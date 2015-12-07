@@ -172,7 +172,6 @@ namespace TestProbabilisticDataStructures
             var n = 100000;
             var f = new BloomFilter(100000, 0.1);
             var data = new byte[n][];
-            //var data = new byte[(count * bucketSize + 7) / 8];
             for (int i = 0; i < n; i++)
             {
                 data[i] = Encoding.ASCII.GetBytes(i.ToString());
@@ -190,7 +189,6 @@ namespace TestProbabilisticDataStructures
             var n = 100000;
             var f = new BloomFilter(100000, 0.1);
             var data = new byte[n][];
-            //var data = new byte[(count * bucketSize + 7) / 8];
             for (int i = 0; i < n; i++)
             {
                 data[i] = Encoding.ASCII.GetBytes(i.ToString());
@@ -208,7 +206,6 @@ namespace TestProbabilisticDataStructures
             var n = 100000;
             var f = new BloomFilter(100000, 0.1);
             var data = new byte[n][];
-            //var data = new byte[(count * bucketSize + 7) / 8];
             for (int i = 0; i < n; i++)
             {
                 data[i] = Encoding.ASCII.GetBytes(i.ToString());
