@@ -42,6 +42,7 @@
     <Compile Include="BloomFilter.cs" />
     <Compile Include="Buckets.cs" />
     <Compile Include="Hash.cs" />
+    <Compile Include="IFilter.cs" />
     <Compile Include="ProbabilisticDataStructures.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

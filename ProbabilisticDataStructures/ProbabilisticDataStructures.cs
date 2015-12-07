@@ -18,11 +18,11 @@ namespace ProbabilisticDataStructures
         /// <param name="n">Number of items.</param>
         /// <param name="fpRate">Desired false positive rate.</param>
         /// <returns>The optimal BloomFilter size, m.</returns>
-        public static int OptimalM(int n, double fpRate)
+        public static uint OptimalM(uint n, double fpRate)
         {
             var optimalM = Math.Ceiling((double)n / ((Math.Log(FILL_RATIO) *
                 Math.Log(1 - FILL_RATIO)) / Math.Abs(Math.Log(fpRate))));
-            return Convert.ToInt32(optimalM);
+            return Convert.ToUInt32(optimalM);
         }
 
         /// <summary>
@@ -31,10 +31,10 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="fpRate">Desired false positive rate.</param>
         /// <returns>The optimal number of hash functions, k.</returns>
-        public static int OptimalK(double fpRate)
+        public static uint OptimalK(double fpRate)
         {
             var optimalK = Math.Ceiling(Math.Log(1 / fpRate, 2));
-            return Convert.ToInt32(optimalK);
+            return Convert.ToUInt32(optimalK);
         }
 
         /// <summary>

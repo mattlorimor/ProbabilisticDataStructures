@@ -32,7 +32,7 @@ namespace ProbabilisticDataStructures
                     _max = (byte)value;
             } 
         }
-        public int Count { get; private set; }
+        public uint Count { get; private set; }
 
         /// <summary>
         /// Creates a new Buckets with the provided number of buckets where each bucket
@@ -40,7 +40,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="count">Number of buckets.</param>
         /// <param name="bucketSize">Number of bits per bucket.</param>
-        public Buckets(int count, byte bucketSize)
+        public Buckets(uint count, byte bucketSize)
         {
             this.Count = count;
             this.Data = new byte[(count * bucketSize + 7) / 8];
@@ -70,7 +70,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The modified bucket.</returns>
         public Buckets Increment(uint bucket, int delta)
         {
-            int val = GetBits(bucket * this.BucketSize, this.BucketSize) + delta;
+            int val = (int)(GetBits(bucket * this.BucketSize, this.BucketSize) + delta);
 
             if (val > this.Max)
                 val = this.Max;
@@ -102,7 +102,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="bucket">The bucket to get.</param>
         /// <returns>The specified bucket.</returns>
-        public int Get(uint bucket)
+        public uint Get(uint bucket)
         {
             return GetBits(bucket * this.BucketSize, this.BucketSize);
         }
@@ -124,7 +124,7 @@ namespace ProbabilisticDataStructures
         /// <param name="offset">The position to start reading at.</param>
         /// <param name="length">The distance to read from the offset.</param>
         /// <returns>The bits at the specified offset and length.</returns>
-        private int GetBits(uint offset, int length)
+        private uint GetBits(uint offset, int length)
         {
             uint byteIndex = offset / 8;
             int byteOffset = (int)(offset % 8);
@@ -137,7 +137,7 @@ namespace ProbabilisticDataStructures
             }
 
             int bitMask = (1 << length) - 1;
-            return (this.Data[byteIndex] & (bitMask << byteOffset)) >> byteOffset;
+            return (uint)((this.Data[byteIndex] & (bitMask << byteOffset)) >> byteOffset);
         }
 
         /// <summary>

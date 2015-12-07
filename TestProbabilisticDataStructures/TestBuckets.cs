@@ -29,7 +29,7 @@ namespace TestProbabilisticDataStructures
             var b = new Buckets(10, 2);
 
             var count = b.Count;
-            Assert.AreEqual(10, count);
+            Assert.AreEqual(10u, count);
         }
 
         /// <summary>
@@ -46,23 +46,23 @@ namespace TestProbabilisticDataStructures
             Assert.AreSame(b, incrementedB, "Returned Buckets should be the same instance");
 
             var v = b.Get(0);
-            Assert.AreEqual(1, v);
+            Assert.AreEqual(1u, v);
 
-            b.Increment(1, -1);
+            b.Increment(1u, -1);
 
             v = b.Get(1);
-            Assert.AreEqual(0, v);
+            Assert.AreEqual(0u, v);
 
-            var setB = b.Set(2, 100);
+            var setB = b.Set(2u, 100);
             Assert.AreSame(b, setB, "Returned Buckets should be the same instance");
 
             v = b.Get(2);
-            Assert.AreEqual(3, v);
+            Assert.AreEqual(3u, v);
 
             b.Increment(3, 2);
 
             v = b.Get(3);
-            Assert.AreEqual(2, v);
+            Assert.AreEqual(2u, v);
         }
 
         /// <summary>
@@ -84,7 +84,7 @@ namespace TestProbabilisticDataStructures
             for (uint i = 0; i < 5; i++)
             {
                 var c = b.Get(i);
-                Assert.AreEqual(0, c);
+                Assert.AreEqual(0u, c);
             }
         }
 

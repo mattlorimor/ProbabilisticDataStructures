@@ -54,6 +54,7 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="TestProbabilisticDataStructures.cs" />
     <Compile Include="TestHash.cs" />
+    <Compile Include="TestBloomFilter.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ProbabilisticDataStructures\ProbabilisticDataStructures.csproj">

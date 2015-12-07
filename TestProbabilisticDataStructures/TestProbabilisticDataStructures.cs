@@ -15,10 +15,10 @@ namespace TestProbabilisticDataStructures
         public void TestOptimalM()
         {
             var optimalM = OptimalM(100, 0.01);
-            Assert.AreEqual(959, optimalM);
+            Assert.AreEqual(959u, optimalM);
 
             optimalM = OptimalM(100, 0.5);
-            Assert.AreEqual(145, optimalM);
+            Assert.AreEqual(145u, optimalM);
         }
 
         /// <summary>
@@ -28,10 +28,10 @@ namespace TestProbabilisticDataStructures
         public void TestOptimalK()
         {
             var optimalK = OptimalK(0.01);
-            Assert.AreEqual(7, optimalK);
+            Assert.AreEqual(7u, optimalK);
 
             optimalK = OptimalK(0.0001);
-            Assert.AreEqual(14, optimalK);
+            Assert.AreEqual(14u, optimalK);
         }
 
         /// <summary>
@@ -72,7 +72,7 @@ namespace TestProbabilisticDataStructures
         /// <param name="n"></param>
         /// <param name="fpRate"></param>
         /// <returns></returns>
-        private int OptimalM(int n, double fpRate)
+        private uint OptimalM(uint n, double fpRate)
         {
             return ProbabilisticDataStructures
                 .ProbabilisticDataStructures.OptimalM(n, fpRate);
@@ -83,7 +83,7 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         /// <param name="fpRate"></param>
         /// <returns></returns>
-        private int OptimalK(double fpRate)
+        private uint OptimalK(double fpRate)
         {
             return ProbabilisticDataStructures
                 .ProbabilisticDataStructures.OptimalK(fpRate);
