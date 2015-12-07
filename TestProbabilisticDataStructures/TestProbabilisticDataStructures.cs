@@ -1,6 +1,7 @@
 ﻿using System;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
+using System.Security.Cryptography;
 
 namespace TestProbabilisticDataStructures
 {
@@ -31,6 +32,38 @@ namespace TestProbabilisticDataStructures
 
             optimalK = OptimalK(0.0001);
             Assert.AreEqual(14, optimalK);
+        }
+
+        /// <summary>
+        /// Ensures that HashKernel() returns the proper upper and lower base when using
+        /// MD5.
+        /// </summary>
+        [TestMethod]
+        public void TestHashKernelMD5()
+        {
+            var data = new byte[] { 0, 1, 2, 3 };
+            var hashAlgorithm = HashAlgorithm.Create("MD5");
+            var hashKernel = ProbabilisticDataStructures
+                .ProbabilisticDataStructures.HashKernel(data, hashAlgorithm);
+
+            Assert.AreEqual(4254774583u, hashKernel.Item1);
+            Assert.AreEqual(4179961689u, hashKernel.Item2);
+        }
+
+        /// <summary>
+        /// Ensures that HashKernel() returns the proper upper and lower base when using
+        /// SHA256.
+        /// </summary>
+        [TestMethod]
+        public void TestHashKernelSHA256()
+        {
+            var data = new byte[] { 0, 1, 2, 3 };
+            var hashAlgorithm = HashAlgorithm.Create("SHA256");
+            var hashKernel = ProbabilisticDataStructures
+                .ProbabilisticDataStructures.HashKernel(data, hashAlgorithm);
+
+            Assert.AreEqual(3252571653u, hashKernel.Item1);
+            Assert.AreEqual(1646207440u, hashKernel.Item2);
         }
 
         /// <summary>

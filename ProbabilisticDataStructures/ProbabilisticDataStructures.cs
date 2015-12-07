@@ -37,24 +37,31 @@ namespace ProbabilisticDataStructures
             return Convert.ToInt32(optimalK);
         }
 
-        //public static Tuple<int, int> HashKernel(byte[] data)
-        //{
-
-        //}
-
-        private static string CreateMD5(byte[] inputBytes)
+        /// <summary>
+        /// Returns the upper and lower base hash values from which the k hashes are
+        /// derived.
+        /// </summary>
+        /// <param name="data">The data bytes to hash.</param>
+        /// <param name="algorithm">The hashing algorithm to use.</param>
+        /// <returns>A a tuple of the upper and lower base.</returns>
+        public static Tuple<uint, uint> HashKernel(byte[] data, HashAlgorithm algorithm)
         {
-            // Use input string to calculate MD5 hash
-            MD5 md5 = System.Security.Cryptography.MD5.Create();
-            byte[] hashBytes = md5.ComputeHash(inputBytes);
+            var hash = new Hash(algorithm);
+            hash.ComputeHash(data);
+            var sum = hash.Sum();
+            return Tuple.Create(
+                ToBigEndianUInt32(sum.Skip(4).Take(4).ToArray()),
+                ToBigEndianUInt32(sum.Take(4).ToArray())
+                );
+        }
 
-            // Convert the byte array to hexadecimal string
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < hashBytes.Length; i++)
-            {
-                sb.Append(hashBytes[i].ToString("X2"));
-            }
-            return sb.ToString();
+        private static uint ToBigEndianUInt32(byte[] bytes)
+        {
+            if (BitConverter.IsLittleEndian)
+                Array.Reverse(bytes);
+
+            uint i = BitConverter.ToUInt32(bytes, 0);
+            return i;
         }
     }
 }

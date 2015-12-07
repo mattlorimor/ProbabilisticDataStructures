@@ -53,6 +53,7 @@
     <Compile Include="TestBuckets.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="TestProbabilisticDataStructures.cs" />
+    <Compile Include="TestHash.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ProbabilisticDataStructures\ProbabilisticDataStructures.csproj">
