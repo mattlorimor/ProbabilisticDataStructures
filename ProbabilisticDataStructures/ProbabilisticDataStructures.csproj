@@ -41,6 +41,7 @@
   <ItemGroup>
     <Compile Include="BloomFilter.cs" />
     <Compile Include="Buckets.cs" />
+    <Compile Include="CountingBloomFilter.cs" />
     <Compile Include="Hash.cs" />
     <Compile Include="IFilter.cs" />
     <Compile Include="ProbabilisticDataStructures.cs" />
