@@ -11,6 +11,13 @@ namespace ProbabilisticDataStructures
     {
         const double FILL_RATIO = 0.5;
 
+        /// <summary>
+        /// Calculates the optimal Bloom filter size, m, based on the number of items and
+        /// the desired rate of false positives.
+        /// </summary>
+        /// <param name="n">Number of items.</param>
+        /// <param name="fpRate">Desired false positive rate.</param>
+        /// <returns>The optimal BloomFilter size, m.</returns>
         public static int OptimalM(int n, double fpRate)
         {
             var optimalM = Math.Ceiling((double)n / ((Math.Log(FILL_RATIO) *
@@ -18,6 +25,12 @@ namespace ProbabilisticDataStructures
             return Convert.ToInt32(optimalM);
         }
 
+        /// <summary>
+        /// Calculates the optimal number of hash functions to use for a Bloom filter
+        /// based on the desired rate of false positives.
+        /// </summary>
+        /// <param name="fpRate">Desired false positive rate.</param>
+        /// <returns>The optimal number of hash functions, k.</returns>
         public static int OptimalK(double fpRate)
         {
             var optimalK = Math.Ceiling(Math.Log(1 / fpRate, 2));
