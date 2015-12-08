@@ -55,7 +55,7 @@ namespace ProbabilisticDataStructures
                 );
         }
 
-        private static uint ToBigEndianUInt32(byte[] bytes)
+        public static uint ToBigEndianUInt32(byte[] bytes)
         {
             if (BitConverter.IsLittleEndian)
                 Array.Reverse(bytes);
