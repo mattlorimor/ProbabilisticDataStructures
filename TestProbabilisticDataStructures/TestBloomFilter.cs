@@ -9,6 +9,11 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestBloomFilter
     {
+        private static byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
+        private static byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
+        private static byte[] C_BYTES = Encoding.ASCII.GetBytes("c");
+        private static byte[] X_BYTES = Encoding.ASCII.GetBytes("x");
+
         /// <summary>
         /// Ensures that Capacity() returns the number of bits, m, in the Bloom filter.
         /// </summary>
@@ -75,9 +80,9 @@ namespace TestProbabilisticDataStructures
         public void TestBloomFillRatio()
         {
             var f = new BloomFilter(100, 0.1);
-            f.Add(Encoding.ASCII.GetBytes("a"));
-            f.Add(Encoding.ASCII.GetBytes("b"));
-            f.Add(Encoding.ASCII.GetBytes("c"));
+            f.Add(A_BYTES);
+            f.Add(B_BYTES);
+            f.Add(C_BYTES);
 
             var ratio = f.FillRatio();
             Assert.AreEqual(0.025, ratio);
@@ -92,40 +97,46 @@ namespace TestProbabilisticDataStructures
             var f = new BloomFilter(100, 0.01);
 
             // 'a' is not in the filter.
-            if (f.Test(Encoding.ASCII.GetBytes("a")))
+            if (f.Test(A_BYTES))
             {
                 Assert.Fail("'a' should not be a member");
             }
 
-            var addedF = f.Add(Encoding.ASCII.GetBytes("a"));
+            var addedF = f.Add(A_BYTES);
             Assert.AreSame(f, addedF, "Returned BloomFilter should be the same instance");
 
             // 'a' is now in the filter.
-            if (!f.Test(Encoding.ASCII.GetBytes("a")))
+            if (!f.Test(A_BYTES))
+            {
+                Assert.Fail("'a' should be a member");
+            }
+
+            // 'a' is still in the filter.
+            if (!f.TestAndAdd(A_BYTES))
             {
                 Assert.Fail("'a' should be a member");
             }
 
             // 'b' is not in the filter.
-            if (f.TestAndAdd(Encoding.ASCII.GetBytes("b")))
+            if (f.TestAndAdd(B_BYTES))
             {
                 Assert.Fail("'b' should not be a member");
             }
 
             // 'a' is still in the filter.
-            if (!f.Test(Encoding.ASCII.GetBytes("a")))
+            if (!f.Test(A_BYTES))
             {
                 Assert.Fail("'a' should be a member");
             }
 
             // 'b' is now in the filter.
-            if (!f.Test(Encoding.ASCII.GetBytes("b")))
+            if (!f.Test(B_BYTES))
             {
                 Assert.Fail("'b' should be a member");
             }
 
             // 'c' is not in the filter.
-            if (f.Test(Encoding.ASCII.GetBytes("c")))
+            if (f.Test(C_BYTES))
             {
                 Assert.Fail("'c' should not be a member");
             }
@@ -136,7 +147,7 @@ namespace TestProbabilisticDataStructures
             }
 
             // 'x' should be a false positive.
-            if (!f.Test(Encoding.ASCII.GetBytes("x")))
+            if (!f.Test(X_BYTES))
             {
                 Assert.Fail("'x' should be a member");
             }
