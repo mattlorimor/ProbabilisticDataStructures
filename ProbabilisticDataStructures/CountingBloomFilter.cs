@@ -30,11 +30,11 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Filter data
         /// </summary>
-        public Buckets Buckets { get; set; }
+        public Buckets Buckets { get; private set; }
         /// <summary>
         /// Hash algorithm
         /// </summary>
-        private HashAlgorithm Hash { get; set; }
+        private HashAlgorithm hash { get; set; }
         /// <summary>
         /// Filter size
         /// </summary>
@@ -46,11 +46,11 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Number of items added
         /// </summary>
-        public uint Count { get; private set; }
+        private uint count { get; set; }
         /// <summary>
         /// Buffer used to cache indices
         /// </summary>
-        public uint[] indexBuffer { get; set; }
+        private uint[] indexBuffer { get; set; }
 
         /// <summary>
         /// Creates a new Counting Bloom Filter optimized to store n-items with a
@@ -66,7 +66,7 @@ namespace ProbabilisticDataStructures
             var m = ProbabilisticDataStructures.OptimalM(n, fpRate);
             var k = ProbabilisticDataStructures.OptimalK(fpRate);
             this.Buckets =  new Buckets(m, b);
-            this.Hash = HashAlgorithm.Create("MD5");
+            this.hash = HashAlgorithm.Create("MD5");
             this.m = m;
             this.k = k;
             this.indexBuffer = new uint[k];
@@ -102,6 +102,15 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Returns the number of items in the filter.
+        /// </summary>
+        /// <returns></returns>
+        public uint Count()
+        {
+            return this.count;
+        } 
+
+        /// <summary>
         /// Will test for membership of the data and returns true if it is a member,
         /// false if not. This is a probabilistic test, meaning there is a non-zero
         /// probability of false positives but a zero probability of false negatives.
@@ -110,7 +119,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data is maybe contained in the filter.</returns>
         public bool Test(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
 
@@ -133,7 +142,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The filter.</returns>
         public IFilter Add(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
 
@@ -143,7 +152,7 @@ namespace ProbabilisticDataStructures
                 this.Buckets.Increment((lower + upper * i) % this.m, 1);
             }
 
-            this.Count++;
+            this.count++;
             return this;
         }
 
@@ -155,7 +164,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was probably contained in the filter.</returns>
         public bool TestAndAdd(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
             var member = true;
@@ -171,7 +180,7 @@ namespace ProbabilisticDataStructures
                 this.Buckets.Increment(idx, 1);
             }
 
-            this.Count++;
+            this.count++;
             return member;
         }
 
@@ -183,7 +192,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was in the filter before removal.</returns>
         public bool TestAndRemove(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
             var member = true;
@@ -204,7 +213,7 @@ namespace ProbabilisticDataStructures
                 {
                     this.Buckets.Increment(idx, -1);
                 }
-                this.Count--;
+                this.count--;
             }
 
             return member;
@@ -218,7 +227,7 @@ namespace ProbabilisticDataStructures
         public CountingBloomFilter Reset()
         {
             this.Buckets.Reset();
-            this.Count = 0;
+            this.count = 0;
             return this;
         }
 
@@ -229,7 +238,7 @@ namespace ProbabilisticDataStructures
         // TODO: Add SetHash to the IFilter interface?
         public void SetHash(HashAlgorithm h)
         {
-            this.Hash = h;
+            this.hash = h;
         }
     }
 }

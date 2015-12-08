@@ -54,7 +54,7 @@ namespace TestProbabilisticDataStructures
                 f.TestAndRemove(Encoding.ASCII.GetBytes(i.ToString()));
             }
 
-            var count = f.Count;
+            var count = f.Count();
             Assert.AreEqual(5u, count);
         }
 
@@ -175,7 +175,7 @@ namespace TestProbabilisticDataStructures
                 }
             }
 
-            Assert.AreEqual(0u, f.Count);
+            Assert.AreEqual(0u, f.Count());
         }
 
         [TestMethod]
