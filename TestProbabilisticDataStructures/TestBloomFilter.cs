@@ -50,7 +50,7 @@ namespace TestProbabilisticDataStructures
                 f.Add(Encoding.ASCII.GetBytes(i.ToString()));
             }
 
-            var count = f.Count;
+            var count = f.Count();
             Assert.AreEqual(10u, count);
         }
 

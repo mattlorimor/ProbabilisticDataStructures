@@ -17,11 +17,11 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Filter data
         /// </summary>
-        public Buckets Buckets { get; set; }
+        public Buckets Buckets { get; private set; }
         /// <summary>
         /// Hash algorithm
         /// </summary>
-        private HashAlgorithm Hash { get; set; }
+        private HashAlgorithm hash { get; set; }
         /// <summary>
         /// Filter size
         /// </summary>
@@ -33,7 +33,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Number of items added
         /// </summary>
-        public uint Count { get; private set; }
+        private uint count { get; set; }
 
         /// <summary>
         /// Creates a new Bloom filter optimized to store n items with a specified target
@@ -46,7 +46,7 @@ namespace ProbabilisticDataStructures
             var m = ProbabilisticDataStructures.OptimalM(n, fpRate);
             var k = ProbabilisticDataStructures.OptimalK(fpRate);
             Buckets = new Buckets(m, 1);
-            Hash = HashAlgorithm.Create("MD5");
+            hash = HashAlgorithm.Create("MD5");
             this.m = m;
             this.k = k;
         }
@@ -70,12 +70,21 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Returns the number of items in the filter.
+        /// </summary>
+        /// <returns></returns>
+        public uint Count()
+        {
+            return this.count;
+        }
+
+        /// <summary>
         /// Returns the current estimated ratio of set bits.
         /// </summary>
         /// <returns>The current estimated ratio of set bits.</returns>
         public double EstimatedFillRatio()
         {
-            return 1 - Math.Exp((-(double)this.Count * (double)this.k) / (double)this.m);
+            return 1 - Math.Exp((-(double)this.count * (double)this.k) / (double)this.m);
         }
 
         /// <summary>
@@ -101,7 +110,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data is maybe contained in the filter.</returns>
         public bool Test(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
 
@@ -124,7 +133,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The filter.</returns>
         public IFilter Add(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
 
@@ -134,7 +143,7 @@ namespace ProbabilisticDataStructures
                 this.Buckets.Set((lower + upper * i) % this.m, 1);
             }
 
-            this.Count++;
+            this.count++;
             return this;
         }
 
@@ -146,7 +155,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was probably contained in the filter.</returns>
         public bool TestAndAdd(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
             var member = true;
@@ -162,7 +171,7 @@ namespace ProbabilisticDataStructures
                 this.Buckets.Set(idx, 1);
             }
 
-            this.Count++;
+            this.count++;
             return member;
         }
 
@@ -184,7 +193,7 @@ namespace ProbabilisticDataStructures
         // TODO: Add SetHash to the IFilter interface?
         public void SetHash(HashAlgorithm h)
         {
-            this.Hash = h;
+            this.hash = h;
         }
     }
 }
