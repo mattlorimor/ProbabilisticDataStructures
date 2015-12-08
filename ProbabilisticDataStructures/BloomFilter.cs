@@ -14,10 +14,25 @@ namespace ProbabilisticDataStructures
     /// </summary>
     public class BloomFilter : IFilter
     {
+        /// <summary>
+        /// Filter data
+        /// </summary>
         public Buckets Buckets { get; set; }
+        /// <summary>
+        /// Hash algorithm
+        /// </summary>
         private HashAlgorithm Hash { get; set; }
+        /// <summary>
+        /// Filter size
+        /// </summary>
         private uint m { get; set; }
+        /// <summary>
+        /// Number of hash functions
+        /// </summary>
         private uint k { get; set; }
+        /// <summary>
+        /// Number of items added
+        /// </summary>
         public uint Count { get; private set; }
 
         /// <summary>
