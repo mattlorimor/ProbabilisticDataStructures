@@ -79,7 +79,7 @@ namespace ProbabilisticDataStructures
         {
             if ((m & (m - 1)) != 0)
             {
-                throw new ArgumentException(String.Format("{0} is not a power of two"));
+                throw new ArgumentException(String.Format("{0} is not a power of two", m));
             }
 
             this.registers = new byte[m];
