@@ -61,6 +61,7 @@
     <Compile Include="TestDeletableBloomFilter.cs" />
     <Compile Include="TestHyperLogLog.cs" />
     <Compile Include="TestMinHash.cs" />
+    <Compile Include="TestPartitionedBloomFilter.cs" />
     <Compile Include="Words.cs" />
   </ItemGroup>
   <ItemGroup>
