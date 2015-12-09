@@ -44,6 +44,7 @@
     <Compile Include="CountingBloomFilter.cs" />
     <Compile Include="CountMinSketch.cs" />
     <Compile Include="CuckooBloomFilter.cs" />
+    <Compile Include="DeletableBloomFilter.cs" />
     <Compile Include="Hash.cs" />
     <Compile Include="IFilter.cs" />
     <Compile Include="ProbabilisticDataStructures.cs" />
