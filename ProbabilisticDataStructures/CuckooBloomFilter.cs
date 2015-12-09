@@ -32,11 +32,29 @@ namespace ProbabilisticDataStructures
         private const int MAX_NUM_KICKS = 500;
 
         public byte[][][] Buckets { get; private set; }
+        /// <summary>
+        /// Hash algorithm.
+        /// </summary>
         private HashAlgorithm hash { get; set; }
+        /// <summary>
+        /// Number of buckets
+        /// </summary>
         private uint m { get; set; }
+        /// <summary>
+        /// Number of entries per bucket
+        /// </summary>
         public uint b { get; private set; }
+        /// <summary>
+        /// Length of fingerprints (in bytes)
+        /// </summary>
         private uint f { get; set; }
+        /// <summary>
+        /// Number of items in the filter
+        /// </summary>
         private uint count { get; set; }
+        /// <summary>
+        /// Filter capacity
+        /// </summary>
         private uint n { get; set; }
 
         /// <summary>
