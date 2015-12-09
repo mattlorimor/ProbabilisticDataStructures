@@ -59,6 +59,8 @@
     <Compile Include="TestCountMinSketch.cs" />
     <Compile Include="TestCuckooBloomFilter.cs" />
     <Compile Include="TestDeletableBloomFilter.cs" />
+    <Compile Include="TestHyperLogLog.cs" />
+    <Compile Include="Words.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ProbabilisticDataStructures\ProbabilisticDataStructures.csproj">
@@ -66,6 +68,7 @@
       <Name>ProbabilisticDataStructures</Name>
     </ProjectReference>
   </ItemGroup>
+  <ItemGroup />
   <Choose>
     <When Condition="'$(VisualStudioVersion)' == '10.0' And '$(IsCodedUITest)' == 'True'">
       <ItemGroup>

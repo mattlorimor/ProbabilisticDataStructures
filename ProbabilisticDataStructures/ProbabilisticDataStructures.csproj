@@ -46,6 +46,7 @@
     <Compile Include="CuckooBloomFilter.cs" />
     <Compile Include="DeletableBloomFilter.cs" />
     <Compile Include="Hash.cs" />
+    <Compile Include="HyperLogLog.cs" />
     <Compile Include="IFilter.cs" />
     <Compile Include="ProbabilisticDataStructures.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
