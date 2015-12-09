@@ -60,6 +60,7 @@
     <Compile Include="TestCuckooBloomFilter.cs" />
     <Compile Include="TestDeletableBloomFilter.cs" />
     <Compile Include="TestHyperLogLog.cs" />
+    <Compile Include="TestMinHash.cs" />
     <Compile Include="Words.cs" />
   </ItemGroup>
   <ItemGroup>
