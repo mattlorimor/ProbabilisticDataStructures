@@ -28,11 +28,11 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Filter data
         /// </summary>
-        public Buckets Buckets { get; private set; }
+        internal Buckets buckets { get; set; }
         /// <summary>
         /// Filter collision data
         /// </summary>
-        public Buckets Collisions { get; private set; }
+        internal Buckets collisions { get; set; }
         /// <summary>
         /// Hash algorithm
         /// </summary>
@@ -72,8 +72,8 @@ namespace ProbabilisticDataStructures
             var m = ProbabilisticDataStructures.OptimalM(n, fpRate);
             var k = ProbabilisticDataStructures.OptimalK(fpRate);
 
-            this.Buckets = new Buckets(m - r, 1);
-            this.Collisions = new Buckets(r, 1);
+            this.buckets = new Buckets(m - r, 1);
+            this.collisions = new Buckets(r, 1);
             this.hash = HashAlgorithm.Create("MD5");
             this.m = m - r;
             this.regionSize = (m - r) / r;
@@ -124,7 +124,7 @@ namespace ProbabilisticDataStructures
             // If any of the K bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                if (this.Buckets.Get((lower + upper * i) % this.m) == 0)
+                if (this.buckets.Get((lower + upper * i) % this.m) == 0)
                 {
                     return false;
                 }
@@ -148,14 +148,14 @@ namespace ProbabilisticDataStructures
             for (uint i = 0; i < this.k; i++)
             {
                 var idx = (lower + upper * i) % this.m;
-                if (this.Buckets.Get(idx) != 0)
+                if (this.buckets.Get(idx) != 0)
                 {
                     // Collision, set corresponding region bit.
-                    this.Collisions.Set(idx / this.regionSize, 1);
+                    this.collisions.Set(idx / this.regionSize, 1);
                 }
                 else
                 {
-                    this.Buckets.Set(idx, 1);
+                    this.buckets.Set(idx, 1);
                 }
             }
 
@@ -180,16 +180,16 @@ namespace ProbabilisticDataStructures
             for (uint i = 0; i < this.k; i++)
             {
                 var idx = (lower + upper * i) % this.m;
-                if (this.Buckets.Get(idx) == 0)
+                if (this.buckets.Get(idx) == 0)
                 {
                     member = false;
                 }
                 else
                 {
                     // Collision, set corresponding region bit.
-                    this.Collisions.Set(idx / this.regionSize, 1);
+                    this.collisions.Set(idx / this.regionSize, 1);
                 }
-                this.Buckets.Set(idx, 1);
+                this.buckets.Set(idx, 1);
             }
 
             this.count++;
@@ -214,7 +214,7 @@ namespace ProbabilisticDataStructures
             {
                 var idx = (lower + upper * i) % this.m;
                 this.indexBuffer[i] = idx;
-                if (this.Buckets.Get(idx) == 0)
+                if (this.buckets.Get(idx) == 0)
                 {
                     member = false;
                 }
@@ -224,10 +224,10 @@ namespace ProbabilisticDataStructures
             {
                 foreach (var idx in this.indexBuffer)
                 {
-                    if (this.Collisions.Get(idx / this.regionSize) == 0)
+                    if (this.collisions.Get(idx / this.regionSize) == 0)
                     {
                         // Clear only bits located in collision-free zones.
-                        this.Buckets.Set(idx, 0);
+                        this.buckets.Set(idx, 0);
                     }
                 }
                 this.count--;
@@ -243,8 +243,8 @@ namespace ProbabilisticDataStructures
         /// <returns>The reset bloom filter.</returns>
         public DeletableBloomFilter Reset()
         {
-            this.Buckets.Reset();
-            this.Collisions.Reset();
+            this.buckets.Reset();
+            this.collisions.Reset();
             this.count = 0;
             return this;
         }

@@ -152,9 +152,9 @@ namespace TestProbabilisticDataStructures
             count = f.filters.Count;
             Assert.IsTrue(count == 1, string.Format("Expected 1 filter, got {0}", count));
 
-            foreach(var partition in f.filters[0].Partitions)
+            foreach(var partition in f.filters[0].partitions)
             {
-                for (uint i = 0; i < partition.Count; i++)
+                for (uint i = 0; i < partition.count; i++)
                 {
                     if (partition.Get(i) != 0)
                     {

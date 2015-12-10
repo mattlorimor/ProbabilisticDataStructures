@@ -30,7 +30,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Filter data
         /// </summary>
-        public Buckets Buckets { get; private set; }
+        internal Buckets buckets { get; set; }
         /// <summary>
         /// Hash algorithm
         /// </summary>
@@ -65,7 +65,7 @@ namespace ProbabilisticDataStructures
         {
             var m = ProbabilisticDataStructures.OptimalM(n, fpRate);
             var k = ProbabilisticDataStructures.OptimalK(fpRate);
-            this.Buckets =  new Buckets(m, b);
+            this.buckets =  new Buckets(m, b);
             this.hash = HashAlgorithm.Create("MD5");
             this.m = m;
             this.k = k;
@@ -124,7 +124,7 @@ namespace ProbabilisticDataStructures
             // If any of the K bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                if (this.Buckets.Get((lower + upper * i) % this.m) == 0)
+                if (this.buckets.Get((lower + upper * i) % this.m) == 0)
                 {
                     return false;
                 }
@@ -147,7 +147,7 @@ namespace ProbabilisticDataStructures
             // Set the K bits.
             for (uint i = 0; i < this.k; i++)
             {
-                this.Buckets.Increment((lower + upper * i) % this.m, 1);
+                this.buckets.Increment((lower + upper * i) % this.m, 1);
             }
 
             this.count++;
@@ -171,11 +171,11 @@ namespace ProbabilisticDataStructures
             for (uint i = 0; i < this.k; i++)
             {
                 var idx = (lower + upper * i) % this.m;
-                if (this.Buckets.Get(idx) == 0)
+                if (this.buckets.Get(idx) == 0)
                 {
                     member = false;
                 }
-                this.Buckets.Increment(idx, 1);
+                this.buckets.Increment(idx, 1);
             }
 
             this.count++;
@@ -199,7 +199,7 @@ namespace ProbabilisticDataStructures
             for (uint i = 0; i < this.k; i++)
             {
                 this.indexBuffer[i] = (lower + upper * i) % this.m;
-                if (this.Buckets.Get(this.indexBuffer[i]) == 0)
+                if (this.buckets.Get(this.indexBuffer[i]) == 0)
                 {
                     member = false;
                 }
@@ -209,7 +209,7 @@ namespace ProbabilisticDataStructures
             {
                 foreach (var idx in this.indexBuffer)
                 {
-                    this.Buckets.Increment(idx, -1);
+                    this.buckets.Increment(idx, -1);
                 }
                 this.count--;
             }
@@ -224,7 +224,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The reset bloom filter.</returns>
         public CountingBloomFilter Reset()
         {
-            this.Buckets.Reset();
+            this.buckets.Reset();
             this.count = 0;
             return this;
         }

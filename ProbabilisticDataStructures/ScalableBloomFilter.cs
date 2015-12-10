@@ -17,7 +17,6 @@ copies or substantial portions of the Software.
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
@@ -59,7 +58,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Partition fill ratio
         /// </summary>
-        internal double p { get; set; }
+        private double p { get; set; }
         /// <summary>
         /// Filter size hint
         /// </summary>
@@ -186,6 +185,19 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Sets the hashing function used in the filter.
+        /// </summary>
+        /// <param name="h">The HashAlgorithm to use.</param>
+        // TODO: Add SetHash to the IFilter interface?
+        public void SetHash(HashAlgorithm h)
+        {
+            foreach (var filter in this.filters)
+            {
+                filter.SetHash(h);
+            }
+        }
+
+        /// <summary>
         /// Restores the Bloom filter to its original state. It returns the filter to
         /// allow for chaining.
         /// </summary>
@@ -210,19 +222,6 @@ namespace ProbabilisticDataStructures
                 p.SetHash(this.filters[0].hash);
             }
             this.filters.Add(p);
-        }
-
-        /// <summary>
-        /// Sets the hashing function used in the filter.
-        /// </summary>
-        /// <param name="h">The HashAlgorithm to use.</param>
-        // TODO: Add SetHash to the IFilter interface?
-        public void SetHash(HashAlgorithm h)
-        {
-            foreach (var filter in this.filters)
-            {
-                filter.SetHash(h);
-            }
         }
     }
 }

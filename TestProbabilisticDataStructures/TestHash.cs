@@ -14,7 +14,7 @@ namespace TestProbabilisticDataStructures
             var hashingAlgorithm = HashAlgorithm.Create("MD5");
             var hash = new Hash(hashingAlgorithm);
 
-            Assert.AreEqual(HashAlgorithm.Create("MD5").GetType(), hash.Algorithm.GetType());
+            Assert.AreEqual(HashAlgorithm.Create("MD5").GetType(), hash.algorithm.GetType());
         }
 
         [TestMethod]

@@ -168,7 +168,7 @@ namespace TestProbabilisticDataStructures
             var resetF = f.Reset();
             Assert.AreSame(f, resetF, "Returned BloomFilter should be the same instance");
 
-            for (uint i = 0; i < f.buckets.Count; i++)
+            for (uint i = 0; i < f.buckets.count; i++)
             {
                 if (f.buckets.Get(i) != 0)
                 {
@@ -176,18 +176,38 @@ namespace TestProbabilisticDataStructures
                 }
             }
         }
+    }
 
-        [TestMethod]
-        public void BenchmarkBloomAdd()
+    [TestClass]
+    public class BenchmarkBloomFilter
+    {
+        private BloomFilter f;
+        private int n;
+        private byte[][] data;
+
+        [TestInitialize()]
+        public void Testinitialize()
         {
-            var n = 100000;
-            var f = new BloomFilter(100000, 0.1);
-            var data = new byte[n][];
+            n = 100000;
+            f = new BloomFilter(100000, 0.1);
+            data = new byte[n][];
             for (int i = 0; i < n; i++)
             {
                 data[i] = Encoding.ASCII.GetBytes(i.ToString());
             }
+        }
 
+        [TestCleanup()]
+        public void TestCleanup()
+        {
+            f = null;
+            n = 0;
+            data = null;
+        }
+
+        [TestMethod]
+        public void BenchmarkBloomAdd()
+        {
             for (int i = 0; i < n; i++)
             {
                 f.Add(data[i]);
@@ -197,14 +217,6 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void BenchmarkBloomTest()
         {
-            var n = 100000;
-            var f = new BloomFilter(100000, 0.1);
-            var data = new byte[n][];
-            for (int i = 0; i < n; i++)
-            {
-                data[i] = Encoding.ASCII.GetBytes(i.ToString());
-            }
-
             for (int i = 0; i < n; i++)
             {
                 f.Test(data[i]);
@@ -214,14 +226,6 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void BenchmarkBloomTestAndAdd()
         {
-            var n = 100000;
-            var f = new BloomFilter(100000, 0.1);
-            var data = new byte[n][];
-            for (int i = 0; i < n; i++)
-            {
-                data[i] = Encoding.ASCII.GetBytes(i.ToString());
-            }
-
             for (int i = 0; i < n; i++)
             {
                 f.TestAndAdd(data[i]);

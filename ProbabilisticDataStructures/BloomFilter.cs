@@ -94,7 +94,7 @@ namespace ProbabilisticDataStructures
         public double FillRatio()
         {
             uint sum = 0;
-            for (uint i = 0; i < this.buckets.Count; i++)
+            for (uint i = 0; i < this.buckets.count; i++)
             {
                 sum += this.buckets.Get(i);
             }

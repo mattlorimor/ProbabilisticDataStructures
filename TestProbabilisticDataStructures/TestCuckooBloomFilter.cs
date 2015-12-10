@@ -180,7 +180,7 @@ namespace TestProbabilisticDataStructures
             {
                 for (uint j = 0; j < f.b; j++)
                 {
-                    if (f.Buckets[i][j] != null)
+                    if (f.buckets[i][j] != null)
                     {
                         Assert.Fail("Exected all buckets to be cleared");
                     }

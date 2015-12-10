@@ -28,7 +28,7 @@ namespace TestProbabilisticDataStructures
         {
             var b = new Buckets(10, 2);
 
-            var count = b.Count;
+            var count = b.count;
             Assert.AreEqual(10u, count);
         }
 
@@ -92,7 +92,7 @@ namespace TestProbabilisticDataStructures
         public void BenchmarkBucketsIncrement()
         {
             var buckets = new Buckets(10000, 10);
-            for (uint i = 0; i < buckets.Count; i++)
+            for (uint i = 0; i < buckets.count; i++)
             {
                 buckets.Increment(i % 10000, 1);
             }
@@ -102,7 +102,7 @@ namespace TestProbabilisticDataStructures
         public void BenchmarkBucketsSet()
         {
             var buckets = new Buckets(10000, 10);
-            for (uint i = 0; i < buckets.Count; i++)
+            for (uint i = 0; i < buckets.count; i++)
             {
                 buckets.Set(i % 10000, 1);
             }
@@ -112,7 +112,7 @@ namespace TestProbabilisticDataStructures
         public void BenchmarkBucketsGet()
         {
             var buckets = new Buckets(10000, 10);
-            for (uint i = 0; i < buckets.Count; i++)
+            for (uint i = 0; i < buckets.count; i++)
             {
                 buckets.Get(i % 10000);
             }

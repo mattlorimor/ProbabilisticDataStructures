@@ -56,7 +56,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Number of registers
         /// </summary>
-        public uint m { get; private set; }
+        internal uint m { get; set; }
         /// <summary>
         /// Number of bits to calculate register
         /// </summary>
@@ -196,6 +196,15 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Sets the hashing function used in the filter.
+        /// </summary>
+        /// <param name="h">The HashAlgorithm to use.</param>
+        public void SetHash(HashAlgorithm h)
+        {
+            this.hash = h;
+        }
+
+        /// <summary>
         /// Returns a 32-bit hash value for the given data.
         /// </summary>
         /// <param name="data">Data</param>
@@ -206,15 +215,6 @@ namespace ProbabilisticDataStructures
             hash.ComputeHash(data);
             var sum = hash.Sum();
             return ProbabilisticDataStructures.ToBigEndianUInt32(sum);
-        }
-
-        /// <summary>
-        /// Sets the hashing function used in the filter.
-        /// </summary>
-        /// <param name="h">The HashAlgorithm to use.</param>
-        public void SetHash(HashAlgorithm h)
-        {
-            this.hash = h;
         }
 
         /// <summary>

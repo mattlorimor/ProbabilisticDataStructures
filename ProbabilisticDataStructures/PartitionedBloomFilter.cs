@@ -40,7 +40,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Partitioned filter data
         /// </summary>
-        public Buckets[] Partitions { get; private set; }
+        internal Buckets[] partitions { get; set; }
         /// <summary>
         /// Hash algorithm
         /// </summary>
@@ -80,7 +80,7 @@ namespace ProbabilisticDataStructures
                 partitions[i] = new Buckets(s, 1);
             }
 
-            this.Partitions = partitions;
+            this.partitions = partitions;
             this.hash = HashAlgorithm.Create("MD5");
             this.m = m;
             this.k = k;
@@ -133,9 +133,9 @@ namespace ProbabilisticDataStructures
             for (uint i = 0; i < this.k; i++)
             {
                 uint sum = 0;
-                for (uint j = 0; j < this.Partitions[i].Count; j++)
+                for (uint j = 0; j < this.partitions[i].count; j++)
                 {
-                    sum += this.Partitions[i].Get(j);
+                    sum += this.partitions[i].Get(j);
                 }
                 t += ((double)sum / (double)this.s);
             }
@@ -160,7 +160,7 @@ namespace ProbabilisticDataStructures
             // If any of the K partiion bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                if (this.Partitions[i].Get((lower + upper * i) % this.s) == 0)
+                if (this.partitions[i].Get((lower + upper * i) % this.s) == 0)
                 {
                     return false;
                 }
@@ -184,7 +184,7 @@ namespace ProbabilisticDataStructures
             // Set the K partition bits.
             for (uint i = 0; i < this.k; i++)
             {
-                this.Partitions[i].Set((lower + upper * i) % this.s, 1);
+                this.partitions[i].Set((lower + upper * i) % this.s, 1);
             }
 
             this.count++;
@@ -210,11 +210,11 @@ namespace ProbabilisticDataStructures
             for (uint i = 0; i < this.k; i++)
             {
                 var idx = (lower + upper * i) % this.s;
-                if (this.Partitions[i].Get(idx) == 0)
+                if (this.partitions[i].Get(idx) == 0)
                 {
                     member = false;
                 }
-                this.Partitions[i].Set(idx, 1);
+                this.partitions[i].Set(idx, 1);
             }
 
             this.count++;
@@ -228,7 +228,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The PartitionedBloomFilter</returns>
         public PartitionedBloomFilter Reset()
         {
-            foreach (var partition in this.Partitions)
+            foreach (var partition in this.partitions)
             {
                 partition.Reset();
             }

@@ -12,8 +12,8 @@ namespace ProbabilisticDataStructures
     /// </summary>
     public class Buckets
     {
-        public byte[] Data { get; private set; }
-        public byte BucketSize { get; private set; }
+        private byte[] Data { get; set; }
+        private byte bucketSize { get; set; }
         private byte _max;
         private int Max
         {
@@ -32,7 +32,7 @@ namespace ProbabilisticDataStructures
                     _max = (byte)value;
             } 
         }
-        public uint Count { get; private set; }
+        internal uint count { get; set; }
 
         /// <summary>
         /// Creates a new Buckets with the provided number of buckets where each bucket
@@ -42,9 +42,9 @@ namespace ProbabilisticDataStructures
         /// <param name="bucketSize">Number of bits per bucket.</param>
         public Buckets(uint count, byte bucketSize)
         {
-            this.Count = count;
+            this.count = count;
             this.Data = new byte[(count * bucketSize + 7) / 8];
-            this.BucketSize = bucketSize;
+            this.bucketSize = bucketSize;
             this.Max = (1 << bucketSize) - 1;
         }
 
@@ -70,14 +70,14 @@ namespace ProbabilisticDataStructures
         /// <returns>The modified bucket.</returns>
         public Buckets Increment(uint bucket, int delta)
         {
-            int val = (int)(GetBits(bucket * this.BucketSize, this.BucketSize) + delta);
+            int val = (int)(GetBits(bucket * this.bucketSize, this.bucketSize) + delta);
 
             if (val > this.Max)
                 val = this.Max;
             else if (val < 0)
                 val = 0;
 
-            SetBits((uint)bucket * (uint)this.BucketSize, this.BucketSize, (uint)val);
+            SetBits((uint)bucket * (uint)this.bucketSize, this.bucketSize, (uint)val);
             return this;
         }
 
@@ -93,7 +93,7 @@ namespace ProbabilisticDataStructures
             if (value > this._max)
                 value = this._max;
 
-            SetBits(bucket * this.BucketSize, this.BucketSize, value);
+            SetBits(bucket * this.bucketSize, this.bucketSize, value);
             return this;
         }
 
@@ -104,7 +104,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The specified bucket.</returns>
         public uint Get(uint bucket)
         {
-            return GetBits(bucket * this.BucketSize, this.BucketSize);
+            return GetBits(bucket * this.bucketSize, this.bucketSize);
         }
 
         /// <summary>
@@ -114,7 +114,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The Buckets object the reset operation was performed on.</returns>
         public Buckets Reset()
         {
-            this.Data = new byte[(this.Count * this.BucketSize + 7) / 8];
+            this.Data = new byte[(this.count * this.bucketSize + 7) / 8];
             return this;
         }
 
