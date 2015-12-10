@@ -168,9 +168,9 @@ namespace TestProbabilisticDataStructures
             var resetF = f.Reset();
             Assert.AreSame(f, resetF, "Returned BloomFilter should be the same instance");
 
-            for (uint i = 0; i < f.Buckets.Count; i++)
+            for (uint i = 0; i < f.buckets.Count; i++)
             {
-                if (f.Buckets.Get(i) != 0)
+                if (f.buckets.Get(i) != 0)
                 {
                     Assert.Fail("Expected all bits to be unset");
                 }

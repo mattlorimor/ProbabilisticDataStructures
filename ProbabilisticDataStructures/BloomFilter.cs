@@ -17,7 +17,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Filter data
         /// </summary>
-        public Buckets Buckets { get; private set; }
+        internal Buckets buckets { get; set; }
         /// <summary>
         /// Hash algorithm
         /// </summary>
@@ -45,7 +45,7 @@ namespace ProbabilisticDataStructures
         {
             var m = ProbabilisticDataStructures.OptimalM(n, fpRate);
             var k = ProbabilisticDataStructures.OptimalK(fpRate);
-            Buckets = new Buckets(m, 1);
+            buckets = new Buckets(m, 1);
             hash = HashAlgorithm.Create("MD5");
             this.m = m;
             this.k = k;
@@ -94,9 +94,9 @@ namespace ProbabilisticDataStructures
         public double FillRatio()
         {
             uint sum = 0;
-            for (uint i = 0; i < this.Buckets.Count; i++)
+            for (uint i = 0; i < this.buckets.Count; i++)
             {
-                sum += this.Buckets.Get(i);
+                sum += this.buckets.Get(i);
             }
             return (double)sum / (double)this.m;
         }
@@ -117,7 +117,7 @@ namespace ProbabilisticDataStructures
             // If any of the K bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                if (this.Buckets.Get((lower + upper * i) % this.m) == 0)
+                if (this.buckets.Get((lower + upper * i) % this.m) == 0)
                 {
                     return false;
                 }
@@ -140,7 +140,7 @@ namespace ProbabilisticDataStructures
             // Set the K bits.
             for (uint i = 0; i < this.k; i++)
             {
-                this.Buckets.Set((lower + upper * i) % this.m, 1);
+                this.buckets.Set((lower + upper * i) % this.m, 1);
             }
 
             this.count++;
@@ -164,11 +164,11 @@ namespace ProbabilisticDataStructures
             for (uint i = 0; i < this.k; i++)
             {
                 var idx = (lower + upper * i) % this.m;
-                if (this.Buckets.Get(idx) == 0)
+                if (this.buckets.Get(idx) == 0)
                 {
                     member = false;
                 }
-                this.Buckets.Set(idx, 1);
+                this.buckets.Set(idx, 1);
             }
 
             this.count++;
@@ -182,7 +182,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The reset bloom filter.</returns>
         public BloomFilter Reset()
         {
-            this.Buckets.Reset();
+            this.buckets.Reset();
             return this;
         }
 
