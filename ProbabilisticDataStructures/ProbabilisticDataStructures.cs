@@ -9,7 +9,7 @@ namespace ProbabilisticDataStructures
 {
     public static class ProbabilisticDataStructures
     {
-        const double FILL_RATIO = 0.5;
+        public const double FILL_RATIO = 0.5;
 
         /// <summary>
         /// Calculates the optimal Bloom filter size, m, based on the number of items and

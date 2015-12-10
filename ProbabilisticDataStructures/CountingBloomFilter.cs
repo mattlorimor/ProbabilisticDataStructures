@@ -79,9 +79,7 @@ namespace ProbabilisticDataStructures
         /// <param name="fpRate">Desired false positive rate.</param>
         /// <returns>Default CountingBloomFilter</returns>
         public CountingBloomFilter(uint n, double fpRate)
-            : this(n, 4, fpRate)
-        {
-        }
+            : this(n, 4, fpRate){}
 
         /// <summary>
         /// Returns the Bloom filter capacity, m.

@@ -44,7 +44,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Hash algorithm
         /// </summary>
-        private HashAlgorithm hash { get; set; }
+        internal HashAlgorithm hash { get; set; }
         /// <summary>
         /// Filter size (divided into k partitions)
         /// </summary>
