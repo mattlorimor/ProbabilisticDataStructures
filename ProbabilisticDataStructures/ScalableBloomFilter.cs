@@ -22,9 +22,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 
-// Make all internals visible to the testing assembly.
-[assembly: InternalsVisibleTo("TestProbabilisticDataStructures")]
-
 namespace ProbabilisticDataStructures
 {
     /// <summary>
