@@ -121,7 +121,7 @@ namespace TestProbabilisticDataStructures
 
             for (int i = 0; i < 10000; i++)
             {
-                f.TestAndAdd(Encoding.ASCII.GetBytes(i.ToString()));
+                f.Add(Encoding.ASCII.GetBytes(i.ToString()));
             }
 
             // Filter should be full.
