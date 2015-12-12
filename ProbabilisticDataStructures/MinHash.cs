@@ -55,10 +55,13 @@ namespace ProbabilisticDataStructures
             int k,
             int[] hashes)
         {
+            var options = new ParallelOptions();
+            options.MaxDegreeOfParallelism = 4;
             var index = 0;
+
             foreach (var element in bitArray)
             {
-                for (int i = 0; i < k; i++)
+                Parallel.For(0, k, options, (i, loopState) =>
                 {
                     if (bag.Contains(element.Key))
                     {
@@ -68,7 +71,7 @@ namespace ProbabilisticDataStructures
                             minHashValues[bagIndex][index] = hindex;
                         }
                     }
-                }
+                });
                 index++;
             }
         }
