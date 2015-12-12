@@ -63,6 +63,7 @@
     <Compile Include="TestMinHash.cs" />
     <Compile Include="TestPartitionedBloomFilter.cs" />
     <Compile Include="TestScalableBloomFilter.cs" />
+    <Compile Include="TestStableBloomFilter.cs" />
     <Compile Include="Words.cs" />
   </ItemGroup>
   <ItemGroup>
