@@ -19,6 +19,7 @@ using System;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace TestProbabilisticDataStructures
 {
@@ -35,7 +36,10 @@ namespace TestProbabilisticDataStructures
             var words = Words.Dictionary(n);
             var bad = 0;
             var nWords = (UInt64)words.LongLength;
-            for (int i = lowB; i < highB; i++)
+
+            var options = new ParallelOptions();
+            options.MaxDegreeOfParallelism = 4;
+            Parallel.For(lowB, highB, options, i =>
             {
                 var m = (uint)Math.Pow(2, i);
 
@@ -62,7 +66,7 @@ namespace TestProbabilisticDataStructures
                     bad++;
                     //Assert.Fail(string.Format("Expected: {0}, Actual: {1}", expectedError, actualError));
                 }
-            }
+            });
         }
 
         private void benchmarkCount(int registers)
