@@ -19,6 +19,8 @@ namespace ProbabilisticDataStructures
     /// </summary>
     public static class MinHash
     {
+        private static Random random = new Random();
+
         /// <summary>
         /// Returns the similarity between two bags.
         /// </summary>
@@ -29,12 +31,11 @@ namespace ProbabilisticDataStructures
         {
             var k = bag1.Length + bag2.Length;
             var hashes = new int[k];
-            Random rand = new Random();
             for (int i = 0; i < k; i++)
             {
-                var a = rand.Next();
-                var b = rand.Next();
-                var c = rand.Next();
+                var a = random.Next();
+                var b = random.Next();
+                var c = random.Next();
                 var x = computeHash((uint)(a * b * c), (uint)a, (uint)b, c);
                 hashes[i] = (int)x;
             }

@@ -57,6 +57,8 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private uint n { get; set; }
 
+        private Random random = new Random();
+
         /// <summary>
         /// Creates a new Cuckoo Bloom filter optimized to store n items with a specified
         /// target false-positive rate.
@@ -346,11 +348,10 @@ namespace ProbabilisticDataStructures
 
             // Must relocate existing items.
             var i = i1;
-            var rand = new Random();
             for (int n = 0; n < MAX_NUM_KICKS; n++)
             {
                 var bucketIdx = i % this.m;
-                var entryIdx = rand.Next((int)this.b);
+                var entryIdx = random.Next((int)this.b);
                 var tempF = f;
                 f = this.buckets[bucketIdx][entryIdx];
                 this.buckets[bucketIdx][entryIdx] = tempF;
