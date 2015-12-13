@@ -64,6 +64,7 @@
     <Compile Include="TestPartitionedBloomFilter.cs" />
     <Compile Include="TestScalableBloomFilter.cs" />
     <Compile Include="TestStableBloomFilter.cs" />
+    <Compile Include="TestTopK.cs" />
     <Compile Include="Words.cs" />
   </ItemGroup>
   <ItemGroup>
