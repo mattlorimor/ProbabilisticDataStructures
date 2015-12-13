@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using C5;
 
 namespace ProbabilisticDataStructures
 {
@@ -34,7 +33,6 @@ namespace ProbabilisticDataStructures
             {
                 cms = new CountMinSketch(epsilon, delta),
                 k = k,
-                //elements = new IntervalHeap<Element>((int)k)
                 elements = new ElementHeap((int)k)
             };
         }
