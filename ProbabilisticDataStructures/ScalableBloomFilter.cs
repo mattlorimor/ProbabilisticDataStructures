@@ -219,7 +219,7 @@ namespace ProbabilisticDataStructures
             var p = new PartitionedBloomFilter(this.hint, fpRate);
             if (this.filters.Count() > 0)
             {
-                p.SetHash(this.filters[0].hash);
+                p.SetHash(this.filters[0].Hash);
             }
             this.filters.Add(p);
         }
