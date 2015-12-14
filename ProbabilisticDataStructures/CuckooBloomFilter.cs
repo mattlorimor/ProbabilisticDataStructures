@@ -363,7 +363,7 @@ namespace ProbabilisticDataStructures
                 var tempF = f;
                 f = this.Buckets[bucketIdx][entryIdx];
                 this.Buckets[bucketIdx][entryIdx] = tempF;
-                i = i ^ ProbabilisticDataStructures.ToBigEndianUInt32(this.ComputeHash(f));
+                i = i ^ ComputeHashSum32(f);
                 var b = this.Buckets[i % this.M];
 
                 idx = GetEmptyEntry(b);
@@ -389,8 +389,8 @@ namespace ProbabilisticDataStructures
         {
             var hash = this.ComputeHash(data);
             var f = hash.Take((int)this.F).ToArray();
-            var i1 = ProbabilisticDataStructures.ToBigEndianUInt32(hash);
-            var i2 = ProbabilisticDataStructures.ToBigEndianUInt32(this.ComputeHash(f));
+            var i1 = this.ComputeHashSum32(hash);
+            var i2 = this.ComputeHashSum32(f);
 
             return Components.Create(f, i1, i2);
         }
@@ -406,6 +406,19 @@ namespace ProbabilisticDataStructures
             hash.ComputeHash(data);
             var sum = hash.Sum();
             return sum;
+        }
+
+        /// <summary>
+        /// Returns the sum of the hash.
+        /// </summary>
+        /// <param name="data">Data</param>
+        /// <returns>32-bit hash value</returns>
+        private uint ComputeHashSum32(byte[] data)
+        {
+            var hash = new Hash(this.Hash);
+            hash.ComputeHash(data);
+            var sum = hash.Sum();
+            return ProbabilisticDataStructures.ToBigEndianUInt32(sum);
         }
 
         /// <summary>
