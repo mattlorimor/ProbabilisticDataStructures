@@ -36,12 +36,12 @@ namespace TestProbabilisticDataStructures
             var addedK = topK.Add(BILL_BYTES);
             Assert.AreSame(topK, addedK);
             // latest one also
-            var expected = new ProbabilisticDataStructures.TopK.Element[]{
-                new ProbabilisticDataStructures.TopK.Element{Data=BILL_BYTES, Freq=1},
-                new ProbabilisticDataStructures.TopK.Element{Data=SARA_BYTES, Freq=2},
-                new ProbabilisticDataStructures.TopK.Element{Data=BOB_BYTES, Freq=3},
-                new ProbabilisticDataStructures.TopK.Element{Data=ALICE_BYTES, Freq=4},
-                new ProbabilisticDataStructures.TopK.Element{Data=TYLER_BYTES, Freq=5},
+            var expected = new ProbabilisticDataStructures.Element[]{
+                new ProbabilisticDataStructures.Element{Data=BILL_BYTES, Freq=1},
+                new ProbabilisticDataStructures.Element{Data=SARA_BYTES, Freq=2},
+                new ProbabilisticDataStructures.Element{Data=BOB_BYTES, Freq=3},
+                new ProbabilisticDataStructures.Element{Data=ALICE_BYTES, Freq=4},
+                new ProbabilisticDataStructures.Element{Data=TYLER_BYTES, Freq=5},
             };
 
             var actual = topK.Elements();
@@ -60,7 +60,7 @@ namespace TestProbabilisticDataStructures
             Assert.AreSame(topK, resetK);
 
             Assert.AreEqual(0, topK.Elements().Length);
-            Assert.AreEqual(0u, topK.n);
+            Assert.AreEqual(0u, topK.N);
         }
 
         [TestMethod]
