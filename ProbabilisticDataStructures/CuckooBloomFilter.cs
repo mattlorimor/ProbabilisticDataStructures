@@ -392,12 +392,7 @@ namespace ProbabilisticDataStructures
             var i1 = ProbabilisticDataStructures.ToBigEndianUInt32(hash);
             var i2 = ProbabilisticDataStructures.ToBigEndianUInt32(this.ComputeHash(f));
 
-            return new Components
-            {
-                Fingerprint = f,
-                Hash1 = i1,
-                Hash2 = i2
-            };
+            return Components.Create(f, i1, i2);
         }
 
         /// <summary>
@@ -451,9 +446,19 @@ namespace ProbabilisticDataStructures
 
         private struct Components
         {
-            public byte[] Fingerprint;
-            public uint Hash1;
-            public uint Hash2;
+            internal byte[] Fingerprint;
+            internal uint Hash1;
+            internal uint Hash2;
+
+            internal static Components Create(byte[] fingerprint, uint hash1, uint hash2)
+            {
+                return new Components
+                {
+                    Fingerprint = fingerprint,
+                    Hash1 = hash1,
+                    Hash2 = hash2
+                };
+            }
         }
 
         public class TestAndAddResult
