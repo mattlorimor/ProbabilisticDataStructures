@@ -17,11 +17,11 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Filter data
         /// </summary>
-        internal Buckets buckets { get; set; }
+        internal Buckets Buckets { get; set; }
         /// <summary>
         /// Hash algorithm
         /// </summary>
-        private HashAlgorithm hash { get; set; }
+        private HashAlgorithm Hash { get; set; }
         /// <summary>
         /// Filter size
         /// </summary>
@@ -45,8 +45,8 @@ namespace ProbabilisticDataStructures
         {
             var m = ProbabilisticDataStructures.OptimalM(n, fpRate);
             var k = ProbabilisticDataStructures.OptimalK(fpRate);
-            buckets = new Buckets(m, 1);
-            hash = HashAlgorithm.Create("MD5");
+            Buckets = new Buckets(m, 1);
+            Hash = HashAlgorithm.Create("MD5");
             this.m = m;
             this.k = k;
         }
@@ -94,9 +94,9 @@ namespace ProbabilisticDataStructures
         public double FillRatio()
         {
             uint sum = 0;
-            for (uint i = 0; i < this.buckets.count; i++)
+            for (uint i = 0; i < this.Buckets.count; i++)
             {
-                sum += this.buckets.Get(i);
+                sum += this.Buckets.Get(i);
             }
             return (double)sum / (double)this.m;
         }
@@ -110,14 +110,14 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data is maybe contained in the filter.</returns>
         public bool Test(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
 
             // If any of the K bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                if (this.buckets.Get((lower + upper * i) % this.m) == 0)
+                if (this.Buckets.Get((lower + upper * i) % this.m) == 0)
                 {
                     return false;
                 }
@@ -133,14 +133,14 @@ namespace ProbabilisticDataStructures
         /// <returns>The filter.</returns>
         public IFilter Add(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
 
             // Set the K bits.
             for (uint i = 0; i < this.k; i++)
             {
-                this.buckets.Set((lower + upper * i) % this.m, 1);
+                this.Buckets.Set((lower + upper * i) % this.m, 1);
             }
 
             this.count++;
@@ -155,7 +155,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was probably contained in the filter.</returns>
         public bool TestAndAdd(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
             var member = true;
@@ -164,11 +164,11 @@ namespace ProbabilisticDataStructures
             for (uint i = 0; i < this.k; i++)
             {
                 var idx = (lower + upper * i) % this.m;
-                if (this.buckets.Get(idx) == 0)
+                if (this.Buckets.Get(idx) == 0)
                 {
                     member = false;
                 }
-                this.buckets.Set(idx, 1);
+                this.Buckets.Set(idx, 1);
             }
 
             this.count++;
@@ -182,7 +182,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The reset bloom filter.</returns>
         public BloomFilter Reset()
         {
-            this.buckets.Reset();
+            this.Buckets.Reset();
             return this;
         }
 
@@ -193,7 +193,7 @@ namespace ProbabilisticDataStructures
         // TODO: Add SetHash to the IFilter interface?
         public void SetHash(HashAlgorithm h)
         {
-            this.hash = h;
+            this.Hash = h;
         }
     }
 }
