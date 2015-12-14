@@ -19,7 +19,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestCountingCapacity()
         {
-            var f = new CountingBloomFilter(100, 0.1);
+            var f = CountingBloomFilter.NewDefaultCountingBloomFilter(100, 0.1);
             var capacity = f.Capacity();
 
             Assert.AreEqual(480u, capacity);
@@ -31,7 +31,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestCountingK()
         {
-            var f = new CountingBloomFilter(100, 0.1);
+            var f = CountingBloomFilter.NewDefaultCountingBloomFilter(100, 0.1);
             var k = f.K();
 
             Assert.AreEqual(4u, k);
@@ -43,7 +43,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestCountingCount()
         {
-            var f = new CountingBloomFilter(100, 0.1);
+            var f = CountingBloomFilter.NewDefaultCountingBloomFilter(100, 0.1);
             for (uint i = 0; i < 10; i++)
             {
                 f.Add(Encoding.ASCII.GetBytes(i.ToString()));
@@ -64,7 +64,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestCountingTestAndAdd()
         {
-            var f = new CountingBloomFilter(100, 0.01);
+            var f = CountingBloomFilter.NewDefaultCountingBloomFilter(100, 0.01);
 
             // 'a' is not in the filter.
             if (f.Test(A_BYTES))
@@ -129,7 +129,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestCountingTestAndRemove()
         {
-            var f = new CountingBloomFilter(100, 0.01);
+            var f = CountingBloomFilter.NewDefaultCountingBloomFilter(100, 0.01);
 
             // 'a' is not in the filter.
             if (f.TestAndRemove(A_BYTES))
@@ -158,7 +158,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestCountingReset()
         {
-            var f = new CountingBloomFilter(100, 0.1);
+            var f = CountingBloomFilter.NewDefaultCountingBloomFilter(100, 0.1);
             for (int i = 0; i < 1000; i++)
             {
                 f.Add(Encoding.ASCII.GetBytes(i.ToString()));
@@ -167,9 +167,9 @@ namespace TestProbabilisticDataStructures
             var resetF = f.Reset();
             Assert.AreSame(f, resetF, "Returned CountingBloomFilter should be the same instance");
 
-            for (uint i = 0; i < f.buckets.count; i++)
+            for (uint i = 0; i < f.Buckets.count; i++)
             {
-                if (f.buckets.Get(i) != 0)
+                if (f.Buckets.Get(i) != 0)
                 {
                     Assert.Fail("Expected all bits to be unset");
                 }
@@ -182,7 +182,7 @@ namespace TestProbabilisticDataStructures
         public void BenchmarkCountingAdd()
         {
             var n = 100000;
-            var f = new CountingBloomFilter(100000, 0.1);
+            var f = CountingBloomFilter.NewDefaultCountingBloomFilter(100000, 0.1);
             var data = new byte[n][];
             for (int i = 0; i < n; i++)
             {
@@ -199,7 +199,7 @@ namespace TestProbabilisticDataStructures
         public void BenchmarkCountingTest()
         {
             var n = 100000;
-            var f = new CountingBloomFilter(100000, 0.1);
+            var f = CountingBloomFilter.NewDefaultCountingBloomFilter(100000, 0.1);
             var data = new byte[n][];
             for (int i = 0; i < n; i++)
             {
@@ -216,7 +216,7 @@ namespace TestProbabilisticDataStructures
         public void BenchmarkCountingTestAndAdd()
         {
             var n = 100000;
-            var f = new CountingBloomFilter(100000, 0.1);
+            var f = CountingBloomFilter.NewDefaultCountingBloomFilter(100000, 0.1);
             var data = new byte[n][];
             for (int i = 0; i < n; i++)
             {
@@ -233,7 +233,7 @@ namespace TestProbabilisticDataStructures
         public void BenchmarkCountingTestAndRemove()
         {
             var n = 100000;
-            var f = new CountingBloomFilter(100000, 0.1);
+            var f = CountingBloomFilter.NewDefaultCountingBloomFilter(100000, 0.1);
             var data = new byte[n][];
             for (int i = 0; i < n; i++)
             {
