@@ -14,8 +14,7 @@ namespace ProbabilisticDataStructures
     {
         private CountMinSketch cms { get; set; }
         private uint k { get; set; }
-        private uint n { get; set; }
-        //private IntervalHeap<Element> elements { get; set; }
+        internal uint n { get; set; }
         private ElementHeap elements { get; set; }
 
         /// <summary>
@@ -23,18 +22,15 @@ namespace ProbabilisticDataStructures
         /// within a factor of epsilon with probability delta. It tracks the k-most
         /// frequent elements.
         /// </summary>
-        /// <param name="epsilon"></param>
-        /// <param name="delta"></param>
-        /// <param name="k"></param>
+        /// <param name="epsilon">Relative-accuracy factor</param>
+        /// <param name="delta">Relative-accuracy probability</param>
+        /// <param name="k">Number of top elements to track</param>
         /// <returns></returns>
-        public static TopK NewTopK(double epsilon, double delta, uint k)
+        public TopK(double epsilon, double delta, uint k)
         {
-            return new TopK
-            {
-                cms = new CountMinSketch(epsilon, delta),
-                k = k,
-                elements = new ElementHeap((int)k)
-            };
+            this.cms = new CountMinSketch(epsilon, delta);
+            this.k = k;
+            this.elements = new ElementHeap((int)k);
         }
 
         /// <summary>
@@ -57,6 +53,10 @@ namespace ProbabilisticDataStructures
             return this;
         }
 
+        /// <summary>
+        /// Returns the top-k elements from lowest to highest frequency.
+        /// </summary>
+        /// <returns>The top-k elements from lowest to highest frequency</returns>
         public Element[] Elements()
         {
             if (this.elements.Len() == 0)
@@ -64,23 +64,16 @@ namespace ProbabilisticDataStructures
                 return new Element[0];
             }
 
-            return this.elements.elementHeap.OrderBy(x => x.Freq).ThenBy(x => x.added).ToArray();
-
-            //var elements = this.elements;
-            //var topK = new List<Element>((int)this.k);
-
-            //if (elements.Len() > 0)
-            //{
-            //    //return topK.OrderBy(x => x.Freq).ToArray();
-            //    //foreach (var element in elements.elementHeap)
-            //    //{
-            //    //    topK.Add(elements.Pop());
-            //    //}
-            //}
-
-            //return topK.ToArray();
+            return this.elements.elementHeap
+                .OrderBy(x => x.Freq)
+                .ToArray();
         }
 
+        /// <summary>
+        /// Restores the TopK to its original state. It returns itself to allow for
+        /// chaining.
+        /// </summary>
+        /// <returns>The TopK</returns>
         public TopK Reset()
         {
             this.cms.Reset();
@@ -89,6 +82,11 @@ namespace ProbabilisticDataStructures
             return this;
         }
 
+        /// <summary>
+        /// Indicates if the given frequency falls within the top-k heap.
+        /// </summary>
+        /// <param name="freq">The frequency to check</param>
+        /// <returns>Whether or not the frequency falls within the top-k heap</returns>
         private bool isTop(UInt64 freq)
         {
             if (this.elements.Len() < this.k)
@@ -96,22 +94,25 @@ namespace ProbabilisticDataStructures
                 return true;
             }
 
-            return freq >= this.Elements()[0].Freq;
+            return freq >= this.elements.elementHeap[0].Freq;
         }
 
+        /// <summary>
+        /// Adds the data to the top-k heap. If the data is already an element, the
+        /// frequency is updated. If the heap already has k elements, the element with
+        /// the minimum frequency is removed.
+        /// </summary>
+        /// <param name="data">The data to insert</param>
+        /// <param name="freq">The frequency to associate with the data</param>
         private void insert(byte[] data, UInt64 freq)
         {
-            var elements = this.Elements();
-            for (int i = 0; i < elements.Count(); i++)
+            for (int i = 0; i < this.elements.elementHeap.Count; i++)
             {
-                var element = elements[i];
+                var element = this.elements.elementHeap[i];
                 if (Enumerable.SequenceEqual(data, element.Data))
                 {
-                    // Element alread in top-k.
-                    elements[i].Freq = freq;
-                    this.elements.elementHeap = elements.ToList();
-                    return;
-                    this.elements.elementHeap[i].Freq = freq;
+                    // Element already in top-k.
+                    element.Freq = freq;
                     return;
                 }
             }
@@ -127,7 +128,6 @@ namespace ProbabilisticDataStructures
             {
                 Data = data,
                 Freq = freq,
-                added = DateTime.UtcNow.Ticks
             });
         }
 
@@ -142,7 +142,7 @@ namespace ProbabilisticDataStructures
 
             internal bool Less(int i, int j)
             {
-                return this.elementHeap[i].Freq < elementHeap[j].Freq;
+                return this.elementHeap[i].Freq < this.elementHeap[j].Freq;
             }
 
             internal void Swap(int i, int j)
@@ -152,23 +152,56 @@ namespace ProbabilisticDataStructures
                 elementHeap[j] = temp;
             }
 
-            internal void Push(Element x)
+            internal void Push(Element e)
             {
-                this.elementHeap.Add(x);
+                this.elementHeap.Add(e);
+                this.up(this.Len() - 1);
             }
 
             internal Element Pop()
             {
-                var elementToRemove = this.elementHeap
-                    .OrderBy(x => x.Freq)
-                    .ThenBy(x => x.added)
-                    .First();
+                var elementToRemove = this.elementHeap[0];
                 this.elementHeap.Remove(elementToRemove);
                 return elementToRemove;
-                //var n = this.elementHeap.Count - 1;
-                //var x = this.elementHeap[n];
-                //this.elementHeap = this.elementHeap.Take(n).ToList();
-                //return x;
+            }
+
+            internal void up(int j)
+            {
+                while (true)
+                {
+                    var i = (j - 1) / 2; // parent
+                    if (i == j || !this.Less(j, i))
+                    {
+                        break;
+                    }
+                    this.Swap(i, j);
+                    j = i;
+                }
+            }
+
+            internal void down(int i, int n)
+            {
+                while (true)
+                {
+                    var j1 = 2 * i + 1;
+                    if (j1 >= n || j1 < 0)
+                    {
+                        // j1 < - after int overflow
+                        break;
+                    }
+                    var j = j1; // left child
+                    var j2 = j1 + 1;
+                    if (j2 < n && !this.Less(j1, j2))
+                    {
+                        j = j2; // 2*i + 2 // right child
+                    }
+                    if (!this.Less(j, i))
+                    {
+                        break;
+                    }
+                    this.Swap(i, j);
+                    i = j;
+                }
             }
 
             internal ElementHeap(int k)
@@ -181,7 +214,6 @@ namespace ProbabilisticDataStructures
         {
             public byte[] Data { get; set; }
             public UInt64 Freq { get; set; }
-            internal long added { get; set; }
         }
     }
 }
