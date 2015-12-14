@@ -117,11 +117,11 @@ namespace TestProbabilisticDataStructures
             var resetCms = cms.Reset();
             Assert.AreSame(cms, resetCms);
 
-            for (uint i = 0; i < cms.depth; i++)
+            for (uint i = 0; i < cms.Depth; i++)
             {
-                for (int j = 0; j < cms.width; j++)
+                for (int j = 0; j < cms.Width; j++)
                 {
-                    if (cms.matrix[i][j] != 0)
+                    if (cms.Matrix[i][j] != 0)
                     {
                         Assert.Fail("Expected matrix to be completely empty.");
                     }

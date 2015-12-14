@@ -34,15 +34,15 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Count matrix
         /// </summary>
-        internal UInt64[][] matrix { get; set; }
+        internal UInt64[][] Matrix { get; set; }
         /// <summary>
         /// Matrix width
         /// </summary>
-        internal uint width { get; set; }
+        internal uint Width { get; set; }
         /// <summary>
         /// Matrix depth
         /// </summary>
-        internal uint depth { get; set; }
+        internal uint Depth { get; set; }
         /// <summary>
         /// Number of items added
         /// </summary>
@@ -58,7 +58,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Hash function
         /// </summary>
-        private HashAlgorithm hash { get; set; }
+        private HashAlgorithm Hash { get; set; }
 
         /// <summary>
         /// Creates a new Count-Min Sketch whose relative accuracy is within a factor of
@@ -71,18 +71,18 @@ namespace ProbabilisticDataStructures
         {
             var width = (uint)(Math.Ceiling(Math.E / epsilon));
             var depth = (uint)(Math.Ceiling(Math.Log(1 / delta)));
-            this.matrix = new UInt64[depth][];
+            this.Matrix = new UInt64[depth][];
 
             for (int i = 0; i < depth; i++)
             {
-               this.matrix[i] = new UInt64[width];
+               this.Matrix[i] = new UInt64[width];
             }
 
-            this.width = width;
-            this.depth = depth;
+            this.Width = width;
+            this.Depth = depth;
             this.epsilon = epsilon;
             this.delta = delta;
-            this.hash = HashAlgorithm.Create("MD5");
+            this.Hash = HashAlgorithm.Create("MD5");
         }
 
         /// <summary>
@@ -119,14 +119,14 @@ namespace ProbabilisticDataStructures
         /// <returns>The CountMinSketch</returns>
         public CountMinSketch Add(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
 
             // Increment count in each row.
-            for (uint i = 0; i < this.depth; i++)
+            for (uint i = 0; i < this.Depth; i++)
             {
-                this.matrix[i][(lower + upper * i) % this.width]++;
+                this.Matrix[i][(lower + upper * i) % this.Width]++;
             }
 
             this.count++;
@@ -141,14 +141,14 @@ namespace ProbabilisticDataStructures
         /// <returns>The data to count.</returns>
         public UInt64 Count(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
             var count = UInt64.MaxValue;
 
-            for (uint i = 0; i < this.depth; i++)
+            for (uint i = 0; i < this.Depth; i++)
             {
-                count = Math.Min(count, this.matrix[i][(lower + upper * i) % this.width]);
+                count = Math.Min(count, this.Matrix[i][(lower + upper * i) % this.Width]);
             }
 
             return count;
@@ -163,21 +163,21 @@ namespace ProbabilisticDataStructures
         /// <returns>True if successful.</returns>
         public bool Merge(CountMinSketch other)
         {
-            if (this.depth != other.depth)
+            if (this.Depth != other.Depth)
             {
                 throw new Exception("Matrix depth must match.");
             }
 
-            if (this.width != other.width)
+            if (this.Width != other.Width)
             {
                 throw new Exception("Matrix width must match.");
             }
 
-            for (uint i = 0; i < this.depth; i++)
+            for (uint i = 0; i < this.Depth; i++)
             {
-                for (int j = 0; j < this.width; j++)
+                for (int j = 0; j < this.Width; j++)
                 {
-                    this.matrix[i][j] += other.matrix[i][j];
+                    this.Matrix[i][j] += other.Matrix[i][j];
                 }
             }
 
@@ -192,10 +192,10 @@ namespace ProbabilisticDataStructures
         /// <returns>The CountMinSketch</returns>
         public CountMinSketch Reset()
         {
-            this.matrix = new UInt64[this.depth][];
-            for (uint i = 0; i < this.depth; i++)
+            this.Matrix = new UInt64[this.Depth][];
+            for (uint i = 0; i < this.Depth; i++)
             {
-                this.matrix[i] = new UInt64[this.width];
+                this.Matrix[i] = new UInt64[this.Width];
             }
 
             this.count = 0;
@@ -208,7 +208,7 @@ namespace ProbabilisticDataStructures
         /// <param name="h">The HashAlgorithm to use.</param>
         public void SetHash(HashAlgorithm h)
         {
-            this.hash = h;
+            this.Hash = h;
         }
 
         // TODO: Implement these later.
