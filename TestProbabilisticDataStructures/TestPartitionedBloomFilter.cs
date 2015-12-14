@@ -168,7 +168,7 @@ namespace TestProbabilisticDataStructures
             var resetF = f.Reset();
             Assert.AreSame(f, resetF, "Returned PartitionedBloomFilter should be the same instance");
 
-            foreach (var partition in f.partitions)
+            foreach (var partition in f.Partitions)
             {
                 for (uint i = 0; i < partition.count; i++)
                 {

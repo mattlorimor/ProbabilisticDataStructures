@@ -40,15 +40,15 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Partitioned filter data
         /// </summary>
-        internal Buckets[] partitions { get; set; }
+        internal Buckets[] Partitions { get; set; }
         /// <summary>
         /// Hash algorithm
         /// </summary>
-        internal HashAlgorithm hash { get; set; }
+        internal HashAlgorithm Hash { get; set; }
         /// <summary>
         /// Filter size (divided into k partitions)
         /// </summary>
-        private uint m { get; set; }
+        private uint M { get; set; }
         /// <summary>
         /// Number of hash functions (and partitions)
         /// </summary>
@@ -56,7 +56,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Partition size (m / k)
         /// </summary>
-        private uint s { get; set; }
+        private uint S { get; set; }
         /// <summary>
         /// Number of items added
         /// </summary>
@@ -80,11 +80,11 @@ namespace ProbabilisticDataStructures
                 partitions[i] = new Buckets(s, 1);
             }
 
-            this.partitions = partitions;
-            this.hash = HashAlgorithm.Create("MD5");
-            this.m = m;
+            this.Partitions = partitions;
+            this.Hash = HashAlgorithm.Create("MD5");
+            this.M = m;
             this.k = k;
-            this.s = s;
+            this.S = s;
         }
 
         /// <summary>
@@ -93,7 +93,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The Bloom filter capacity, m</returns>
         public uint Capacity()
         {
-            return this.m;
+            return this.M;
         }
 
         /// <summary>
@@ -120,7 +120,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The current estimated ratio of set bits</returns>
         public double EstimatedFillRatio()
         {
-            return 1 - Math.Exp(-(double)this.count / (double)this.s);
+            return 1 - Math.Exp(-(double)this.count / (double)this.S);
         }
 
         /// <summary>
@@ -133,11 +133,11 @@ namespace ProbabilisticDataStructures
             for (uint i = 0; i < this.k; i++)
             {
                 uint sum = 0;
-                for (uint j = 0; j < this.partitions[i].count; j++)
+                for (uint j = 0; j < this.Partitions[i].count; j++)
                 {
-                    sum += this.partitions[i].Get(j);
+                    sum += this.Partitions[i].Get(j);
                 }
-                t += ((double)sum / (double)this.s);
+                t += ((double)sum / (double)this.S);
             }
             return (double)t / (double)this.k;
         }
@@ -153,14 +153,14 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was found</returns>
         public bool Test(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
 
             // If any of the K partiion bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                if (this.partitions[i].Get((lower + upper * i) % this.s) == 0)
+                if (this.Partitions[i].Get((lower + upper * i) % this.S) == 0)
                 {
                     return false;
                 }
@@ -177,14 +177,14 @@ namespace ProbabilisticDataStructures
         /// <returns>The PartitionedBloomFilter</returns>
         public IFilter Add(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
 
             // Set the K partition bits.
             for (uint i = 0; i < this.k; i++)
             {
-                this.partitions[i].Set((lower + upper * i) % this.s, 1);
+                this.Partitions[i].Set((lower + upper * i) % this.S, 1);
             }
 
             this.count++;
@@ -201,7 +201,7 @@ namespace ProbabilisticDataStructures
         /// </returns>
         public bool TestAndAdd(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
             var member = true;
@@ -209,12 +209,12 @@ namespace ProbabilisticDataStructures
             // If any K partition bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                var idx = (lower + upper * i) % this.s;
-                if (this.partitions[i].Get(idx) == 0)
+                var idx = (lower + upper * i) % this.S;
+                if (this.Partitions[i].Get(idx) == 0)
                 {
                     member = false;
                 }
-                this.partitions[i].Set(idx, 1);
+                this.Partitions[i].Set(idx, 1);
             }
 
             this.count++;
@@ -228,7 +228,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The PartitionedBloomFilter</returns>
         public PartitionedBloomFilter Reset()
         {
-            foreach (var partition in this.partitions)
+            foreach (var partition in this.Partitions)
             {
                 partition.Reset();
             }
@@ -242,7 +242,7 @@ namespace ProbabilisticDataStructures
         // TODO: Add SetHash to the IFilter interface?
         public void SetHash(HashAlgorithm h)
         {
-            this.hash = h;
+            this.Hash = h;
         }
     }
 }
