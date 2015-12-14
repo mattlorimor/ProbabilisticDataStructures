@@ -40,7 +40,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="count">Number of buckets.</param>
         /// <param name="bucketSize">Number of bits per bucket.</param>
-        public Buckets(uint count, byte bucketSize)
+        internal Buckets(uint count, byte bucketSize)
         {
             this.count = count;
             this.Data = new byte[(count * bucketSize + 7) / 8];
@@ -52,7 +52,7 @@ namespace ProbabilisticDataStructures
         /// Returns the maximum value that can be stored in a bucket.
         /// </summary>
         /// <returns>The bucket max value.</returns>
-        public byte MaxBucketValue()
+        internal byte MaxBucketValue()
         {
             return this._max;
         }
@@ -68,7 +68,7 @@ namespace ProbabilisticDataStructures
         /// <param name="bucket">The bucket to increment.</param>
         /// <param name="delta">The amount to increment the bucket by.</param>
         /// <returns>The modified bucket.</returns>
-        public Buckets Increment(uint bucket, int delta)
+        internal Buckets Increment(uint bucket, int delta)
         {
             int val = (int)(GetBits(bucket * this.bucketSize, this.bucketSize) + delta);
 
@@ -88,7 +88,7 @@ namespace ProbabilisticDataStructures
         /// <param name="bucket">The bucket to change the value of.</param>
         /// <param name="value">The value to set.</param>
         /// <returns>The modified bucket.</returns>
-        public Buckets Set(uint bucket, byte value)
+        internal Buckets Set(uint bucket, byte value)
         {
             if (value > this._max)
                 value = this._max;
@@ -102,7 +102,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="bucket">The bucket to get.</param>
         /// <returns>The specified bucket.</returns>
-        public uint Get(uint bucket)
+        internal uint Get(uint bucket)
         {
             return GetBits(bucket * this.bucketSize, this.bucketSize);
         }
@@ -112,7 +112,7 @@ namespace ProbabilisticDataStructures
         /// chaining.
         /// </summary>
         /// <returns>The Buckets object the reset operation was performed on.</returns>
-        public Buckets Reset()
+        internal Buckets Reset()
         {
             this.Data = new byte[(this.count * this.bucketSize + 7) / 8];
             return this;
@@ -124,7 +124,7 @@ namespace ProbabilisticDataStructures
         /// <param name="offset">The position to start reading at.</param>
         /// <param name="length">The distance to read from the offset.</param>
         /// <returns>The bits at the specified offset and length.</returns>
-        private uint GetBits(uint offset, int length)
+        internal uint GetBits(uint offset, int length)
         {
             uint byteIndex = offset / 8;
             int byteOffset = (int)(offset % 8);
@@ -146,7 +146,7 @@ namespace ProbabilisticDataStructures
         /// <param name="offset">The position to start writing at.</param>
         /// <param name="length">The distance to write from the offset.</param>
         /// <param name="bits">The bits to write.</param>
-        private void SetBits(uint offset, int length, uint bits)
+        internal void SetBits(uint offset, int length, uint bits)
         {
             uint byteIndex = offset / 8;
             int byteOffset = (int)(offset % 8);
