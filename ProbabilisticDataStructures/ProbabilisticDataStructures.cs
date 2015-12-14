@@ -43,7 +43,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="data">The data bytes to hash.</param>
         /// <param name="algorithm">The hashing algorithm to use.</param>
-        /// <returns>A a tuple of the upper and lower base.</returns>
+        /// <returns>A HashKernel</returns>
         public static HashKernel HashKernel(byte[] data, HashAlgorithm algorithm)
         {
             var hash = new Hash(algorithm);
