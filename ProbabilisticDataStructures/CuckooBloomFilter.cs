@@ -121,10 +121,10 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data is a member</returns>
         public bool Test(byte[] data)
         {
-            var components = this.Components(data);
-            var i1 = components.Item1;
-            var i2 = components.Item2;
-            var f = components.Item3;
+            var components = this.GetComponents(data);
+            var i1 = components.Hash1;
+            var i2 = components.Hash2;
+            var f = components.Fingerprint;
 
             // If either bucket containsf, it's a member.
             var b1 = this.Buckets[i1 % this.M];
@@ -156,10 +156,10 @@ namespace ProbabilisticDataStructures
         /// </returns>
         public bool Add(byte[] data)
         {
-            var components = this.Components(data);
-            var i1 = components.Item1;
-            var i2 = components.Item2;
-            var f = components.Item3;
+            var components = this.GetComponents(data);
+            var i1 = components.Hash1;
+            var i2 = components.Hash2;
+            var f = components.Fingerprint;
             return this.Insert(i1, i2, f);
         }
 
@@ -175,10 +175,10 @@ namespace ProbabilisticDataStructures
         /// </returns>
         public Tuple<bool, bool> TestAndAdd(byte[] data)
         {
-            var components = this.Components(data);
-            var i1 = components.Item1;
-            var i2 = components.Item2;
-            var f = components.Item3;
+            var components = this.GetComponents(data);
+            var i1 = components.Hash1;
+            var i2 = components.Hash2;
+            var f = components.Fingerprint;
 
             // If either bucket contains f, it's a member.
             var b1 = this.Buckets[i1 % this.M];
@@ -207,10 +207,10 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether the data was a member or not</returns>
         public bool TestAndRemove(byte[] data)
         {
-            var components = this.Components(data);
-            var i1 = components.Item1;
-            var i2 = components.Item2;
-            var f = components.Item3;
+            var components = this.GetComponents(data);
+            var i1 = components.Hash1;
+            var i2 = components.Hash2;
+            var f = components.Fingerprint;
 
             // Try to remove from bucket[i1].
             var b1 = this.Buckets[i1 % this.M];
@@ -377,14 +377,19 @@ namespace ProbabilisticDataStructures
         /// <param name="data">Data</param>
         /// <returns>The two hash values used to index into the buckets and the
         /// fingerprint for the given data</returns>
-        private Tuple<uint, uint, byte[]> Components(byte[] data)
+        private Components GetComponents(byte[] data)
         {
             var hash = this.ComputeHash(data);
             var f = hash.Take((int)this.F).ToArray();
             var i1 = ProbabilisticDataStructures.ToBigEndianUInt32(hash);
             var i2 = ProbabilisticDataStructures.ToBigEndianUInt32(this.ComputeHash(f));
 
-            return Tuple.Create<uint, uint, byte[]>(i1, i2, f);
+            return new Components
+            {
+                Fingerprint = f,
+                Hash1 = i1,
+                Hash2 = i2
+            };
         }
 
         /// <summary>
@@ -434,6 +439,13 @@ namespace ProbabilisticDataStructures
             x |= x >> 32;
             x++;
             return x;
+        }
+
+        private struct Components
+        {
+            public byte[] Fingerprint;
+            public uint Hash1;
+            public uint Hash2;
         }
     }
 }
