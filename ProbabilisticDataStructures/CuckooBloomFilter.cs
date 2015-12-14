@@ -31,23 +31,23 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private const int MAX_NUM_KICKS = 500;
 
-        internal byte[][][] buckets { get; set; }
+        internal byte[][][] Buckets { get; set; }
         /// <summary>
         /// Hash algorithm.
         /// </summary>
-        private HashAlgorithm hash { get; set; }
+        private HashAlgorithm Hash { get; set; }
         /// <summary>
         /// Number of buckets
         /// </summary>
-        private uint m { get; set; }
+        private uint M { get; set; }
         /// <summary>
         /// Number of entries per bucket
         /// </summary>
-        internal uint b { get; set; }
+        internal uint B { get; set; }
         /// <summary>
         /// Length of fingerprints (in bytes)
         /// </summary>
-        private uint f { get; set; }
+        private uint F { get; set; }
         /// <summary>
         /// Number of items in the filter
         /// </summary>
@@ -55,7 +55,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Filter capacity
         /// </summary>
-        private uint n { get; set; }
+        private uint N { get; set; }
 
         private Random random = new Random();
 
@@ -68,8 +68,8 @@ namespace ProbabilisticDataStructures
         public CuckooBloomFilter(uint n, double fpRate)
         {
             var b = (uint)4;
-            var f = this.calculateF(b, fpRate);
-            var m = this.power2(n / f * 8);
+            var f = CalculateF(b, fpRate);
+            var m = Power2(n / f * 8);
             var buckets = new byte[m][][];
 
             for (uint i = 0; i < m; i++)
@@ -77,12 +77,12 @@ namespace ProbabilisticDataStructures
                 buckets[i] = new byte[b][];
             }
 
-            this.buckets = buckets;
-            this.hash = HashAlgorithm.Create("MD5");
-            this.m = m;
-            this.b = b;
-            this.f = f;
-            this.n = n;
+            this.Buckets = buckets;
+            this.Hash = HashAlgorithm.Create("MD5");
+            this.M = m;
+            this.B = b;
+            this.F = f;
+            this.N = n;
         }
 
         /// <summary>
@@ -91,7 +91,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The number of buckets</returns>
         public uint BucketCount()
         {
-            return this.m;
+            return this.M;
         }
 
         /// <summary>
@@ -100,7 +100,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The number of items the filter can store</returns>
         public uint Capacity()
         {
-            return this.n;
+            return this.N;
         }
 
         /// <summary>
@@ -121,20 +121,20 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data is a member</returns>
         public bool Test(byte[] data)
         {
-            var components = this.components(data);
+            var components = this.Components(data);
             var i1 = components.Item1;
             var i2 = components.Item2;
             var f = components.Item3;
 
             // If either bucket containsf, it's a member.
-            var b1 = this.buckets[i1 % this.m];
+            var b1 = this.Buckets[i1 % this.M];
             foreach (var sequence in b1)
             {
                 if (sequence != null)
                     if (Enumerable.SequenceEqual(sequence, f))
                         return true;
             }
-            var b2 = this.buckets[i2 % this.m];
+            var b2 = this.Buckets[i2 % this.M];
             foreach (var sequence in b2)
             {
                 if (sequence != null)
@@ -156,11 +156,11 @@ namespace ProbabilisticDataStructures
         /// </returns>
         public bool Add(byte[] data)
         {
-            var components = this.components(data);
+            var components = this.Components(data);
             var i1 = components.Item1;
             var i2 = components.Item2;
             var f = components.Item3;
-            return this.add(i1, i2, f);
+            return this.Insert(i1, i2, f);
         }
 
         /// <summary>
@@ -175,20 +175,20 @@ namespace ProbabilisticDataStructures
         /// </returns>
         public Tuple<bool, bool> TestAndAdd(byte[] data)
         {
-            var components = this.components(data);
+            var components = this.Components(data);
             var i1 = components.Item1;
             var i2 = components.Item2;
             var f = components.Item3;
 
             // If either bucket contains f, it's a member.
-            var b1 = this.buckets[i1 % this.m];
+            var b1 = this.Buckets[i1 % this.M];
             foreach (var sequence in b1)
             {
                 if (sequence != null)
                     if (Enumerable.SequenceEqual(sequence, f))
                         return Tuple.Create(true, false);
             }
-            var b2 = this.buckets[i2 % this.m];
+            var b2 = this.Buckets[i2 % this.M];
             foreach (var sequence in b2)
             {
                 if (sequence != null)
@@ -196,7 +196,7 @@ namespace ProbabilisticDataStructures
                         return Tuple.Create(true, false);
             }
 
-            return Tuple.Create(false, this.add(i1, i2, f));
+            return Tuple.Create(false, this.Insert(i1, i2, f));
         }
 
         /// <summary>
@@ -207,14 +207,14 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether the data was a member or not</returns>
         public bool TestAndRemove(byte[] data)
         {
-            var components = this.components(data);
+            var components = this.Components(data);
             var i1 = components.Item1;
             var i2 = components.Item2;
             var f = components.Item3;
 
             // Try to remove from bucket[i1].
-            var b1 = this.buckets[i1 % this.m];
-            var idx = this.IndexOf(b1, f);
+            var b1 = this.Buckets[i1 % this.M];
+            var idx = IndexOf(b1, f);
             if (idx != -1)
             {
                 b1[idx] = null;
@@ -223,8 +223,8 @@ namespace ProbabilisticDataStructures
             }
 
             // Try to remove from bucket[i2].
-            var b2 = this.buckets[i2 % this.m];
-            idx = this.IndexOf(b2, f);
+            var b2 = this.Buckets[i2 % this.M];
+            idx = IndexOf(b2, f);
             if (idx != -1)
             {
                 b2[idx] = null;
@@ -242,12 +242,12 @@ namespace ProbabilisticDataStructures
         /// <returns>The CuckooBloomFilter</returns>
         public CuckooBloomFilter Reset()
         {
-            var buckets = new byte[this.m][][];
-            for (uint i = 0; i < this.m; i++)
+            var buckets = new byte[this.M][][];
+            for (uint i = 0; i < this.M; i++)
             {
-                buckets[i] = new byte[this.b][];
+                buckets[i] = new byte[this.B][];
             }
-            this.buckets = buckets;
+            this.Buckets = buckets;
             this.count = 0;
             return this;
         }
@@ -258,7 +258,7 @@ namespace ProbabilisticDataStructures
         /// <param name="h">The HashAlgorithm to use.</param>
         public void SetHash(HashAlgorithm h)
         {
-            this.hash = h;
+            this.Hash = h;
         }
 
         /// <summary>
@@ -269,9 +269,9 @@ namespace ProbabilisticDataStructures
         /// <returns>
         /// Whether or not the fingerprint is contained in one of the bucket's entries.
         /// </returns>
-        private bool Contains(byte[][] bucket, byte[] f)
+        private static bool Contains(byte[][] bucket, byte[] f)
         {
-            return this.IndexOf(bucket, f) != 1;
+            return IndexOf(bucket, f) != 1;
         }
 
         /// <summary>
@@ -281,7 +281,7 @@ namespace ProbabilisticDataStructures
         /// <param name="f">Fingerprint</param>
         /// <returns>The entry index of the fingerprint or -1 if it's not in the
         /// bucket</returns>
-        private int IndexOf(byte[][] bucket, byte[] f)
+        private static int IndexOf(byte[][] bucket, byte[] f)
         {
             for (int i = 0; i < bucket.Count(); i++)
             {
@@ -302,7 +302,7 @@ namespace ProbabilisticDataStructures
         /// full.
         /// </summary>
         /// <returns></returns>
-        private int GetEmptyEntry(byte[][] bucket)
+        private static int GetEmptyEntry(byte[][] bucket)
         {
             for (int i = 0; i < bucket.Count(); i++)
             {
@@ -324,11 +324,11 @@ namespace ProbabilisticDataStructures
         /// <returns>
         /// True if the insert was successful. False if the filter is full
         /// </returns>
-        private bool add(uint i1, uint i2, byte[] f)
+        private bool Insert(uint i1, uint i2, byte[] f)
         {
             // Try to insert into bucket[i1].
-            var b1 = this.buckets[i1 % this.m];
-            var idx = this.GetEmptyEntry(b1);
+            var b1 = this.Buckets[i1 % this.M];
+            var idx = GetEmptyEntry(b1);
             if (idx != -1)
             {
                 b1[idx] = f;
@@ -337,8 +337,8 @@ namespace ProbabilisticDataStructures
             }
 
             // Try to insert into bucket[i2].
-            var b2 = this.buckets[i2 % this.m];
-            var ids = this.GetEmptyEntry(b2);
+            var b2 = this.Buckets[i2 % this.M];
+            var ids = GetEmptyEntry(b2);
             if (idx != -1)
             {
                 b2[idx] = f;
@@ -350,15 +350,15 @@ namespace ProbabilisticDataStructures
             var i = i1;
             for (int n = 0; n < MAX_NUM_KICKS; n++)
             {
-                var bucketIdx = i % this.m;
-                var entryIdx = random.Next((int)this.b);
+                var bucketIdx = i % this.M;
+                var entryIdx = random.Next((int)this.B);
                 var tempF = f;
-                f = this.buckets[bucketIdx][entryIdx];
-                this.buckets[bucketIdx][entryIdx] = tempF;
-                i = i ^ ProbabilisticDataStructures.ToBigEndianUInt32(this.computeHash(f));
-                var b = this.buckets[i % this.m];
+                f = this.Buckets[bucketIdx][entryIdx];
+                this.Buckets[bucketIdx][entryIdx] = tempF;
+                i = i ^ ProbabilisticDataStructures.ToBigEndianUInt32(this.ComputeHash(f));
+                var b = this.Buckets[i % this.M];
 
-                idx = this.GetEmptyEntry(b);
+                idx = GetEmptyEntry(b);
                 if (idx != -1)
                 {
                     b[idx] = f;
@@ -377,12 +377,12 @@ namespace ProbabilisticDataStructures
         /// <param name="data">Data</param>
         /// <returns>The two hash values used to index into the buckets and the
         /// fingerprint for the given data</returns>
-        private Tuple<uint, uint, byte[]> components(byte[] data)
+        private Tuple<uint, uint, byte[]> Components(byte[] data)
         {
-            var hash = this.computeHash(data);
-            var f = hash.Take((int)this.f).ToArray();
+            var hash = this.ComputeHash(data);
+            var f = hash.Take((int)this.F).ToArray();
             var i1 = ProbabilisticDataStructures.ToBigEndianUInt32(hash);
-            var i2 = ProbabilisticDataStructures.ToBigEndianUInt32(this.computeHash(f));
+            var i2 = ProbabilisticDataStructures.ToBigEndianUInt32(this.ComputeHash(f));
 
             return Tuple.Create<uint, uint, byte[]>(i1, i2, f);
         }
@@ -392,9 +392,9 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="data">Data</param>
         /// <returns>32-bit hash value</returns>
-        private byte[] computeHash(byte[] data)
+        private byte[] ComputeHash(byte[] data)
         {
-            var hash = new Hash(this.hash);
+            var hash = new Hash(this.Hash);
             hash.ComputeHash(data);
             var sum = hash.Sum();
             return sum;
@@ -407,7 +407,7 @@ namespace ProbabilisticDataStructures
         /// <param name="b">Bucket size</param>
         /// <param name="epsilon">False positive rate</param>
         /// <returns>The optimal fingerprint length</returns>
-        private uint calculateF(uint b, double epsilon)
+        private static uint CalculateF(uint b, double epsilon)
         {
             var f = (uint)Math.Ceiling(Math.Log(2 * b / epsilon));
             f = f / 8;
@@ -423,7 +423,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="x">Value</param>
         /// <returns>The next power of two for the given value</returns>
-        private uint power2(uint x)
+        private static uint Power2(uint x)
         {
             x--;
             x |= x >> 1;

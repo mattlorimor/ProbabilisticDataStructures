@@ -178,9 +178,9 @@ namespace TestProbabilisticDataStructures
 
             for (int i = 0; i < f.BucketCount(); i++)
             {
-                for (uint j = 0; j < f.b; j++)
+                for (uint j = 0; j < f.B; j++)
                 {
-                    if (f.buckets[i][j] != null)
+                    if (f.Buckets[i][j] != null)
                     {
                         Assert.Fail("Exected all buckets to be cleared");
                     }
