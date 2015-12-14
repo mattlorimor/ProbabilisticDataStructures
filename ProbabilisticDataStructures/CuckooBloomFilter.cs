@@ -173,7 +173,7 @@ namespace ProbabilisticDataStructures
         /// <returns>
         /// (true, false) if the data is a member, (false, add()) if not
         /// </returns>
-        public TestAndAddResult TestAndAdd(byte[] data)
+        public TestAndAddReturnValue TestAndAdd(byte[] data)
         {
             var components = this.GetComponents(data);
             var i1 = components.Hash1;
@@ -188,7 +188,7 @@ namespace ProbabilisticDataStructures
                 { 
                     if (Enumerable.SequenceEqual(sequence, f))
                     {
-                        return TestAndAddResult.Create(true, false);
+                        return TestAndAddReturnValue.Create(true, false);
                     }
                 }
             }
@@ -199,12 +199,12 @@ namespace ProbabilisticDataStructures
                 {
                     if (Enumerable.SequenceEqual(sequence, f))
                     {
-                        return TestAndAddResult.Create(true, false);
+                        return TestAndAddReturnValue.Create(true, false);
                     }
                 }
             }
 
-            return TestAndAddResult.Create(false, this.Insert(i1, i2, f));
+            return TestAndAddReturnValue.Create(false, this.Insert(i1, i2, f));
         }
 
         /// <summary>
@@ -461,14 +461,14 @@ namespace ProbabilisticDataStructures
             }
         }
 
-        public class TestAndAddResult
+        public struct TestAndAddReturnValue
         {
             public bool WasAlreadyAMember { get; private set; }
             public bool Added { get; private set; }
 
-            internal static TestAndAddResult Create(bool wasAlreadyAMember, bool added)
+            internal static TestAndAddReturnValue Create(bool wasAlreadyAMember, bool added)
             {
-                return new TestAndAddResult
+                return new TestAndAddReturnValue
                 {
                     WasAlreadyAMember = wasAlreadyAMember,
                     Added = added
