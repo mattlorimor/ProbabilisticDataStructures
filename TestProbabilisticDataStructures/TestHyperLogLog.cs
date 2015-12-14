@@ -105,7 +105,7 @@ namespace TestProbabilisticDataStructures
         {
             var hll = HyperLogLog.NewDefaultHyperLogLog(0.1);
 
-            Assert.AreEqual(128u, hll.m);
+            Assert.AreEqual(128u, hll.M);
         }
 
         [TestMethod]

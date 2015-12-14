@@ -47,28 +47,28 @@ namespace ProbabilisticDataStructures
     /// </summary>
     public class HyperLogLog
     {
-        private static double exp32 = Math.Pow(2, 32);
+        private static double Exp32 = Math.Pow(2, 32);
 
         /// <summary>
         /// Counter registers
         /// </summary>
-        private byte[] registers { get; set; }
+        private byte[] Registers { get; set; }
         /// <summary>
         /// Number of registers
         /// </summary>
-        internal uint m { get; set; }
+        internal uint M { get; set; }
         /// <summary>
         /// Number of bits to calculate register
         /// </summary>
-        private uint b { get; set; }
+        private uint B { get; set; }
         /// <summary>
         /// Bias-correction constant
         /// </summary>
-        private double alpha { get; set; }
+        private double Alpha { get; set; }
         /// <summary>
         /// Hash algorithm
         /// </summary>
-        private HashAlgorithm hash { get; set; }
+        private HashAlgorithm Hash { get; set; }
 
         /// <summary>
         /// Creates a new HyperLogLog with m registers. Returns an error if m isn't a
@@ -82,11 +82,11 @@ namespace ProbabilisticDataStructures
                 throw new ArgumentException(String.Format("{0} is not a power of two", m));
             }
 
-            this.registers = new byte[m];
-            this.m = m;
-            this.b = (uint)Math.Ceiling(Math.Log(m, 2));
-            this.alpha = this.calculateAlpha(m);
-            this.hash = HashAlgorithm.Create("MD5");
+            this.Registers = new byte[m];
+            this.M = m;
+            this.B = (uint)Math.Ceiling(Math.Log(m, 2));
+            this.Alpha = CalculateAlpha(m);
+            this.Hash = HashAlgorithm.Create("MD5");
         }
 
         /// <summary>
@@ -109,14 +109,14 @@ namespace ProbabilisticDataStructures
         /// <returns>The HyperLogLog</returns>
         public HyperLogLog Add(byte[] data)
         {
-            var hash = calculateHash(data);
-            var k = 32 - this.b;
-            var r = this.calculateRho(hash << (int)this.b, k);
+            var hash = CalculateHash(data);
+            var k = 32 - this.B;
+            var r = CalculateRho(hash << (int)this.B, k);
             var j = hash >> (int)k;
 
-            if (r > this.registers[j])
+            if (r > this.Registers[j])
             {
-                this.registers[j] = r;
+                this.Registers[j] = r;
             }
 
             return this;
@@ -129,17 +129,17 @@ namespace ProbabilisticDataStructures
         public UInt64 Count()
         {
             var sum = 0.0;
-            var m = (double)this.m;
-            foreach (var val in this.registers)
+            var m = (double)this.M;
+            foreach (var val in this.Registers)
             {
                 sum += 1.0 / Math.Pow(2.0, val);
             }
-            var estimate = this.alpha * m * m / sum;
+            var estimate = this.Alpha * m * m / sum;
             if (estimate <= 5.0 / 2.0 * m)
             {
                 // Small range correction
                 var v = 0;
-                foreach (var r in this.registers)
+                foreach (var r in this.Registers)
                 {
                     if (r == 0)
                     {
@@ -151,10 +151,10 @@ namespace ProbabilisticDataStructures
                     estimate = m * Math.Log(m / v);
                 }
             }
-            else if (estimate > 1.0 / 30.0 * exp32)
+            else if (estimate > 1.0 / 30.0 * Exp32)
             {
                 // Large range correction
-                estimate = -exp32 * Math.Log(1 - estimate / exp32);
+                estimate = -Exp32 * Math.Log(1 - estimate / Exp32);
             }
             return (UInt64)estimate;
         }
@@ -167,17 +167,17 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the merge was successful</returns>
         public bool Merge(HyperLogLog other)
         {
-            if (this.m != other.m)
+            if (this.M != other.M)
             {
                 throw new ArgumentException("Number of registers must match");
             }
 
-            for (int i = 0; i < other.registers.Count(); i++)
+            for (int i = 0; i < other.Registers.Count(); i++)
             {
-                var r = other.registers[i];
-                if (r > this.registers[i])
+                var r = other.Registers[i];
+                if (r > this.Registers[i])
                 {
-                    this.registers[i] = r;
+                    this.Registers[i] = r;
                 }
             }
 
@@ -191,7 +191,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The HyperLogLog</returns>
         public HyperLogLog Reset()
         {
-            this.registers = new byte[this.m];
+            this.Registers = new byte[this.M];
             return this;
         }
 
@@ -201,7 +201,7 @@ namespace ProbabilisticDataStructures
         /// <param name="h">The HashAlgorithm to use.</param>
         public void SetHash(HashAlgorithm h)
         {
-            this.hash = h;
+            this.Hash = h;
         }
 
         /// <summary>
@@ -209,9 +209,9 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="data">Data</param>
         /// <returns>32-bit hash value</returns>
-        private uint calculateHash(byte[] data)
+        private uint CalculateHash(byte[] data)
         {
-            var hash = new Hash(this.hash);
+            var hash = new Hash(this.Hash);
             hash.ComputeHash(data);
             var sum = hash.Sum();
             return ProbabilisticDataStructures.ToBigEndianUInt32(sum);
@@ -223,7 +223,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="m">Number of registers</param>
         /// <returns>Calculated bias-correction constant, alpha</returns>
-        private double calculateAlpha(uint m)
+        private static double CalculateAlpha(uint m)
         {
             switch (m)
             {
@@ -244,7 +244,7 @@ namespace ProbabilisticDataStructures
         /// <param name="val">The value to check</param>
         /// <param name="max"></param>
         /// <returns>The position of the leftmost 1-bit</returns>
-        private byte calculateRho(uint val, uint max)
+        private static byte CalculateRho(uint val, uint max)
         {
             var r = 1;
             while ((val & 0x80000000) == 0 && r <= max)
