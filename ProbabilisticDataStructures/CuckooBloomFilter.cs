@@ -173,7 +173,7 @@ namespace ProbabilisticDataStructures
         /// <returns>
         /// (true, false) if the data is a member, (false, add()) if not
         /// </returns>
-        public Tuple<bool, bool> TestAndAdd(byte[] data)
+        public TestAndAddResult TestAndAdd(byte[] data)
         {
             var components = this.GetComponents(data);
             var i1 = components.Hash1;
@@ -185,18 +185,26 @@ namespace ProbabilisticDataStructures
             foreach (var sequence in b1)
             {
                 if (sequence != null)
+                { 
                     if (Enumerable.SequenceEqual(sequence, f))
-                        return Tuple.Create(true, false);
+                    {
+                        return TestAndAddResult.Create(true, false);
+                    }
+                }
             }
             var b2 = this.Buckets[i2 % this.M];
             foreach (var sequence in b2)
             {
                 if (sequence != null)
+                {
                     if (Enumerable.SequenceEqual(sequence, f))
-                        return Tuple.Create(true, false);
+                    {
+                        return TestAndAddResult.Create(true, false);
+                    }
+                }
             }
 
-            return Tuple.Create(false, this.Insert(i1, i2, f));
+            return TestAndAddResult.Create(false, this.Insert(i1, i2, f));
         }
 
         /// <summary>
@@ -446,6 +454,21 @@ namespace ProbabilisticDataStructures
             public byte[] Fingerprint;
             public uint Hash1;
             public uint Hash2;
+        }
+
+        public class TestAndAddResult
+        {
+            public bool WasAlreadyAMember { get; private set; }
+            public bool Added { get; private set; }
+
+            internal static TestAndAddResult Create(bool wasAlreadyAMember, bool added)
+            {
+                return new TestAndAddResult
+                {
+                    WasAlreadyAMember = wasAlreadyAMember,
+                    Added = added
+                };
+            }
         }
     }
 }

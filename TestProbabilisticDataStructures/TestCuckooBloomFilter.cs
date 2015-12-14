@@ -85,21 +85,21 @@ namespace TestProbabilisticDataStructures
 
             // 'a' is still in the filter.
             var testAndAdd = f.TestAndAdd(A_BYTES);
-            if (!testAndAdd.Item1)
+            if (!testAndAdd.WasAlreadyAMember)
             {
                 Assert.Fail("'a' should be a member");
             }
             // Should not have added
-            Assert.IsFalse(testAndAdd.Item2);
+            Assert.IsFalse(testAndAdd.Added);
 
             // 'b' is not in the filter.
             testAndAdd = f.TestAndAdd(B_BYTES);
-            if (testAndAdd.Item1)
+            if (testAndAdd.WasAlreadyAMember)
             {
                 Assert.Fail("'b' should not be a member");
             }
             // Should add
-            Assert.IsTrue(testAndAdd.Item2);
+            Assert.IsTrue(testAndAdd.Added);
 
             // 'a' is still in the filter.
             if (!f.Test(A_BYTES))
@@ -127,9 +127,9 @@ namespace TestProbabilisticDataStructures
             // Filter should be full.
             testAndAdd = f.TestAndAdd(X_BYTES);
             // Make sure not there
-            Assert.IsFalse(testAndAdd.Item1);
+            Assert.IsFalse(testAndAdd.WasAlreadyAMember);
             // Make sure didn't add
-            Assert.IsFalse(testAndAdd.Item2);
+            Assert.IsFalse(testAndAdd.Added);
         }
 
         /// <summary>
