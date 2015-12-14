@@ -205,8 +205,8 @@ namespace ProbabilisticDataStructures
         public bool Test(byte[] data)
         {
             var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
-            var lower = hashKernel.Item1;
-            var upper = hashKernel.Item2;
+            var lower = hashKernel.LowerBaseHash;
+            var upper = hashKernel.UpperBaseHash;
 
             // If any of the K cells are 0, then it's not a member.
             for (uint i = 0; i < this.k; i++)
@@ -231,8 +231,8 @@ namespace ProbabilisticDataStructures
             this.Decrement();
 
             var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
-            var lower = hashKernel.Item1;
-            var upper = hashKernel.Item2;
+            var lower = hashKernel.LowerBaseHash;
+            var upper = hashKernel.UpperBaseHash;
 
             // Set the K cells to max.
             for (uint i = 0; i < this.k; i++)
@@ -252,8 +252,8 @@ namespace ProbabilisticDataStructures
         public bool TestAndAdd(byte[] data)
         {
             var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
-            var lower = hashKernel.Item1;
-            var upper = hashKernel.Item2;
+            var lower = hashKernel.LowerBaseHash;
+            var upper = hashKernel.UpperBaseHash;
             var member = true;
 
             // If any of the K cells are 0, then it's not a member.

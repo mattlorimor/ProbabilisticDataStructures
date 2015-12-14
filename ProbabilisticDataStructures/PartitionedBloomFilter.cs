@@ -154,8 +154,8 @@ namespace ProbabilisticDataStructures
         public bool Test(byte[] data)
         {
             var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
-            var lower = hashKernel.Item1;
-            var upper = hashKernel.Item2;
+            var lower = hashKernel.LowerBaseHash;
+            var upper = hashKernel.UpperBaseHash;
 
             // If any of the K partiion bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
@@ -178,8 +178,8 @@ namespace ProbabilisticDataStructures
         public IFilter Add(byte[] data)
         {
             var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
-            var lower = hashKernel.Item1;
-            var upper = hashKernel.Item2;
+            var lower = hashKernel.LowerBaseHash;
+            var upper = hashKernel.UpperBaseHash;
 
             // Set the K partition bits.
             for (uint i = 0; i < this.k; i++)
@@ -202,8 +202,8 @@ namespace ProbabilisticDataStructures
         public bool TestAndAdd(byte[] data)
         {
             var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
-            var lower = hashKernel.Item1;
-            var upper = hashKernel.Item2;
+            var lower = hashKernel.LowerBaseHash;
+            var upper = hashKernel.UpperBaseHash;
             var member = true;
 
             // If any K partition bits are not set, then it's not a member.

@@ -120,8 +120,8 @@ namespace ProbabilisticDataStructures
         public CountMinSketch Add(byte[] data)
         {
             var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
-            var lower = hashKernel.Item1;
-            var upper = hashKernel.Item2;
+            var lower = hashKernel.LowerBaseHash;
+            var upper = hashKernel.UpperBaseHash;
 
             // Increment count in each row.
             for (uint i = 0; i < this.Depth; i++)
@@ -142,8 +142,8 @@ namespace ProbabilisticDataStructures
         public UInt64 Count(byte[] data)
         {
             var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
-            var lower = hashKernel.Item1;
-            var upper = hashKernel.Item2;
+            var lower = hashKernel.LowerBaseHash;
+            var upper = hashKernel.UpperBaseHash;
             var count = UInt64.MaxValue;
 
             for (uint i = 0; i < this.Depth; i++)

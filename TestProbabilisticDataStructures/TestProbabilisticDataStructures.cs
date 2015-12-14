@@ -46,8 +46,8 @@ namespace TestProbabilisticDataStructures
             var hashKernel = ProbabilisticDataStructures
                 .ProbabilisticDataStructures.HashKernel(data, hashAlgorithm);
 
-            Assert.AreEqual(4254774583u, hashKernel.Item1);
-            Assert.AreEqual(4179961689u, hashKernel.Item2);
+            Assert.AreEqual(4254774583u, hashKernel.LowerBaseHash);
+            Assert.AreEqual(4179961689u, hashKernel.UpperBaseHash);
         }
 
         /// <summary>
@@ -62,8 +62,8 @@ namespace TestProbabilisticDataStructures
             var hashKernel = ProbabilisticDataStructures
                 .ProbabilisticDataStructures.HashKernel(data, hashAlgorithm);
 
-            Assert.AreEqual(3252571653u, hashKernel.Item1);
-            Assert.AreEqual(1646207440u, hashKernel.Item2);
+            Assert.AreEqual(3252571653u, hashKernel.LowerBaseHash);
+            Assert.AreEqual(1646207440u, hashKernel.UpperBaseHash);
         }
 
         /// <summary>

@@ -44,15 +44,16 @@ namespace ProbabilisticDataStructures
         /// <param name="data">The data bytes to hash.</param>
         /// <param name="algorithm">The hashing algorithm to use.</param>
         /// <returns>A a tuple of the upper and lower base.</returns>
-        public static Tuple<uint, uint> HashKernel(byte[] data, HashAlgorithm algorithm)
+        public static HashKernel HashKernel(byte[] data, HashAlgorithm algorithm)
         {
             var hash = new Hash(algorithm);
             hash.ComputeHash(data);
             var sum = hash.Sum();
-            return Tuple.Create(
-                ToBigEndianUInt32(sum.Skip(4).Take(4).ToArray()),
-                ToBigEndianUInt32(sum.Take(4).ToArray())
-                );
+            return new HashKernel
+            {
+                LowerBaseHash = ToBigEndianUInt32(sum.Skip(4).Take(4).ToArray()),
+                UpperBaseHash = ToBigEndianUInt32(sum.Take(4).ToArray())
+            };
         }
 
         public static uint ToBigEndianUInt32(byte[] bytes)
@@ -63,5 +64,11 @@ namespace ProbabilisticDataStructures
             uint i = BitConverter.ToUInt32(bytes, 0);
             return i;
         }
+    }
+
+    public struct HashKernel
+    {
+        public uint UpperBaseHash;
+        public uint LowerBaseHash;
     }
 }
