@@ -167,17 +167,17 @@ namespace TestProbabilisticDataStructures
             var resetF = d.Reset();
             Assert.AreSame(d, resetF, "Returned DeletableBloomFilter should be the same instance");
 
-            for (uint i = 0; i < d.buckets.count; i++)
+            for (uint i = 0; i < d.Buckets.count; i++)
             {
-                if (d.buckets.Get(i) != 0)
+                if (d.Buckets.Get(i) != 0)
                 {
                     Assert.Fail("Expected all bits to be unset");
                 }
             }
 
-            for (uint i = 0; i < d.collisions.count; i++)
+            for (uint i = 0; i < d.Collisions.count; i++)
             {
-                if (d.collisions.Get(i) != 0)
+                if (d.Collisions.Get(i) != 0)
                 {
                     Assert.Fail("Expected all bits to be unset");
                 }
