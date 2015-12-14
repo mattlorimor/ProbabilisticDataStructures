@@ -24,9 +24,9 @@ namespace TestProbabilisticDataStructures
             var k = ProbabilisticDataStructures.ProbabilisticDataStructures.OptimalK(0.1);
 
             Assert.AreEqual(k, f.K());
-            Assert.AreEqual(100u, f.m);
+            Assert.AreEqual(100u, f.M);
             Assert.AreEqual(0u, f.P());
-            Assert.AreEqual(1u, f.max);
+            Assert.AreEqual(1u, f.Max);
         }
 
         /// <summary>
@@ -36,7 +36,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestStableCells()
         {
-            var f = StableBloomFilter.NewStableBloomFilter(100, 1, 0.1);
+            var f = new StableBloomFilter(100, 1, 0.1);
 
             Assert.AreEqual(100u, f.Cells());
         }
@@ -48,7 +48,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestStableK()
         {
-            var f = StableBloomFilter.NewStableBloomFilter(100, 1, 0.01);
+            var f = new StableBloomFilter(100, 1, 0.01);
 
             Assert.AreEqual(3u, f.K());
         }
@@ -132,7 +132,7 @@ namespace TestProbabilisticDataStructures
             }
 
             var zeros = 0;
-            for (uint i = 0; i < f.m; i++)
+            for (uint i = 0; i < f.M; i++)
             {
                 if (f.cells.Get(i) == 0)
                 {
@@ -140,7 +140,7 @@ namespace TestProbabilisticDataStructures
                 }
             }
 
-            var actual = Math.Round((double)((double)zeros / (double)f.m), 1, MidpointRounding.AwayFromZero);
+            var actual = Math.Round((double)((double)zeros / (double)f.M), 1, MidpointRounding.AwayFromZero);
             var expected = Math.Round(f.StablePoint(), 1, MidpointRounding.AwayFromZero);
 
             Assert.AreEqual(expected, actual);
@@ -186,7 +186,7 @@ namespace TestProbabilisticDataStructures
             var resetF = f.Reset();
             Assert.AreSame(f, resetF, "Returned StableBloomFilter should be the same instance");
 
-            for (uint i = 0; i < f.m; i++)
+            for (uint i = 0; i < f.M; i++)
             {
                 var cell = f.cells.Get(i);
                 if (cell != 0)

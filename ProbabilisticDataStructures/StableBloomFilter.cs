@@ -41,11 +41,11 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Hash algorightm
         /// </summary>
-        private HashAlgorithm hash { get; set; }
+        private HashAlgorithm Hash { get; set; }
         /// <summary>
         /// Number of cells
         /// </summary>
-        internal uint m { get; set; }
+        internal uint M { get; set; }
         /// <summary>
         /// Number of cells to decrement
         /// </summary>
@@ -57,13 +57,18 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Cell max value
         /// </summary>
-        internal byte max { get; set; }
+        internal byte Max { get; set; }
         /// <summary>
         /// Buffer used to cache indices
         /// </summary>
-        private uint[] indexBuffer { get; set; }
+        private uint[] IndexBuffer { get; set; }
 
         private Random random = new Random();
+
+        /// <summary>
+        /// Empty constructor
+        /// </summary>
+        private StableBloomFilter() { }
 
         /// <summary>
         /// Creates a new Stable Bloom Filter with m cells and d bits allocated per cell
@@ -73,7 +78,7 @@ namespace ProbabilisticDataStructures
         /// <param name="m">Number of cells to decrement</param>
         /// <param name="d">Bits per cell</param>
         /// <param name="fpRate">Desired false-positive rate</param>
-        public static StableBloomFilter NewStableBloomFilter(uint m, byte d, double fpRate)
+        public StableBloomFilter(uint m, byte d, double fpRate)
         {
             var k = ProbabilisticDataStructures.OptimalK(fpRate) / 2;
             if (k > m)
@@ -87,16 +92,13 @@ namespace ProbabilisticDataStructures
 
             var cells = new Buckets(m, d);
 
-            return new StableBloomFilter
-            {
-                hash = HashAlgorithm.Create("MD5"),
-                m = m,
-                k = k,
-                p = optimalStableP(m, k, d, fpRate),
-                max = cells.MaxBucketValue(),
-                cells = cells,
-                indexBuffer = new uint[k]
-            };
+            this.Hash = HashAlgorithm.Create("MD5");
+            this.M = m;
+            this.k = k;
+            this.p = OptimalStableP(m, k, d, fpRate);
+            this.Max = cells.MaxBucketValue();
+            this.cells = cells;
+            this.IndexBuffer = new uint[k];
         }
 
         /// <summary>
@@ -108,7 +110,7 @@ namespace ProbabilisticDataStructures
         /// <param name="fpRate">Desired false-positive rate</param>
         public static StableBloomFilter NewDefaultStableBloomFilter(uint m, double fpRate)
         {
-            return NewStableBloomFilter(m, 1, fpRate);
+            return new StableBloomFilter(m, 1, fpRate);
         }
 
         /// <summary>
@@ -127,13 +129,13 @@ namespace ProbabilisticDataStructures
 
             return new StableBloomFilter
             {
-                hash = HashAlgorithm.Create("MD5"),
-                m = m,
+                Hash = HashAlgorithm.Create("MD5"),
+                M = m,
                 k = k,
                 p = 0,
-                max = cells.MaxBucketValue(),
+                Max = cells.MaxBucketValue(),
                 cells = cells,
-                indexBuffer = new uint[k]
+                IndexBuffer = new uint[k]
             };
         }
 
@@ -143,7 +145,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The number of cells in the Stable Bloom Filter</returns>
         public uint Cells()
         {
-            return this.m;
+            return this.M;
         }
 
         /// <summary>
@@ -175,11 +177,11 @@ namespace ProbabilisticDataStructures
         /// </returns>
         public double StablePoint()
         {
-            var subDenom = this.p * (1.0 / (double)this.k - 1.0 / (double)this.m);
+            var subDenom = this.p * (1.0 / (double)this.k - 1.0 / (double)this.M);
             var denom = 1.0 + 1.0 / (double)subDenom;
             var b = 1.0 / denom;
 
-            return Math.Pow(b, this.max);
+            return Math.Pow(b, this.Max);
         }
 
         /// <summary>
@@ -202,14 +204,14 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data is maybe contained in the filter</returns>
         public bool Test(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
 
             // If any of the K cells are 0, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                if (this.cells.Get((lower + upper * i) % this.m) == 0)
+                if (this.cells.Get((lower + upper * i) % this.M) == 0)
                 {
                     return false;
                 }
@@ -226,16 +228,16 @@ namespace ProbabilisticDataStructures
         public IFilter Add(byte[] data)
         {
             // Randomly decrement p cells to make room for new elements.
-            this.decrement();
+            this.Decrement();
 
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
 
             // Set the K cells to max.
             for (uint i = 0; i < this.k; i++)
             {
-                this.cells.Set((lower + upper * i) % this.m, this.max);
+                this.cells.Set((lower + upper * i) % this.M, this.Max);
             }
 
             return this;
@@ -249,7 +251,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was present before adding.</returns>
         public bool TestAndAdd(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.hash);
+            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
             var lower = hashKernel.Item1;
             var upper = hashKernel.Item2;
             var member = true;
@@ -257,20 +259,20 @@ namespace ProbabilisticDataStructures
             // If any of the K cells are 0, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                this.indexBuffer[i] = (lower + upper * i) % this.m;
-                if (this.cells.Get(this.indexBuffer[i]) == 0)
+                this.IndexBuffer[i] = (lower + upper * i) % this.M;
+                if (this.cells.Get(this.IndexBuffer[i]) == 0)
                 {
                     member = false;
                 }
             }
 
             // Randomly decrement p cells to make room for new elements.
-            this.decrement();
+            this.Decrement();
 
             // Set the K cells to max.
-            foreach (var idx in this.indexBuffer)
+            foreach (var idx in this.IndexBuffer)
             {
-                this.cells.Set(idx, this.max);
+                this.cells.Set(idx, this.Max);
             }
 
             return member;
@@ -294,7 +296,7 @@ namespace ProbabilisticDataStructures
         // TODO: Add SetHash to the IFilter interface?
         public void SetHash(HashAlgorithm h)
         {
-            this.hash = h;
+            this.Hash = h;
         }
 
         /// <summary>
@@ -303,12 +305,12 @@ namespace ProbabilisticDataStructures
         /// cells are not independent, each cell has a probability of p/m for being
         /// picked at each iteration, which means the properties still hold.
         /// </summary>
-        private void decrement()
+        private void Decrement()
         {
-            var r = random.Next((int)this.m);
+            var r = random.Next((int)this.M);
             for (uint i = 0; i < this.p; i++)
             {
-                var idx = (r + i) % this.m;
+                var idx = (r + i) % this.M;
                 this.cells.Increment((uint)idx, -1);
             }
         }
@@ -322,7 +324,7 @@ namespace ProbabilisticDataStructures
         /// <param name="d">Bits per cell</param>
         /// <param name="fpRate">Desired false-positive rate</param>
         /// <returns>Optimal number of cells to decrement</returns>
-        private static uint optimalStableP(uint m, uint k, byte d, double fpRate)
+        private static uint OptimalStableP(uint m, uint k, byte d, double fpRate)
         {
             var max = Math.Pow(2, d) - 1;
             var subDenom = Math.Pow(1 - Math.Pow(fpRate, 1.0 / k), 1.0 / max);
