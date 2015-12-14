@@ -16,7 +16,6 @@ namespace ProbabilisticDataStructures
         private uint K { get; set; }
         internal uint N { get; set; }
         private ElementHeap elements { get; set; }
-        //private List<Element> elements { get; set; }
 
         /// <summary>
         /// Creates a new TopK backed by a Count-Min sketch whose relative accuracy is
