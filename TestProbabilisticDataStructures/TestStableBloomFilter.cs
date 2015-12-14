@@ -21,7 +21,7 @@ namespace TestProbabilisticDataStructures
         public void TestNewUnstableBloomFilter()
         {
             var f = StableBloomFilter.NewUnstableBloomFilter(100, 0.1);
-            var k = ProbabilisticDataStructures.ProbabilisticDataStructures.OptimalK(0.1);
+            var k = ProbabilisticDataStructures.Utils.OptimalK(0.1);
 
             Assert.AreEqual(k, f.K());
             Assert.AreEqual(100u, f.M);

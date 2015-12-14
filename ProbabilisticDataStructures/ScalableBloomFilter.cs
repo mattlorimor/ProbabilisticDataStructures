@@ -77,7 +77,7 @@ namespace ProbabilisticDataStructures
             this.Filters = new List<PartitionedBloomFilter>();
             this.R = r;
             this.FP = fpRate;
-            this.P = ProbabilisticDataStructures.FILL_RATIO;
+            this.P = Defaults.FILL_RATIO;
             this.Hint = hint;
 
             this.AddFilter();

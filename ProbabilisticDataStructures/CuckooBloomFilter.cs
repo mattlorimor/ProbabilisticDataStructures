@@ -78,7 +78,7 @@ namespace ProbabilisticDataStructures
             }
 
             this.Buckets = buckets;
-            this.Hash = HashAlgorithm.Create("MD5");
+            this.Hash = Defaults.GetDefaultHashAlgorithm();
             this.M = m;
             this.B = b;
             this.F = f;
@@ -418,7 +418,7 @@ namespace ProbabilisticDataStructures
             var hash = new Hash(this.Hash);
             hash.ComputeHash(data);
             var sum = hash.Sum();
-            return ProbabilisticDataStructures.ToBigEndianUInt32(sum);
+            return Utils.ToBigEndianUInt32(sum);
         }
 
         /// <summary>

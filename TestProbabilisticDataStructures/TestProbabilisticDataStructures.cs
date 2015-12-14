@@ -44,7 +44,7 @@ namespace TestProbabilisticDataStructures
             var data = new byte[] { 0, 1, 2, 3 };
             var hashAlgorithm = HashAlgorithm.Create("MD5");
             var hashKernel = ProbabilisticDataStructures
-                .ProbabilisticDataStructures.HashKernel(data, hashAlgorithm);
+                .Utils.HashKernel(data, hashAlgorithm);
 
             Assert.AreEqual(4254774583u, hashKernel.LowerBaseHash);
             Assert.AreEqual(4179961689u, hashKernel.UpperBaseHash);
@@ -60,7 +60,7 @@ namespace TestProbabilisticDataStructures
             var data = new byte[] { 0, 1, 2, 3 };
             var hashAlgorithm = HashAlgorithm.Create("SHA256");
             var hashKernel = ProbabilisticDataStructures
-                .ProbabilisticDataStructures.HashKernel(data, hashAlgorithm);
+                .Utils.HashKernel(data, hashAlgorithm);
 
             Assert.AreEqual(3252571653u, hashKernel.LowerBaseHash);
             Assert.AreEqual(1646207440u, hashKernel.UpperBaseHash);
@@ -75,7 +75,7 @@ namespace TestProbabilisticDataStructures
         private uint OptimalM(uint n, double fpRate)
         {
             return ProbabilisticDataStructures
-                .ProbabilisticDataStructures.OptimalM(n, fpRate);
+                .Utils.OptimalM(n, fpRate);
         }
 
         /// <summary>
@@ -86,7 +86,7 @@ namespace TestProbabilisticDataStructures
         private uint OptimalK(double fpRate)
         {
             return ProbabilisticDataStructures
-                .ProbabilisticDataStructures.OptimalK(fpRate);
+                .Utils.OptimalK(fpRate);
         }
     }
 }

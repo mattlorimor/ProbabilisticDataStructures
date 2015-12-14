@@ -68,7 +68,7 @@ namespace ProbabilisticDataStructures
         public InverseBloomFilter(uint capacity)
         {
             this.Array = new byte[capacity][];
-            this.Hash = ProbabilisticDataStructures.GetDefaultHashAlgorithm();
+            this.Hash = Defaults.GetDefaultHashAlgorithm();
             this.capacity = capacity;
         }
 
@@ -168,7 +168,7 @@ namespace ProbabilisticDataStructures
             var hash = new Hash(this.Hash);
             hash.ComputeHash(data);
             var sum = hash.Sum();
-            return ProbabilisticDataStructures.ToBigEndianUInt32(sum);
+            return Utils.ToBigEndianUInt32(sum);
         }
 
         /// <summary>

@@ -70,8 +70,8 @@ namespace ProbabilisticDataStructures
         /// <param name="fpRate">Desired false-positive rate</param>
         public PartitionedBloomFilter(uint n, double fpRate)
         {
-            var m = ProbabilisticDataStructures.OptimalM(n, fpRate);
-            var k = ProbabilisticDataStructures.OptimalK(fpRate);
+            var m = Utils.OptimalM(n, fpRate);
+            var k = Utils.OptimalK(fpRate);
             var partitions = new Buckets[k];
             var s = (uint)Math.Ceiling((double)m / (double)k);
 
@@ -81,7 +81,7 @@ namespace ProbabilisticDataStructures
             }
 
             this.Partitions = partitions;
-            this.Hash = HashAlgorithm.Create("MD5");
+            this.Hash = Defaults.GetDefaultHashAlgorithm();
             this.M = m;
             this.k = k;
             this.S = s;
@@ -153,7 +153,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was found</returns>
         public bool Test(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
 
@@ -177,7 +177,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The PartitionedBloomFilter</returns>
         public IFilter Add(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
 
@@ -201,7 +201,7 @@ namespace ProbabilisticDataStructures
         /// </returns>
         public bool TestAndAdd(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
             var member = true;

@@ -11,10 +11,10 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestConstructor()
         {
-            var hashingAlgorithm = HashAlgorithm.Create("MD5");
+            var hashingAlgorithm = ProbabilisticDataStructures.Defaults.GetDefaultHashAlgorithm();
             var hash = new Hash(hashingAlgorithm);
 
-            Assert.AreEqual(HashAlgorithm.Create("MD5").GetType(), hash.algorithm.GetType());
+            Assert.AreEqual(HashAlgorithm.Create("MD5").GetType(), hash.HashAlgorithm.GetType());
         }
 
         [TestMethod]

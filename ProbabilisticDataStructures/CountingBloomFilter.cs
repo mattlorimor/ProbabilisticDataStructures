@@ -63,10 +63,10 @@ namespace ProbabilisticDataStructures
         /// <param name="fpRate">Desired false positive rate.</param>
         public CountingBloomFilter(uint n, byte b, double fpRate)
         {
-            var m = ProbabilisticDataStructures.OptimalM(n, fpRate);
-            var k = ProbabilisticDataStructures.OptimalK(fpRate);
+            var m = Utils.OptimalM(n, fpRate);
+            var k = Utils.OptimalK(fpRate);
             this.Buckets =  new Buckets(m, b);
-            this.Hash = HashAlgorithm.Create("MD5");
+            this.Hash = Defaults.GetDefaultHashAlgorithm();
             this.m = m;
             this.k = k;
             this.indexBuffer = new uint[k];
@@ -122,7 +122,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data is maybe contained in the filter.</returns>
         public bool Test(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
 
@@ -145,7 +145,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The filter.</returns>
         public IFilter Add(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
 
@@ -167,7 +167,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was probably contained in the filter.</returns>
         public bool TestAndAdd(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
             var member = true;
@@ -195,7 +195,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was in the filter before removal.</returns>
         public bool TestAndRemove(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
             var member = true;

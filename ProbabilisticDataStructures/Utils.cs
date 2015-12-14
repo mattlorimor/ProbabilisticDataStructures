@@ -7,10 +7,8 @@ using System.Threading.Tasks;
 
 namespace ProbabilisticDataStructures
 {
-    public static class ProbabilisticDataStructures
+    public static class Utils
     {
-        public const double FILL_RATIO = 0.5;
-
         /// <summary>
         /// Calculates the optimal Bloom filter size, m, based on the number of items and
         /// the desired rate of false positives.
@@ -20,8 +18,8 @@ namespace ProbabilisticDataStructures
         /// <returns>The optimal BloomFilter size, m.</returns>
         public static uint OptimalM(uint n, double fpRate)
         {
-            var optimalM = Math.Ceiling((double)n / ((Math.Log(FILL_RATIO) *
-                Math.Log(1 - FILL_RATIO)) / Math.Abs(Math.Log(fpRate))));
+            var optimalM = Math.Ceiling((double)n / ((Math.Log(Defaults.FILL_RATIO) *
+                Math.Log(1 - Defaults.FILL_RATIO)) / Math.Abs(Math.Log(fpRate))));
             return Convert.ToUInt32(optimalM);
         }
 
@@ -53,15 +51,6 @@ namespace ProbabilisticDataStructures
                 ToBigEndianUInt32(sum.Skip(4).Take(4).ToArray()),
                 ToBigEndianUInt32(sum.Take(4).ToArray())
                 );
-        }
-
-        /// <summary>
-        /// Returns the default hashing algorithm for the library.
-        /// </summary>
-        /// <returns>The default hashing algorithm for the library</returns>
-        internal static HashAlgorithm GetDefaultHashAlgorithm()
-        {
-            return HashAlgorithm.Create("MD5");
         }
 
         public static uint ToBigEndianUInt32(byte[] bytes)

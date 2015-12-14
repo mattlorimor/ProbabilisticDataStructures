@@ -53,7 +53,7 @@ namespace TestProbabilisticDataStructures
         public void TestScalableFillRatio()
         {
             var f = new ScalableBloomFilter(100, 0.1, 0.8);
-            f.SetHash(HashAlgorithm.Create("MD5"));
+            f.SetHash(ProbabilisticDataStructures.Defaults.GetDefaultHashAlgorithm());
             for (int i = 0; i < 200; i++)
             {
                 f.Add(Encoding.ASCII.GetBytes(i.ToString()));

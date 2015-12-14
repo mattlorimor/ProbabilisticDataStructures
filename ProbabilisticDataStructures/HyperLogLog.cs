@@ -86,7 +86,7 @@ namespace ProbabilisticDataStructures
             this.M = m;
             this.B = (uint)Math.Ceiling(Math.Log(m, 2));
             this.Alpha = CalculateAlpha(m);
-            this.Hash = HashAlgorithm.Create("MD5");
+            this.Hash = Defaults.GetDefaultHashAlgorithm();
         }
 
         /// <summary>
@@ -214,7 +214,7 @@ namespace ProbabilisticDataStructures
             var hash = new Hash(this.Hash);
             hash.ComputeHash(data);
             var sum = hash.Sum();
-            return ProbabilisticDataStructures.ToBigEndianUInt32(sum);
+            return Utils.ToBigEndianUInt32(sum);
         }
 
         /// <summary>

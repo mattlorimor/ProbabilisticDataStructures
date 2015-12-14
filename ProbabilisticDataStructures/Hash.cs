@@ -9,7 +9,7 @@ namespace ProbabilisticDataStructures
 {
     public class Hash
     {
-        internal HashAlgorithm algorithm { get; set; }
+        internal HashAlgorithm HashAlgorithm { get; private set; }
         private string _hash;
 
         /// <summary>
@@ -19,7 +19,7 @@ namespace ProbabilisticDataStructures
         /// System.Security.Cryptography.HashAlgorithm.</param>
         public Hash(HashAlgorithm hashAlgorithm)
         {
-            algorithm = hashAlgorithm;
+            HashAlgorithm = hashAlgorithm;
         }
 
         /// <summary>
@@ -30,7 +30,7 @@ namespace ProbabilisticDataStructures
         public string ComputeHash(byte[] inputBytes)
         {
             // Compute the hash of the input byte array.
-            byte[] data = algorithm.ComputeHash(inputBytes);
+            byte[] data = HashAlgorithm.ComputeHash(inputBytes);
 
             // Create a new StringBuilder to collect the bytes and create a string.
             StringBuilder sb = new StringBuilder();

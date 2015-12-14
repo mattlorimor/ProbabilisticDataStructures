@@ -69,12 +69,12 @@ namespace ProbabilisticDataStructures
         /// <param name="fpRate">Desired false positive rate</param>
         public DeletableBloomFilter(uint n, uint r, double fpRate)
         {
-            var m = ProbabilisticDataStructures.OptimalM(n, fpRate);
-            var k = ProbabilisticDataStructures.OptimalK(fpRate);
+            var m = Utils.OptimalM(n, fpRate);
+            var k = Utils.OptimalK(fpRate);
 
             this.Buckets = new Buckets(m - r, 1);
             this.Collisions = new Buckets(r, 1);
-            this.Hash = HashAlgorithm.Create("MD5");
+            this.Hash = Defaults.GetDefaultHashAlgorithm();
             this.M = m - r;
             this.RegionSize = (m - r) / r;
             this.k = k;
@@ -117,7 +117,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data is maybe contained in the filter.</returns>
         public bool Test(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
 
@@ -140,7 +140,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The filter.</returns>
         public IFilter Add(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
 
@@ -171,7 +171,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was probably contained in the filter.</returns>
         public bool TestAndAdd(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
             var member = true;
@@ -204,7 +204,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was a member before this call</returns>
         public bool TestAndRemove(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
             var member = true;

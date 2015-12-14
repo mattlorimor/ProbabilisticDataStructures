@@ -43,10 +43,10 @@ namespace ProbabilisticDataStructures
         /// <param name="fpRate">Desired false positive rate.</param>
         public BloomFilter(uint n, double fpRate)
         {
-            var m = ProbabilisticDataStructures.OptimalM(n, fpRate);
-            var k = ProbabilisticDataStructures.OptimalK(fpRate);
+            var m = Utils.OptimalM(n, fpRate);
+            var k = Utils.OptimalK(fpRate);
             Buckets = new Buckets(m, 1);
-            Hash = HashAlgorithm.Create("MD5");
+            Hash = Defaults.GetDefaultHashAlgorithm();
             this.m = m;
             this.k = k;
         }
@@ -110,7 +110,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data is maybe contained in the filter.</returns>
         public bool Test(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
 
@@ -133,7 +133,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The filter.</returns>
         public IFilter Add(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
 
@@ -155,7 +155,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was probably contained in the filter.</returns>
         public bool TestAndAdd(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
             var member = true;

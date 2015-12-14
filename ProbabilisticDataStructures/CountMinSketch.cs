@@ -82,7 +82,7 @@ namespace ProbabilisticDataStructures
             this.Depth = depth;
             this.epsilon = epsilon;
             this.delta = delta;
-            this.Hash = HashAlgorithm.Create("MD5");
+            this.Hash = Defaults.GetDefaultHashAlgorithm();
         }
 
         /// <summary>
@@ -119,7 +119,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The CountMinSketch</returns>
         public CountMinSketch Add(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
 
@@ -141,7 +141,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The data to count.</returns>
         public UInt64 Count(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
             var count = UInt64.MaxValue;

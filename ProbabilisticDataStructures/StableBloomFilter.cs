@@ -80,7 +80,7 @@ namespace ProbabilisticDataStructures
         /// <param name="fpRate">Desired false-positive rate</param>
         public StableBloomFilter(uint m, byte d, double fpRate)
         {
-            var k = ProbabilisticDataStructures.OptimalK(fpRate) / 2;
+            var k = Utils.OptimalK(fpRate) / 2;
             if (k > m)
             {
                 k = m;
@@ -92,7 +92,7 @@ namespace ProbabilisticDataStructures
 
             var cells = new Buckets(m, d);
 
-            this.Hash = HashAlgorithm.Create("MD5");
+            this.Hash = Defaults.GetDefaultHashAlgorithm();
             this.M = m;
             this.k = k;
             this.p = OptimalStableP(m, k, d, fpRate);
@@ -125,11 +125,11 @@ namespace ProbabilisticDataStructures
         public static StableBloomFilter NewUnstableBloomFilter(uint m, double fpRate)
         {
             var cells = new Buckets(m, 1);
-            var k = ProbabilisticDataStructures.OptimalK(fpRate);
+            var k = Utils.OptimalK(fpRate);
 
             return new StableBloomFilter
             {
-                Hash = HashAlgorithm.Create("MD5"),
+                Hash = Defaults.GetDefaultHashAlgorithm(),
                 M = m,
                 k = k,
                 p = 0,
@@ -204,7 +204,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data is maybe contained in the filter</returns>
         public bool Test(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
 
@@ -230,7 +230,7 @@ namespace ProbabilisticDataStructures
             // Randomly decrement p cells to make room for new elements.
             this.Decrement();
 
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
 
@@ -251,7 +251,7 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was present before adding.</returns>
         public bool TestAndAdd(byte[] data)
         {
-            var hashKernel = ProbabilisticDataStructures.HashKernel(data, this.Hash);
+            var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
             var member = true;
