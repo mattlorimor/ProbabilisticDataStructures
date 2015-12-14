@@ -17,19 +17,19 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestNewDefaultScalableBloomFilter()
         {
-            var f = new ScalableBloomFilter(0.1);
+            var f = ScalableBloomFilter.NewDefaultScalableBloomFilter(0.1);
 
-            Assert.AreEqual(0.1, f.fp);
-            Assert.AreEqual(10000u, f.hint);
-            Assert.AreEqual(0.8, f.r);
+            Assert.AreEqual(0.1, f.FP);
+            Assert.AreEqual(10000u, f.Hint);
+            Assert.AreEqual(0.8, f.R);
         }
 
         [TestMethod]
         public void TestScalableBloomCapacity()
         {
             var f = new ScalableBloomFilter(1, 0.1, 1);
-            f.addFilter();
-            f.addFilter();
+            f.AddFilter();
+            f.AddFilter();
 
             var capacity = f.Capacity();
             Assert.AreEqual(15u, capacity);
@@ -143,16 +143,16 @@ namespace TestProbabilisticDataStructures
                 f.Add(Encoding.ASCII.GetBytes(i.ToString()));
             }
 
-            var count = f.filters.Count;
+            var count = f.Filters.Count;
             Assert.IsTrue(count > 1, string.Format("Expected more than 1 filter, got {0}", count));
 
             var resetF = f.Reset();
             Assert.AreSame(f, resetF, "Returned ScalableBloomFilter should be the same instance");
 
-            count = f.filters.Count;
+            count = f.Filters.Count;
             Assert.IsTrue(count == 1, string.Format("Expected 1 filter, got {0}", count));
 
-            foreach(var partition in f.filters[0].Partitions)
+            foreach(var partition in f.Filters[0].Partitions)
             {
                 for (uint i = 0; i < partition.count; i++)
                 {

@@ -46,41 +46,41 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Filters with geometrically decreasing error rates
         /// </summary>
-        internal List<PartitionedBloomFilter> filters { get; set; }
+        internal List<PartitionedBloomFilter> Filters { get; set; }
         /// <summary>
         /// Tightening ratio
         /// </summary>
-        internal double r { get; set; }
+        internal double R { get; set; }
         /// <summary>
         /// Target false-positive rate
         /// </summary>
-        internal double fp { get; set; }
+        internal double FP { get; set; }
         /// <summary>
         /// Partition fill ratio
         /// </summary>
-        private double p { get; set; }
+        private double P { get; set; }
         /// <summary>
         /// Filter size hint
         /// </summary>
-        internal uint hint { get; set; }
+        internal uint Hint { get; set; }
 
         /// <summary>
         /// Creates a new Scalable Bloom Filter with the specified target false-positive
-        /// rate and tightening ratio. Use the constructor overload that only accepts a
-        /// false-positive rate if you don't want to calculate all the parameters.
+        /// rate and tightening ratio. Use NewDefaultScalableBloomFilter if you don't
+        /// want to calculate all these parameters.
         /// </summary>
         /// <param name="hint"></param>
         /// <param name="fpRate"></param>
         /// <param name="r"></param>
         public ScalableBloomFilter(uint hint, double fpRate, double r)
         {
-            this.filters = new List<PartitionedBloomFilter>();
-            this.r = r;
-            this.fp = fpRate;
-            this.p = ProbabilisticDataStructures.FILL_RATIO;
-            this.hint = hint;
+            this.Filters = new List<PartitionedBloomFilter>();
+            this.R = r;
+            this.FP = fpRate;
+            this.P = ProbabilisticDataStructures.FILL_RATIO;
+            this.Hint = hint;
 
-            this.addFilter();
+            this.AddFilter();
         }
 
         /// <summary>
@@ -88,8 +88,10 @@ namespace ProbabilisticDataStructures
         /// rate and an optimal tightening ratio.
         /// </summary>
         /// <param name="fpRate"></param>
-        public ScalableBloomFilter(double fpRate)
-            : this(10000u, fpRate, 0.8){}
+        public static ScalableBloomFilter NewDefaultScalableBloomFilter(double fpRate)
+        {
+            return new ScalableBloomFilter(10000, fpRate, 0.8);
+        }
 
         /// <summary>
         /// Returns the current Scalable Bloom Filter capacity, which is the sum of the
@@ -99,7 +101,7 @@ namespace ProbabilisticDataStructures
         public uint Capacity()
         {
             var capacity = 0u;
-            foreach (var filter in this.filters)
+            foreach (var filter in this.Filters)
             {
                 capacity += filter.Capacity();
             }
@@ -112,7 +114,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The number of hash functions used in each Bloom filter</returns>
         public uint K()
         {
-            return this.filters[0].K();
+            return this.Filters[0].K();
         }
 
         /// <summary>
@@ -122,11 +124,11 @@ namespace ProbabilisticDataStructures
         public double FillRatio()
         {
             var sum = 0.0;
-            foreach (var filter in this.filters)
+            foreach (var filter in this.Filters)
             {
                 sum += filter.FillRatio();
             }
-            return (double)sum / this.filters.Count();
+            return (double)sum / this.Filters.Count();
         }
 
         /// <summary>
@@ -139,7 +141,7 @@ namespace ProbabilisticDataStructures
         public bool Test(byte[] data)
         {
             // Querying is made by testing for the presence in each filter.
-            foreach (var filter in this.filters)
+            foreach (var filter in this.Filters)
             {
                 if (filter.Test(data))
                 {
@@ -158,16 +160,16 @@ namespace ProbabilisticDataStructures
         /// <returns>The ScalableBloomFilter</returns>
         public IFilter Add(byte[] data)
         {
-            var idx = this.filters.Count() - 1;
+            var idx = this.Filters.Count() - 1;
 
             // If the last filter has reached its fill ratio, add a new one.
-            if (this.filters[idx].EstimatedFillRatio() >= this.p)
+            if (this.Filters[idx].EstimatedFillRatio() >= this.P)
             {
-                this.addFilter();
+                this.AddFilter();
                 idx++;
             }
 
-            this.filters[idx].Add(data);
+            this.Filters[idx].Add(data);
             return this;
         }
 
@@ -191,7 +193,7 @@ namespace ProbabilisticDataStructures
         // TODO: Add SetHash to the IFilter interface?
         public void SetHash(HashAlgorithm h)
         {
-            foreach (var filter in this.filters)
+            foreach (var filter in this.Filters)
             {
                 filter.SetHash(h);
             }
@@ -204,8 +206,8 @@ namespace ProbabilisticDataStructures
         /// <returns>The reset bloom filter.</returns>
         public ScalableBloomFilter Reset()
         {
-            this.filters = new List<PartitionedBloomFilter>();
-            this.addFilter();
+            this.Filters = new List<PartitionedBloomFilter>();
+            this.AddFilter();
             return this;
         }
 
@@ -213,15 +215,15 @@ namespace ProbabilisticDataStructures
         /// Adds a new Bloom filter with a restricted false-positive rate to the
         /// Scalable Bloom Filter
         /// </summary>
-        internal void addFilter()
+        internal void AddFilter()
         {
-            var fpRate = this.fp * Math.Pow(this.r, this.filters.Count());
-            var p = new PartitionedBloomFilter(this.hint, fpRate);
-            if (this.filters.Count() > 0)
+            var fpRate = this.FP * Math.Pow(this.R, this.Filters.Count());
+            var p = new PartitionedBloomFilter(this.Hint, fpRate);
+            if (this.Filters.Count() > 0)
             {
-                p.SetHash(this.filters[0].Hash);
+                p.SetHash(this.Filters[0].Hash);
             }
-            this.filters.Add(p);
+            this.Filters.Add(p);
         }
     }
 }
