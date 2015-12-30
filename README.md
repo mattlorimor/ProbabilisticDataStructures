@@ -4,6 +4,8 @@ This is a C# port of [Tyler Treat's](https://github.com/tylertreat) work in the 
 
 If you're on this page, you probably already know a bit about probabilistic data structures and why you might want to use them. To keep this README smaller, I'll remove some of the exposition Tyler does and keep this closer to a "How to Use" document. I would refer you to [his project's README](https://github.com/tylertreat/BoomFilters/blob/master/README.md) if you are trying to get all the information you possibly can.
 
+The descriptions for each filter were lifted directly from the BoomFilters' README.
+
 ## Included Structures
 * Count-Min Sketch
 * Counting Bloom filter
