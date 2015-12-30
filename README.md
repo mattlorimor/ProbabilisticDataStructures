@@ -22,6 +22,9 @@ For now: Download and compile
 
 Future: NuGet
 
+## Contributions
+Pull-requests are welcome, but submitting an issue is probably the best place to start if you have complex critiques or suggestions.
+
 ## Stable Bloom Filter
 
 This is an implementation of Stable Bloom Filters as described by Deng and Rafiei in [Approximately Detecting Duplicates for Streaming Data using Stable Bloom Filters](http://webdocs.cs.ualberta.ca/~drafiei/papers/DupDet06Sigmod.pdf).
