@@ -14,10 +14,10 @@ The descriptions for each filter were lifted directly from the BoomFilters' READ
 * [HyperLogLog](https://github.com/mattlorimor/ProbabilisticDataStructures#hyperloglog)
 * [Inverse Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#inverse-bloom-filter)
 * [MinHash](https://github.com/mattlorimor/ProbabilisticDataStructures#minhash)
-* [PartitionedBloomFilter](https://github.com/mattlorimor/ProbabilisticDataStructures#partitioned-bloom-filter)
+* PartitionedBloomFilter
 * [Scalable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#scalable-bloom-filter)
 * [Stable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#stable-bloom-filter)
-* [TopK](https://github.com/mattlorimor/ProbabilisticDataStructures#topk)
+* [TopK](https://github.com/mattlorimor/ProbabilisticDataStructures#top-k)
 
 ## Installation 
 
