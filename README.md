@@ -7,16 +7,17 @@ If you're on this page, you probably already know a bit about probabilistic data
 The descriptions for each filter were lifted directly from the BoomFilters' README.
 
 ## Included Structures
-* Count-Min Sketch
-* Counting Bloom filter
-* Cuckoo filter
+* [Count-Min Sketch](https://github.com/mattlorimor/ProbabilisticDataStructures#count-min-sketch)
+* [Counting Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#counting-bloom-filter)
+* [Cuckoo filter](https://github.com/mattlorimor/ProbabilisticDataStructures#cuckoo-filter)
 * Deletable Bloom filter
-* HyperLogLog
-* Inverse Bloom filter
-* MinHash
-* PartitionedBloomFilter
-* Scalable Bloom filter
-* TopK
+* [HyperLogLog](https://github.com/mattlorimor/ProbabilisticDataStructures#hyperloglog)
+* [Inverse Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#inverse-bloom-filter)
+* [MinHash](https://github.com/mattlorimor/ProbabilisticDataStructures#minhash)
+* [PartitionedBloomFilter](https://github.com/mattlorimor/ProbabilisticDataStructures#partitioned-bloom-filter)
+* [Scalable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#scalable-bloom-filter)
+* [Stable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#stable-bloom-filter)
+* [TopK](https://github.com/mattlorimor/ProbabilisticDataStructures#topk)
 
 ## Installation 
 
