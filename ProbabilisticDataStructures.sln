@@ -7,6 +7,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestProbabilisticDataStruct
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{FB0C1D18-BE84-4C9C-939E-3729FC292735}"
 	ProjectSection(SolutionItems) = preProject
+		appveyor.yml = appveyor.yml
 		Default.testsettings = Default.testsettings
 		LICENSE.txt = LICENSE.txt
 		ProbabilisticDataStructures.vsmdi = ProbabilisticDataStructures.vsmdi
