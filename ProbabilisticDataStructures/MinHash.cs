@@ -86,13 +86,13 @@ namespace ProbabilisticDataStructures
 
             foreach (var element in bag2)
             {
-                if (bitArray.ContainsKey(element) != null)
+                if (bitArray.ContainsKey(element))
                 {
                     bitArray[element] = new bool[] { true, true };
                 }
                 else
                 {
-                    bitArray[element] = new bool[] { false, false };
+                    bitArray[element] = new bool[] { false, true };
                 }
             }
 
