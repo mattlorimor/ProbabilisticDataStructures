@@ -1,0 +1,9 @@
+version: 1.0.{build}
+skip_non_tags: true
+configuration: Release
+build:
+  verbosity: minimal
+test: off
+artifacts:
+- path: ProbabilisticDataStructures\bin\Release
+  name: ProbabilisticDataStructures-v$(appveyor_build_version)
