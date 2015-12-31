@@ -57,7 +57,7 @@ namespace ProbabilisticDataStructures
         /// Returns the top-k elements from lowest to highest frequency.
         /// </summary>
         /// <returns>The top-k elements from lowest to highest frequency</returns>
-        internal Element[] Elements()
+        public Element[] Elements()
         {
             return elements.Elements();
         }

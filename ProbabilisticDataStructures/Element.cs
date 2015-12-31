@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace ProbabilisticDataStructures
 {
-    internal class Element
+    public class Element
     {
         public byte[] Data { get; set; }
         public UInt64 Freq { get; set; }

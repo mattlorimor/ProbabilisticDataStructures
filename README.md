@@ -234,7 +234,7 @@ namespace FilterExample
             byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
             byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
 
-            var cf = new CuckooFilter(1000, 0.01);
+            var cf = new CuckooBloomFilter(1000, 0.01);
 
             cf.Add(A_BYTES);
             if (cf.Test(A_BYTES))
@@ -242,7 +242,7 @@ namespace FilterExample
                 Console.WriteLine("contains a");
             }
 
-            if (!cf.TestAndAdd(B_BYTES))
+            if (!cf.TestAndAdd(B_BYTES).WasAlreadyAMember)
             {
                 Console.WriteLine("doesn't contain b");
             }
@@ -372,7 +372,7 @@ namespace FilterExample
             topK.Add(SARA_BYTES).Add(SARA_BYTES);
             topK.Add(BILL_BYTES);
 
-            for (var element in topK.Elements())
+            foreach (var element in topK.Elements())
             {
                 Console.WriteLine(string.Format("element: {0}, frequency: {1}", Encoding.ASCII.GetString(element.Data), element.Freq));
             }
