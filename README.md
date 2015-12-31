@@ -19,9 +19,9 @@ The descriptions for each filter were lifted directly from the BoomFilters' READ
 * [Stable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#stable-bloom-filter)
 * [TopK](https://github.com/mattlorimor/ProbabilisticDataStructures#top-k)
 
-## Installation 
+## Releases 
 
-For now: Download and compile
+For now: https://github.com/mattlorimor/ProbabilisticDataStructures/releases
 
 Future: NuGet
 
