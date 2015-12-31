@@ -1,6 +1,7 @@
 version: 1.0.{build}
 configuration: Release
-test: off
+test: on
+skip_tags: true
 pull_requests:
   do_not_increment_build_number: true
 build:
