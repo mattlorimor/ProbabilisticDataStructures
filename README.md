@@ -1,4 +1,4 @@
-# Probabilistic Data Structures for C<span>#</span> [![Build status](https://ci.appveyor.com/api/projects/status/mvi89d128eno2udb?svg=true)](https://ci.appveyor.com/project/mattlorimor/probabilisticdatastructures)
+# Probabilistic Data Structures for C<span>#</span> [![Build status](https://ci.appveyor.com/api/projects/status/s9gwqptvy0jbjsmp?svg=true)](https://ci.appveyor.com/project/mattlorimor/probabilisticdatastructures)
 
 This is a C# port of [Tyler Treat's](https://github.com/tylertreat) work in the [BoomFilters](https://github.com/tylertreat/BoomFilters) golang project. His writing on probabilistic data structures and other computing-related activities can be found here: http://bravenewgeek.com/.
 
