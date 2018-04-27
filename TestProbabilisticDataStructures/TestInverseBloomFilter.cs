@@ -1,8 +1,6 @@
-﻿using System;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
+﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System.Text;
 using ProbabilisticDataStructures;
-using System.Security.Cryptography;
 
 namespace TestProbabilisticDataStructures
 {

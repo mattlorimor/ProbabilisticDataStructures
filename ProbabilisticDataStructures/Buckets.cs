@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace ProbabilisticDataStructures
+﻿namespace ProbabilisticDataStructures
 {
     /// <summary>
     /// Buckets is a fast, space-efficient array of buckets where each bucket can store
