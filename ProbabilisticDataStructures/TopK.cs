@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace ProbabilisticDataStructures
+﻿namespace ProbabilisticDataStructures
 {
     /// <summary>
     /// TopK uses a Count-Min Sketch to calculate the top-K frequent elements in a
