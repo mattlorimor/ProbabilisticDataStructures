@@ -51,8 +51,11 @@
     </Otherwise>
   </Choose>
   <ItemGroup>
+    <Compile Include="TestBloomFilter64.cs" />
     <Compile Include="TestBuckets.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="TestBuckets64.cs" />
+    <Compile Include="TestHash128.cs" />
     <Compile Include="TestProbabilisticDataStructures.cs" />
     <Compile Include="TestHash.cs" />
     <Compile Include="TestBloomFilter.cs" />
