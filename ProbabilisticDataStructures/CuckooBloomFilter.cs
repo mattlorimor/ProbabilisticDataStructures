@@ -384,25 +384,12 @@ namespace ProbabilisticDataStructures
         /// fingerprint for the given data</returns>
         private Components GetComponents(byte[] data)
         {
-            var hash = this.ComputeHash(data);
+            var hash = Hash.ComputeHash(data);
             var f = hash.Take((int)this.F).ToArray();
             var i1 = this.ComputeHashSum32(hash);
             var i2 = this.ComputeHashSum32(f);
 
             return Components.Create(f, i1, i2);
-        }
-
-        /// <summary>
-        /// Returns a 32-bit hash value for the given data.
-        /// </summary>
-        /// <param name="data">Data</param>
-        /// <returns>32-bit hash value</returns>
-        private byte[] ComputeHash(byte[] data)
-        {
-            var hash = new Hash(this.Hash);
-            hash.ComputeHash(data);
-            var sum = hash.Sum();
-            return sum;
         }
 
         /// <summary>
@@ -412,10 +399,8 @@ namespace ProbabilisticDataStructures
         /// <returns>32-bit hash value</returns>
         private uint ComputeHashSum32(byte[] data)
         {
-            var hash = new Hash(this.Hash);
-            hash.ComputeHash(data);
-            var sum = hash.Sum();
-            return Utils.ToBigEndianUInt32(sum);
+            var sum = Hash.ComputeHash(data);
+            return Utils.HashBytesToUInt32(sum);
         }
 
         /// <summary>
