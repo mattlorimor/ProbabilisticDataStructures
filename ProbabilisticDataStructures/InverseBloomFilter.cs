@@ -161,10 +161,8 @@ namespace ProbabilisticDataStructures
         /// <returns>32-bit hash value</returns>
         private uint ComputeHashSum32(byte[] data)
         {
-            var hash = new Hash(this.Hash);
-            hash.ComputeHash(data);
-            var sum = hash.Sum();
-            return Utils.ToBigEndianUInt32(sum);
+            var sum = Hash.ComputeHash(data);
+            return Utils.HashBytesToUInt32(sum);
         }
 
         /// <summary>
