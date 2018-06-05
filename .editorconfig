@@ -1,0 +1,25 @@
+; Check http://editorconfig.org/ for more informations
+; Top-most EditorConfig file
+; For VisualStudio 2015 https://visualstudiogallery.msdn.microsoft.com/c8bccfe2-650c-4b42-bc5c-845e21f96328
+root = true
+
+; 4-column space indentation
+[*]
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+; Not change VS generated files
+[*.{sln,csroj}]
+trim_trailing_whitespace = false
+insert_final_newline = false
+
+[*.cs]
+indent_size = 4
+
+[*.csproj]
+indent_size = 2
+
+[*.nuspec]
+indent_size = 2
