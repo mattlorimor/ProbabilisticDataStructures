@@ -1,6 +1,7 @@
 ﻿using System.Security.Cryptography;
 using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("TestProbabilisticDataStructures")]
+[assembly: InternalsVisibleTo("ProbabilisticDataStructures.ThreadSafe")]
 
 namespace ProbabilisticDataStructures
 {
