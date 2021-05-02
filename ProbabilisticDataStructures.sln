@@ -7,6 +7,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ProbabilisticDataStructures
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestProbabilisticDataStructures", "TestProbabilisticDataStructures\TestProbabilisticDataStructures.csproj", "{8212EFDE-5134-4914-96D3-C550FD9432F1}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ProbabilisticDataStructures.Serialization", "ProbabilisticDataStructures.Serialization\ProbabilisticDataStructures.Serialization.csproj", "{AE15DD78-22E8-4A7E-830A-862F3B64ECFE}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +23,10 @@ Global
 		{8212EFDE-5134-4914-96D3-C550FD9432F1}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8212EFDE-5134-4914-96D3-C550FD9432F1}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8212EFDE-5134-4914-96D3-C550FD9432F1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AE15DD78-22E8-4A7E-830A-862F3B64ECFE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AE15DD78-22E8-4A7E-830A-862F3B64ECFE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AE15DD78-22E8-4A7E-830A-862F3B64ECFE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AE15DD78-22E8-4A7E-830A-862F3B64ECFE}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
