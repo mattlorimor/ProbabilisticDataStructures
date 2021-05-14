@@ -6,20 +6,20 @@ namespace ProbabilisticDataStructures.Serialization
 {
     public static class ExpressionExtensions<T>
     {
-        private static readonly ConcurrentDictionary<Type, Func<T, object>> Cached =
+        private static readonly ConcurrentDictionary<Type, Func<T, object>> CachedDelegatesTo =
             new ConcurrentDictionary<Type, Func<T, object>>();
 
-        private static readonly ConcurrentDictionary<Type, Func<object, T>> Cached2 =
+        private static readonly ConcurrentDictionary<Type, Func<object, T>> CachedDelegatesFrom =
             new ConcurrentDictionary<Type, Func<object, T>>();
 
         private static readonly ConcurrentDictionary<Type, Func<T>> CachedInstanceFunc =
             new ConcurrentDictionary<Type, Func<T>>();
 
-        public static Func<T, object> GetCastDelegate(Type to)
-            => Cached.GetOrAdd(to, MakeCastDelegateTo);
+        public static Func<T, object> GetCastDelegateTo(Type to)
+            => CachedDelegatesTo.GetOrAdd(to, MakeCastDelegateTo);
 
-        public static Func<object, T> GetCastDelegate2(Type to)
-            => Cached2.GetOrAdd(to, MakeCastDelegateFrom);
+        public static Func<object, T> GetCastDelegateFrom(Type to)
+            => CachedDelegatesFrom.GetOrAdd(to, MakeCastDelegateFrom);
         
         public static Func<T> GetInstanceDelegate(Type typeToCreate)
             => CachedInstanceFunc.GetOrAdd(typeToCreate, CreateInstance);

@@ -58,7 +58,7 @@ namespace ProbabilisticDataStructures.Serialization
             var xmlSerializer = new XmlSerializer(surrogateType);
             using (var stringWriter = new StringWriter())
             {
-                var castFunc = ExpressionExtensions<T>.GetCastDelegate(surrogateType);
+                var castFunc = ExpressionExtensions<T>.GetCastDelegateTo(surrogateType);
 
                 xmlSerializer.Serialize(stringWriter, castFunc(value));
 
@@ -74,7 +74,7 @@ namespace ProbabilisticDataStructures.Serialization
             var xmlSerializer = new XmlSerializer(surrogateType);
             var reader = new StringReader(value);
 
-            var castFunc = ExpressionExtensions<T>.GetCastDelegate2(surrogateType);
+            var castFunc = ExpressionExtensions<T>.GetCastDelegateFrom(surrogateType);
 
             return castFunc(xmlSerializer.Deserialize(reader));
         }
