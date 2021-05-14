@@ -41,19 +41,25 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Number of items added
         /// </summary>
-        private UInt64 count { get; set; }
+        internal UInt64 count { get; set; }
         /// <summary>
         /// Relative-accuracy factor
         /// </summary>
-        private double epsilon { get; set; }
+        internal double epsilon { get; set; }
         /// <summary>
         /// Relative-accuracy probability
         /// </summary>
-        private double delta { get; set; }
+        internal double delta { get; set; }
         /// <summary>
         /// Hash function
         /// </summary>
-        private HashAlgorithm Hash { get; set; }
+        internal HashAlgorithm Hash { get; set; }
+        
+        /// <summary>
+        /// The name of the hash algorithm.
+        /// Used for serialization/deserialization
+        /// </summary>
+        internal string HashAlgorithmName { get; set; }
 
         /// <summary>
         /// Creates a new Count-Min Sketch whose relative accuracy is within a factor of
@@ -77,7 +83,16 @@ namespace ProbabilisticDataStructures
             this.Depth = depth;
             this.epsilon = epsilon;
             this.delta = delta;
+            HashAlgorithmName = Defaults.DefaultHashAlgorithm;
             this.Hash = Defaults.GetDefaultHashAlgorithm();
+        }
+
+        /// <summary>
+        /// Used for deserialization
+        /// </summary>
+        internal CountMinSketch()
+        {
+            
         }
 
         /// <summary>
@@ -200,10 +215,11 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Sets the hashing function used in the filter.
         /// </summary>
-        /// <param name="h">The HashAlgorithm to use.</param>
-        public void SetHash(HashAlgorithm h)
+        /// <param name="hashAlgorithmName">The name of the hash algorithm to use.</param>
+        public void SetHash(string hashAlgorithmName)
         {
-            this.Hash = h;
+            HashAlgorithmName = hashAlgorithmName;
+            this.Hash = HashAlgorithm.Create(hashAlgorithmName);
         }
 
         // TODO: Implement these later.
