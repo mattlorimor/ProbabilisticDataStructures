@@ -69,7 +69,7 @@ namespace TestProbabilisticDataStructures
             var ratio = f.EstimatedFillRatio();
             if (ratio > 0.5)
             {
-                Assert.Fail("Expected less than or equal to 0.5, got {0}", ratio);
+                Assert.Fail($"Expected less than or equal to 0.5, got {ratio}");
             }
         }
 
