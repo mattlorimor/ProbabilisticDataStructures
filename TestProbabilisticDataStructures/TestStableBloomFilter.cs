@@ -162,6 +162,20 @@ namespace TestProbabilisticDataStructures
         {
             var f = StableBloomFilter.NewDefaultStableBloomFilter(1000, 0.01);
             var fps = Math.Round(f.FalsePositiveRate(), 2, MidpointRounding.AwayFromZero);
+
+            // IsLessThanOrEqualTo takes the bound first and the value under test second,
+            // which reads in the opposite order from the "fps <= 0.01" it replaced.
+            //
+            // This assertion cannot verify that ordering for you. The raw rate here is
+            // 0.01237..., which Math.Round collapses to exactly 0.01, so both arguments
+            // are numerically equal at runtime and a transposed call passes just as
+            // happily as a correct one. Confirm the direction against the framework's
+            // parameter docs if you touch this line; a green suite proves nothing here.
+            //
+            // The rounding is not a workaround: upstream Go BoomFilters rounds to two
+            // decimal places in its own TestFalsePositiveRate, absorbing the same
+            // stable-point approximation error. Do not tighten this without also
+            // diverging from the implementation this library is a port of.
             Assert.IsLessThanOrEqualTo(0.01, fps);
 
             // Classic Bloom filters have an unbound rate of false positives. Once they
