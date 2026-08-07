@@ -88,7 +88,7 @@ namespace TestProbabilisticDataStructures
         public void TestHashKernelMD5()
         {
             var data = new byte[] { 0, 1, 2, 3 };
-            var hashAlgorithm = HashAlgorithm.Create("MD5");
+            var hashAlgorithm = MD5.Create();
             var hashKernel = ProbabilisticDataStructures
                 .Utils.HashKernel(data, hashAlgorithm);
 
@@ -104,7 +104,7 @@ namespace TestProbabilisticDataStructures
         public void TestHashKernelSHA256()
         {
             var data = new byte[] { 0, 1, 2, 3 };
-            var hashAlgorithm = HashAlgorithm.Create("SHA256");
+            var hashAlgorithm = SHA256.Create();
             var hashKernel = ProbabilisticDataStructures
                 .Utils.HashKernel(data, hashAlgorithm);
 
@@ -120,7 +120,7 @@ namespace TestProbabilisticDataStructures
         public void TestHashKerne128lMD5()
         {
             var data = new byte[] { 0, 1, 2, 3 };
-            var hashAlgorithm = HashAlgorithm.Create("MD5");
+            var hashAlgorithm = MD5.Create();
             var hashKernel = ProbabilisticDataStructures
                 .Utils.HashKernel128(data, hashAlgorithm);
 
@@ -136,7 +136,7 @@ namespace TestProbabilisticDataStructures
         public void TestHashKernel128SHA256()
         {
             var data = new byte[] { 0, 1, 2, 3 };
-            var hashAlgorithm = HashAlgorithm.Create("SHA256");
+            var hashAlgorithm = SHA256.Create();
             var hashKernel = ProbabilisticDataStructures
                 .Utils.HashKernel128(data, hashAlgorithm);
 
@@ -230,7 +230,7 @@ namespace TestProbabilisticDataStructures
         public void TestComputeHashAsStringMD5()
         {
             var data = new byte[] { 0, 1, 2, 3 };
-            var hashingAlgorithm = HashAlgorithm.Create("MD5");
+            var hashingAlgorithm = MD5.Create();
             var hashString = Utils.ComputeHashAsString(data, hashingAlgorithm);
             Assert.AreEqual("37B59AFD592725F9305E484A5D7F5168", hashString);
         }
@@ -239,7 +239,7 @@ namespace TestProbabilisticDataStructures
         public void TestComputeHashAsStringSHA256()
         {
             var data = new byte[] { 0, 1, 2, 3 };
-            var hashingAlgorithm = HashAlgorithm.Create("SHA256");
+            var hashingAlgorithm = SHA256.Create();
             var hashString = Utils.ComputeHashAsString(data, hashingAlgorithm);
             Assert.AreEqual("054EDEC1D0211F624FED0CBCA9D4F9400B0E491C43742AF2C5B0ABEBF0C990D8", hashString);
         }
