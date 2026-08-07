@@ -277,7 +277,7 @@ namespace ProbabilisticDataStructures
         /// </returns>
         private static bool Contains(byte[][] bucket, byte[] f)
         {
-            return IndexOf(bucket, f) != 1;
+            return IndexOf(bucket, f) != -1;
         }
 
         /// <summary>
