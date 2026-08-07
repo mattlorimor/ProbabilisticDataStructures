@@ -15,19 +15,29 @@ This release modernizes the entire build. The library had not been touched since
 - **Dropped `net45` and `netstandard2.0`. The library now targets `net10.0` only.**
 
   This is a hard break, and it is deliberate. If you consume this package from .NET
-  Framework, from Xamarin/Mono, or from any .NET Core or .NET 5–9 application, **you
-  cannot upgrade to 2.0.0**. Stay on 1.0.1, which continues to work and is not being
-  withdrawn.
+  Framework, from Unity, from Xamarin/Mono, or from any .NET Core or .NET 5–9
+  application — including .NET 8, which remains in support until November 2026 —
+  **you cannot upgrade to 2.0.0**. Stay on 1.0.1, which continues to work and is not
+  being withdrawn.
 
-  The rationale: `net45` reached end of support in January 2016, and carrying
-  `netstandard2.0` forces the library to keep pretending the modern BCL does not
-  exist — no spans, no static hash APIs, no allocation-free hashing path. Multi-targeting
-  would have preserved compatibility, but at the cost of `#if` guards through the core
-  hot path forever. Given the size of this library, a clean break now is cheaper than
-  carrying the conditional-compilation tax indefinitely.
+  Note that this costs no operating-system coverage. `netstandard2.0` is an API
+  specification, not a runtime, and `net10.0` runs on Windows, Linux, and macOS across
+  x64 and arm64. What narrows is the range of .NET *versions* that can consume the
+  package, not the platforms it runs on.
 
-  If you need continued .NET Framework support, please open an issue. Restoring a
-  `netstandard2.0` target is a decision that can be revisited if there is real demand.
+  The rationale is honest about what it is not: the code in this release would still
+  compile against `netstandard2.0` unchanged, so multi-targeting was not blocked by
+  anything technical. It was declined because a second target cannot be verified.
+  `netstandard2.0` is not executable, so proving that binary works would require an
+  additional test target on a runtime that consumes it, and without one the package
+  would ship a second assembly that nothing ever runs. One target that is fully
+  exercised on three operating systems was judged better than two where only one is
+  tested. `net45` is a simpler case: it reached end of support in January 2016.
+
+  If you need continued .NET Framework, Unity, or .NET 8 support, please open an issue.
+  Restoring a `netstandard2.0` target is a decision that can be revisited if there is
+  real demand; the work is small, and the reason it was skipped is verification cost
+  rather than incompatibility.
 
 - Deleted Visual Studio–era build artifacts that no longer serve any purpose:
   `Default.testsettings`, `ProbabilisticDataStructures.vsmdi`, and
