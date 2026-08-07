@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report every platform's result. The library does its own bit packing in
+      # Buckets/Buckets64 and derives hash kernels from raw byte offsets, so a
+      # platform-specific failure is exactly the signal worth having, and
+      # fail-fast would hide it behind whichever runner finished first.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore -warnaserror
+
+      - name: Test
+        run: >-
+          dotnet test --configuration Release --no-build
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory ${{ github.workspace }}/test-results
+
+      - name: Upload test results
+        # Results are most useful precisely when the previous step failed.
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: test-results/
+          if-no-files-found: warn
