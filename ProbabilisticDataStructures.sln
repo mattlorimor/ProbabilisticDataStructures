@@ -5,7 +5,7 @@ VisualStudioVersion = 15.0.27428.2043
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ProbabilisticDataStructures", "ProbabilisticDataStructures\ProbabilisticDataStructures.csproj", "{4775E89C-C139-43B0-8436-B456C035C9D9}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestProbabilisticDataStructures", "TestProbabilisticDataStructures\TestProbabilisticDataStructures.csproj", "{8212EFDE-5134-4914-96D3-C550FD9432F1}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TestProbabilisticDataStructures", "TestProbabilisticDataStructures\TestProbabilisticDataStructures.csproj", "{8212EFDE-5134-4914-96D3-C550FD9432F1}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
