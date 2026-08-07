@@ -2,6 +2,34 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
+
+  <!-- NuGet package metadata. Version lives in Directory.Build.props. -->
+  <PropertyGroup>
+    <PackageId>ProbabilisticDataStructures</PackageId>
+    <Authors>Matthew Lorimor</Authors>
+    <Copyright>Copyright 2015 Matthew Lorimor</Copyright>
+    <Description>A probabilistic data structures library for C#, ported from Tyler Treat's BoomFilters project for Go. Includes Bloom filters (classic, counting, deletable, inverse, partitioned, scalable, and stable), Cuckoo filters, Count-Min Sketch, HyperLogLog, MinHash, and Top-K.</Description>
+    <PackageTags>bloom-filter;cuckoo-filter;count-min-sketch;hyperloglog;minhash;topk;probabilistic-data-structures</PackageTags>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/mattlorimor/ProbabilisticDataStructures</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/mattlorimor/ProbabilisticDataStructures</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <!-- Source Link and symbols, so consumers can step into this code while debugging.
+       Source Link ships in the SDK; no PackageReference is required. -->
+  <PropertyGroup>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
 
 </Project>
