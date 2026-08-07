@@ -1,4 +1,4 @@
-# Probabilistic Data Structures for C<span>#</span> [![CI](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml/badge.svg)](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml)
+# Probabilistic Data Structures for C<span>#</span> [![CI](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml/badge.svg)](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml) [![NuGet](https://img.shields.io/nuget/v/ProbabilisticDataStructures.svg)](https://www.nuget.org/packages/ProbabilisticDataStructures/)
 
 This is a C# port of [Tyler Treat's](https://github.com/tylertreat) work in the [BoomFilters](https://github.com/tylertreat/BoomFilters) golang project. His writing on probabilistic data structures and other computing-related activities can be found here: http://bravenewgeek.com/.
 
@@ -19,11 +19,21 @@ The descriptions for each filter were lifted directly from the BoomFilters' READ
 * [Stable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#stable-bloom-filter)
 * [TopK](https://github.com/mattlorimor/ProbabilisticDataStructures#top-k)
 
-## Releases 
+## Installation
 
-For now: https://github.com/mattlorimor/ProbabilisticDataStructures/releases
+```
+dotnet add package ProbabilisticDataStructures
+```
 
-Future: NuGet
+Requires .NET 10 or later. Version 1.0.1 targets .NET Framework 4.5 and .NET Standard 2.0
+and remains available for older projects; see [CHANGELOG.md](CHANGELOG.md) for what
+changed in 2.0.0.
+
+## Releases
+
+Packages are published to [NuGet](https://www.nuget.org/packages/ProbabilisticDataStructures/),
+and each release is also tagged on the
+[releases page](https://github.com/mattlorimor/ProbabilisticDataStructures/releases).
 
 ## Contributions
 Pull-requests are welcome, but submitting an issue is probably the best place to start if you have complex critiques or suggestions.
@@ -39,7 +49,8 @@ Stable Bloom Filters are useful for cases where the size of the data set isn't k
 ### Usage
 
 ```C#
-using System.Encoding;
+using System;
+using System.Text;
 using ProbabilisticDataStructures;
 
 namespace FilterExample
@@ -85,7 +96,8 @@ Scalable Bloom Filters are useful for cases where the size of the data set isn't
 ### Usage
 
 ```C#
-using System.Encoding;
+using System;
+using System.Text;
 using ProbabilisticDataStructures;
 
 namespace FilterExample
@@ -130,7 +142,8 @@ This structure is particularly well-suited to streams in which duplicates are re
 ### Usage
 
 ```C#
-using System.Encoding;
+using System;
+using System.Text;
 using ProbabilisticDataStructures;
 
 namespace FilterExample
@@ -177,7 +190,8 @@ See Deletable Bloom Filter for an alternative which avoids false negatives.
 ### Usage
 
 ```C#
-using System.Encoding;
+using System;
+using System.Text;
 using ProbabilisticDataStructures;
 
 namespace FilterExample
@@ -222,7 +236,8 @@ For applications that store many items and target moderately low false-positive 
 ### Usage
 
 ```C#
-using System.Encoding;
+using System;
+using System.Text;
 using ProbabilisticDataStructures;
 
 namespace FilterExample
@@ -267,7 +282,8 @@ A Bloom filter is ideal for cases where the data set is known a priori because t
 ### Usage
 
 ```C#
-using System.Encoding;
+using System;
+using System.Text;
 using ProbabilisticDataStructures;
 
 namespace FilterExample
@@ -312,7 +328,8 @@ Count-Min Sketches are useful for counting the frequency of events in massive da
 ### Usage
 
 ```C#
-using System.Encoding;
+using System;
+using System.Text;
 using ProbabilisticDataStructures;
 
 namespace FilterExample
@@ -343,7 +360,8 @@ Top-K uses a Count-Min Sketch and min-heap to track the top-k most frequent elem
 ### Usage
 
 ```C#
-using System.Encoding;
+using System;
+using System.Text;
 using ProbabilisticDataStructures;
 
 namespace FilterExample
@@ -394,7 +412,8 @@ This implementation was [originally written by Eric Lesh](https://github.com/ecl
 ### Usage
 
 ```C#
-using System.Encoding;
+using System;
+using System.Text;
 using ProbabilisticDataStructures;
 
 namespace FilterExample
@@ -425,7 +444,9 @@ MinHash is a probabilistic algorithm which can be used to cluster or compare doc
 ### Usage
 
 ```C#
-using System.Encoding;
+using System;
+using System.Collections.Generic;
+using System.Text;
 using ProbabilisticDataStructures;
 
 namespace FilterExample
