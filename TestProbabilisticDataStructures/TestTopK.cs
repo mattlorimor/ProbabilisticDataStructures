@@ -45,7 +45,7 @@ namespace TestProbabilisticDataStructures
 
             var actual = topK.Elements();
 
-            Assert.AreEqual(5, actual.Length);
+            Assert.HasCount(5, actual);
 
             for (int i = 0; i < actual.Length; i++)
             {
@@ -58,7 +58,7 @@ namespace TestProbabilisticDataStructures
             var resetK = topK.Reset();
             Assert.AreSame(topK, resetK);
 
-            Assert.AreEqual(0, topK.Elements().Length);
+            Assert.IsEmpty(topK.Elements());
             Assert.AreEqual(0u, topK.N);
         }
 

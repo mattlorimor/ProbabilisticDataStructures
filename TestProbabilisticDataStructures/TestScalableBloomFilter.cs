@@ -142,13 +142,13 @@ namespace TestProbabilisticDataStructures
             }
 
             var count = f.Filters.Count;
-            Assert.IsTrue(count > 1, string.Format("Expected more than 1 filter, got {0}", count));
+            Assert.IsGreaterThan(1, count, $"Expected more than 1 filter, got {count}");
 
             var resetF = f.Reset();
             Assert.AreSame(f, resetF, "Returned ScalableBloomFilter should be the same instance");
 
             count = f.Filters.Count;
-            Assert.IsTrue(count == 1, string.Format("Expected 1 filter, got {0}", count));
+            Assert.AreEqual(1, count, $"Expected 1 filter, got {count}");
 
             foreach(var partition in f.Filters[0].Partitions)
             {

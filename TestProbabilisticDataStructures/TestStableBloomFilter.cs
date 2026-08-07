@@ -162,7 +162,7 @@ namespace TestProbabilisticDataStructures
         {
             var f = StableBloomFilter.NewDefaultStableBloomFilter(1000, 0.01);
             var fps = Math.Round(f.FalsePositiveRate(), 2, MidpointRounding.AwayFromZero);
-            Assert.IsFalse(fps > 0.01);
+            Assert.IsLessThanOrEqualTo(0.01, fps);
 
             // Classic Bloom filters have an unbound rate of false positives. Once they
             // become full, every query returns a false positive.
