@@ -4,8 +4,15 @@ using System.Runtime.CompilerServices;
 
 namespace ProbabilisticDataStructures
 {
+    /// <summary>
+    /// Library-wide defaults shared by the filter implementations.
+    /// </summary>
     public static class Defaults
     {
+        /// <summary>
+        /// The target fraction of set bits used when calculating optimal filter
+        /// sizes. See <see cref="Utils.OptimalM(uint, double)"/>.
+        /// </summary>
         public const double FILL_RATIO = 0.5;
 
         /// <summary>

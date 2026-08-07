@@ -5,6 +5,9 @@ using System.Text;
 
 namespace ProbabilisticDataStructures
 {
+    /// <summary>
+    /// Sizing calculations and hashing helpers shared by the filter implementations.
+    /// </summary>
     public static class Utils
     {
         /// <summary>
@@ -136,6 +139,7 @@ namespace ProbabilisticDataStructures
         /// Compute the hash for the provided bytes.
         /// </summary>
         /// <param name="inputBytes">The bytes to hash.</param>
+        /// <param name="hashAlgorithm">The hashing algorithm to use.</param>
         /// <returns>The hash string of the bytes.</returns>
         public static string ComputeHashAsString(byte[] inputBytes, HashAlgorithm hashAlgorithm)
         {
@@ -157,11 +161,26 @@ namespace ProbabilisticDataStructures
         }
     }
 
+    /// <summary>
+    /// The pair of 32-bit base hash values from which a filter's k hashes are derived.
+    /// </summary>
     public struct HashKernelReturnValue
     {
+        /// <summary>
+        /// The upper base hash value.
+        /// </summary>
         public uint UpperBaseHash { get; private set; }
+        /// <summary>
+        /// The lower base hash value.
+        /// </summary>
         public uint LowerBaseHash { get; private set; }
 
+        /// <summary>
+        /// Creates a new <see cref="HashKernelReturnValue"/>.
+        /// </summary>
+        /// <param name="lowerBaseHash">The lower base hash value.</param>
+        /// <param name="upperBaseHash">The upper base hash value.</param>
+        /// <returns>A HashKernelReturnValue.</returns>
         public static HashKernelReturnValue Create(uint lowerBaseHash, uint upperBaseHash)
         {
             return new HashKernelReturnValue
@@ -172,10 +191,26 @@ namespace ProbabilisticDataStructures
         }
     }
 
+    /// <summary>
+    /// The pair of 64-bit base hash values from which a filter's k hashes are derived,
+    /// for filters large enough to need a 128-bit kernel.
+    /// </summary>
     public struct HashKernel128ReturnValue
     {
+        /// <summary>
+        /// The upper base hash value.
+        /// </summary>
         public ulong UpperBaseHash { get; private set; }
+        /// <summary>
+        /// The lower base hash value.
+        /// </summary>
         public ulong LowerBaseHash { get; private set; }
+        /// <summary>
+        /// Creates a new <see cref="HashKernel128ReturnValue"/>.
+        /// </summary>
+        /// <param name="lowerBaseHash">The lower base hash value.</param>
+        /// <param name="upperBaseHash">The upper base hash value.</param>
+        /// <returns>A HashKernel128ReturnValue.</returns>
         public static HashKernel128ReturnValue Create(ulong lowerBaseHash, ulong upperBaseHash)
         {
             return new HashKernel128ReturnValue

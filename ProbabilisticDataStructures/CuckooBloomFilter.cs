@@ -270,6 +270,7 @@ namespace ProbabilisticDataStructures
         /// Indicates if the given fingerprint is contained in one of the bucket's
         /// entries.
         /// </summary>
+        /// <param name="bucket">The bucket to search.</param>
         /// <param name="f">Fingerprint</param>
         /// <returns>
         /// Whether or not the fingerprint is contained in one of the bucket's entries.
@@ -283,6 +284,7 @@ namespace ProbabilisticDataStructures
         /// Returns the entry index of the given fingerprint or -1 if it's not in the
         /// bucket.
         /// </summary>
+        /// <param name="bucket">The bucket to search.</param>
         /// <param name="f">Fingerprint</param>
         /// <returns>The entry index of the fingerprint or -1 if it's not in the
         /// bucket</returns>
@@ -456,9 +458,19 @@ namespace ProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// The outcome of a <see cref="CuckooBloomFilter.TestAndAdd(byte[])"/> call.
+        /// </summary>
         public struct TestAndAddReturnValue
         {
+            /// <summary>
+            /// Whether the data was already a member of the filter.
+            /// </summary>
             public bool WasAlreadyAMember { get; private set; }
+            /// <summary>
+            /// Whether the data was added. This is false when the data was already a
+            /// member, and also when the filter was full.
+            /// </summary>
             public bool Added { get; private set; }
 
             internal static TestAndAddReturnValue Create(bool wasAlreadyAMember, bool added)

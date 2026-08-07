@@ -136,6 +136,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="data">The data to insert</param>
         /// <param name="freq">The frequency to associate with the data</param>
+        /// <param name="k">The maximum number of elements the heap may hold</param>
         internal void insert(byte[] data, UInt64 freq, uint k)
         {
             for (int i = 0; i < this.Len(); i++)
@@ -167,6 +168,7 @@ namespace ProbabilisticDataStructures
         /// Indicates if the given frequency falls within the top-k heap.
         /// </summary>
         /// <param name="freq">The frequency to check</param>
+        /// <param name="k">The maximum number of elements the heap may hold</param>
         /// <returns>Whether or not the frequency falls within the top-k heap</returns>
         internal bool isTop(UInt64 freq, uint k)
         {
