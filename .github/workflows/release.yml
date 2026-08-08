@@ -56,7 +56,7 @@ jobs:
           --configuration Release --no-build --output artifacts
 
       - name: Upload packages as build artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: nuget-packages
           path: artifacts/*
