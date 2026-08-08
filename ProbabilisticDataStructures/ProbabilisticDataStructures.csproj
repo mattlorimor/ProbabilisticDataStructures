@@ -23,6 +23,7 @@
     <PackageTags>bloom-filter;cuckoo-filter;count-min-sketch;hyperloglog;minhash;topk;probabilistic-data-structures</PackageTags>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/mattlorimor/ProbabilisticDataStructures</PackageProjectUrl>
+    <PackageIcon>icon.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <RepositoryUrl>https://github.com/mattlorimor/ProbabilisticDataStructures</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -39,6 +40,7 @@
 
   <ItemGroup>
     <None Include="../README.md" Pack="true" PackagePath="/" />
+    <None Include="../icon.png" Pack="true" PackagePath="/" />
   </ItemGroup>
 
 </Project>
