@@ -7,7 +7,13 @@
 
   <!-- NuGet package metadata. Version lives in Directory.Build.props. -->
   <PropertyGroup>
-    <PackageId>ProbabilisticDataStructures</PackageId>
+    <!-- The unprefixed ProbabilisticDataStructures ID on nuget.org is owned by an
+         unrelated account that published this code in 2018. This package therefore
+         ships under an owner-identifying prefix, which also makes MattLorimor.*
+         eligible for ID prefix reservation. Only the package ID changes: the
+         assembly and namespace remain ProbabilisticDataStructures, so consuming
+         code is unaffected. -->
+    <PackageId>MattLorimor.ProbabilisticDataStructures</PackageId>
     <Authors>Matthew Lorimor</Authors>
     <!-- NuGet's guidance is "Copyright (c) <name> <year>". LICENSE.txt deliberately
          differs: Apache-2.0's own boilerplate mandates "Copyright [yyyy] [name]". -->
