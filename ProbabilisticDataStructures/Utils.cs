@@ -11,6 +11,14 @@ namespace ProbabilisticDataStructures
     public static class Utils
     {
         /// <summary>
+        /// Size of the stack buffer used when hashing. 64 bytes holds the largest
+        /// digest any standard <see cref="HashAlgorithm"/> produces (SHA-512); a
+        /// larger one falls back to the allocating path rather than growing the
+        /// stack frame.
+        /// </summary>
+        private const int MaxStackHashSize = 64;
+
+        /// <summary>
         /// Calculates the optimal Bloom filter size, m, based on the number of items and
         /// the desired rate of false positives.
         /// </summary>
@@ -60,8 +68,15 @@ namespace ProbabilisticDataStructures
         /// <returns>A HashKernel</returns>
         public static HashKernelReturnValue HashKernel(byte[] data, HashAlgorithm algorithm)
         {
-            var sum = algorithm.ComputeHash(data);
-            return HashKernelFromHashBytes(sum);
+            Span<byte> sum = stackalloc byte[MaxStackHashSize];
+            if (algorithm.TryComputeHash(data, sum, out int written))
+            {
+                return HashKernelFromHashBytes(sum.Slice(0, written));
+            }
+
+            // Digest larger than the stack buffer, which only a non-standard
+            // HashAlgorithm produces. Fall back to the allocating path.
+            return HashKernelFromHashBytes(algorithm.ComputeHash(data));
         }
 
         /// <summary>
@@ -74,6 +89,19 @@ namespace ProbabilisticDataStructures
         /// <param name="hashBytes">The hash bytes.</param>
         /// <returns>A HashKernel</returns>
         public static HashKernelReturnValue HashKernelFromHashBytes(byte[] hashBytes)
+        {
+            return HashKernelFromHashBytes((ReadOnlySpan<byte>)hashBytes);
+        }
+
+        /// <summary>
+        /// Returns the upper and lower base hash values from which the k hashes are
+        /// derived using the given hash bytes directly.  Identical to the array
+        /// overload, but accepts a span so callers can hash into a buffer they own
+        /// rather than allocating one per call.
+        /// </summary>
+        /// <param name="hashBytes">The hash bytes.</param>
+        /// <returns>A HashKernel</returns>
+        public static HashKernelReturnValue HashKernelFromHashBytes(ReadOnlySpan<byte> hashBytes)
         {
             return HashKernelReturnValue.Create(
                 HashBytesToUInt32(hashBytes, 0),
@@ -90,10 +118,21 @@ namespace ProbabilisticDataStructures
         /// <returns>A HashKernel</returns>
         public static HashKernel128ReturnValue HashKernel128(byte[] data, HashAlgorithm algorithm)
         {
-            var sum = algorithm.ComputeHash(data);
+            Span<byte> sum = stackalloc byte[MaxStackHashSize];
+            if (!algorithm.TryComputeHash(data, sum, out int written))
+            {
+                // Digest larger than the stack buffer, which only a non-standard
+                // HashAlgorithm produces. Fall back to the allocating path.
+                byte[] allocated = algorithm.ComputeHash(data);
+                return HashKernel128ReturnValue.Create(
+                    HashBytesToUInt64(allocated, 0),
+                    HashBytesToUInt64(allocated, 8)
+                    );
+            }
+
             return HashKernel128ReturnValue.Create(
-                HashBytesToUInt64(sum, 0),
-                HashBytesToUInt64(sum, 8)
+                HashBytesToUInt64(sum.Slice(0, written), 0),
+                HashBytesToUInt64(sum.Slice(0, written), 8)
                 );
         }
 
@@ -106,6 +145,19 @@ namespace ProbabilisticDataStructures
         /// <param name="offset"></param>
         /// <returns></returns>
         public static uint HashBytesToUInt32(byte[] hashBytes, int offset = 0)
+        {
+            return HashBytesToUInt32((ReadOnlySpan<byte>)hashBytes, offset);
+        }
+
+        /// <summary>
+        /// Returns the uint represented by the given hash bytes, starting at
+        /// byte <paramref name="offset"/>.  The result will be the same
+        /// regardless of the endianness of the architecture.
+        /// </summary>
+        /// <param name="hashBytes"></param>
+        /// <param name="offset"></param>
+        /// <returns></returns>
+        public static uint HashBytesToUInt32(ReadOnlySpan<byte> hashBytes, int offset = 0)
         {
             return
                 ((uint)hashBytes[offset]) |
@@ -123,6 +175,19 @@ namespace ProbabilisticDataStructures
         /// <param name="offset"></param>
         /// <returns></returns>
         public static ulong HashBytesToUInt64(byte[] hashBytes, int offset = 0)
+        {
+            return HashBytesToUInt64((ReadOnlySpan<byte>)hashBytes, offset);
+        }
+
+        /// <summary>
+        /// Returns the ulong represented by the given hash bytes, starting at
+        /// byte <paramref name="offset"/>.  The result will be the same
+        /// regardless of the endianness of the architecture.
+        /// </summary>
+        /// <param name="hashBytes"></param>
+        /// <param name="offset"></param>
+        /// <returns></returns>
+        public static ulong HashBytesToUInt64(ReadOnlySpan<byte> hashBytes, int offset = 0)
         {
             return
                 ((ulong)hashBytes[offset]) |
