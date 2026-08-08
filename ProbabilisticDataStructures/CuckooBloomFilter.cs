@@ -23,6 +23,12 @@ namespace ProbabilisticDataStructures
     public class CuckooBloomFilter
     {
         /// <summary>
+        /// Size of the stack buffer used when hashing. 64 bytes holds the largest
+        /// digest any standard <see cref="HashAlgorithm"/> produces (SHA-512).
+        /// </summary>
+        private const int MaxStackHashSize = 64;
+
+        /// <summary>
         /// The maximum number of relocations to attempt when inserting an element before
         /// considering the filter full.
         /// </summary>
@@ -386,12 +392,40 @@ namespace ProbabilisticDataStructures
         /// fingerprint for the given data</returns>
         private Components GetComponents(byte[] data)
         {
-            var hash = Hash.ComputeHash(data);
-            var f = hash.Take((int)this.F).ToArray();
-            var i1 = this.ComputeHashSum32(hash);
+            Span<byte> hash = stackalloc byte[MaxStackHashSize];
+            if (!Hash.TryComputeHash(data, hash, out int written))
+            {
+                // Digest larger than the stack buffer, which only a non-standard
+                // HashAlgorithm produces. Fall back to the allocating path.
+                byte[] allocated = Hash.ComputeHash(data);
+                byte[] allocatedF = Slice(allocated, (int)this.F);
+                return Components.Create(
+                    allocatedF,
+                    this.ComputeHashSum32(allocated),
+                    this.ComputeHashSum32(allocatedF));
+            }
+
+            ReadOnlySpan<byte> digest = hash.Slice(0, written);
+
+            // The fingerprint is stored in a bucket, so this array is genuinely
+            // needed. Take(...).ToArray() built it through a LINQ enumerator; a
+            // direct copy of the same bytes avoids that without changing the value.
+            byte[] f = Slice(digest, (int)this.F);
+
+            var i1 = this.ComputeHashSum32(digest);
             var i2 = this.ComputeHashSum32(f);
 
             return Components.Create(f, i1, i2);
+        }
+
+        /// <summary>
+        /// Copies the first <paramref name="length"/> bytes of <paramref name="source"/>,
+        /// clamped to its length. Matches what Take(length).ToArray() produced, which
+        /// returned a short array rather than throwing when the source was smaller.
+        /// </summary>
+        private static byte[] Slice(ReadOnlySpan<byte> source, int length)
+        {
+            return source.Slice(0, Math.Min(length, source.Length)).ToArray();
         }
 
         /// <summary>
@@ -401,8 +435,26 @@ namespace ProbabilisticDataStructures
         /// <returns>32-bit hash value</returns>
         private uint ComputeHashSum32(byte[] data)
         {
-            var sum = Hash.ComputeHash(data);
-            return Utils.HashBytesToUInt32(sum);
+            return this.ComputeHashSum32((ReadOnlySpan<byte>)data);
+        }
+
+        /// <summary>
+        /// Returns the sum of the hash, hashing into a caller-owned buffer so the
+        /// digest does not have to be allocated per call.
+        /// </summary>
+        /// <param name="data">Data</param>
+        /// <returns>32-bit hash value</returns>
+        private uint ComputeHashSum32(ReadOnlySpan<byte> data)
+        {
+            Span<byte> sum = stackalloc byte[MaxStackHashSize];
+            if (Hash.TryComputeHash(data, sum, out int written))
+            {
+                return Utils.HashBytesToUInt32(sum.Slice(0, written));
+            }
+
+            // Digest larger than the stack buffer, which only a non-standard
+            // HashAlgorithm produces. Fall back to the allocating path.
+            return Utils.HashBytesToUInt32(Hash.ComputeHash(data.ToArray()));
         }
 
         /// <summary>

@@ -57,7 +57,7 @@ not, and are the interesting part.
 | `Scalable_Hit` | 285.0 ns | 255.6 ns | 80 B | **0 B** |
 | `Stable_Hit` | 279.1 ns | 248.1 ns | 80 B | **0 B** |
 | `Deletable_Hit` | 283.6 ns | 252.3 ns | 80 B | **0 B** |
-| `Cuckoo_Hit` | 871.2 ns | 873.7 ns | 320 B | 320 B |
+| `Cuckoo_Hit` | 871.2 ns | 755.1 ns | 320 B | **32 B** |
 
 ## What the numbers show
 
@@ -73,11 +73,11 @@ gain shrinks to about 2%. The timing gain is modest relative to the ~5% noise fl
 documented below; it is believable mainly because it appears consistently across every
 benchmark. The allocation result is the unambiguous one.
 
-**Cuckoo is unchanged**, and is now the only filter that allocates. `GetComponents`
-computes the hash three times — once directly, then again inside each of two
-`ComputeHashSum32` calls — plus a LINQ `Take(...).ToArray()` for the fingerprint.
-Fixing it means restructuring how it derives its two indices and fingerprint, which is
-an algorithmic change rather than a buffer change, so it is left for its own commit.
+**Cuckoo still allocates, but far less.** Its digests now go into stack buffers and the
+LINQ `Take(...).ToArray()` is a direct copy, taking it from 320 B to 32 B. What remains
+is the fingerprint array itself, which cannot go away while it is stored in a bucket.
+It continues to compute three hashes per operation; reducing that would change the
+index values it derives, so it is not a performance question alone.
 
 ## Why these are not run in CI
 

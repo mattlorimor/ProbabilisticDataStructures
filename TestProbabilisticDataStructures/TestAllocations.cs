@@ -161,10 +161,9 @@ namespace TestProbabilisticDataStructures
         /// The Cuckoo filter is bounded separately and higher. Its GetComponents
         /// computes the hash three times -- once directly and again inside each of two
         /// ComputeHashSum32 calls -- and builds the fingerprint with a LINQ
-        /// Take(...).ToArray(), so it allocates four times what a single hash costs.
-        /// Routing it through the shared kernel is an algorithmic change rather than a
-        /// buffer change, so it is handled separately; this bound holds the line until
-        /// then.
+        /// Take(...).ToArray(). The digests now go into stack buffers, but the
+        /// fingerprint remains a real allocation because it is stored in a bucket, so
+        /// this filter is bounded rather than zeroed.
         /// </summary>
         [TestMethod]
         public void TestCuckooFilterTestAllocation()
@@ -175,8 +174,8 @@ namespace TestProbabilisticDataStructures
 
             var bytes = BytesPerOperation(() => f.Test(data));
 
-            Assert.IsLessThanOrEqualTo(320, bytes,
-                $"CuckooBloomFilter.Test allocated {bytes} B per call, above the recorded 320 B.");
+            Assert.IsLessThanOrEqualTo(32, bytes,
+                $"CuckooBloomFilter.Test allocated {bytes} B per call, above the recorded 32 B.");
         }
     }
 }
