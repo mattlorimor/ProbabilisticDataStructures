@@ -5,7 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0] - Unreleased
+## [2.0.1] - Unreleased
+
+### Added
+
+- A package icon. NuGet renders an embedded icon on the package listing and in Visual
+  Studio's package manager; without one the package showed a grey placeholder. The
+  design is a bit array with some bits set, which is what a Bloom filter is.
+
+  Shipped as a patch release because 2.0.0 is already published and an icon only
+  appears on versions packed after it was added — it is not applied retroactively.
+
+## [2.0.0] - 2026-08-08
 
 This release modernizes the entire build. The library had not been touched since June
 2018 and could no longer be built or tested with current .NET tooling.
@@ -91,12 +102,24 @@ This release modernizes the entire build. The library had not been touched since
   point: the published 1.0.1 package was built on 2018-06-05 from what was tagged
   `v1.0.9`, so the NuGet version line and the Git tag line had not agreed since 2018.
 
-### Notes for maintainers
+### Added
 
-Package metadata (`PackageId`, `Authors`, `Description`, license expression,
-`RepositoryUrl`, SourceLink) is **not yet configured**. The 1.0.1 package shipped with
-the placeholder description `"Package Description"` and no author or license metadata.
-This must be corrected before 2.0.0 is published to NuGet.
+- Full package metadata: authors, copyright, description, tags, the Apache-2.0 license
+  expression, project and repository URLs, and the README as the package readme. The
+  unaffiliated 1.0.1 package had shipped with the SDK's placeholder description,
+  `"Package Description"`, and no author or license information.
+
+- Generated XML documentation, packed so consumers get IntelliSense against the library
+  rather than bare signatures.
+
+- Source Link with symbols published as a `.snupkg`, so consumers can step into this
+  code from their own debugger.
+
+- A tag-driven release pipeline that publishes to NuGet via
+  [trusted publishing](https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing),
+  exchanging a short-lived OIDC token for a temporary API key rather than storing a
+  long-lived publishing secret. It refuses to publish when the tag disagrees with the
+  declared version.
 
 ## [1.0.9] - 2018-06-05
 
@@ -115,7 +138,8 @@ This must be corrected before 2.0.0 is published to NuGet.
 - Initial release: a C# port of [Tyler Treat's](https://github.com/tylertreat)
   [BoomFilters](https://github.com/tylertreat/BoomFilters) Go project.
 
-[2.0.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v1.0.9...HEAD
+[2.0.1]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v1.0.9...v2.0.0
 [1.0.9]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v1.0.8...v1.0.9
 [1.0.8]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v1.0.7...v1.0.8
 [1.0.7]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v1.0.0...v1.0.7
