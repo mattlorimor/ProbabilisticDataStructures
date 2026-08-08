@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           # Source Link records the commit; a shallow clone is enough, but tags
           # must be present for the version check below.
