@@ -1,4 +1,4 @@
-# Probabilistic Data Structures for C<span>#</span> [![CI](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml/badge.svg)](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml) [![NuGet](https://img.shields.io/nuget/v/ProbabilisticDataStructures.svg)](https://www.nuget.org/packages/ProbabilisticDataStructures/)
+# Probabilistic Data Structures for C<span>#</span> [![CI](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml/badge.svg)](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml) [![NuGet](https://img.shields.io/nuget/v/MattLorimor.ProbabilisticDataStructures.svg)](https://www.nuget.org/packages/MattLorimor.ProbabilisticDataStructures/)
 
 This is a C# port of [Tyler Treat's](https://github.com/tylertreat) work in the [BoomFilters](https://github.com/tylertreat/BoomFilters) golang project. His writing on probabilistic data structures and other computing-related activities can be found here: http://bravenewgeek.com/.
 
@@ -22,17 +22,28 @@ The descriptions for each filter were lifted directly from the BoomFilters' READ
 ## Installation
 
 ```
-dotnet add package ProbabilisticDataStructures
+dotnet add package MattLorimor.ProbabilisticDataStructures
 ```
 
-Requires .NET 10 or later. Version 1.0.1 targets .NET Framework 4.5 and .NET Standard 2.0
-and remains available for older projects; see [CHANGELOG.md](CHANGELOG.md) for what
-changed in 2.0.0.
+Requires .NET 10 or later. See [CHANGELOG.md](CHANGELOG.md) for what changed in 2.0.0.
+
+The package ID carries a prefix, but the assembly and namespace do not — your code
+still uses `ProbabilisticDataStructures`:
+
+```C#
+using ProbabilisticDataStructures;
+```
+
+> **Note on package naming.** An unprefixed `ProbabilisticDataStructures` package also
+> exists on nuget.org. It was published in 2018 from this project's source by an account
+> unaffiliated with this repository, is not maintained here, and will not receive these
+> releases. Current releases ship under the `MattLorimor.` prefix above.
 
 ## Releases
 
-Packages are published to [NuGet](https://www.nuget.org/packages/ProbabilisticDataStructures/),
-and each release is also tagged on the
+Packages are published to
+[NuGet](https://www.nuget.org/packages/MattLorimor.ProbabilisticDataStructures/), and each
+release is also tagged on the
 [releases page](https://github.com/mattlorimor/ProbabilisticDataStructures/releases).
 
 ## Contributions

@@ -10,15 +10,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 This release modernizes the entire build. The library had not been touched since June
 2018 and could no longer be built or tested with current .NET tooling.
 
+### Changed — package identity
+
+- **The package ID is now `MattLorimor.ProbabilisticDataStructures`.**
+
+  Releases from this repository previously had no package of their own. The unprefixed
+  `ProbabilisticDataStructures` ID on nuget.org was registered in 2018 by an account
+  unaffiliated with this project, which published this project's source; that package is
+  not maintained here and will not receive these releases.
+
+  Rather than contest the name, this project ships under an owner-identifying prefix.
+  The prefix also makes `MattLorimor.*` eligible for
+  [ID prefix reservation](https://learn.microsoft.com/en-us/nuget/nuget-org/id-prefix-reservation),
+  which prevents anyone else from publishing under it.
+
+  **Only the package ID changed.** The assembly and namespace remain
+  `ProbabilisticDataStructures`, so `using ProbabilisticDataStructures;` and every type
+  name are unaffected. Updating means changing the `PackageReference` include, nothing
+  more.
+
 ### Removed
 
 - **Dropped `net45` and `netstandard2.0`. The library now targets `net10.0` only.**
 
-  This is a hard break, and it is deliberate. If you consume this package from .NET
+  This is a hard break, and it is deliberate. If you consume this library from .NET
   Framework, from Unity, from Xamarin/Mono, or from any .NET Core or .NET 5–9
   application — including .NET 8, which remains in support until November 2026 —
-  **you cannot upgrade to 2.0.0**. Stay on 1.0.1, which continues to work and is not
-  being withdrawn.
+  **2.0.0 will not install**. The older, unaffiliated 1.0.1 package targets `net45` and
+  `netstandard2.0` and remains on nuget.org, but it is not published by this project and
+  nothing here governs it.
 
   Note that this costs no operating-system coverage. `netstandard2.0` is an API
   specification, not a runtime, and `net10.0` runs on Windows, Linux, and macOS across
