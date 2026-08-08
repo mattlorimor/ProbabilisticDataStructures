@@ -73,3 +73,26 @@ the win: no filter can allocate less than the kernel does.
 directly, then again inside each of two `ComputeHashSum32` calls — plus a LINQ
 `Take(...).ToArray()` for the fingerprint. Four allocations, three MD5 computations.
 It is a separate problem from the shared kernel and deserves its own fix.
+
+## Why these are not run in CI
+
+Benchmarks are for when you are optimizing and can control the machine. They do not
+gate pull requests, for two measured reasons.
+
+**The timings are too noisy to gate on.** In the baseline above — a quiet local machine,
+not a shared runner — `HashKernel` at 1024 bytes measured 1,483.4 ns ± 135.01, or 9%.
+`Bloom_Hit`, `Stable_Hit`, `Partitioned_Hit`, `Counting_Hit` and `Deletable_Hit` land
+within 2% of each other while almost certainly doing identical work; that spread is the
+noise floor. A threshold loose enough to avoid false failures on a shared CI runner
+would sail past a real 10% regression, and a tighter one would fire constantly until
+somebody switched it off.
+
+**They are slow.** The two `--job short` runs above took 40s and 62s for 14 benchmarks.
+Default precision is roughly an order of magnitude longer, which is 15–30 minutes added
+to every pull request.
+
+What *is* worth gating on is allocation, because it is a property of the code rather
+than the machine and reproduces exactly. That lives in
+`TestProbabilisticDataStructures/TestAllocations.cs` as ordinary unit tests using
+`GC.GetAllocatedBytesForCurrentThread`, which run in about 35 ms as part of the normal
+suite. Update the bounds there when the hash path changes.
