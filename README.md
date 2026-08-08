@@ -10,11 +10,12 @@ The descriptions for each filter were lifted directly from the BoomFilters' READ
 * [Count-Min Sketch](https://github.com/mattlorimor/ProbabilisticDataStructures#count-min-sketch)
 * [Counting Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#counting-bloom-filter)
 * [Cuckoo filter](https://github.com/mattlorimor/ProbabilisticDataStructures#cuckoo-filter)
-* Deletable Bloom filter
+* [Classic Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#classic-bloom-filter)
+* [Deletable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#deletable-bloom-filter)
 * [HyperLogLog](https://github.com/mattlorimor/ProbabilisticDataStructures#hyperloglog)
 * [Inverse Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#inverse-bloom-filter)
 * [MinHash](https://github.com/mattlorimor/ProbabilisticDataStructures#minhash)
-* PartitionedBloomFilter
+* [Partitioned Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#partitioned-bloom-filter)
 * [Scalable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#scalable-bloom-filter)
 * [Stable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#stable-bloom-filter)
 * [TopK](https://github.com/mattlorimor/ProbabilisticDataStructures#top-k)
@@ -196,7 +197,7 @@ A Counting Bloom Filter (CBF) provides a way to remove elements by using an arra
 
 Counting Bloom Filters are useful for cases where elements are both added and removed from the data set. Since they use n-bit buckets, CBFs use roughly n-times more memory than traditional Bloom filters.
 
-See Deletable Bloom Filter for an alternative which avoids false negatives.
+See [Deletable Bloom Filter](https://github.com/mattlorimor/ProbabilisticDataStructures#deletable-bloom-filter) for an alternative which avoids false negatives.
 
 ### Usage
 
@@ -322,6 +323,101 @@ namespace FilterExample
             if (bf.Test(B_BYTES))
             {
                 Console.WriteLine("now it contains b!");
+            }
+        }
+    }
+}
+```
+
+## Deletable Bloom Filter
+
+This is an implementation of a Deletable Bloom Filter as described by Rothenberg, Macapuna, Verdi, and Magalhaes in [The Deletable Bloom filter - A new member of the Bloom family](http://arxiv.org/pdf/1005.0352.pdf).
+
+A Deletable Bloom Filter compactly stores information on collisions when inserting elements. This information is used to determine if elements are deletable. This design enables false-negative-free deletions at a fraction of the cost in memory consumption.
+
+Deletable Bloom Filters are useful for cases which require removing elements but cannot allow false negatives. This means they can be safely swapped in place of traditional Bloom filters.
+
+The `r` constructor parameter sets how many bits are used to store collision information, which controls how deletable elements are. Refer to the paper when selecting a value.
+
+### Usage
+
+```C#
+using System;
+using System.Text;
+using ProbabilisticDataStructures;
+
+namespace FilterExample
+{
+    class Example
+    {
+        static void Main()
+        {
+            byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
+            byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
+
+            var dbf = new DeletableBloomFilter(1000, 20, 0.01);
+
+            dbf.Add(A_BYTES);
+            if (dbf.Test(A_BYTES))
+            {
+                Console.WriteLine("contains a");
+            }
+
+            // TestAndRemove returns whether the element was a member before removal.
+            // Removal only happens when the element's bits are not in a colliding
+            // region, which is what keeps deletions free of false negatives.
+            if (dbf.TestAndRemove(A_BYTES))
+            {
+                Console.WriteLine("removed a");
+            }
+
+            if (!dbf.Test(B_BYTES))
+            {
+                Console.WriteLine("doesn't contain b");
+            }
+        }
+    }
+}
+```
+
+## Partitioned Bloom Filter
+
+This is an implementation of a partitioned Bloom filter, a variation of the classic Bloom filter described by Almeida, Baquero, Preguica, and Hutchison in [Scalable Bloom Filters](http://gsd.di.uminho.pt/members/cbm/ps/dbloom.pdf).
+
+This filter works by partitioning the M-sized bit array into k slices of size m = M/k bits. Each hash function produces an index over m for its respective slice. Thus, each element is described by exactly k bits, meaning the distribution of false positives is uniform across all elements.
+
+### Usage
+
+```C#
+using System;
+using System.Text;
+using ProbabilisticDataStructures;
+
+namespace FilterExample
+{
+    class Example
+    {
+        static void Main()
+        {
+            byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
+            byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
+
+            var pbf = new PartitionedBloomFilter(1000, 0.01);
+
+            pbf.Add(A_BYTES);
+            if (pbf.Test(A_BYTES))
+            {
+                Console.WriteLine("contains a");
+            }
+
+            if (!pbf.TestAndAdd(B_BYTES))
+            {
+                Console.WriteLine("doesn't contain b");
+            }
+
+            if (pbf.Test(B_BYTES))
+            {
+                Console.WriteLine("now contains b");
             }
         }
     }
