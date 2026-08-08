@@ -7,11 +7,14 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create the GitHub release
+      id-token: write  # request the OIDC token used for NuGet trusted publishing
 
     steps:
       - name: Check out
@@ -58,21 +61,33 @@ jobs:
           name: nuget-packages
           path: artifacts/*
 
-      - name: Publish to NuGet
+      - name: Check trusted publishing is configured
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_USER: ${{ secrets.NUGET_USER }}
         run: |
-          set -euo pipefail
-          if [ -z "${NUGET_API_KEY}" ]; then
-            echo "::error::NUGET_API_KEY secret is not set. Add it in Settings > Secrets and variables > Actions."
+          if [ -z "${NUGET_USER}" ]; then
+            echo "::error::NUGET_USER secret is not set. It must contain your nuget.org username (profile name, not email). A matching trusted publishing policy must also exist at https://www.nuget.org/account/trustedpublishing for owner ${GITHUB_REPOSITORY_OWNER}, repository ${GITHUB_REPOSITORY#*/}, workflow file release.yml."
             exit 1
           fi
-          # --skip-duplicate makes a re-run of an already-published tag a no-op
-          # rather than a hard failure. The .snupkg is picked up alongside.
-          dotnet nuget push "artifacts/*.nupkg" \
-            --api-key "${NUGET_API_KEY}" \
-            --source https://api.nuget.org/v3/index.json \
-            --skip-duplicate
+
+      # Trusted publishing: exchange a short-lived, GitHub-signed OIDC token for a
+      # temporary nuget.org API key, so no long-lived publishing secret exists to
+      # leak or rotate. Requested immediately before the push on purpose -- the key
+      # lives one hour, and each OIDC token may be exchanged exactly once.
+      - name: NuGet login (OIDC to temporary API key)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Publish to NuGet
+        # --skip-duplicate makes a re-run of an already-published tag a no-op
+        # rather than a hard failure. The .snupkg is picked up alongside.
+        run: >-
+          dotnet nuget push "artifacts/*.nupkg"
+          --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}"
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
 
       - name: Create GitHub release
         env:
