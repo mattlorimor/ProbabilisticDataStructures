@@ -351,10 +351,10 @@ namespace ProbabilisticDataStructures
 
             // Try to insert into bucket[i2].
             var b2 = this.Buckets[i2 % this.M];
-            var ids = GetEmptyEntry(b2);
-            if (idx != -1)
+            var idx2 = GetEmptyEntry(b2);
+            if (idx2 != -1)
             {
-                b2[idx] = f;
+                b2[idx2] = f;
                 this.count++;
                 return true;
             }
@@ -399,10 +399,11 @@ namespace ProbabilisticDataStructures
                 // HashAlgorithm produces. Fall back to the allocating path.
                 byte[] allocated = Hash.ComputeHash(data);
                 byte[] allocatedF = Slice(allocated, (int)this.F);
+                var fallbackI1 = this.ComputeHashSum32(allocated);
                 return Components.Create(
                     allocatedF,
-                    this.ComputeHashSum32(allocated),
-                    this.ComputeHashSum32(allocatedF));
+                    fallbackI1,
+                    fallbackI1 ^ this.ComputeHashSum32(allocatedF));
             }
 
             ReadOnlySpan<byte> digest = hash.Slice(0, written);
@@ -413,7 +414,12 @@ namespace ProbabilisticDataStructures
             byte[] f = Slice(digest, (int)this.F);
 
             var i1 = this.ComputeHashSum32(digest);
-            var i2 = this.ComputeHashSum32(f);
+
+            // The two candidate buckets form a pair: i2 must be i1 XOR the
+            // fingerprint hash, so either index recovers the other. The relocation
+            // loop in Insert depends on it, computing an element's alternate bucket
+            // as i ^ ComputeHashSum32(f).
+            var i2 = i1 ^ this.ComputeHashSum32(f);
 
             return Components.Create(f, i1, i2);
         }
