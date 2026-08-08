@@ -9,7 +9,10 @@
   <PropertyGroup>
     <PackageId>ProbabilisticDataStructures</PackageId>
     <Authors>Matthew Lorimor</Authors>
-    <Copyright>Copyright 2015 Matthew Lorimor</Copyright>
+    <!-- NuGet's guidance is "Copyright (c) <name> <year>". LICENSE.txt deliberately
+         differs: Apache-2.0's own boilerplate mandates "Copyright [yyyy] [name]". -->
+    <Copyright>Copyright (c) Matthew Lorimor 2015</Copyright>
+    <PackageReleaseNotes>See the changelog for this release: https://github.com/mattlorimor/ProbabilisticDataStructures/blob/v$(VersionPrefix)/CHANGELOG.md</PackageReleaseNotes>
     <Description>A probabilistic data structures library for C#, ported from Tyler Treat's BoomFilters project for Go. Includes Bloom filters (classic, counting, deletable, inverse, partitioned, scalable, and stable), Cuckoo filters, Count-Min Sketch, HyperLogLog, MinHash, and Top-K.</Description>
     <PackageTags>bloom-filter;cuckoo-filter;count-min-sketch;hyperloglog;minhash;topk;probabilistic-data-structures</PackageTags>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
