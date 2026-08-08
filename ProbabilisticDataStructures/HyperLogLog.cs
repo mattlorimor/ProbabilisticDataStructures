@@ -208,8 +208,15 @@ namespace ProbabilisticDataStructures
         /// <returns>32-bit hash value</returns>
         private uint CalculateHash(byte[] data)
         {
-            var sum = Hash.ComputeHash(data);
-            return Utils.HashBytesToUInt32(sum);
+            Span<byte> sum = stackalloc byte[64];
+            if (Hash.TryComputeHash(data, sum, out int written))
+            {
+                return Utils.HashBytesToUInt32(sum.Slice(0, written));
+            }
+
+            // Digest larger than the stack buffer, which only a non-standard
+            // HashAlgorithm produces. Fall back to the allocating path.
+            return Utils.HashBytesToUInt32(Hash.ComputeHash(data));
         }
 
         /// <summary>

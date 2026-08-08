@@ -16,10 +16,15 @@ namespace TestProbabilisticDataStructures
     /// milliseconds, and need no benchmarking harness.
     /// </para>
     /// <para>
-    /// The bounds below record today's behavior, not a target. Every filter operation
-    /// currently allocates because <see cref="HashAlgorithm.ComputeHash(byte[])"/>
-    /// returns a freshly allocated digest on each call. They should drop to zero once
-    /// the hash path writes into a caller-provided buffer; tighten them when it does.
+    /// The hash path writes into a stack buffer via
+    /// <see cref="HashAlgorithm.TryComputeHash(ReadOnlySpan{byte}, Span{byte}, out int)"/>,
+    /// so these operations allocate nothing. Reintroducing
+    /// <see cref="HashAlgorithm.ComputeHash(byte[])"/> anywhere on the hot path fails
+    /// these tests, which is the point.
+    /// </para>
+    /// <para>
+    /// The Cuckoo filter is the one exception and is still bounded rather than
+    /// zeroed; see its test for why.
     /// </para>
     /// </summary>
     [TestClass]
@@ -67,8 +72,8 @@ namespace TestProbabilisticDataStructures
 
             var bytes = BytesPerOperation(() => Utils.HashKernel(data, md5));
 
-            Assert.IsLessThanOrEqualTo(80, bytes,
-                $"Utils.HashKernel allocated {bytes} B per call, above the recorded 80 B.");
+            Assert.AreEqual(0, bytes,
+                $"Utils.HashKernel allocated {bytes} B per call; the hot path must not allocate.");
         }
 
         /// <summary>
@@ -99,8 +104,8 @@ namespace TestProbabilisticDataStructures
 
             var bytes = BytesPerOperation(() => f.Test(data));
 
-            Assert.IsLessThanOrEqualTo(80, bytes,
-                $"BloomFilter.Test allocated {bytes} B per call, above the recorded 80 B.");
+            Assert.AreEqual(0, bytes,
+                $"BloomFilter.Test allocated {bytes} B per call; the hot path must not allocate.");
         }
 
         [TestMethod]
@@ -111,8 +116,8 @@ namespace TestProbabilisticDataStructures
 
             var bytes = BytesPerOperation(() => f.Add(data));
 
-            Assert.IsLessThanOrEqualTo(80, bytes,
-                $"BloomFilter.Add allocated {bytes} B per call, above the recorded 80 B.");
+            Assert.AreEqual(0, bytes,
+                $"BloomFilter.Add allocated {bytes} B per call; the hot path must not allocate.");
         }
 
         [TestMethod]
@@ -123,16 +128,43 @@ namespace TestProbabilisticDataStructures
 
             var bytes = BytesPerOperation(() => f.TestAndAdd(data));
 
-            Assert.IsLessThanOrEqualTo(80, bytes,
-                $"BloomFilter.TestAndAdd allocated {bytes} B per call, above the recorded 80 B.");
+            Assert.AreEqual(0, bytes,
+                $"BloomFilter.TestAndAdd allocated {bytes} B per call; the hot path must not allocate.");
+        }
+
+        [TestMethod]
+        public void TestInverseBloomFilterTestAllocation()
+        {
+            var data = Key("allocation-probe");
+            var f = new InverseBloomFilter(10000);
+            f.Add(data);
+
+            var bytes = BytesPerOperation(() => f.Test(data));
+
+            Assert.AreEqual(0, bytes,
+                $"InverseBloomFilter.Test allocated {bytes} B per call; the hot path must not allocate.");
+        }
+
+        [TestMethod]
+        public void TestHyperLogLogAddAllocation()
+        {
+            var data = Key("allocation-probe");
+            var hll = HyperLogLog.NewDefaultHyperLogLog(0.01);
+
+            var bytes = BytesPerOperation(() => hll.Add(data));
+
+            Assert.AreEqual(0, bytes,
+                $"HyperLogLog.Add allocated {bytes} B per call; the hot path must not allocate.");
         }
 
         /// <summary>
         /// The Cuckoo filter is bounded separately and higher. Its GetComponents
         /// computes the hash three times -- once directly and again inside each of two
         /// ComputeHashSum32 calls -- and builds the fingerprint with a LINQ
-        /// Take(...).ToArray(), so it allocates four times what the others do. The
-        /// bound records that rather than endorsing it.
+        /// Take(...).ToArray(), so it allocates four times what a single hash costs.
+        /// Routing it through the shared kernel is an algorithmic change rather than a
+        /// buffer change, so it is handled separately; this bound holds the line until
+        /// then.
         /// </summary>
         [TestMethod]
         public void TestCuckooFilterTestAllocation()

@@ -32,47 +32,52 @@ Results are written to `BenchmarkDotNet.Artifacts/` (git-ignored).
 insert a fixed batch per invocation. `OperationsPerInvoke` reports per-item cost and
 amortizes the setup, keeping it out of the measurement.
 
-## Baseline
+## Results
 
-Captured before any optimization work, on an Apple Silicon Mac running .NET 10 with
-`--job short`. Absolute times are machine-specific; the **allocation** figures are not,
-and are the interesting part.
+Apple Silicon Mac, .NET 10, `--job short`. "Before" is the original
+`HashAlgorithm.ComputeHash` path; "after" is hashing into a stack buffer via
+`TryComputeHash`. Absolute times are machine-specific; the **allocation** figures are
+not, and are the interesting part.
 
 ### Hash kernel
 
-| Method | DataSize | Mean | Allocated |
-| --- | --- | --- | --- |
-| `HashKernel` | 8 | 282.0 ns | **80 B** |
-| `HashKernel` | 64 | 383.6 ns | **80 B** |
-| `HashKernel` | 1024 | 1,483.4 ns | **80 B** |
+| Method | DataSize | Mean before | Mean after | Allocated before | Allocated after |
+| --- | --- | --- | --- | --- | --- |
+| `HashKernel` | 8 | 282.0 ns | 254.0 ns | 80 B | **0 B** |
+| `HashKernel` | 64 | 383.6 ns | 348.7 ns | 80 B | **0 B** |
+| `HashKernel` | 1024 | 1,483.4 ns | 1,451.1 ns | 80 B | **0 B** |
 
 ### Membership tests
 
-| Method | Mean | Ratio | Allocated |
-| --- | --- | --- | --- |
-| `Bloom_Hit` | 277.3 ns | 1.00 | 80 B |
-| `Counting_Hit` | 283.0 ns | 1.02 | 80 B |
-| `Partitioned_Hit` | 280.7 ns | 1.01 | 80 B |
-| `Scalable_Hit` | 285.0 ns | 1.03 | 80 B |
-| `Stable_Hit` | 279.1 ns | 1.01 | 80 B |
-| `Deletable_Hit` | 283.6 ns | 1.02 | 80 B |
-| `Cuckoo_Hit` | 871.2 ns | **3.14** | **320 B** |
+| Method | Mean before | Mean after | Allocated before | Allocated after |
+| --- | --- | --- | --- | --- |
+| `Bloom_Hit` | 277.3 ns | 249.7 ns | 80 B | **0 B** |
+| `Counting_Hit` | 283.0 ns | 250.5 ns | 80 B | **0 B** |
+| `Partitioned_Hit` | 280.7 ns | 251.0 ns | 80 B | **0 B** |
+| `Scalable_Hit` | 285.0 ns | 255.6 ns | 80 B | **0 B** |
+| `Stable_Hit` | 279.1 ns | 248.1 ns | 80 B | **0 B** |
+| `Deletable_Hit` | 283.6 ns | 252.3 ns | 80 B | **0 B** |
+| `Cuckoo_Hit` | 871.2 ns | 873.7 ns | 320 B | 320 B |
 
-## What the baseline shows
+## What the numbers show
 
-**Allocation is constant at 80 B per operation regardless of input size**, because it
-comes from `HashAlgorithm.ComputeHash` allocating a fresh digest array on every call,
-not from the data being hashed.
+**Allocation on the hot path is gone.** The original 80 B per operation was constant
+regardless of input size, because it came from `HashAlgorithm.ComputeHash` returning a
+freshly allocated digest on every call rather than from the data being hashed. Hashing
+into a stack buffer removes it entirely, and Gen0 collections with it.
 
-**Every filter except Cuckoo allocates exactly the same 80 B as the raw hash kernel.**
-The filter logic itself allocates nothing — the entire per-operation allocation is
-hashing. That makes the hash kernel the single point worth optimizing, and it bounds
-the win: no filter can allocate less than the kernel does.
+**Time improved by roughly 10% at small inputs and less at large ones**, which is what
+should be expected: removing an allocation matters most when the allocation is a
+meaningful share of the work. At 1024-byte inputs the MD5 computation dominates and the
+gain shrinks to about 2%. The timing gain is modest relative to the ~5% noise floor
+documented below; it is believable mainly because it appears consistently across every
+benchmark. The allocation result is the unambiguous one.
 
-**Cuckoo is a 4x outlier** because `GetComponents` computes the hash three times — once
-directly, then again inside each of two `ComputeHashSum32` calls — plus a LINQ
-`Take(...).ToArray()` for the fingerprint. Four allocations, three MD5 computations.
-It is a separate problem from the shared kernel and deserves its own fix.
+**Cuckoo is unchanged**, and is now the only filter that allocates. `GetComponents`
+computes the hash three times — once directly, then again inside each of two
+`ComputeHashSum32` calls — plus a LINQ `Take(...).ToArray()` for the fingerprint.
+Fixing it means restructuring how it derives its two indices and fingerprint, which is
+an algorithmic change rather than a buffer change, so it is left for its own commit.
 
 ## Why these are not run in CI
 
