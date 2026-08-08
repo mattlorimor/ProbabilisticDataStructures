@@ -1,5 +1,9 @@
 ﻿namespace ProbabilisticDataStructures
 {
+    /// <summary>
+    /// The operations common to every filter in this library: testing for
+    /// membership, adding data, and the combination of the two.
+    /// </summary>
     public interface IFilter
     {
         /// <summary>

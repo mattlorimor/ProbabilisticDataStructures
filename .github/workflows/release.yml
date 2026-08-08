@@ -1,0 +1,100 @@
+name: Release
+
+# Publishing is driven by tags. Pushing a tag like v2.0.0 builds, tests, packs,
+# and publishes to NuGet, then attaches the packages to a GitHub release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create the GitHub release
+      id-token: write  # request the OIDC token used for NuGet trusted publishing
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+        with:
+          # Source Link records the commit; a shallow clone is enough, but tags
+          # must be present for the version check below.
+          fetch-depth: 0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      # A tag that disagrees with VersionPrefix would publish a package whose
+      # number does not match the commit it claims to come from. That is exactly
+      # how the 1.0.1 package ended up carrying v1.0.9's code, so fail loudly
+      # rather than guess which one is right.
+      - name: Verify tag matches project version
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          project_version="$(dotnet msbuild ProbabilisticDataStructures/ProbabilisticDataStructures.csproj \
+            -getProperty:Version -v:quiet | tr -d '[:space:]')"
+          echo "tag=${tag_version} project=${project_version}"
+          if [ "${tag_version}" != "${project_version}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match project version ${project_version}. Update VersionPrefix in Directory.Build.props or retag."
+            exit 1
+          fi
+
+      - name: Build
+        run: dotnet build --configuration Release -warnaserror
+
+      - name: Test
+        run: dotnet test --configuration Release --no-build
+
+      - name: Pack
+        run: dotnet pack ProbabilisticDataStructures/ProbabilisticDataStructures.csproj
+          --configuration Release --no-build --output artifacts
+
+      - name: Upload packages as build artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: nuget-packages
+          path: artifacts/*
+
+      - name: Check trusted publishing is configured
+        env:
+          NUGET_USER: ${{ secrets.NUGET_USER }}
+        run: |
+          if [ -z "${NUGET_USER}" ]; then
+            echo "::error::NUGET_USER secret is not set. It must contain your nuget.org username (profile name, not email). A matching trusted publishing policy must also exist at https://www.nuget.org/account/trustedpublishing for owner ${GITHUB_REPOSITORY_OWNER}, repository ${GITHUB_REPOSITORY#*/}, workflow file release.yml."
+            exit 1
+          fi
+
+      # Trusted publishing: exchange a short-lived, GitHub-signed OIDC token for a
+      # temporary nuget.org API key, so no long-lived publishing secret exists to
+      # leak or rotate. Requested immediately before the push on purpose -- the key
+      # lives one hour, and each OIDC token may be exchanged exactly once.
+      - name: NuGet login (OIDC to temporary API key)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: Publish to NuGet
+        # --skip-duplicate makes a re-run of an already-published tag a no-op
+        # rather than a hard failure. The .snupkg is picked up alongside.
+        run: >-
+          dotnet nuget push "artifacts/*.nupkg"
+          --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}"
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${GITHUB_REF_NAME}"
+          --repo "${GITHUB_REPOSITORY}"
+          --title "${GITHUB_REF_NAME}"
+          --notes "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/CHANGELOG.md)."
+          artifacts/*
