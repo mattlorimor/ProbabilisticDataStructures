@@ -34,7 +34,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private const int MAX_NUM_KICKS = 500;
 
-        internal byte[][][] Buckets { get; set; }
+        internal byte[]?[][] Buckets { get; set; }
         /// <summary>
         /// Hash algorithm.
         /// </summary>
@@ -281,7 +281,7 @@ namespace ProbabilisticDataStructures
         /// <returns>
         /// Whether or not the fingerprint is contained in one of the bucket's entries.
         /// </returns>
-        private static bool Contains(byte[][] bucket, byte[] f)
+        private static bool Contains(byte[]?[] bucket, byte[] f)
         {
             return IndexOf(bucket, f) != -1;
         }
@@ -294,14 +294,14 @@ namespace ProbabilisticDataStructures
         /// <param name="f">Fingerprint</param>
         /// <returns>The entry index of the fingerprint or -1 if it's not in the
         /// bucket</returns>
-        private static int IndexOf(byte[][] bucket, byte[] f)
+        private static int IndexOf(byte[]?[] bucket, byte[] f)
         {
             for (int i = 0; i < bucket.Count(); i++)
             {
                 var sequence = bucket[i];
                 if (sequence != null)
                 {
-                    if (Enumerable.SequenceEqual(f, bucket[i]))
+                    if (Enumerable.SequenceEqual(f, sequence))
                     {
                         return i;
                     }
@@ -315,7 +315,7 @@ namespace ProbabilisticDataStructures
         /// full.
         /// </summary>
         /// <returns></returns>
-        private static int GetEmptyEntry(byte[][] bucket)
+        private static int GetEmptyEntry(byte[]?[] bucket)
         {
             for (int i = 0; i < bucket.Count(); i++)
             {
@@ -366,7 +366,12 @@ namespace ProbabilisticDataStructures
                 var bucketIdx = i % this.M;
                 var entryIdx = random.Next((int)this.B);
                 var tempF = f;
-                f = this.Buckets[bucketIdx][entryIdx];
+
+                // The loop only relocates out of a bucket with no free entry, so
+                // every slot in it is occupied. Reaching a null here would have
+                // thrown before these annotations existed, so this records the
+                // existing invariant rather than assuming a new one.
+                f = this.Buckets[bucketIdx][entryIdx]!;
                 this.Buckets[bucketIdx][entryIdx] = tempF;
                 i = i ^ ComputeHashSum32(f);
                 var b = this.Buckets[i % this.M];

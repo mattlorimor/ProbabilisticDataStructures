@@ -47,6 +47,38 @@ Packages are published to
 release is also tagged on the
 [releases page](https://github.com/mattlorimor/ProbabilisticDataStructures/releases).
 
+## Thread safety
+
+**None of the filters in this library are thread-safe.** No operation is synchronized,
+including read-only ones.
+
+This is deliberate and matches the Go implementation this library is a port of. Adding
+locks would impose a cost on the single-threaded case, which is the common one, and the
+right granularity depends on the caller's access pattern rather than the filter's.
+
+`Test` is not safe to call concurrently with `Add` or `TestAndAdd`, and it is not safe
+to call `Test` concurrently with itself either: the filters hold a `HashAlgorithm`
+instance and reuse it across calls, and `HashAlgorithm` is itself not thread-safe.
+
+If you need concurrent access, synchronize externally:
+
+```C#
+private readonly object _gate = new object();
+private readonly BloomFilter _filter = new BloomFilter(100000, 0.01);
+
+public bool Contains(byte[] data)
+{
+    lock (_gate)
+    {
+        return _filter.Test(data);
+    }
+}
+```
+
+A reader-writer lock will not help without further care, because concurrent `Test` calls
+still share the same `HashAlgorithm`. Give each thread its own filter, or hold an
+exclusive lock for every operation.
+
 ## Contributions
 Pull-requests are welcome, but submitting an issue is probably the best place to start if you have complex critiques or suggestions.
 

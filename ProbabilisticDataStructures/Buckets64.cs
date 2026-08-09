@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -51,6 +52,7 @@ namespace ProbabilisticDataStructures
             this.Max = (1 << bucketSize) - 1;
         }
 
+        [MemberNotNull(nameof(Data))]
         private void AllocateArray(ulong count, byte bucketSize)
         {
             this.arrayCount = (int)(count / maxArraySize + 1);
