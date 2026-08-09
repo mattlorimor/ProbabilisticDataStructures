@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The test word list moved from a 5.75 MB C# array to an embedded `words.txt`. The list
+  is unchanged, verified by checksum over all 235,886 entries. This affects the test
+  project only and is not part of the package.
+
 - **Cuckoo filter element placement has changed**, which is why this is a major release.
   Both fixes alter which buckets an element occupies. Filters persisted by 2.x cannot be
   read correctly by 3.0.0, and a 3.0.0 filter will not agree with a 2.x one. Nothing else
@@ -37,6 +41,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   byte-for-byte compatible with Go BoomFilters.
 
 ### Added
+
+- Nullable reference type annotations on the library. These ship in the package, so
+  consumers get null analysis against this API. Notably, `CuckooBloomFilter`'s bucket
+  entries are now typed as nullable, which is what they always were, and
+  `Element.Data` defaults to an empty array so reading `TopK.Elements()` needs no
+  null check.
+
+- Thread-safety documentation on `IFilter` and in the README. Nothing in this library
+  is synchronized, matching the Go original. The non-obvious part is that `Test` is not
+  safe to call concurrently with *itself*, because filters reuse a single
+  `HashAlgorithm` instance and that type is not thread-safe, so a reader-writer lock is
+  not sufficient.
 
 - A regression test that fills a Cuckoo filter well past the point where relocation
   begins and asserts that every element it accepted can still be found. The existing
