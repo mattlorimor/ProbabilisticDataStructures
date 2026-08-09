@@ -5,7 +5,45 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.1] - Unreleased
+## [3.0.0] - Unreleased
+
+### Fixed
+
+- **The Cuckoo filter could report false negatives.** `GetComponents` derived the second
+  candidate bucket as `hash(fingerprint)` rather than `i1 XOR hash(fingerprint)`.
+
+  The two candidate buckets in a cuckoo filter are a pair: either index must recover the
+  other by XOR with the fingerprint hash. The relocation loop already relied on that,
+  computing an element's alternate bucket as `i ^ ComputeHashSum32(f)`, but the pairing
+  was never established, so an element moved during relocation could land in a bucket
+  that `Test` does not examine. Filling a filter to 5,000 insertions reproduced eight
+  elements that were reported as added and then could not be found. A cuckoo filter is
+  supposed to avoid false negatives entirely.
+
+- **The Cuckoo filter never used its second bucket for insertion.** `Insert` computed the
+  second bucket's free slot into a variable named `ids`, then tested `idx` — the result
+  from the *first* bucket, which is always `-1` at that point. The condition could never
+  be true, so the write was unreachable and every element that did not fit in its first
+  bucket went straight to relocation. Measured impact on capacity is small; the cost is
+  wasted relocation work rather than lost slots. No compiler warning fires because `ids`
+  is assigned from a method call.
+
+### Changed
+
+- **Cuckoo filter element placement has changed**, which is why this is a major release.
+  Both fixes alter which buckets an element occupies. Filters persisted by 2.x cannot be
+  read correctly by 3.0.0, and a 3.0.0 filter will not agree with a 2.x one. Nothing else
+  in the library is affected: the Bloom-family hash kernel is untouched and remains
+  byte-for-byte compatible with Go BoomFilters.
+
+### Added
+
+- A regression test that fills a Cuckoo filter well past the point where relocation
+  begins and asserts that every element it accepted can still be found. The existing
+  Cuckoo tests all used filters small enough that relocation never happened, which is
+  why both defects survived.
+
+## [2.0.1] - 2026-08-08
 
 ### Added
 
@@ -138,7 +176,8 @@ This release modernizes the entire build. The library had not been touched since
 - Initial release: a C# port of [Tyler Treat's](https://github.com/tylertreat)
   [BoomFilters](https://github.com/tylertreat/BoomFilters) Go project.
 
-[2.0.1]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v2.0.0...HEAD
+[3.0.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v1.0.9...v2.0.0
 [1.0.9]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v1.0.8...v1.0.9
 [1.0.8]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v1.0.7...v1.0.8

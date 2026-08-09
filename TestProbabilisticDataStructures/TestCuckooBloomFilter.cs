@@ -1,5 +1,6 @@
 ﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
+using System.Collections.Generic;
 using System.Text;
 
 namespace TestProbabilisticDataStructures
@@ -255,6 +256,43 @@ namespace TestProbabilisticDataStructures
             {
                 f.TestAndRemove(data[i]);
             }
+        }
+
+        /// <summary>
+        /// A cuckoo filter may refuse an insert when it is full, but anything it
+        /// reports as added must remain findable. Relocation is the path where that
+        /// can break, and it only happens once buckets start colliding, so this fills
+        /// the filter well past the point where kicks begin.
+        /// </summary>
+        [TestMethod]
+        public void TestCuckooNoFalseNegativesAfterEviction()
+        {
+            var f = new CuckooBloomFilter(1000, 0.01);
+            var added = new List<byte[]>();
+
+            for (int i = 0; i < 5000; i++)
+            {
+                var data = Encoding.ASCII.GetBytes("evict-" + i.ToString());
+                if (f.TestAndAdd(data).Added)
+                {
+                    added.Add(data);
+                }
+            }
+
+            Assert.IsGreaterThan(0, added.Count, "Nothing was inserted; the test proves nothing.");
+
+            var missing = 0;
+            foreach (var data in added)
+            {
+                if (!f.Test(data))
+                {
+                    missing++;
+                }
+            }
+
+            Assert.AreEqual(0, missing,
+                $"{missing} of {added.Count} elements reported as added could not be found. " +
+                "A cuckoo filter must not produce false negatives for elements it accepted.");
         }
     }
 }
