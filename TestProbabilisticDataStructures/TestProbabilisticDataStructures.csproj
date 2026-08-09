@@ -6,6 +6,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The word list is data, not code. Embedding it keeps 235,886 entries out of
+         the compiler's input. -->
+    <EmbeddedResource Include="words.txt" LogicalName="TestProbabilisticDataStructures.words.txt" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="MSTest" Version="4.3.3" />
   </ItemGroup>
 
