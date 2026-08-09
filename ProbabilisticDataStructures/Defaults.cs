@@ -19,11 +19,14 @@ namespace ProbabilisticDataStructures
         /// Returns the default hashing algorithm for the library.
         /// </summary>
         /// <remarks>
-        /// MD5 is used here for bucket indexing, not for any security purpose. The
-        /// choice is load-bearing for compatibility: the hash kernel is required to
-        /// produce byte-for-byte identical results to the Go BoomFilters project
-        /// (https://github.com/tylertreat/BoomFilters), and changing the algorithm
-        /// would invalidate every persisted filter. Do not "upgrade" this to SHA-2.
+        /// MD5 is used here for bucket indexing, not for any security purpose, so
+        /// analyzer warnings about it being cryptographically broken do not apply.
+        ///
+        /// Changing the algorithm changes where every element lands, so it would
+        /// invalidate any filter a caller has persisted and is a breaking change.
+        /// It is not, however, required for compatibility with Go BoomFilters:
+        /// that project hashes with FNV-1a, so filters from the two libraries were
+        /// never interchangeable regardless of what is chosen here.
         /// </remarks>
         /// <returns>The default hashing algorithm for the library</returns>
         internal static HashAlgorithm GetDefaultHashAlgorithm()

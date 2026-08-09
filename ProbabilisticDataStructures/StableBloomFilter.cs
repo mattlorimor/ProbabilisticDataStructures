@@ -33,11 +33,11 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Filter data
         /// </summary>
-        internal Buckets cells { get; set; }
+        internal Buckets cells { get; set; } = null!;
         /// <summary>
         /// Hash algorightm
         /// </summary>
-        private HashAlgorithm Hash { get; set; }
+        private HashAlgorithm Hash { get; set; } = null!;
         /// <summary>
         /// Number of cells
         /// </summary>
@@ -57,12 +57,14 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Buffer used to cache indices
         /// </summary>
-        private uint[] IndexBuffer { get; set; }
+        private uint[] IndexBuffer { get; set; } = null!;
 
         private Random random = new Random();
 
         /// <summary>
-        /// Empty constructor
+        /// Used by NewUnstableBloomFilter, which populates every member through an
+        /// object initializer. The compiler cannot see that, so the members it sets
+        /// are marked null-forgiving at their declarations.
         /// </summary>
         private StableBloomFilter() { }
 

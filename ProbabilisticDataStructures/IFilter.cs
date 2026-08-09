@@ -4,6 +4,13 @@
     /// The operations common to every filter in this library: testing for
     /// membership, adding data, and the combination of the two.
     /// </summary>
+    /// <remarks>
+    /// Implementations are <b>not thread-safe</b>, and no operation is synchronized --
+    /// including <see cref="Test"/>, because implementations reuse a single
+    /// <see cref="System.Security.Cryptography.HashAlgorithm"/> instance across calls
+    /// and that type is not thread-safe either. Callers needing concurrent access must
+    /// serialize every operation externally, or give each thread its own filter.
+    /// </remarks>
     public interface IFilter
     {
         /// <summary>

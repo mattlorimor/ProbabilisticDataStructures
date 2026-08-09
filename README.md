@@ -6,6 +6,13 @@ If you're on this page, you probably already know a bit about probabilistic data
 
 The descriptions for each filter were lifted directly from the BoomFilters' README.
 
+> **On compatibility with BoomFilters.** This is a port of the algorithms, not a
+> wire-compatible implementation. The two libraries hash with different functions by
+> default — MD5 here, FNV-1a in Go — so a filter built by one cannot be read by the
+> other, and their false positives will not agree. The byte-extraction arithmetic in
+> `Utils.HashKernel` does follow Go's convention, and a test pins it, but that is a
+> property of the arithmetic rather than of the filters.
+
 ## Included Structures
 * [Count-Min Sketch](https://github.com/mattlorimor/ProbabilisticDataStructures#count-min-sketch)
 * [Counting Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#counting-bloom-filter)
@@ -46,6 +53,38 @@ Packages are published to
 [NuGet](https://www.nuget.org/packages/MattLorimor.ProbabilisticDataStructures/), and each
 release is also tagged on the
 [releases page](https://github.com/mattlorimor/ProbabilisticDataStructures/releases).
+
+## Thread safety
+
+**None of the filters in this library are thread-safe.** No operation is synchronized,
+including read-only ones.
+
+This is deliberate and matches the Go implementation this library is a port of. Adding
+locks would impose a cost on the single-threaded case, which is the common one, and the
+right granularity depends on the caller's access pattern rather than the filter's.
+
+`Test` is not safe to call concurrently with `Add` or `TestAndAdd`, and it is not safe
+to call `Test` concurrently with itself either: the filters hold a `HashAlgorithm`
+instance and reuse it across calls, and `HashAlgorithm` is itself not thread-safe.
+
+If you need concurrent access, synchronize externally:
+
+```C#
+private readonly object _gate = new object();
+private readonly BloomFilter _filter = new BloomFilter(100000, 0.01);
+
+public bool Contains(byte[] data)
+{
+    lock (_gate)
+    {
+        return _filter.Test(data);
+    }
+}
+```
+
+A reader-writer lock will not help without further care, because concurrent `Test` calls
+still share the same `HashAlgorithm`. Give each thread its own filter, or hold an
+exclusive lock for every operation.
 
 ## Contributions
 Pull-requests are welcome, but submitting an issue is probably the best place to start if you have complex critiques or suggestions.

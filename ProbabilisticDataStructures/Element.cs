@@ -11,7 +11,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// The element's data.
         /// </summary>
-        public byte[] Data { get; set; }
+        public byte[] Data { get; set; } = Array.Empty<byte>();
         /// <summary>
         /// The frequency the data has been observed with.
         /// </summary>

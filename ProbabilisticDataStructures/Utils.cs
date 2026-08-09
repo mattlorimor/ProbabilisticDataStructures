@@ -82,9 +82,14 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Returns the upper and lower base hash values from which the k hashes are
         /// derived using the given hash bytes directly.  The result will be the
-        /// same regardless of the endianness of the architecture.  Used by a unit
-        /// test to confirm the calculation is compatible with the HashKernel from
-        /// https://github.com/tylertreat/BoomFilters running in Go.
+        /// same regardless of the endianness of the architecture.
+        ///
+        /// A unit test pins this extraction against Go BoomFilters' convention:
+        /// given the same digest bytes, this produces the same lower and upper
+        /// values that Go's hashKernel derives from a 64-bit sum. That is a
+        /// statement about the arithmetic only. The two libraries do not produce
+        /// interchangeable filters, because they hash with different algorithms by
+        /// default -- MD5 here, FNV-1a in Go.
         /// </summary>
         /// <param name="hashBytes">The hash bytes.</param>
         /// <returns>A HashKernel</returns>
