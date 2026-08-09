@@ -37,8 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Cuckoo filter element placement has changed**, which is why this is a major release.
   Both fixes alter which buckets an element occupies. Filters persisted by 2.x cannot be
   read correctly by 3.0.0, and a 3.0.0 filter will not agree with a 2.x one. Nothing else
-  in the library is affected: the Bloom-family hash kernel is untouched and remains
-  byte-for-byte compatible with Go BoomFilters.
+  in the library is affected; the Bloom-family hash kernel is untouched.
 
 ### Added
 
@@ -134,10 +133,12 @@ This release modernizes the entire build. The library had not been touched since
   `HashAlgorithm.Create("MD5")`, which is obsolete as of .NET 7 (`SYSLIB0045`) and throws
   under trimming.
 
-  **Hash output is unchanged.** The hash kernel remains byte-for-byte compatible with
-  the [Go BoomFilters](https://github.com/tylertreat/BoomFilters) project, and filters
-  persisted by 1.x remain readable. This is verified by the existing hash-kernel tests,
-  which assert hardcoded digest values captured from the Go implementation.
+  **Hash output is unchanged**, so filters persisted by 1.x remain readable. This is
+  verified by the existing hash-kernel tests, which assert hardcoded digest values.
+
+  Those tests pin the byte-extraction arithmetic against Go BoomFilters' convention.
+  They do not establish that filters are interchangeable between the two libraries,
+  and they never did: Go hashes with FNV-1a where this library uses MD5.
 
 - Migrated the test project from MSTest v1 to MSTest 4. The old test project was a
   legacy-format `.csproj` bound to Visual Studio's test targets, which meant the suite

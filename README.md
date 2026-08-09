@@ -6,6 +6,13 @@ If you're on this page, you probably already know a bit about probabilistic data
 
 The descriptions for each filter were lifted directly from the BoomFilters' README.
 
+> **On compatibility with BoomFilters.** This is a port of the algorithms, not a
+> wire-compatible implementation. The two libraries hash with different functions by
+> default — MD5 here, FNV-1a in Go — so a filter built by one cannot be read by the
+> other, and their false positives will not agree. The byte-extraction arithmetic in
+> `Utils.HashKernel` does follow Go's convention, and a test pins it, but that is a
+> property of the arithmetic rather than of the filters.
+
 ## Included Structures
 * [Count-Min Sketch](https://github.com/mattlorimor/ProbabilisticDataStructures#count-min-sketch)
 * [Counting Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#counting-bloom-filter)
