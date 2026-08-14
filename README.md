@@ -90,6 +90,37 @@ var filter = BloomFilter.ReadFrom(file, myHashFunction);
 Without it the read fails. That is deliberate: a filter restored under the wrong hash
 does not look broken, it looks empty, and would answer no to everything it holds.
 
+## Choosing a hash function
+
+Every constructor takes an optional hash function:
+
+```C#
+var filter = new BloomFilter(10000, 0.01, hash: myHashFunction);
+```
+
+Omitting it uses the default, a 64-bit XxHash3. A scalable filter passes it to the
+filters it adds as it grows, and a top-k to the sketch it holds.
+
+**The hash cannot be replaced once a structure holds anything.** `SetHash` throws in that
+case. Everything already stored was placed by the hash in use at the time, and replacing
+it moves none of it, so every lookup would go somewhere else — the structure would report
+items it can no longer find. It would not look broken, it would look empty.
+
+`SetHash` remains available before anything has been added, including after `Reset()`.
+
+## Reproducibility
+
+`StableBloomFilter` and `CuckooBloomFilter` make random choices as part of what they are:
+the first decrements randomly chosen cells to make room, the second evicts a randomly
+chosen entry when both of an item's buckets are full. Both accept a seed:
+
+```C#
+var filter = new StableBloomFilter(10000, 2, 0.01, seed: 42);
+```
+
+Omitting it seeds unpredictably. Every other structure here is already deterministic
+given its inputs.
+
 ## Thread safety
 
 **None of the filters in this library are thread-safe.** No operation is synchronized,

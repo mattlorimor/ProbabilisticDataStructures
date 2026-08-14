@@ -22,11 +22,17 @@ namespace ProbabilisticDataStructures
         /// <param name="delta">Relative-accuracy probability</param>
         /// <param name="k">Number of top elements to track</param>
         /// <returns></returns>
-        public TopK(double epsilon, double delta, uint k)
+        /// <param name="hash">
+        /// The hash function to use, or null for the default. Passing it here is the
+        /// only way to have one hash cover everything the structure will ever hold:
+        /// once anything has been added, the hash can no longer be replaced.
+        /// </param>
+        public TopK(double epsilon, double delta, uint k,
+            Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
             Guard.ValidItemCount(k, nameof(k));
 
-            this.Cms = new CountMinSketch(epsilon, delta);
+            this.Cms = new CountMinSketch(epsilon, delta, hash);
             this.K = k;
             this.elements = new ElementHeap((int)k);
         }

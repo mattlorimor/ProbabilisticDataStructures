@@ -5,6 +5,55 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] - 2026-08-14
+
+### Fixed
+
+- **Replacing a populated structure's hash function is refused** rather than silently
+  destroying it. `SetHash` on a filter holding 500 items left it reporting 500 items and
+  finding none of them: everything stored had been placed by the old hash, and replacing
+  it moves none of it, so every lookup goes somewhere else. Nothing raised. The filter
+  did not look broken, it looked empty.
+
+  It now throws `InvalidOperationException` unless the structure holds nothing, which is
+  the only state the call was ever safe in. Emptiness is derived from what the structure
+  holds rather than tracked, so one read back from a payload is not mistaken for
+  untouched.
+
+### Added
+
+- **Every constructor accepts a hash function**, which closes
+  [#1](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/1). It is an
+  optional trailing parameter, so existing calls are unchanged:
+
+  ```C#
+  var filter = new BloomFilter(10000, 0.01, hash: myHashFunction);
+  ```
+
+  This is now the only way to use a hash for everything a structure will ever hold. A
+  scalable filter carries it to the filters it adds as it grows, and a top-k to the
+  sketch it holds.
+
+- **`StableBloomFilter` and `CuckooBloomFilter` accept a seed.** Both make random
+  choices as part of what they are -- one decrements randomly chosen cells to make room,
+  the other evicts a randomly chosen entry when both of an item's buckets are full --
+  and both drew from an unseeded generator, so neither could be asserted against, only
+  described.
+
+  ```C#
+  var filter = new StableBloomFilter(10000, 2, 0.01, seed: 42);
+  ```
+
+  Omitting it still seeds unpredictably. This also makes their persisted bytes
+  comparable, which is why the format fixtures for those two could previously only be
+  checked on reading.
+
+### Changed
+
+- **`SetHash` is a fallback rather than the way to configure hashing.** Prefer the
+  constructor. `SetHash` remains for callers who cannot, and is now valid only before
+  anything has been added.
+
 ## [3.2.0] - 2026-08-14
 
 ### Added

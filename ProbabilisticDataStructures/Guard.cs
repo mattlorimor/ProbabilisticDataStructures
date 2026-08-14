@@ -52,6 +52,33 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A structure's hash function can only be replaced while it holds nothing.
+        /// </summary>
+        /// <remarks>
+        /// Everything a structure has stored was placed by the hash it was holding at
+        /// the time, and replacing that hash does not move any of it. Every lookup then
+        /// goes somewhere else, so the structure answers no to everything it holds while
+        /// still reporting that it holds it. It does not look broken, it looks empty,
+        /// which is the reason this is refused rather than documented.
+        /// <para>
+        /// Prefer passing the hash to the constructor. This exists for callers who
+        /// cannot, and is safe only before anything has been added.
+        /// </para>
+        /// </remarks>
+        internal static void HashMayBeReplaced(bool isEmpty, string structureName)
+        {
+            if (!isEmpty)
+            {
+                throw new InvalidOperationException(
+                    $"The hash function cannot be replaced once a {structureName} holds " +
+                    "anything. What it has stored was placed by the hash it had then, " +
+                    "and replacing that hash does not move it: every lookup would go " +
+                    "somewhere else and the structure would answer no to everything it " +
+                    "holds. Pass the hash function to the constructor instead.");
+            }
+        }
+
+        /// <summary>
         /// A count-min sketch's epsilon fixes the width of its matrix, as e / epsilon,
         /// so it has to be positive and not so small that the width is unbuildable.
         /// </summary>

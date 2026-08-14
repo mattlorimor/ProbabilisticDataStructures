@@ -52,6 +52,28 @@ namespace ProbabilisticDataStructures
         /// Counter registers
         /// </summary>
         private byte[] Registers { get; set; }
+
+        /// <summary>
+        /// Whether any register has been set, which is what decides if the hash
+        /// can still be replaced. Derived rather than tracked, so that an
+        /// estimator read back from a payload answers this the way the one that
+        /// wrote it would.
+        /// </summary>
+        private bool IsEmpty
+        {
+            get
+            {
+                foreach (var register in this.Registers)
+                {
+                    if (register != 0)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+        }
         /// <summary>
         /// Number of registers
         /// </summary>
@@ -74,7 +96,12 @@ namespace ProbabilisticDataStructures
         /// power of two.
         /// </summary>
         /// <param name="m">Number of registers (must be a power of two)</param>
-        public HyperLogLog(uint m)
+        /// <param name="hash">
+        /// The hash function to use, or null for the default. Passing it here is the
+        /// only way to have one hash cover everything the structure will ever hold:
+        /// once anything has been added, the hash can no longer be replaced.
+        /// </param>
+        public HyperLogLog(uint m, Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
             // Zero passes the power-of-two test below, because 0 - 1 underflows to
             // all ones and 0 & anything is 0. It would build an estimator with no
@@ -95,7 +122,7 @@ namespace ProbabilisticDataStructures
             // index derived from it can exceed the register array.
             this.B = (uint)BitOperations.Log2(m);
             this.Alpha = CalculateAlpha(m);
-            this.Hash = Defaults.GetDefaultHashFunction();
+            this.Hash = hash ?? Defaults.GetDefaultHashFunction();
         }
 
         /// <summary>
@@ -292,6 +319,9 @@ namespace ProbabilisticDataStructures
         /// <param name="h">The hash function to use.</param>
         public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
+            ArgumentNullException.ThrowIfNull(h);
+            Guard.HashMayBeReplaced(this.IsEmpty, nameof(HyperLogLog));
+
             this.Hash = h;
         }
 

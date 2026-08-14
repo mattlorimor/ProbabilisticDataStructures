@@ -69,7 +69,18 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="n">Number of items to store</param>
         /// <param name="fpRate">Target false-positive rate</param>
-        public CuckooBloomFilter(uint n, double fpRate)
+        /// <param name="hash">
+        /// The hash function to use, or null for the default. Passing it here is the
+        /// only way to have one hash cover everything the structure will ever hold:
+        /// once anything has been added, the hash can no longer be replaced.
+        /// </param>
+        /// <param name="seed">
+        /// A seed for the random choices this filter makes, or null to seed it
+        /// unpredictably. Supplying one makes the filter reproducible, which is what
+        /// makes its behavior assertable rather than only describable.
+        /// </param>
+        public CuckooBloomFilter(uint n, double fpRate,
+            Func<ReadOnlySpan<byte>, ulong>? hash = null, int? seed = null)
         {
             Guard.ValidItemCount(n, nameof(n));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
@@ -85,7 +96,8 @@ namespace ProbabilisticDataStructures
             }
 
             this.Buckets = buckets;
-            this.Hash = Defaults.GetDefaultHashFunction();
+            this.Hash = hash ?? Defaults.GetDefaultHashFunction();
+            this.random = seed is null ? new Random() : new Random(seed.Value);
             this.M = m;
             this.B = b;
             this.F = f;
@@ -431,6 +443,9 @@ namespace ProbabilisticDataStructures
         /// <param name="h">The hash function to use.</param>
         public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
+            ArgumentNullException.ThrowIfNull(h);
+            Guard.HashMayBeReplaced(this.count == 0, nameof(CuckooBloomFilter));
+
             this.Hash = h;
         }
 

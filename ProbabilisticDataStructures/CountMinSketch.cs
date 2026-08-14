@@ -69,7 +69,12 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="epsilon">Relative-accuracy factor</param>
         /// <param name="delta">Relative-accuracy probability</param>
-        public CountMinSketch(double epsilon, double delta)
+        /// <param name="hash">
+        /// The hash function to use, or null for the default. Passing it here is the
+        /// only way to have one hash cover everything the structure will ever hold:
+        /// once anything has been added, the hash can no longer be replaced.
+        /// </param>
+        public CountMinSketch(double epsilon, double delta, Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
             Guard.ValidSketchEpsilon(epsilon, nameof(epsilon));
             Guard.ValidSketchDelta(delta, nameof(delta));
@@ -87,7 +92,7 @@ namespace ProbabilisticDataStructures
             this.Depth = depth;
             this.epsilon = epsilon;
             this.delta = delta;
-            this.Hash = Defaults.GetDefaultHashFunction();
+            this.Hash = hash ?? Defaults.GetDefaultHashFunction();
         }
 
         /// <summary>
@@ -228,6 +233,9 @@ namespace ProbabilisticDataStructures
         /// <param name="h">The hash function to use.</param>
         public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
+            ArgumentNullException.ThrowIfNull(h);
+            Guard.HashMayBeReplaced(this.count == 0, nameof(CountMinSketch));
+
             this.Hash = h;
         }
 
