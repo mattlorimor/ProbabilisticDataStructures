@@ -238,6 +238,101 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A top-k structure has one job. Given a stream whose frequencies are all
+        /// distinct, and a sketch wide enough to count it without error, the answer is
+        /// not approximate and there is nothing to be lenient about.
+        /// <para>
+        /// It got this wrong across most configurations, because its min-heap was not
+        /// one. Pop removed the root with List.Remove, which slides every later element
+        /// down a position rather than restoring the ordering, and an element already
+        /// in the heap had its frequency raised in place with no re-ordering at all.
+        /// The root therefore stopped being the minimum, and the root is both what new
+        /// elements are compared against and what gets evicted. 89 of these 150
+        /// configurations returned the wrong set.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestTopKReturnsTheExactTopKWhenCountsAreExact()
+        {
+            const int distinct = 200;
+
+            foreach (uint k in new uint[] { 1, 2, 5, 10, 25, 50 })
+            {
+                for (int seed = 0; seed < 5; seed++)
+                {
+                    // Item i occurs (distinct - i + 5) times, so every frequency
+                    // differs and the correct answer is exactly items 0..k-1.
+                    var stream = new List<int>();
+                    for (int i = 0; i < distinct; i++)
+                    {
+                        for (int j = 0; j < distinct - i + 5; j++)
+                        {
+                            stream.Add(i);
+                        }
+                    }
+
+                    var rand = new Random(seed);
+                    for (int i = stream.Count - 1; i > 0; i--)
+                    {
+                        int j = rand.Next(i + 1);
+                        (stream[i], stream[j]) = (stream[j], stream[i]);
+                    }
+
+                    // Wide and deep enough that the sketch counts this stream exactly.
+                    var topK = new TopK(0.0001, 0.001, k);
+                    foreach (var x in stream)
+                    {
+                        topK.Add(Key($"i{x:D4}"));
+                    }
+
+                    var got = topK.Elements()
+                        .Select(e => Encoding.ASCII.GetString(e.Data))
+                        .ToHashSet();
+                    var want = Enumerable.Range(0, (int)k)
+                        .Select(i => $"i{i:D4}")
+                        .ToHashSet();
+
+                    Assert.IsTrue(got.SetEquals(want),
+                        $"k={k} seed={seed}: missing {string.Join(", ", want.Except(got))}, " +
+                        $"unexpected {string.Join(", ", got.Except(want))}");
+
+                    // And ordered from lowest to highest frequency, as documented.
+                    var freqs = topK.Elements().Select(e => e.Freq).ToArray();
+                    CollectionAssert.AreEqual(freqs.OrderBy(x => x).ToArray(), freqs,
+                        $"k={k} seed={seed}: Elements() must be ascending by frequency");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Elements() hands the stored arrays back to the caller, and the heap kept the
+        /// arrays it was given rather than copying them, so a caller reusing one buffer
+        /// to add from would find every entry holding their last write.
+        /// </summary>
+        [TestMethod]
+        public void TestTopKIsUnaffectedByMutatingAddedData()
+        {
+            var topK = new TopK(0.001, 0.01, 3);
+            var buffer = new byte[4];
+
+            foreach (var name in new[] { "aaaa", "bbbb", "cccc" })
+            {
+                Encoding.ASCII.GetBytes(name).CopyTo(buffer, 0);
+                topK.Add(buffer);
+            }
+
+            Encoding.ASCII.GetBytes("zzzz").CopyTo(buffer, 0);
+
+            var names = topK.Elements()
+                .Select(e => Encoding.ASCII.GetString(e.Data))
+                .OrderBy(x => x, StringComparer.Ordinal)
+                .ToArray();
+
+            CollectionAssert.AreEqual(new[] { "aaaa", "bbbb", "cccc" }, names,
+                "the heap held the caller's buffer rather than a copy of it");
+        }
+
+        /// <summary>
         /// The inverse filter is a bounded "recently seen" cache rather than a growing
         /// set: an element whose slot is claimed by a later one is forgotten. False
         /// negatives are therefore expected here, which is the opposite of every other

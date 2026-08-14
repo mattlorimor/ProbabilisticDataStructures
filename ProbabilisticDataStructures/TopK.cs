@@ -23,6 +23,8 @@ namespace ProbabilisticDataStructures
         /// <returns></returns>
         public TopK(double epsilon, double delta, uint k)
         {
+            Guard.ValidItemCount(k, nameof(k));
+
             this.Cms = new CountMinSketch(epsilon, delta);
             this.K = k;
             this.elements = new ElementHeap((int)k);

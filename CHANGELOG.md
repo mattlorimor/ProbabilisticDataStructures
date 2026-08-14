@@ -69,6 +69,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is inherent -- a filter cannot tell such a removal from a real one -- and is now
   documented rather than fixed.
 
+- **`TopK` returns the top k.** Its min-heap was not one. `Pop` removed the root with
+  `List.Remove`, which slides every later element down a position instead of restoring
+  the ordering, and an element already in the heap had its frequency raised in place
+  with no re-ordering at all. The root therefore stopped being the minimum -- and the
+  root is both what an arriving element is compared against and what gets evicted, so
+  the structure discarded frequent elements and kept rare ones. `Down`, the sift that
+  both paths needed, was present and never called.
+
+  Given a stream with distinct frequencies and a sketch wide enough to count it
+  exactly, so that the right answer is unambiguous, **89 of 150 configurations returned
+  the wrong set**. All 150 are now correct. Reported frequencies were also stale, since
+  an element's count was only refreshed on the path the broken ordering skipped.
+
+- **`TopK` copies the data it stores.** It handed the caller's arrays back through
+  `Elements()` without copying, so a caller reusing one buffer to add from found every
+  entry holding their last write.
+
+- **`new TopK(epsilon, delta, 0)`** throws `ArgumentOutOfRangeException` rather than
+  indexing its empty heap on the first `Add`.
+
 - **`InverseBloomFilter` no longer reports data it never saw.** This is the only filter
   here that stores the data rather than only hashing it, and `Test` answers by comparing
   the stored bytes against the query. It kept the caller's array instead of copying,

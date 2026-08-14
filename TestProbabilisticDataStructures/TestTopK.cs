@@ -34,26 +34,28 @@ namespace TestProbabilisticDataStructures
 
             var addedK = topK.Add(BILL_BYTES);
             Assert.AreSame(topK, addedK);
-            // latest one also
-            var expected = new ProbabilisticDataStructures.Element[]{
-                new ProbabilisticDataStructures.Element{Data=BILL_BYTES, Freq=1},
-                new ProbabilisticDataStructures.Element{Data=SARA_BYTES, Freq=2},
-                new ProbabilisticDataStructures.Element{Data=BOB_BYTES, Freq=3},
-                new ProbabilisticDataStructures.Element{Data=ALICE_BYTES, Freq=4},
-                new ProbabilisticDataStructures.Element{Data=TYLER_BYTES, Freq=5},
-            };
 
+            // Counts are tyler 5, alice 4, bob 3, fred 2, sara 2, james 1, bill 1, so
+            // the top five are everything above james and bill. This previously
+            // expected bill, at a frequency of 1, in place of fred, at 2: the heap
+            // evicted by position rather than by frequency, and the test recorded
+            // whatever came out. fred and sara tie, so the order between those two is
+            // not part of the contract and is not asserted.
             var actual = topK.Elements();
 
             Assert.HasCount(5, actual);
 
-            for (int i = 0; i < actual.Length; i++)
-            {
-                var element = actual[i];
-                Assert.IsTrue(Enumerable.SequenceEqual(element.Data, expected[i].Data));
-                // freq check
-                Assert.AreEqual(expected[i].Freq, element.Freq);
-            }
+            var expectedFreqs = new ulong[] { 2, 2, 3, 4, 5 };
+            CollectionAssert.AreEqual(expectedFreqs, actual.Select(e => e.Freq).ToArray(),
+                "Elements returns the top k ordered from lowest to highest frequency");
+
+            var expectedNames = new[] { "alice", "bob", "fred", "sara", "tyler" };
+            var actualNames = actual
+                .Select(e => Encoding.ASCII.GetString(e.Data))
+                .OrderBy(x => x, System.StringComparer.Ordinal)
+                .ToArray();
+            CollectionAssert.AreEqual(expectedNames, actualNames,
+                "the five most frequent elements, and no others");
 
             var resetK = topK.Reset();
             Assert.AreSame(topK, resetK);
