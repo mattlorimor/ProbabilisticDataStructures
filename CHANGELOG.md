@@ -5,6 +5,61 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.0] - 2026-08-14
+
+### Added
+
+- **`Merge` on `BloomFilter`, `BloomFilter64` and `PartitionedBloomFilter`**, which is
+  [#53](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/53). Two
+  filters with the same dimensions and hash union by OR-ing their bit arrays, giving
+  exactly the filter that adding everything to one of them would have produced.
+
+  Verified by building 20,000 elements across 8 shards and merging: **zero disagreements
+  with a single filter built from all of them, over 200,000 absent keys**, and the same
+  measured false positive rate.
+
+  The item count becomes the sum, which overstates the union whenever the inputs shared
+  elements. There is no way to know how many they shared, so a merged filter's count is
+  an upper bound.
+
+- **`Merge` on `CountingBloomFilter`**, which is
+  [#54](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/54). Counters
+  add rather than max, so a merged filter is removable from as many times as its inputs
+  together were. Sums hold at the counter maximum, which keeps the rule 3.1.0
+  established -- a saturated counter is never decremented -- and means merging can make
+  an element permanently unremovable when neither input had.
+
+- **`Merge` on `TopK`**, which is
+  [#55](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/55).
+  Frequencies are re-read from the merged sketch rather than added, since each
+  structure's recorded frequency is what its own sketch last told it and adding them
+  double-counts everything both already knew.
+
+  A merged top-k is not necessarily the true top-k of the combined stream: only elements
+  one of the heaps was holding are candidates, so an element frequent in both but top in
+  neither stays invisible. That is inherent to merging bounded summaries, and there is a
+  test pinning it.
+
+### Fixed
+
+- **`CountMinSketch.Merge` and `HyperLogLog.Merge` check that both were built with the
+  same hash function.** Neither did. Everything a structure holds sits where its own hash
+  put it, so merging two that hash differently produced something answering confidently
+  about positions neither meant -- and nothing about the result looked wrong afterwards.
+
+  `HyperLogLog.Merge` also rejects null rather than throwing `NullReferenceException`.
+
+### Notes
+
+Delegates compare by method and target, so the default hash, a method group, and one
+delegate passed to both constructors all compare equal. Two separately written lambdas
+with identical bodies do not, and are refused: pass one hash function to both structures
+rather than writing it out twice.
+
+The new methods return the receiver so calls can chain, following `Add` and `Reset`.
+`CountMinSketch.Merge` and `HyperLogLog.Merge` return a `bool` that is always `true`,
+which is left alone rather than changed under anyone.
+
 ## [5.0.0] - 2026-08-14
 
 ### Fixed

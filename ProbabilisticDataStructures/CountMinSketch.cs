@@ -179,6 +179,8 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(other);
 
+            Guard.SameHashFunction(this.Hash, other.Hash, nameof(other));
+
             // ArgumentException rather than Exception: a caller who wants to fall back
             // to merging some other way cannot catch the bare one without catching
             // every unrelated failure alongside it.

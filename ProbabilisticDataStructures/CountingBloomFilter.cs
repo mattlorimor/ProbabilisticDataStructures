@@ -358,6 +358,57 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Combines another filter into this one, adding its counters to their
+        /// counterparts.
+        /// </summary>
+        /// <param name="other">The filter to combine in.</param>
+        /// <returns>This filter, so calls can be chained.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="other"/> is null.</exception>
+        /// <exception cref="ArgumentException">
+        /// The two were built with different dimensions, different counter widths, or
+        /// different hash functions.
+        /// </exception>
+        /// <remarks>
+        /// Counters are added rather than maxed, since a counting filter records how
+        /// many elements landed on each position and a merged filter has to be
+        /// removable from as many times as the two inputs together were.
+        /// <para>
+        /// Sums hold at the maximum a counter can carry. That matters more here than
+        /// elsewhere: a counter which reaches its maximum is never decremented again,
+        /// because it has stopped tracking what it stands for and resuming from the
+        /// ceiling produces false negatives. Merging can carry a counter over that line
+        /// when neither input was near it, so a merged filter can hold elements that
+        /// are permanently unremovable when neither input did. Wider counters saturate
+        /// later.
+        /// </para>
+        /// </remarks>
+        public CountingBloomFilter Merge(CountingBloomFilter other)
+        {
+            ArgumentNullException.ThrowIfNull(other);
+
+            if (this.m != other.m || this.k != other.k)
+            {
+                throw new ArgumentException(
+                    $"Cannot merge a filter of {other.m} counters and {other.k} hash " +
+                    $"functions into one of {this.m} and {this.k}. The two describe " +
+                    "different positions.", nameof(other));
+            }
+
+            if (this.Buckets.BucketSize != other.Buckets.BucketSize)
+            {
+                throw new ArgumentException(
+                    $"Cannot merge {other.Buckets.BucketSize}-bit counters into " +
+                    $"{this.Buckets.BucketSize}-bit ones.", nameof(other));
+            }
+
+            Guard.SameHashFunction(this.Hash, other.Hash, nameof(other));
+
+            this.Buckets.Add(other.Buckets);
+            this.count += other.count;
+            return this;
+        }
+
+        /// <summary>
         /// Sets the hashing function used in the filter.
         /// </summary>
         /// <param name="h">The hash function to use.</param>

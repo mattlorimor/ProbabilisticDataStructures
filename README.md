@@ -54,6 +54,32 @@ Packages are published to
 release is also tagged on the
 [releases page](https://github.com/mattlorimor/ProbabilisticDataStructures/releases).
 
+## Merging
+
+Filters built separately can be combined, which is what makes it possible to build them
+across shards or machines and put them together at the end:
+
+```C#
+var merged = shardA.Merge(shardB).Merge(shardC);
+```
+
+The result is exactly the filter that adding everything to one of them would have
+produced, so its false positive rate is that of a filter holding the union.
+
+Available on `BloomFilter`, `BloomFilter64`, `PartitionedBloomFilter`,
+`CountingBloomFilter`, `CountMinSketch`, `HyperLogLog` and `TopK`. Both structures must
+have the same dimensions **and the same hash function** — a merge of two that hash
+differently is refused, because the result would answer confidently about positions
+neither of them meant.
+
+Not available on `InverseBloomFilter` (a slot holds one element, so a merge would have to
+choose between them), `StableBloomFilter` (its contents are a function of the order things
+arrived in) or `CuckooBloomFilter` (fingerprints only combine when both filters happen to
+have placed them compatibly).
+
+A merged filter's `Count()` is the sum of its inputs', which overstates the union whenever
+they shared elements.
+
 ## Persistence
 
 Every structure can be written to a stream and read back.
