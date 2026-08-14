@@ -52,6 +52,52 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A count-min sketch's epsilon fixes the width of its matrix, as e / epsilon,
+        /// so it has to be positive and not so small that the width is unbuildable.
+        /// </summary>
+        internal static void ValidSketchEpsilon(double epsilon, string paramName)
+        {
+            if (double.IsNaN(epsilon) || epsilon <= 0.0)
+            {
+                throw new ArgumentOutOfRangeException(paramName, epsilon,
+                    "Epsilon must be greater than 0. It bounds the sketch's " +
+                    "overestimate as a fraction of the total count, and a bound of " +
+                    "zero or less asks for a matrix of infinite width.");
+            }
+
+            var width = Math.Ceiling(Math.E / epsilon);
+            if (width > uint.MaxValue)
+            {
+                throw new ArgumentOutOfRangeException(paramName, epsilon,
+                    $"Epsilon of {epsilon} needs a matrix {width} columns wide, which " +
+                    $"exceeds the {uint.MaxValue} addressable. Use a larger epsilon.");
+            }
+        }
+
+        /// <summary>
+        /// A count-min sketch's delta is the probability that its estimate exceeds the
+        /// error epsilon allows, so it is a probability of failure and not of success.
+        /// </summary>
+        /// <remarks>
+        /// The matrix depth is ln(1 / delta), which is only positive below one. At one
+        /// and above it is zero or negative and the matrix has no rows at all, and a
+        /// sketch with no rows does not fail loudly: Count takes a minimum over an
+        /// empty set of rows and returns the initial value, so every element is
+        /// reported as having been seen ulong.MaxValue times.
+        /// </remarks>
+        internal static void ValidSketchDelta(double delta, string paramName)
+        {
+            if (double.IsNaN(delta) || delta <= 0.0 || delta >= 1.0)
+            {
+                throw new ArgumentOutOfRangeException(paramName, delta,
+                    "Delta must be greater than 0 and less than 1. It is the " +
+                    "probability that an estimate exceeds the error epsilon allows, " +
+                    "so it is a probability of failure: a smaller delta is a deeper, " +
+                    "more reliable sketch.");
+            }
+        }
+
+        /// <summary>
         /// A scalable filter tightens each new filter's false positive rate by this
         /// ratio, so it has to be a proper fraction.
         /// </summary>

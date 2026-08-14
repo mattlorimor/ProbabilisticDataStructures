@@ -69,6 +69,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is inherent -- a filter cannot tell such a removal from a real one -- and is now
   documented rather than fixed.
 
+- **`CountMinSketch` validates `epsilon` and `delta`.** `delta` is the probability that
+  an estimate exceeds the error `epsilon` allows, and the matrix depth `ln(1 / delta)`
+  is only positive below one. At one and above the matrix had **no rows**, and a sketch
+  with no rows did not fail: `Count` minimises over an empty set of rows and returns its
+  initial value, so **every element was reported as having been seen 18446744073709551615
+  times**. Values at or below zero, and `NaN`, surfaced as `OverflowException` or
+  `DivideByZeroException` from the sizing arithmetic. An `epsilon` small enough to need
+  a matrix wider than `uint.MaxValue` is now rejected rather than wrapping.
+
+- **`CountMinSketch.Count(null)` and `Merge(null)` throw `ArgumentNullException`.**
+  `Count` hashed the empty span and returned a number; `Merge` threw
+  `NullReferenceException`.
+
+- **`CountMinSketch.Merge` throws `ArgumentException` rather than the bare `Exception`**
+  on a width or depth mismatch, which could not be caught without catching every
+  unrelated failure alongside it. The message now names both dimensions and the
+  parameter each follows from.
+
 - **`TopK` returns the top k.** Its min-heap was not one. `Pop` removed the root with
   `List.Remove`, which slides every later element down a position instead of restoring
   the ordering, and an element already in the heap had its frequency raised in place

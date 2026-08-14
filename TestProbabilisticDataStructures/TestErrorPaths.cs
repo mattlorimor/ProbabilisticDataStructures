@@ -73,7 +73,10 @@ namespace TestProbabilisticDataStructures
             var b = new CountMinSketch(0.001, 0.01);
             Assert.AreNotEqual(a.Depth, b.Depth, "test needs sketches of differing depth");
 
-            var ex = Assert.Throws<Exception>(() => a.Merge(b));
+            // ArgumentException, not the bare Exception this used to throw: a caller
+            // wanting to fall back to some other merge could not catch that one
+            // without catching every unrelated failure alongside it.
+            var ex = Assert.Throws<ArgumentException>(() => a.Merge(b));
             StringAssert.Contains(ex.Message, "depth must match");
         }
 
@@ -89,7 +92,7 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(a.Depth, b.Depth, "test needs matching depth so width is checked");
             Assert.AreNotEqual(a.Width, b.Width, "test needs sketches of differing width");
 
-            var ex = Assert.Throws<Exception>(() => a.Merge(b));
+            var ex = Assert.Throws<ArgumentException>(() => a.Merge(b));
             StringAssert.Contains(ex.Message, "width must match");
         }
 
@@ -134,6 +137,25 @@ namespace TestProbabilisticDataStructures
             Assert.Throws<ArgumentOutOfRangeException>(() => new InverseBloomFilter(0));
             // A top-0 has no room for anything and indexed its empty heap.
             Assert.Throws<ArgumentOutOfRangeException>(() => new TopK(0.001, 0.01, 0));
+
+            // Epsilon fixes the sketch's width as e / epsilon. Zero and below asked
+            // for infinite width and surfaced as OverflowException or
+            // DivideByZeroException from the conversion.
+            foreach (var epsilon in new[] { 0.0, -0.1, double.NaN })
+            {
+                Assert.Throws<ArgumentOutOfRangeException>(
+                    () => new CountMinSketch(epsilon, 0.01));
+            }
+
+            // Delta is a probability of failure, and the depth ln(1 / delta) is only
+            // positive below one. At one and above the matrix had no rows, which did
+            // not fail: Count minimises over no rows and returns its initial value, so
+            // every element was reported as seen ulong.MaxValue times.
+            foreach (var delta in new[] { 0.0, 1.0, 2.0, -0.5, double.NaN })
+            {
+                Assert.Throws<ArgumentOutOfRangeException>(
+                    () => new CountMinSketch(0.001, delta));
+            }
         }
 
         /// <summary>

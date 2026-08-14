@@ -79,5 +79,19 @@ namespace TestProbabilisticDataStructures
             Assert.Throws<ArgumentNullException>(() => f.Test(null!),
                 "null is rejected even though empty input is accepted");
         }
+        /// <summary>
+        /// Add rejected null and Count did not, so a null query hashed the empty span
+        /// and returned a number.
+        /// </summary>
+        [TestMethod]
+        public void TestCountMinSketchRejectsNull()
+        {
+            var sketch = new CountMinSketch(0.001, 0.01);
+
+            Assert.ThrowsExactly<ArgumentNullException>(() => sketch.Add(null!));
+            Assert.ThrowsExactly<ArgumentNullException>(() => sketch.Count(null!));
+            Assert.ThrowsExactly<ArgumentNullException>(() => sketch.Merge(null!));
+        }
+
     }
 }
