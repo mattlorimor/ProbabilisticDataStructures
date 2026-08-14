@@ -69,6 +69,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is inherent -- a filter cannot tell such a removal from a real one -- and is now
   documented rather than fixed.
 
+- **`ScalableBloomFilter` validates its tightening ratio.** The ratio scales each new
+  filter's false positive rate down from the last, and the structure's guarantee -- a
+  compound rate bounded by `P0 / (1 - r)` -- is a geometric series that only converges
+  below 1. A ratio of exactly 1 was accepted and tightened nothing: asking for 1% and
+  adding 20,000 items measured **83%**. The filter kept working and quietly stopped
+  honoring the rate requested of it. Ratios at or below 0 and above 1 did throw, but
+  from inside `Add`, naming `fpRate` -- a parameter the caller had passed correctly.
+
+- **`ScalableBloomFilter.Reset()` keeps a hash function set with `SetHash`.** It
+  rebuilds its list of filters from scratch and did not carry the hash across, silently
+  restoring the default. Every other filter's `Reset` preserves it.
+
 - **A bucket width of zero is rejected** with `ArgumentOutOfRangeException` rather than
   throwing `IndexOutOfRangeException` on first use. `new CountingBloomFilter(n, 0, r)`
   allocated no storage and then read from it.

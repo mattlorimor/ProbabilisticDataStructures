@@ -52,6 +52,29 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A scalable filter tightens each new filter's false positive rate by this
+        /// ratio, so it has to be a proper fraction.
+        /// </summary>
+        /// <remarks>
+        /// The structure's guarantee is a compound false positive rate bounded by
+        /// P0 / (1 - r), which is the sum of a geometric series and only converges for
+        /// a ratio below one. At exactly one the rate never tightens and the compound
+        /// rate grows without bound with every filter added; above one each filter is
+        /// looser than the last. Either way the filter still works and simply stops
+        /// honoring the rate that was asked for, which is worse than refusing.
+        /// </remarks>
+        internal static void ValidTighteningRatio(double r, string paramName)
+        {
+            if (double.IsNaN(r) || r <= 0.0 || r >= 1.0)
+            {
+                throw new ArgumentOutOfRangeException(paramName, r,
+                    "The tightening ratio must be greater than 0 and less than 1. Each " +
+                    "new filter's false positive rate is the previous one's scaled by " +
+                    "this ratio, and the compound rate is only bounded when it shrinks.");
+            }
+        }
+
+        /// <summary>
         /// The deletable filter partitions its bits into data and collision regions,
         /// so the collision count has to leave room for the data.
         /// </summary>

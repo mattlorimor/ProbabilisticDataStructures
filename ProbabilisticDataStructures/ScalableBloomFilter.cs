@@ -74,6 +74,7 @@ namespace ProbabilisticDataStructures
         {
             Guard.ValidItemCount(hint, nameof(hint));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
+            Guard.ValidTighteningRatio(r, nameof(r));
 
             this.Filters = new List<PartitionedBloomFilter>();
             this.R = r;
@@ -213,8 +214,15 @@ namespace ProbabilisticDataStructures
         /// <returns>The reset bloom filter.</returns>
         public ScalableBloomFilter Reset()
         {
+            // Reset empties the filter; it does not reconfigure it. Every filter added
+            // after the first takes its hash from Filters[0], so dropping the list
+            // without carrying the hash across would quietly restore the default and
+            // leave a caller who set their own hashing elsewhere than they left it.
+            var hash = this.Filters[0].Hash;
+
             this.Filters = new List<PartitionedBloomFilter>();
             this.AddFilter();
+            this.Filters[0].SetHash(hash);
             return this;
         }
 

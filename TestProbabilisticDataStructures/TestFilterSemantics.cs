@@ -123,6 +123,60 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A scalable filter's guarantee is a compound false positive rate bounded by
+        /// P0 / (1 - r). That is the sum of a geometric series, so it only converges
+        /// for a ratio strictly between zero and one.
+        /// <para>
+        /// A ratio of exactly 1 was accepted and never tightened anything: asking for
+        /// 1% and adding 20,000 items to a filter hinted at 100 measured **83%**. The
+        /// filter kept working and simply stopped honoring the rate requested of it,
+        /// which is worse than refusing the argument. Ratios outside the range in the
+        /// other direction did throw, but from inside Add and blaming fpRate -- a
+        /// parameter the caller had passed correctly.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestScalableFilterRejectsRatiosThatDoNotTighten()
+        {
+            foreach (var r in new[] { -0.5, 0.0, 1.0, 1.5, 2.0, double.NaN })
+            {
+                Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => new ScalableBloomFilter(100, 0.01, r),
+                    $"a tightening ratio of {r} does not bound the compound rate");
+            }
+
+            // The open interval between them is what the structure is defined on.
+            foreach (var r in new[] { 0.001, 0.5, 0.8, 0.999 })
+            {
+                _ = new ScalableBloomFilter(100, 0.01, r);
+            }
+        }
+
+        /// <summary>
+        /// Reset empties a filter; it does not reconfigure it. The scalable filter
+        /// rebuilds its list from scratch, and did so without carrying the hash across,
+        /// so a caller who had set their own was quietly returned to the default.
+        /// </summary>
+        [TestMethod]
+        public void TestScalableFilterResetKeepsTheHashFunction()
+        {
+            var f = new ScalableBloomFilter(100, 0.01, 0.8);
+
+            // Degenerate on purpose: a constant hash puts every key in the same place,
+            // so any key reads as present. Nothing else produces that.
+            f.SetHash(_ => 12345UL);
+            f.Add(Key("a"));
+            Assert.IsTrue(f.Test(Key("unrelated")),
+                "sanity: with a constant hash every key collides");
+
+            f.Reset();
+            f.Add(Key("a"));
+
+            Assert.IsTrue(f.Test(Key("unrelated")),
+                "Reset restored the default hash and discarded the one that was set");
+        }
+
+        /// <summary>
         /// The inverse filter is a bounded "recently seen" cache rather than a growing
         /// set: an element whose slot is claimed by a later one is forgotten. False
         /// negatives are therefore expected here, which is the opposite of every other
