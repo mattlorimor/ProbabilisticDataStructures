@@ -43,6 +43,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="System.IO.Hashing" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="../README.md" Pack="true" PackagePath="/" />
     <None Include="../icon.png" Pack="true" PackagePath="/" />
   </ItemGroup>

@@ -1,4 +1,5 @@
-﻿using System.Security.Cryptography;
+﻿using System;
+using System.Security.Cryptography;
 
 namespace ProbabilisticDataStructures
 {
@@ -31,7 +32,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Hash algorithm
         /// </summary>
-        private HashAlgorithm Hash { get; set; }
+        private Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
         /// <summary>
         /// Filter size
         /// </summary>
@@ -69,7 +70,7 @@ namespace ProbabilisticDataStructures
 
             this.Buckets = new Buckets(m - r, 1);
             this.Collisions = new Buckets(r, 1);
-            this.Hash = Defaults.GetDefaultHashAlgorithm();
+            this.Hash = Defaults.GetDefaultHashFunction();
             this.M = m - r;
             this.RegionSize = (m - r) / r;
             this.k = k;
@@ -247,9 +248,9 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Sets the hashing function used in the filter.
         /// </summary>
-        /// <param name="h">The HashAlgorithm to use.</param>
+        /// <param name="h">The hash function to use.</param>
         // TODO: Add SetHash to the IFilter interface?
-        public void SetHash(HashAlgorithm h)
+        public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
             this.Hash = h;
         }

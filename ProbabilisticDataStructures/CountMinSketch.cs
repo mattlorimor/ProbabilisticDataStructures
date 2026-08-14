@@ -53,7 +53,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Hash function
         /// </summary>
-        private HashAlgorithm Hash { get; set; }
+        private Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
 
         /// <summary>
         /// Creates a new Count-Min Sketch whose relative accuracy is within a factor of
@@ -77,7 +77,7 @@ namespace ProbabilisticDataStructures
             this.Depth = depth;
             this.epsilon = epsilon;
             this.delta = delta;
-            this.Hash = Defaults.GetDefaultHashAlgorithm();
+            this.Hash = Defaults.GetDefaultHashFunction();
         }
 
         /// <summary>
@@ -200,8 +200,8 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Sets the hashing function used in the filter.
         /// </summary>
-        /// <param name="h">The HashAlgorithm to use.</param>
-        public void SetHash(HashAlgorithm h)
+        /// <param name="h">The hash function to use.</param>
+        public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
             this.Hash = h;
         }

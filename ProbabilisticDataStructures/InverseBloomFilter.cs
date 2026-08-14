@@ -55,7 +55,7 @@ namespace ProbabilisticDataStructures
     public class InverseBloomFilter : IFilter
     {
         private byte[][] Array { get; set; }
-        internal HashAlgorithm Hash { get; set; }
+        internal Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
         private uint capacity { get; set; }
 
         /// <summary>
@@ -65,7 +65,7 @@ namespace ProbabilisticDataStructures
         public InverseBloomFilter(uint capacity)
         {
             this.Array = new byte[capacity][];
-            this.Hash = Defaults.GetDefaultHashAlgorithm();
+            this.Hash = Defaults.GetDefaultHashFunction();
             this.capacity = capacity;
         }
 
@@ -162,23 +162,15 @@ namespace ProbabilisticDataStructures
         /// <returns>32-bit hash value</returns>
         private uint ComputeHashSum32(byte[] data)
         {
-            Span<byte> sum = stackalloc byte[64];
-            if (Hash.TryComputeHash(data, sum, out int written))
-            {
-                return Utils.HashBytesToUInt32(sum.Slice(0, written));
-            }
-
-            // Digest larger than the stack buffer, which only a non-standard
-            // HashAlgorithm produces. Fall back to the allocating path.
-            return Utils.HashBytesToUInt32(Hash.ComputeHash(data));
+            return (uint)(this.Hash(data) & 0xffffffff);
         }
 
         /// <summary>
         /// Sets the hashing function used in the filter.
         /// </summary>
-        /// <param name="h">The HashAlgorithm to use.</param>
+        /// <param name="h">The hash function to use.</param>
         // TODO: Add SetHash to the IFilter interface?
-        public void SetHash(HashAlgorithm h)
+        public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
             this.Hash = h;
         }

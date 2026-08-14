@@ -38,7 +38,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Hash algorithm.
         /// </summary>
-        private HashAlgorithm Hash { get; set; }
+        private Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
         /// <summary>
         /// Number of buckets
         /// </summary>
@@ -81,7 +81,7 @@ namespace ProbabilisticDataStructures
             }
 
             this.Buckets = buckets;
-            this.Hash = Defaults.GetDefaultHashAlgorithm();
+            this.Hash = Defaults.GetDefaultHashFunction();
             this.M = m;
             this.B = b;
             this.F = f;
@@ -266,8 +266,8 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Sets the hashing function used in the filter.
         /// </summary>
-        /// <param name="h">The HashAlgorithm to use.</param>
-        public void SetHash(HashAlgorithm h)
+        /// <param name="h">The hash function to use.</param>
+        public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
             this.Hash = h;
         }
@@ -397,26 +397,12 @@ namespace ProbabilisticDataStructures
         /// fingerprint for the given data</returns>
         private Components GetComponents(byte[] data)
         {
-            Span<byte> hash = stackalloc byte[MaxStackHashSize];
-            if (!Hash.TryComputeHash(data, hash, out int written))
-            {
-                // Digest larger than the stack buffer, which only a non-standard
-                // HashAlgorithm produces. Fall back to the allocating path.
-                byte[] allocated = Hash.ComputeHash(data);
-                byte[] allocatedF = Slice(allocated, (int)this.F);
-                var fallbackI1 = this.ComputeHashSum32(allocated);
-                return Components.Create(
-                    allocatedF,
-                    fallbackI1,
-                    fallbackI1 ^ this.ComputeHashSum32(allocatedF));
-            }
+            // The hash supplies 64 bits. The fingerprint is taken from its bytes,
+            // as it was previously taken from the leading bytes of a digest.
+            Span<byte> digest = stackalloc byte[8];
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(digest, this.Hash(data));
 
-            ReadOnlySpan<byte> digest = hash.Slice(0, written);
-
-            // The fingerprint is stored in a bucket, so this array is genuinely
-            // needed. Take(...).ToArray() built it through a LINQ enumerator; a
-            // direct copy of the same bytes avoids that without changing the value.
-            byte[] f = Slice(digest, (int)this.F);
+            byte[] f = digest.Slice(0, Math.Min((int)this.F, digest.Length)).ToArray();
 
             var i1 = this.ComputeHashSum32(digest);
 
@@ -450,23 +436,15 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Returns the sum of the hash, hashing into a caller-owned buffer so the
-        /// digest does not have to be allocated per call.
+        /// Returns the low 32 bits of the hash of the given data.
         /// </summary>
         /// <param name="data">Data</param>
         /// <returns>32-bit hash value</returns>
         private uint ComputeHashSum32(ReadOnlySpan<byte> data)
         {
-            Span<byte> sum = stackalloc byte[MaxStackHashSize];
-            if (Hash.TryComputeHash(data, sum, out int written))
-            {
-                return Utils.HashBytesToUInt32(sum.Slice(0, written));
-            }
-
-            // Digest larger than the stack buffer, which only a non-standard
-            // HashAlgorithm produces. Fall back to the allocating path.
-            return Utils.HashBytesToUInt32(Hash.ComputeHash(data.ToArray()));
+            return (uint)(this.Hash(data) & 0xffffffff);
         }
+
 
         /// <summary>
         /// Returns the optimal fingerprint length in bytes for the given bucket size and
