@@ -5,6 +5,42 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.2.0] - Unreleased
+
+### Changed
+
+- **`CuckooBloomFilter` stores its fingerprints in one packed array**, which is
+  [#52](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/52). They were
+  individual `byte[]` instances in a jagged array, so every two-byte fingerprint carried a
+  24-byte object header and every bucket was an array of references besides.
+
+  | n = 100,000 at 1% | before | after |
+  | --- | --- | --- |
+  | empty | 3,847 KB | **291 KB** |
+  | holding 100,000 items | 11,501 KB | **291 KB** |
+  | `Test` | 43.0 ns | **31.3 ns** |
+
+  Storage is now allocated once and does not depend on load, which is why the two rows
+  agree. 5.0.0 fixed the filter's sizing; this fixes what the sizing was spent on.
+
+  Occupancy is tracked in a separate bit per entry rather than by treating an all-zero
+  fingerprint as empty. That would be smaller, but a fingerprint comes from a hash and
+  can legitimately be all zero, so it would need forcing to something else — which
+  changes which bucket an element's alternate index resolves to, and so could not be
+  applied to fingerprints already written by an earlier version. Six percent of the
+  fingerprint bytes buys reading every payload ever written, unchanged.
+
+- **Relocation no longer allocates per attempt.** Displacing a fingerprint copied it to a
+  fresh array, up to 500 times per insert and again to unwind, so an insert into a full
+  filter allocated **32 KB**. It now allocates 32 bytes, the same as an insert with room
+  to spare.
+
+### Fixed
+
+- **The fingerprint width is capped at eight bytes.** The hash supplies 64 bits, so a
+  wider fingerprint was storage reserved for bits that never arrived. Only reachable at
+  false positive rates below about 1e-27.
+
 ## [5.1.0] - 2026-08-14
 
 ### Added
