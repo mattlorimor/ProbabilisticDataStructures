@@ -270,6 +270,14 @@ namespace TestProbabilisticDataStructures
             Assert.IsFalse(RoundTrip(new InverseBloomFilter(500)).Test(Key("x")));
             Assert.IsFalse(RoundTrip(new ScalableBloomFilter(100, 0.01, 0.8)).Test(Key("x")));
             Assert.HasCount(0, RoundTrip(new TopK(0.001, 0.01, 10)).Elements());
+
+            Assert.AreEqual(0ul, RoundTrip(new CountMinSketch(0.01, 0.01)).TotalCount());
+
+            // A signature of an empty bag is the one case here that is not all zeroes:
+            // every position holds the identity ulong.MaxValue, which a restore that
+            // defaulted the array instead of reading it would turn into 0.
+            var empty = RoundTrip(MinHash.Signature(Array.Empty<string>(), 8));
+            Assert.AreEqual(1f, MinHash.Similarity(empty, MinHash.Signature(Array.Empty<string>(), 8)));
         }
 
         /// <summary>
@@ -282,6 +290,8 @@ namespace TestProbabilisticDataStructures
         {
             Func<ReadOnlySpan<byte>, ulong> custom = data => (ulong)data.Length * 2654435761UL;
 
+            var bloom = new BloomFilter(1000, 0.01); bloom.SetHash(custom);
+            var sketch = new CountMinSketch(0.01, 0.01); sketch.SetHash(custom);
             var bloom64 = new BloomFilter64(1000, 0.01); bloom64.SetHash(custom);
             var counting = new CountingBloomFilter(1000, 4, 0.01); counting.SetHash(custom);
             var deletable = new DeletableBloomFilter(1000, 10, 0.01); deletable.SetHash(custom);
@@ -292,6 +302,8 @@ namespace TestProbabilisticDataStructures
             var hll = new HyperLogLog(1024); hll.SetHash(custom);
             var scalable = new ScalableBloomFilter(100, 0.01, 0.8); scalable.SetHash(custom);
 
+            AssertRefusesThenAccepts(bloom.ToByteArray(), b => Persistence.FromByteArray<BloomFilter>(b), b => Persistence.FromByteArray<BloomFilter>(b, custom));
+            AssertRefusesThenAccepts(sketch.ToByteArray(), b => Persistence.FromByteArray<CountMinSketch>(b), b => Persistence.FromByteArray<CountMinSketch>(b, custom));
             AssertRefusesThenAccepts(bloom64.ToByteArray(), b => Persistence.FromByteArray<BloomFilter64>(b), b => Persistence.FromByteArray<BloomFilter64>(b, custom));
             AssertRefusesThenAccepts(counting.ToByteArray(), b => Persistence.FromByteArray<CountingBloomFilter>(b), b => Persistence.FromByteArray<CountingBloomFilter>(b, custom));
             AssertRefusesThenAccepts(deletable.ToByteArray(), b => Persistence.FromByteArray<DeletableBloomFilter>(b), b => Persistence.FromByteArray<DeletableBloomFilter>(b, custom));
@@ -335,6 +347,7 @@ namespace TestProbabilisticDataStructures
                 ("CountMinSketch", new CountMinSketch(0.01, 0.01).ToByteArray()),
                 ("HyperLogLog", new HyperLogLog(1024).ToByteArray()),
                 ("TopK", new TopK(0.001, 0.01, 10).ToByteArray()),
+                ("MinHashSignature", MinHash.Signature(new[] { "a" }, 8).ToByteArray()),
             };
 
             // Read every payload as a BloomFilter; only its own may succeed.
@@ -378,6 +391,9 @@ namespace TestProbabilisticDataStructures
                 ("HyperLogLog", b => Persistence.FromByteArray<HyperLogLog>(b), FilledHll()),
                 ("ScalableBloomFilter", b => Persistence.FromByteArray<ScalableBloomFilter>(b), Filled(new ScalableBloomFilter(50, 0.01, 0.8))),
                 ("TopK", b => Persistence.FromByteArray<TopK>(b), FilledTopK()),
+                ("BloomFilter", b => Persistence.FromByteArray<BloomFilter>(b), Filled(new BloomFilter(200, 0.01))),
+                ("CountMinSketch", b => Persistence.FromByteArray<CountMinSketch>(b), FilledSketch()),
+                ("MinHashSignature", b => Persistence.FromByteArray<MinHashSignature>(b), FilledSignature()),
             };
 
             foreach (var (name, read, clean) in payloads)
@@ -413,6 +429,18 @@ namespace TestProbabilisticDataStructures
             var h = new HyperLogLog(64);
             for (int i = 0; i < 40; i++) h.Add(Key($"w{i}"));
             return h.ToByteArray();
+        }
+
+        private static byte[] FilledSketch()
+        {
+            var s = new CountMinSketch(0.1, 0.5);
+            for (int i = 0; i < 40; i++) s.Add(Key($"w{i % 5}"));
+            return s.ToByteArray();
+        }
+
+        private static byte[] FilledSignature()
+        {
+            return MinHash.Signature(new[] { "a", "b", "c", "d" }, 8).ToByteArray();
         }
 
         private static byte[] FilledTopK()
