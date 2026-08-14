@@ -52,6 +52,38 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Two structures can only be combined if they hash the same way.
+        /// </summary>
+        /// <remarks>
+        /// Everything a structure holds sits where its hash function put it, so
+        /// combining two that hash differently produces something that answers
+        /// confidently about positions neither of them meant. Nothing about the result
+        /// looks wrong afterwards, which is why this is checked rather than documented.
+        /// <para>
+        /// Delegates compare by method and target, so two conversions of the same
+        /// method -- including the default, and including one passed to both
+        /// constructors -- are equal. Two separately written lambdas with identical
+        /// bodies are not, and are refused: the fix is to pass one hash function to
+        /// both structures rather than to write it twice.
+        /// </para>
+        /// </remarks>
+        internal static void SameHashFunction(
+            Func<ReadOnlySpan<byte>, ulong> first,
+            Func<ReadOnlySpan<byte>, ulong> second,
+            string paramName)
+        {
+            if (!first.Equals(second))
+            {
+                throw new ArgumentException(
+                    "The two structures use different hash functions. Everything each " +
+                    "one holds sits where its own hash put it, so combining them would " +
+                    "produce a structure that answers about positions neither of them " +
+                    "meant. Build both with the same hash function -- passing the same " +
+                    "one to each, rather than writing it out twice.", paramName);
+            }
+        }
+
+        /// <summary>
         /// A structure's hash function can only be replaced while it holds nothing.
         /// </summary>
         /// <remarks>

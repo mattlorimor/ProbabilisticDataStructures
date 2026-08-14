@@ -205,10 +205,14 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the merge was successful</returns>
         public bool Merge(HyperLogLog other)
         {
+            ArgumentNullException.ThrowIfNull(other);
+
             if (this.M != other.M)
             {
-                throw new ArgumentException("Number of registers must match");
+                throw new ArgumentException("Number of registers must match", nameof(other));
             }
+
+            Guard.SameHashFunction(this.Hash, other.Hash, nameof(other));
 
             for (int i = 0; i < other.Registers.Count(); i++)
             {

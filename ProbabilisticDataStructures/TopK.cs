@@ -1,5 +1,7 @@
 ﻿using System;
 using System.IO;
+using System.Linq;
+using System.Collections.Generic;
 namespace ProbabilisticDataStructures
 {
     /// <summary>
@@ -66,6 +68,94 @@ namespace ProbabilisticDataStructures
         public Element[] Elements()
         {
             return elements.Elements();
+        }
+
+        /// <summary>
+        /// Combines another top-k into this one, over the union of what both were
+        /// tracking.
+        /// </summary>
+        /// <param name="other">The structure to combine in.</param>
+        /// <returns>This structure, so calls can be chained.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="other"/> is null.</exception>
+        /// <exception cref="ArgumentException">
+        /// The two track a different number of elements, or their sketches were built
+        /// with different dimensions or different hash functions.
+        /// </exception>
+        /// <remarks>
+        /// Frequencies are re-read from the merged sketch rather than added together.
+        /// Each structure's recorded frequency is what its own sketch last told it,
+        /// and adding two of them counts twice everything both sketches already knew
+        /// about. The merged sketch is the only thing that knows the combined count.
+        /// <para>
+        /// A merged top-k is not necessarily the true top-k of the combined stream. An
+        /// element frequent in both but held by neither heap is not a candidate here,
+        /// and stays invisible -- the merged sketch knows its count, but nothing asks
+        /// the sketch about elements no heap was holding. This is inherent to merging
+        /// bounded summaries, not a shortcut taken here.
+        /// </para>
+        /// </remarks>
+        public TopK Merge(TopK other)
+        {
+            ArgumentNullException.ThrowIfNull(other);
+
+            if (this.K != other.K)
+            {
+                throw new ArgumentException(
+                    $"Cannot merge a top-{other.K} into a top-{this.K}.", nameof(other));
+            }
+
+            // Throws if the sketches disagree about dimensions or hashing, before
+            // anything here has been changed.
+            this.Cms.Merge(other.Cms);
+            this.N += other.N;
+
+            // Every element either was holding is a candidate, and no others can be:
+            // an element neither heap held is one neither considered frequent.
+            var candidates = new Dictionary<byte[], ulong>(ByteContentComparer.Instance);
+
+            foreach (var element in this.elements.Heap)
+            {
+                candidates[element.Data.ToArray()] = 0;
+            }
+
+            foreach (var element in other.elements.Heap)
+            {
+                candidates[element.Data.ToArray()] = 0;
+            }
+
+            var rebuilt = new ElementHeap((int)this.K);
+
+            foreach (var data in candidates.Keys
+                .OrderByDescending(d => this.Cms.Count(d))
+                .Take((int)this.K))
+            {
+                rebuilt.Push(new Element
+                {
+                    Data = data,
+                    Freq = this.Cms.Count(data),
+                });
+            }
+
+            this.elements = rebuilt;
+            return this;
+        }
+
+        /// <summary>
+        /// Compares candidate data by content, so that the same element held by both
+        /// structures is one candidate rather than two.
+        /// </summary>
+        private sealed class ByteContentComparer : IEqualityComparer<byte[]>
+        {
+            internal static readonly ByteContentComparer Instance = new ByteContentComparer();
+
+            public bool Equals(byte[]? x, byte[]? y) => x.AsSpan().SequenceEqual(y.AsSpan());
+
+            public int GetHashCode(byte[] obj)
+            {
+                var hash = new HashCode();
+                hash.AddBytes(obj);
+                return hash.ToHashCode();
+            }
         }
 
         /// <summary>

@@ -176,6 +176,78 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Sets every bucket to the larger of its own value and the matching bucket in
+        /// <paramref name="other"/>.
+        /// </summary>
+        /// <remarks>
+        /// For single-bit buckets this is a bitwise OR, which is what unioning two
+        /// Bloom filters means. For wider ones it takes the maximum rather than the
+        /// sum, which is what a set union wants: a bucket records whether something
+        /// landed there, not how many times.
+        /// </remarks>
+        internal Buckets Union(Buckets other)
+        {
+            if (this.count != other.count || this.bucketSize != other.bucketSize)
+            {
+                throw new ArgumentException(
+                    $"Cannot union {this.count} buckets of {this.bucketSize} bits with " +
+                    $"{other.count} of {other.bucketSize}.", nameof(other));
+            }
+
+            if (this.bucketSize == 1)
+            {
+                // The common case, and worth taking whole bytes at a time rather than
+                // one bit at a time.
+                for (int i = 0; i < this.Data.Length; i++)
+                {
+                    this.Data[i] |= other.Data[i];
+                }
+
+                return this;
+            }
+
+            for (uint i = 0; i < this.count; i++)
+            {
+                var theirs = other.Get(i);
+                if (theirs > this.Get(i))
+                {
+                    this.Set(i, (byte)theirs);
+                }
+            }
+
+            return this;
+        }
+
+        /// <summary>
+        /// Adds each of <paramref name="other"/>'s counters to its counterpart, holding
+        /// at the maximum a bucket can carry.
+        /// </summary>
+        /// <remarks>
+        /// A counter that reaches its maximum has stopped tracking how many elements it
+        /// stands for and is never decremented again, which is what keeps a counting
+        /// filter's deletions from producing false negatives. Adding two filters can
+        /// carry a counter over that line when neither was near it, and the clamp is
+        /// what keeps the invariant.
+        /// </remarks>
+        internal Buckets Add(Buckets other)
+        {
+            if (this.count != other.count || this.bucketSize != other.bucketSize)
+            {
+                throw new ArgumentException(
+                    $"Cannot add {this.count} buckets of {this.bucketSize} bits to " +
+                    $"{other.count} of {other.bucketSize}.", nameof(other));
+            }
+
+            for (uint i = 0; i < this.count; i++)
+            {
+                var sum = this.Get(i) + other.Get(i);
+                this.Set(i, sum > this._max ? this._max : (byte)sum);
+            }
+
+            return this;
+        }
+
+        /// <summary>
         /// Restores the Buckets to the original state. Returns itself to allow for
         /// chaining.
         /// </summary>

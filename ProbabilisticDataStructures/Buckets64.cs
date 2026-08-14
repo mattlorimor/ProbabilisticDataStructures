@@ -208,6 +208,46 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Sets every bucket to the larger of its own value and the matching bucket in
+        /// <paramref name="other"/>. See <see cref="Buckets.Union"/>.
+        /// </summary>
+        internal Buckets64 Union(Buckets64 other)
+        {
+            if (this.count != other.count || this.bucketSize != other.bucketSize)
+            {
+                throw new ArgumentException(
+                    $"Cannot union {this.count} buckets of {this.bucketSize} bits with " +
+                    $"{other.count} of {other.bucketSize}.", nameof(other));
+            }
+
+            if (this.bucketSize == 1)
+            {
+                for (int a = 0; a < this.Data.Length; a++)
+                {
+                    var mine = this.Data[a];
+                    var theirs = other.Data[a];
+                    for (int i = 0; i < mine.Length; i++)
+                    {
+                        mine[i] |= theirs[i];
+                    }
+                }
+
+                return this;
+            }
+
+            for (ulong i = 0; i < this.count; i++)
+            {
+                var theirs = other.Get(i);
+                if (theirs > this.Get(i))
+                {
+                    this.Set(i, (byte)theirs);
+                }
+            }
+
+            return this;
+        }
+
+        /// <summary>
         /// Restores the Buckets64 to the original state. Returns itself to allow for
         /// chaining.
         /// </summary>

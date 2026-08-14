@@ -291,6 +291,45 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Combines another filter into this one, so that it holds everything both held.
+        /// </summary>
+        /// <param name="other">The filter to combine in.</param>
+        /// <returns>This filter, so calls can be chained.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="other"/> is null.</exception>
+        /// <exception cref="ArgumentException">
+        /// The two were built with different dimensions or different hash functions, so
+        /// their contents do not describe the same positions.
+        /// </exception>
+        /// <remarks>
+        /// The result is exactly what adding everything to one of them would have
+        /// produced, so the false positive rate is that of a filter holding the union
+        /// rather than either input's.
+        /// <para>
+        /// The item count becomes the sum, which overstates the union whenever the two
+        /// shared elements. There is no way to know how many they shared, so the count
+        /// of a merged filter is an upper bound.
+        /// </para>
+        /// </remarks>
+        public BloomFilter64 Merge(BloomFilter64 other)
+        {
+            ArgumentNullException.ThrowIfNull(other);
+
+            if (this.m != other.m || this.k != other.k)
+            {
+                throw new ArgumentException(
+                    $"Cannot merge a filter of {other.m} bits and {other.k} hash " +
+                    $"functions into one of {this.m} and {this.k}. The two describe " +
+                    "different positions.", nameof(other));
+            }
+
+            Guard.SameHashFunction(this.Hash, other.Hash, nameof(other));
+
+            this.Buckets.Union(other.Buckets);
+            this.count += other.count;
+            return this;
+        }
+
+        /// <summary>
         /// Sets the hashing function used in the filter.
         /// </summary>
         /// <param name="h">The hash function to use.</param>

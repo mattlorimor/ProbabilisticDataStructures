@@ -367,6 +367,50 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Combines another filter into this one, so that it holds everything both held.
+        /// </summary>
+        /// <param name="other">The filter to combine in.</param>
+        /// <returns>This filter, so calls can be chained.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="other"/> is null.</exception>
+        /// <exception cref="ArgumentException">
+        /// The two were built with different dimensions or different hash functions, so
+        /// their contents do not describe the same positions.
+        /// </exception>
+        /// <remarks>
+        /// The result is exactly what adding everything to one of them would have
+        /// produced, so the false positive rate is that of a filter holding the union
+        /// rather than either input's.
+        /// <para>
+        /// The item count becomes the sum, which overstates the union whenever the two
+        /// shared elements. There is no way to know how many they shared, so the count
+        /// of a merged filter is an upper bound. Partitions are unioned one against its
+        /// counterpart, so an element's bit stays in the partition its hash chose.
+        /// </para>
+        /// </remarks>
+        public PartitionedBloomFilter Merge(PartitionedBloomFilter other)
+        {
+            ArgumentNullException.ThrowIfNull(other);
+
+            if (this.M != other.M || this.k != other.k || this.S != other.S)
+            {
+                throw new ArgumentException(
+                    $"Cannot merge a filter of {other.M} bits in {other.k} partitions of " +
+                    $"{other.S} into one of {this.M} in {this.k} of {this.S}. The two " +
+                    "describe different positions.", nameof(other));
+            }
+
+            Guard.SameHashFunction(this.Hash, other.Hash, nameof(other));
+
+            for (int i = 0; i < this.Partitions.Length; i++)
+            {
+                this.Partitions[i].Union(other.Partitions[i]);
+            }
+
+            this.count += other.count;
+            return this;
+        }
+
+        /// <summary>
         /// Sets the hashing function used in the filter.
         /// </summary>
         /// <param name="h">The hash function to use.</param>
