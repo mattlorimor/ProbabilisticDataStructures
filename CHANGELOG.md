@@ -69,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is inherent -- a filter cannot tell such a removal from a real one -- and is now
   documented rather than fixed.
 
+
 - **`Reset()` clears the item count** on `BloomFilter`, `BloomFilter64` and
   `PartitionedBloomFilter`. All three emptied their buckets and left the count where it
   was, so a filter that was empty by every other measure still reported the items it
@@ -155,6 +156,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A bucket width of zero is rejected** with `ArgumentOutOfRangeException` rather than
   throwing `IndexOutOfRangeException` on first use. `new CountingBloomFilter(n, 0, r)`
   allocated no storage and then read from it.
+
+### Changed
+
+- **`MinHash.Similarity` returns the resemblance it documents.** Broder's resemblance is
+  the Jaccard index -- distinct words in both bags over distinct words in either. This
+  returned the Sørensen–Dice coefficient, `2|A∩B| / (|A|+|B|)`, which is related as
+  `D = 2J / (1 + J)` and so is consistently higher: **bags of one third resemblance were
+  reported at one half**.
+
+  None of the MinHash machinery contributed to that result. It generated `k` hash
+  permutations and never used them, because the loop over them ignored its own index,
+  and returned agreement over element positions instead. The same input gave the same
+  answer on every run despite the random hashes, which is the tell.
+
+  The result is now computed exactly rather than estimated. Broder's estimator earns its
+  error when a set is too large to hold or a signature can be reused across many
+  comparisons, and neither applies to a call handed both bags in full; estimating would
+  cost accuracy and time and buy nothing. A signature-based API, which is where the
+  estimator does pay, is being considered alongside serialization.
+
+  Removing the unused permutations also removed their cost: comparing two 400-word bags
+  took 163 ms and now takes about 15 µs.
+
+  Two empty bags now return 1 rather than `NaN`, and a null bag throws
+  `ArgumentNullException` rather than `NullReferenceException`.
 
 ## [3.0.1] - 2026-08-13
 

@@ -587,7 +587,19 @@ namespace FilterExample
 
 This is a variation of the technique for estimating similarity between two sets as presented by Broder in [On the resemblance and containment of documents](http://gatekeeper.dec.com/ftp/pub/dec/SRC/publications/broder/positano-final-wpnums.pdf).
 
-MinHash is a probabilistic algorithm which can be used to cluster or compare documents by splitting the corpus into a bag of words. MinHash returns the approximated similarity ratio of the two bags. The similarity is less accurate for very small bags of words.
+`Similarity` can be used to cluster or compare documents by splitting the corpus into a
+bag of words. It returns the resemblance of the two bags -- the number of distinct words
+in both over the number of distinct words in either, which is their Jaccard index.
+Repeated words count once, and two empty bags resemble each other exactly.
+
+The result is exact, not estimated. Broder's estimator earns its error when a set is too
+large to hold, or when a signature can be computed once and reused across many
+comparisons; neither applies to a call that is handed both bags in full and compares
+them once, where estimating would cost accuracy and time and buy nothing.
+
+Before 3.1.0 this returned the Sørensen–Dice coefficient instead, which is related as
+`D = 2J / (1 + J)` and so is consistently higher: bags of one third resemblance were
+reported at one half. See the [changelog](CHANGELOG.md) if you depended on those values.
 
 ### Usage
 
@@ -621,6 +633,7 @@ namespace FilterExample
                 "sara"
             };
 
+            // 5 words in both, 7 distinct across the two: 5 / 7 = 0.714...
             Console.WriteLine(string.Format("similarity: {0}", MinHash.Similarity(bag1.ToArray(), bag2.ToArray())));
         }
     }

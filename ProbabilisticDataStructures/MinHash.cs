@@ -1,138 +1,76 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 
 namespace ProbabilisticDataStructures
 {
     /// <summary>
-    /// MinHash is a variation of the technique for estimating similarity between
-    /// two sets as presented by Broder in On the resemblance and containment of
-    /// documents:
+    /// MinHash computes the similarity between two bags of words, as the resemblance
+    /// defined by Broder in On the resemblance and containment of documents:
     ///
     /// http://gatekeeper.dec.com/ftp/pub/dec/SRC/publications/broder/positano-final-wpnums.pdf
     ///
-    /// This can be used to cluster or compare documents by splitting the corpus
-    /// into a bag of words. MinHash returns the approximated similarity ratio of
-    /// the two bags. The similarity is less accurate for very small bags of words.
+    /// The resemblance of two sets is their Jaccard index: the size of their
+    /// intersection over the size of their union. This can be used to cluster or
+    /// compare documents by splitting the corpus into a bag of words.
     /// </summary>
+    /// <remarks>
+    /// The result is exact, not estimated. Broder's estimator is worth its error when
+    /// a set is too large to hold or a signature has to be computed once and reused
+    /// across many comparisons; neither applies to an API that is handed both bags in
+    /// full and compares them once. Estimating here would cost accuracy and time and
+    /// buy nothing.
+    /// <para>
+    /// Prior versions did neither. They generated hash permutations and never used
+    /// them -- the loop over them ignored its own index -- and returned agreement over
+    /// element positions, which for bags without repeats is the Sorensen-Dice
+    /// coefficient rather than the resemblance. The two are related as D = 2J / (1 + J),
+    /// so results were consistently too high: sets of one third resemblance were
+    /// reported at one half.
+    /// </para>
+    /// </remarks>
     public static class MinHash
     {
-        private static Random random = new Random();
-
         /// <summary>
-        /// Returns the similarity between two bags.
+        /// Returns the resemblance of two bags: the number of distinct words in both,
+        /// over the number of distinct words in either. Repeated words count once.
         /// </summary>
-        /// <param name="bag1">The first bag</param>
-        /// <param name="bag2">The second bag</param>
-        /// <returns>The similarity between the bags</returns>
+        /// <param name="bag1">The first bag.</param>
+        /// <param name="bag2">The second bag.</param>
+        /// <returns>
+        /// The resemblance, from 0 for bags sharing no word to 1 for bags with the
+        /// same distinct words. Two empty bags resemble each other exactly and give 1.
+        /// </returns>
+        /// <exception cref="ArgumentNullException">
+        /// Either bag, or any word in either bag, is null.
+        /// </exception>
         public static float Similarity(string[] bag1, string[] bag2)
         {
-            var k = bag1.Length + bag2.Length;
-            var hashes = new int[k];
-            for (int i = 0; i < k; i++)
+            ArgumentNullException.ThrowIfNull(bag1);
+            ArgumentNullException.ThrowIfNull(bag2);
+
+            var first = new HashSet<string>(bag1, StringComparer.Ordinal);
+            var second = new HashSet<string>(bag2, StringComparer.Ordinal);
+
+            // Both empty is 0 / 0. Defined as 1 rather than left as NaN, which is what
+            // it used to produce: two bags with the same distinct words -- none --
+            // resemble each other exactly, and every other equal pair returns 1.
+            if (first.Count == 0 && second.Count == 0)
             {
-                var a = random.Next();
-                var b = random.Next();
-                var c = random.Next();
-                var x = computeHash((uint)(a * b * c), (uint)a, (uint)b, c);
-                hashes[i] = (int)x;
+                return 1f;
             }
 
-            var bMap = bitMap(bag1, bag2);
-            var minHashValues = hashBuckets(2, k);
-            minHash(bag1, 0, minHashValues, bMap, k, hashes);
-            minHash(bag2, 1, minHashValues, bMap, k, hashes);
-            return similarity(minHashValues, k);
-        }
-
-        private static void minHash(
-            string[] bag,
-            int bagIndex,
-            int[][] minHashValues,
-            Dictionary<string, bool[]> bitArray,
-            int k,
-            int[] hashes)
-        {
-            var options = new ParallelOptions();
-            options.MaxDegreeOfParallelism = 4;
-            var index = 0;
-
-            foreach (var element in bitArray)
+            var intersection = 0;
+            foreach (var word in first)
             {
-                Parallel.For(0, k, options, (i, loopState) =>
+                if (second.Contains(word))
                 {
-                    if (bag.Contains(element.Key))
-                    {
-                        var hindex = hashes[index];
-                        if (hindex < minHashValues[bagIndex][index])
-                        {
-                            minHashValues[bagIndex][index] = hindex;
-                        }
-                    }
-                });
-                index++;
-            }
-        }
-
-        private static Dictionary<string, bool[]> bitMap(string[] bag1, string[] bag2)
-        {
-            var bitArray = new Dictionary<string, bool[]>();
-            foreach (var element in bag1)
-            {
-                bitArray[element] = new bool[] { true, false };
-            }
-
-            foreach (var element in bag2)
-            {
-                if (bitArray.ContainsKey(element))
-                {
-                    bitArray[element] = new bool[] { true, true };
-                }
-                else
-                {
-                    bitArray[element] = new bool[] { false, true };
+                    intersection++;
                 }
             }
 
-            return bitArray;
-        }
-
-        private static int[][] hashBuckets(int numSets, int k)
-        {
-            var minHashValues = new int[numSets][];
-            for (int i = 0; i < numSets; i++)
-            {
-                minHashValues[i] = new int[k];
-            }
-
-            for (int i = 0; i < numSets; i++)
-            {
-                for (int j = 0; j < k; j++)
-                {
-                    minHashValues[i][j] = int.MaxValue;
-                }
-            }
-            return minHashValues;
-        }
-
-        private static uint computeHash(uint x, uint a, uint b, int u)
-        {
-            return (a * x + b) >> (32 - u);
-        }
-
-        private static float similarity(int[][] minHashValues, int k)
-        {
-            var identicalMinHashes = 0;
-            for (int i = 0; i < k; i++)
-            {
-                if (minHashValues[0][i] == minHashValues[1][i])
-                {
-                    identicalMinHashes++;
-                }
-            }
-
-            return (float)(1.0 * (float)identicalMinHashes) / (float)k;
+            // Inclusion-exclusion, so the union is never materialized.
+            var union = first.Count + second.Count - intersection;
+            return (float)intersection / union;
         }
     }
 }
