@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Security.Cryptography;
 
 namespace ProbabilisticDataStructures
@@ -7,7 +8,7 @@ namespace ProbabilisticDataStructures
     /// BloomFilter implements a classic Bloom filter. A bloom filter has a non-zero
     /// probability of false positives and a zero probability of false negatives.
     /// </summary>
-    public class BloomFilter : IFilter
+    public class BloomFilter : IFilter, IBinaryPersistable<BloomFilter>
     {
         /// <summary>
         /// Filter data
@@ -189,6 +190,101 @@ namespace ProbabilisticDataStructures
             this.Buckets.Reset();
             this.count = 0;
             return this;
+        }
+
+        /// <summary>
+        /// Writes this filter to a stream, in the format documented in FORMAT.md.
+        /// </summary>
+        /// <param name="stream">The stream to write to.</param>
+        public void WriteTo(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = new PayloadWriter();
+            payload.WriteUInt32(this.m);
+            payload.WriteUInt32(this.k);
+            payload.WriteUInt32(this.count);
+            payload.WriteUInt32(this.Buckets.count);
+            payload.WriteByte(this.Buckets.BucketSize);
+            payload.WriteBytes(this.Buckets.RawData);
+
+            PersistenceFormat.Write(
+                stream,
+                StructureId.BloomFilter,
+                PersistenceFormat.Identify(this.Hash),
+                payload.WrittenSpan);
+        }
+
+        /// <summary>
+        /// Reads a filter written by <see cref="WriteTo"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <returns>The filter that was written.</returns>
+        public static BloomFilter ReadFrom(Stream stream)
+        {
+            return Read(stream, null);
+        }
+
+        /// <summary>
+        /// Reads a filter written by <see cref="WriteTo"/>, using the supplied hash
+        /// function rather than the one named in the payload.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function the filter was written with.</param>
+        /// <returns>The filter that was written.</returns>
+        public static BloomFilter ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            return Read(stream, hash);
+        }
+
+        private static BloomFilter Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = PersistenceFormat.Read(stream, StructureId.BloomFilter, out var hashId);
+            var reader = new PayloadReader(payload);
+
+            var m = reader.ReadUInt32();
+            var k = reader.ReadUInt32();
+            var count = reader.ReadUInt32();
+            var bucketCount = reader.ReadUInt32();
+            var bucketSize = reader.ReadByte();
+            var data = reader.ReadBytes();
+            reader.ExpectEnd();
+
+            if (m == 0)
+            {
+                throw new InvalidDataException(
+                    "Filter has a capacity of zero bits, which no filter this library " +
+                    "builds can have; it divides by that on first use.");
+            }
+
+            if (bucketCount != m)
+            {
+                throw new InvalidDataException(
+                    $"Filter has a capacity of {m} bits and {bucketCount} buckets to " +
+                    "hold them, which do not describe the same filter.");
+            }
+
+            return new BloomFilter
+            {
+                Buckets = Buckets.Restore(bucketCount, bucketSize, data),
+                m = m,
+                k = k,
+                count = count,
+                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+            };
+        }
+
+        /// <summary>
+        /// Used only by <see cref="Read"/>, which sets every field itself. The public
+        /// constructor derives m and k from a target false positive rate, which is not
+        /// how a filter being restored gets them.
+        /// </summary>
+        private BloomFilter()
+        {
+            this.Buckets = null!;
         }
 
         /// <summary>

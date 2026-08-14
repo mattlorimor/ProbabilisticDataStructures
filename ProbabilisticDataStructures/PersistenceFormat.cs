@@ -1,0 +1,274 @@
+using System;
+using System.Buffers.Binary;
+using System.IO;
+using System.IO.Hashing;
+
+namespace ProbabilisticDataStructures
+{
+    /// <summary>
+    /// Identifies the structure a persisted payload came from, so that reading a file
+    /// into the wrong type fails rather than misinterpreting the bytes.
+    /// </summary>
+    internal enum StructureId : ushort
+    {
+        BloomFilter = 1,
+        BloomFilter64 = 2,
+        CountingBloomFilter = 3,
+        DeletableBloomFilter = 4,
+        PartitionedBloomFilter = 5,
+        ScalableBloomFilter = 6,
+        StableBloomFilter = 7,
+        InverseBloomFilter = 8,
+        CuckooBloomFilter = 9,
+        CountMinSketch = 10,
+        HyperLogLog = 11,
+        TopK = 12,
+    }
+
+    /// <summary>
+    /// Identifies the hash function a structure was using when it was written.
+    /// </summary>
+    /// <remarks>
+    /// A structure's answers depend entirely on its hash function, and a delegate
+    /// cannot be written to a file. Recording which one was in use is what stops a
+    /// reader from installing a different one and returning confident nonsense: a
+    /// filter read back under the wrong hash does not look broken, it looks empty.
+    /// <para>
+    /// The identifier names the algorithm rather than saying "the default", because
+    /// the default is not fixed for all time -- this library's was MD5 until 3.0.0.
+    /// A reader that does not recognise an identifier refuses the payload instead of
+    /// guessing at it.
+    /// </para>
+    /// </remarks>
+    internal enum HashId : ushort
+    {
+        /// <summary>
+        /// A hash function supplied through SetHash. Nothing about it can be written
+        /// down, so reading requires the caller to supply it again.
+        /// </summary>
+        Custom = 0,
+
+        /// <summary>
+        /// The 64-bit XxHash3 that <see cref="Defaults"/> installs, current since 3.0.0.
+        /// </summary>
+        XxHash3_64 = 1,
+    }
+
+    /// <summary>
+    /// The envelope every persisted structure is wrapped in.
+    /// </summary>
+    /// <remarks>
+    /// The layout is documented in FORMAT.md and is stable: a payload written by any
+    /// version of this library can be read by any later one, or is refused outright.
+    /// <code>
+    ///   offset  size  field
+    ///   0       4     magic, "PDS\0"
+    ///   4       2     format version
+    ///   6       2     structure id
+    ///   8       2     hash id
+    ///   10      4     payload length
+    ///   14      n     payload
+    ///   14+n    4     CRC-32 over bytes 4 through 14+n
+    /// </code>
+    /// The checksum covers the header as well as the payload, so a corrupted length or
+    /// structure id is caught by the same check rather than being acted on first.
+    /// </remarks>
+    internal static class PersistenceFormat
+    {
+        /// <summary>
+        /// Marks the start of a payload. Chosen to be recognisable in a hex dump and
+        /// to fail fast on text that was never one of these.
+        /// </summary>
+        internal static ReadOnlySpan<byte> Magic => "PDS\0"u8;
+
+        /// <summary>
+        /// The format version this library writes. Readers refuse anything higher,
+        /// since a later version may mean the payload differently.
+        /// </summary>
+        internal const ushort CurrentVersion = 1;
+
+        private const int MagicLength = 4;
+        private const int HeaderLength = 14;
+        private const int ChecksumLength = 4;
+
+        /// <summary>
+        /// Wraps a payload in the envelope and writes the whole of it to the stream.
+        /// </summary>
+        internal static void Write(
+            Stream stream,
+            StructureId structure,
+            HashId hash,
+            ReadOnlySpan<byte> payload)
+        {
+            var frame = new byte[HeaderLength + payload.Length + ChecksumLength];
+
+            Magic.CopyTo(frame);
+            BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(4), CurrentVersion);
+            BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(6), (ushort)structure);
+            BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(8), (ushort)hash);
+            BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(10), (uint)payload.Length);
+            payload.CopyTo(frame.AsSpan(HeaderLength));
+
+            // Everything after the magic, which is not worth checksumming: a payload
+            // whose magic is wrong is not this format at all.
+            var covered = frame.AsSpan(MagicLength, HeaderLength - MagicLength + payload.Length);
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                frame.AsSpan(HeaderLength + payload.Length), Crc32.HashToUInt32(covered));
+
+            stream.Write(frame, 0, frame.Length);
+        }
+
+        /// <summary>
+        /// Reads and validates an envelope, returning its payload and the hash that was
+        /// in use when it was written.
+        /// </summary>
+        /// <exception cref="InvalidDataException">
+        /// The stream does not hold a payload of this format, holds a later version of
+        /// it, holds a different structure, or has been corrupted.
+        /// </exception>
+        internal static byte[] Read(Stream stream, StructureId expected, out HashId hash)
+        {
+            var header = ReadExactly(stream, HeaderLength, "header");
+
+            if (!header.AsSpan(0, MagicLength).SequenceEqual(Magic))
+            {
+                throw new InvalidDataException(
+                    "The stream does not begin with a probabilistic data structure " +
+                    "payload; its first bytes are not the expected marker.");
+            }
+
+            var version = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(4));
+            if (version == 0 || version > CurrentVersion)
+            {
+                throw new InvalidDataException(
+                    $"Payload is format version {version}, and this library reads up to " +
+                    $"version {CurrentVersion}. It was written by a later version.");
+            }
+
+            var structure = (StructureId)BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(6));
+            if (structure != expected)
+            {
+                throw new InvalidDataException(
+                    $"Payload holds a {Describe(structure)} and was read as a " +
+                    $"{Describe(expected)}.");
+            }
+
+            hash = (HashId)BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(8));
+
+            var length = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(10));
+            if (length > int.MaxValue)
+            {
+                throw new InvalidDataException(
+                    $"Payload claims a length of {length} bytes, which cannot be read " +
+                    "into a single array.");
+            }
+
+            var payload = ReadExactly(stream, (int)length, "payload");
+            var checksum = ReadExactly(stream, ChecksumLength, "checksum");
+
+            var crc = new Crc32();
+            crc.Append(header.AsSpan(MagicLength));
+            crc.Append(payload);
+
+            var expectedCrc = crc.GetCurrentHashAsUInt32();
+            var actualCrc = BinaryPrimitives.ReadUInt32LittleEndian(checksum);
+            if (expectedCrc != actualCrc)
+            {
+                throw new InvalidDataException(
+                    $"Payload checksum does not match: expected {expectedCrc:X8} and " +
+                    $"found {actualCrc:X8}. The data has been corrupted or truncated.");
+            }
+
+            return payload;
+        }
+
+        /// <summary>
+        /// Returns the hash function an identifier names, or null if the identifier
+        /// names one this library cannot supply.
+        /// </summary>
+        internal static Func<ReadOnlySpan<byte>, ulong>? Resolve(HashId hash)
+        {
+            return hash switch
+            {
+                HashId.XxHash3_64 => Defaults.GetDefaultHashFunction(),
+                _ => null,
+            };
+        }
+
+        /// <summary>
+        /// Settles which hash a structure being read should use, given what was
+        /// recorded and what the caller supplied.
+        /// </summary>
+        /// <exception cref="InvalidDataException">
+        /// The recorded hash cannot be reconstructed and none was supplied.
+        /// </exception>
+        internal static Func<ReadOnlySpan<byte>, ulong> ResolveOrThrow(
+            HashId hash,
+            Func<ReadOnlySpan<byte>, ulong>? supplied)
+        {
+            // A supplied hash wins outright. The caller knows what they wrote with,
+            // and this is the only way to read a payload back that used one.
+            if (supplied is not null)
+            {
+                return supplied;
+            }
+
+            var resolved = Resolve(hash);
+            if (resolved is not null)
+            {
+                return resolved;
+            }
+
+            if (hash == HashId.Custom)
+            {
+                throw new InvalidDataException(
+                    "This structure was written while using a hash function set through " +
+                    "SetHash, which cannot be recorded. Read it with the overload that " +
+                    "takes a hash function, supplying the same one. Reading it with the " +
+                    "default would not fail: the structure would answer no to everything " +
+                    "and look empty rather than wrong.");
+            }
+
+            throw new InvalidDataException(
+                $"This structure was written using hash function {(ushort)hash}, which " +
+                "this version does not know. It was written by a later version. Supply " +
+                "that hash function explicitly to read it anyway.");
+        }
+
+        /// <summary>
+        /// Returns the identifier for a hash function, by asking whether it is one this
+        /// library installed rather than by inspecting it.
+        /// </summary>
+        internal static HashId Identify(Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            return Defaults.IsDefaultHashFunction(hash) ? HashId.XxHash3_64 : HashId.Custom;
+        }
+
+        private static byte[] ReadExactly(Stream stream, int count, string what)
+        {
+            var buffer = new byte[count];
+            var read = 0;
+
+            while (read < count)
+            {
+                var n = stream.Read(buffer, read, count - read);
+                if (n == 0)
+                {
+                    throw new InvalidDataException(
+                        $"The stream ended after {read} of the {count} bytes the " +
+                        $"{what} needs. The data has been truncated.");
+                }
+                read += n;
+            }
+
+            return buffer;
+        }
+
+        private static string Describe(StructureId structure)
+        {
+            return Enum.IsDefined(structure)
+                ? structure.ToString()
+                : $"structure of unknown type {(ushort)structure}";
+        }
+    }
+}
