@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Security.Cryptography;
 
 namespace ProbabilisticDataStructures
@@ -32,7 +33,7 @@ namespace ProbabilisticDataStructures
     /// and removed from the data set. Since they use n-bit buckets, CBFs use
     /// roughly n-times more memory than traditional Bloom filters.
     /// </summary>
-    public class CountingBloomFilter : IFilter
+    public class CountingBloomFilter : IFilter, IBinaryPersistable<CountingBloomFilter>
     {
         /// <summary>
         /// Filter data
@@ -263,6 +264,92 @@ namespace ProbabilisticDataStructures
             this.Buckets.Reset();
             this.count = 0;
             return this;
+        }
+
+        /// <summary>
+        /// Writes this filter to a stream, in the format documented in FORMAT.md.
+        /// </summary>
+        /// <param name="stream">The stream to write to.</param>
+        public void WriteTo(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = new PayloadWriter();
+            payload.WriteUInt32(this.m);
+            payload.WriteUInt32(this.k);
+            payload.WriteUInt32(this.count);
+            PersistenceFormat.WriteBuckets(payload, this.Buckets);
+
+            PersistenceFormat.Write(
+                stream,
+                StructureId.CountingBloomFilter,
+                PersistenceFormat.Identify(this.Hash),
+                payload.WrittenSpan);
+        }
+
+        /// <summary>
+        /// Reads a filter written by <see cref="WriteTo"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <returns>The filter that was written.</returns>
+        public static CountingBloomFilter ReadFrom(Stream stream)
+        {
+            return Read(stream, null);
+        }
+
+        /// <summary>
+        /// Reads a filter written by <see cref="WriteTo"/>, using the supplied hash
+        /// function rather than the one named in the payload.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function the filter was written with.</param>
+        /// <returns>The filter that was written.</returns>
+        public static CountingBloomFilter ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            return Read(stream, hash);
+        }
+
+        private static CountingBloomFilter Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = PersistenceFormat.Read(stream, StructureId.CountingBloomFilter, out var hashId);
+            var reader = new PayloadReader(payload);
+
+            var m = reader.ReadUInt32();
+            var k = reader.ReadUInt32();
+            var count = reader.ReadUInt32();
+            var buckets = PersistenceFormat.ReadBuckets(ref reader);
+            reader.ExpectEnd();
+
+            if (m == 0 || buckets.count != m)
+            {
+                throw new InvalidDataException(
+                    $"Filter has a capacity of {m} bits and {buckets.count} buckets to " +
+                    "hold them, which do not describe the same filter.");
+            }
+
+            return new CountingBloomFilter
+            {
+                Buckets = buckets,
+                m = m,
+                k = k,
+                count = count,
+                // Scratch space, sized from k rather than stored: it holds nothing
+                // between calls.
+                indexBuffer = new uint[k],
+                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+            };
+        }
+
+        /// <summary>
+        /// Used only by <see cref="Read"/>, which sets every field itself.
+        /// </summary>
+        private CountingBloomFilter()
+        {
+            this.Buckets = null!;
+            this.indexBuffer = null!;
         }
 
         /// <summary>

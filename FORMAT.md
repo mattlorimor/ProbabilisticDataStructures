@@ -95,6 +95,31 @@ bytes   packed data
 
 The data length is checked against what the count and bucket width imply.
 
+`Buckets64`, its 64-bit counterpart, holds several arrays because one filter can need
+more bytes than a single array holds:
+
+```
+u64     bucket count
+u8      bits per bucket
+u32     array count
+bytes   packed data, per array
+```
+
+### Nested structures
+
+A structure held by another is written as a `bytes` run holding its **own complete
+envelope** — magic, version, structure id, hash id, payload and checksum — rather than
+being flattened into the outer payload.
+
+That costs eighteen bytes per nested structure, against payloads measured in tens of
+thousands, and buys three things. The inner structure names its own hash, so a composite
+cannot silently disagree with itself about hashing. It can be pulled out of the outer
+payload and read on its own. And the outer structure can change what it holds without
+the inner layout being part of that change.
+
+Things that are not structures in their own right — a `Buckets`, a top-k's heap — are
+inlined, because there is nothing to read them as.
+
 ## Payloads
 
 ### `BloomFilter` (id 1)
@@ -124,6 +149,134 @@ what the sketch indexes by, and recomputing them from the parameters would silen
 relocate every cell if the sizing were ever adjusted. `epsilon` and `delta` are stored
 because `Epsilon()` and `Delta()` report them.
 
+### `BloomFilter64` (id 2)
+
+```
+u64       m, the filter's capacity in bits
+u32       k, the number of hash functions
+u64       count, the number of items added
+Buckets64 the bit array
+```
+
+### `CountingBloomFilter` (id 3)
+
+```
+u32     m
+u32     k
+u32     count
+Buckets the counter array, whose bucket width is the counter width
+```
+
+### `DeletableBloomFilter` (id 4)
+
+```
+u32     m, the data region in bits
+u32     k
+u32     count
+Buckets the data region
+Buckets the collision regions, one bucket per region
+```
+
+The region size is **not** stored. See [What is not stored](#what-is-not-stored).
+
+### `PartitionedBloomFilter` (id 5)
+
+```
+u32     m, the total capacity in bits
+u32     k
+u32     s, the size of each partition in bits
+u32     count
+u32     partition count
+Buckets one per partition
+```
+
+There is one partition per hash function, and a payload whose partition count differs
+from `k` is refused. Each partition must hold `s` buckets.
+
+### `ScalableBloomFilter` (id 6)
+
+```
+f64     r, the tightening ratio
+f64     fp, the target false positive rate
+f64     p, the fill ratio at which a new filter is added
+u32     hint
+u32     filter count
+nested  PartitionedBloomFilter, one per contained filter, in order
+```
+
+Order matters: each contained filter targets a rate tightened from the last, and the
+final one is the one additions go to.
+
+### `StableBloomFilter` (id 7)
+
+```
+u32     m, the number of cells
+u32     k
+u32     p, the number of cells decremented per add
+Buckets the cells
+```
+
+The maximum cell value follows from the cell width the cells carry.
+
+### `InverseBloomFilter` (id 8)
+
+```
+u32     capacity
+u32     occupied slot count
+        per occupied slot:
+u32       slot index
+bytes     the stored data
+```
+
+Only occupied slots are written. This filter stores the data rather than hashing it, so
+a full-length run of empty slots would be most of a large, mostly idle filter's payload.
+A slot index at or beyond the capacity is refused.
+
+### `CuckooBloomFilter` (id 9)
+
+```
+u32     m, the number of buckets
+u32     b, entries per bucket
+u32     f, the fingerprint size in bytes
+u32     count
+u32     n, the capacity in items
+u32     occupied entry count
+        per occupied entry:
+u32       bucket index
+u32       entry index
+bytes     the fingerprint
+```
+
+Occupied entries only, for the same reason as above: a filter sized for a load it has
+not reached is mostly empty slots.
+
+### `HyperLogLog` (id 11)
+
+```
+u32     m, the number of registers
+bytes   the registers, one byte each
+```
+
+`m` must be a power of two, and the register count must match it. `b` and `alpha` are
+**not** stored. See [What is not stored](#what-is-not-stored).
+
+### `TopK` (id 12)
+
+```
+u32     k, the number of elements tracked
+u32     n, the number of items added
+nested  CountMinSketch
+u32     element count
+        per element:
+bytes     the element's data
+u64       its recorded frequency
+```
+
+The elements are re-heaped on read rather than being trusted to arrive in heap order.
+They are the same elements either way and `Elements()` sorts them, so nothing about the
+answer depends on the order they were stored in — but a payload that has been edited
+cannot leave the heap in a state where the root is not the minimum.
+
 ## What is not stored
 
 Values a structure derives from what is stored are recomputed rather than written. The
@@ -131,5 +284,10 @@ deletable filter's region size is the example that matters: it is a function of 
 filter's dimensions, that function was **wrong** before 3.1.0, and persisting the
 computed value would have carried the defect into stored data where no fix could reach
 it.
+
+`HyperLogLog`'s `b` is the second example, and the same story: it is `log2(m)`, that
+derivation was wrong at 2^29 registers before 3.1.0, and an estimator is rebuilt through
+its constructor on read so that `b` and `alpha` come out the way a fresh one computes
+them.
 
 Scratch buffers are not stored either. They hold nothing between calls.

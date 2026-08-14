@@ -15,6 +15,7 @@ copies or substantial portions of the Software.
 */
 
 using System;
+using System.IO;
 using System.Security.Cryptography;
 
 namespace ProbabilisticDataStructures
@@ -31,7 +32,7 @@ namespace ProbabilisticDataStructures
     /// respective slice. Thus, each element is described by exactly k bits, meaning
     /// the distribution of false positives is uniform across all elements.
     /// </summary>
-    public class PartitionedBloomFilter : IFilter
+    public class PartitionedBloomFilter : IFilter, IBinaryPersistable<PartitionedBloomFilter>
     {
         /// <summary>
         /// Partitioned filter data
@@ -240,6 +241,124 @@ namespace ProbabilisticDataStructures
 
             this.count = 0;
             return this;
+        }
+
+        /// <summary>
+        /// Writes this filter to a stream, in the format documented in FORMAT.md.
+        /// </summary>
+        /// <param name="stream">The stream to write to.</param>
+        public void WriteTo(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = new PayloadWriter();
+            payload.WriteUInt32(this.M);
+            payload.WriteUInt32(this.k);
+            payload.WriteUInt32(this.S);
+            payload.WriteUInt32(this.count);
+
+            payload.WriteUInt32((uint)this.Partitions.Length);
+            foreach (var partition in this.Partitions)
+            {
+                PersistenceFormat.WriteBuckets(payload, partition);
+            }
+
+            PersistenceFormat.Write(
+                stream,
+                StructureId.PartitionedBloomFilter,
+                PersistenceFormat.Identify(this.Hash),
+                payload.WrittenSpan);
+        }
+
+        /// <summary>
+        /// Reads a filter written by <see cref="WriteTo"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <returns>The filter that was written.</returns>
+        public static PartitionedBloomFilter ReadFrom(Stream stream)
+        {
+            return Read(stream, null);
+        }
+
+        /// <summary>
+        /// Reads a filter written by <see cref="WriteTo"/>, using the supplied hash
+        /// function rather than the one named in the payload.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function the filter was written with.</param>
+        /// <returns>The filter that was written.</returns>
+        public static PartitionedBloomFilter ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            return Read(stream, hash);
+        }
+
+        private static PartitionedBloomFilter Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = PersistenceFormat.Read(stream, StructureId.PartitionedBloomFilter, out var hashId);
+            var reader = new PayloadReader(payload);
+
+            var m = reader.ReadUInt32();
+            var k = reader.ReadUInt32();
+            var s = reader.ReadUInt32();
+            var count = reader.ReadUInt32();
+            var partitionCount = reader.ReadUInt32();
+
+            if (partitionCount == 0 || partitionCount > PersistenceFormat.MaxNestedCount)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {partitionCount} partitions, which is not a filter " +
+                    "this library builds.");
+            }
+
+            // One partition per hash function is what makes this filter partitioned;
+            // any other number is a payload describing something else.
+            if (partitionCount != k)
+            {
+                throw new InvalidDataException(
+                    $"Filter has {k} hash functions and {partitionCount} partitions. A " +
+                    "partitioned filter has one partition per hash function.");
+            }
+
+            var partitions = new Buckets[partitionCount];
+            for (uint i = 0; i < partitionCount; i++)
+            {
+                partitions[i] = PersistenceFormat.ReadBuckets(ref reader);
+                if (partitions[i].count != s)
+                {
+                    throw new InvalidDataException(
+                        $"Partition {i} holds {partitions[i].count} buckets and the " +
+                        $"filter's partitions are {s} wide.");
+                }
+            }
+
+            reader.ExpectEnd();
+
+            if (s == 0)
+            {
+                throw new InvalidDataException(
+                    "Filter has partitions of zero bits, which it divides by on use.");
+            }
+
+            return new PartitionedBloomFilter
+            {
+                Partitions = partitions,
+                M = m,
+                k = k,
+                S = s,
+                count = count,
+                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+            };
+        }
+
+        /// <summary>
+        /// Used only by <see cref="Read"/>, which sets every field itself.
+        /// </summary>
+        private PartitionedBloomFilter()
+        {
+            this.Partitions = null!;
         }
 
         /// <summary>

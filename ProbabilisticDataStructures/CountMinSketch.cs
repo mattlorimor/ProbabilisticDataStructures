@@ -57,6 +57,12 @@ namespace ProbabilisticDataStructures
         private Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
 
         /// <summary>
+        /// The hash function in use, so that a structure holding a sketch can record
+        /// which one it was built with.
+        /// </summary>
+        internal Func<ReadOnlySpan<byte>, ulong> HashFunction => this.Hash;
+
+        /// <summary>
         /// Creates a new Count-Min Sketch whose relative accuracy is within a factor of
         /// epsilon with probability delta. Both of these parameters affect the space and
         /// time complexity.

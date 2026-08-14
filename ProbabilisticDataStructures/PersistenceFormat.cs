@@ -244,6 +244,108 @@ namespace ProbabilisticDataStructures
             return Defaults.IsDefaultHashFunction(hash) ? HashId.XxHash3_64 : HashId.Custom;
         }
 
+        /// <summary>
+        /// Writes a <see cref="Buckets"/> into a payload.
+        /// </summary>
+        internal static void WriteBuckets(PayloadWriter payload, Buckets buckets)
+        {
+            payload.WriteUInt32(buckets.count);
+            payload.WriteByte(buckets.BucketSize);
+            payload.WriteBytes(buckets.RawData);
+        }
+
+        /// <summary>
+        /// Reads a <see cref="Buckets"/> written by <see cref="WriteBuckets"/>.
+        /// </summary>
+        internal static Buckets ReadBuckets(ref PayloadReader reader)
+        {
+            var count = reader.ReadUInt32();
+            var bucketSize = reader.ReadByte();
+            var data = reader.ReadBytes();
+            return Buckets.Restore(count, bucketSize, data);
+        }
+
+        /// <summary>
+        /// Writes a <see cref="Buckets64"/> into a payload.
+        /// </summary>
+        internal static void WriteBuckets64(PayloadWriter payload, Buckets64 buckets)
+        {
+            payload.WriteUInt64(buckets.count);
+            payload.WriteByte(buckets.BucketSize);
+
+            var arrays = buckets.RawData;
+            payload.WriteUInt32((uint)arrays.Length);
+            foreach (var array in arrays)
+            {
+                payload.WriteBytes(array);
+            }
+        }
+
+        /// <summary>
+        /// Reads a <see cref="Buckets64"/> written by <see cref="WriteBuckets64"/>.
+        /// </summary>
+        internal static Buckets64 ReadBuckets64(ref PayloadReader reader)
+        {
+            var count = reader.ReadUInt64();
+            var bucketSize = reader.ReadByte();
+            var arrayCount = reader.ReadUInt32();
+
+            if (arrayCount > MaxNestedCount)
+            {
+                throw new InvalidDataException(
+                    $"Bucket data claims {arrayCount} arrays, beyond anything this " +
+                    "library builds.");
+            }
+
+            var arrays = new byte[arrayCount][];
+            for (uint i = 0; i < arrayCount; i++)
+            {
+                arrays[i] = reader.ReadBytes();
+            }
+
+            return Buckets64.Restore(count, bucketSize, arrays);
+        }
+
+        /// <summary>
+        /// Writes one structure inside another's payload, as a length-prefixed run
+        /// holding its own complete envelope.
+        /// </summary>
+        /// <remarks>
+        /// A structure held by another keeps its own marker, version, structure id,
+        /// hash id and checksum rather than being flattened into the outer payload.
+        /// It costs eighteen bytes against payloads measured in tens of thousands, and
+        /// buys three things: the inner structure names its own hash, so a composite
+        /// cannot silently disagree with itself about hashing; it can be pulled out and
+        /// read on its own; and the outer structure can change what it holds without
+        /// the inner layout being part of that change.
+        /// </remarks>
+        internal static void WriteNested<T>(PayloadWriter payload, T structure)
+            where T : IBinaryPersistable<T>
+        {
+            using var buffer = new MemoryStream();
+            structure.WriteTo(buffer);
+            payload.WriteBytes(buffer.ToArray());
+        }
+
+        /// <summary>
+        /// Reads a structure written by <see cref="WriteNested"/>.
+        /// </summary>
+        internal static T ReadNested<T>(ref PayloadReader reader, Func<ReadOnlySpan<byte>, ulong>? hash)
+            where T : IBinaryPersistable<T>
+        {
+            var bytes = reader.ReadBytes();
+            using var buffer = new MemoryStream(bytes, writable: false);
+
+            return hash is null ? T.ReadFrom(buffer) : T.ReadFrom(buffer, hash);
+        }
+
+        /// <summary>
+        /// A ceiling on counts read from a payload before anything is allocated for
+        /// them, so that a corrupted length cannot ask for an enormous allocation
+        /// before the read that would have failed gets a chance to.
+        /// </summary>
+        internal const uint MaxNestedCount = 1_000_000;
+
         private static byte[] ReadExactly(Stream stream, int count, string what)
         {
             var buffer = new byte[count];

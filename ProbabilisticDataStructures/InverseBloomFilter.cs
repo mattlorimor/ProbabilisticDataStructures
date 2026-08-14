@@ -32,6 +32,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 using System.Linq;
 using System;
+using System.IO;
 using System.Security.Cryptography;
 
 namespace ProbabilisticDataStructures
@@ -57,7 +58,7 @@ namespace ProbabilisticDataStructures
     /// change what it holds. It is not thread-safe: the original swaps the stored
     /// value atomically, and this reads and writes the slot in two steps.
     /// </summary>
-    public class InverseBloomFilter : IFilter
+    public class InverseBloomFilter : IFilter, IBinaryPersistable<InverseBloomFilter>
     {
         private byte[][] Array { get; set; }
         internal Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
@@ -191,6 +192,124 @@ namespace ProbabilisticDataStructures
         private uint ComputeHashSum32(byte[] data)
         {
             return (uint)(this.Hash(data) & 0xffffffff);
+        }
+
+        /// <summary>
+        /// Writes this filter to a stream, in the format documented in FORMAT.md.
+        /// </summary>
+        /// <param name="stream">The stream to write to.</param>
+        public void WriteTo(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = new PayloadWriter();
+            payload.WriteUInt32(this.capacity);
+
+            // Only the occupied slots, each with its index. This filter is the one that
+            // stores the data rather than hashing it, so a full-length run of empties
+            // would be most of a large, mostly idle filter's payload.
+            var occupied = 0u;
+            foreach (var slot in this.Array)
+            {
+                if (slot is not null)
+                {
+                    occupied++;
+                }
+            }
+
+            payload.WriteUInt32(occupied);
+            for (uint i = 0; i < this.capacity; i++)
+            {
+                var slot = this.Array[i];
+                if (slot is not null)
+                {
+                    payload.WriteUInt32(i);
+                    payload.WriteBytes(slot);
+                }
+            }
+
+            PersistenceFormat.Write(
+                stream,
+                StructureId.InverseBloomFilter,
+                PersistenceFormat.Identify(this.Hash),
+                payload.WrittenSpan);
+        }
+
+        /// <summary>
+        /// Reads a filter written by <see cref="WriteTo"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <returns>The filter that was written.</returns>
+        public static InverseBloomFilter ReadFrom(Stream stream)
+        {
+            return Read(stream, null);
+        }
+
+        /// <summary>
+        /// Reads a filter written by <see cref="WriteTo"/>, using the supplied hash
+        /// function rather than the one named in the payload.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function the filter was written with.</param>
+        /// <returns>The filter that was written.</returns>
+        public static InverseBloomFilter ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            return Read(stream, hash);
+        }
+
+        private static InverseBloomFilter Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = PersistenceFormat.Read(stream, StructureId.InverseBloomFilter, out var hashId);
+            var reader = new PayloadReader(payload);
+
+            var capacity = reader.ReadUInt32();
+            if (capacity == 0)
+            {
+                throw new InvalidDataException(
+                    "Filter has a capacity of zero, leaving nowhere to put anything; it " +
+                    "divides by that on first use.");
+            }
+
+            var occupied = reader.ReadUInt32();
+            if (occupied > capacity)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {occupied} occupied slots in a capacity of {capacity}.");
+            }
+
+            var slots = new byte[capacity][];
+            for (uint n = 0; n < occupied; n++)
+            {
+                var index = reader.ReadUInt32();
+                if (index >= capacity)
+                {
+                    throw new InvalidDataException(
+                        $"Filter holds an entry at slot {index}, beyond its capacity of " +
+                        $"{capacity}.");
+                }
+
+                slots[index] = reader.ReadBytes();
+            }
+
+            reader.ExpectEnd();
+
+            return new InverseBloomFilter
+            {
+                Array = slots,
+                capacity = capacity,
+                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+            };
+        }
+
+        /// <summary>
+        /// Used only by <see cref="Read"/>, which sets every field itself.
+        /// </summary>
+        private InverseBloomFilter()
+        {
+            this.Array = null!;
         }
 
         /// <summary>

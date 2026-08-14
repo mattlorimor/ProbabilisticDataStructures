@@ -16,6 +16,7 @@ included in all copies or substantial portions of the Software.
 */
 
 using System;
+using System.IO;
 using System.Numerics;
 using System.Linq;
 using System.Security.Cryptography;
@@ -43,7 +44,7 @@ namespace ProbabilisticDataStructures
     /// accurate approximation. For counting element frequency, refer to the
     /// Count-Min Sketch.
     /// </summary>
-    public class HyperLogLog
+    public class HyperLogLog : IBinaryPersistable<HyperLogLog>
     {
         private static double Exp32 = Math.Pow(2, 32);
 
@@ -203,6 +204,86 @@ namespace ProbabilisticDataStructures
         {
             this.Registers = new byte[this.M];
             return this;
+        }
+
+        /// <summary>
+        /// Writes this estimator to a stream, in the format documented in FORMAT.md.
+        /// </summary>
+        /// <param name="stream">The stream to write to.</param>
+        public void WriteTo(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = new PayloadWriter();
+            payload.WriteUInt32(this.M);
+            payload.WriteBytes(this.Registers);
+
+            PersistenceFormat.Write(
+                stream,
+                StructureId.HyperLogLog,
+                PersistenceFormat.Identify(this.Hash),
+                payload.WrittenSpan);
+        }
+
+        /// <summary>
+        /// Reads an estimator written by <see cref="WriteTo"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <returns>The estimator that was written.</returns>
+        public static HyperLogLog ReadFrom(Stream stream)
+        {
+            return Read(stream, null);
+        }
+
+        /// <summary>
+        /// Reads an estimator written by <see cref="WriteTo"/>, using the supplied hash
+        /// function rather than the one named in the payload.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function the estimator was written with.</param>
+        /// <returns>The estimator that was written.</returns>
+        public static HyperLogLog ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            return Read(stream, hash);
+        }
+
+        private static HyperLogLog Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = PersistenceFormat.Read(stream, StructureId.HyperLogLog, out var hashId);
+            var reader = new PayloadReader(payload);
+
+            var m = reader.ReadUInt32();
+            var registers = reader.ReadBytes();
+            reader.ExpectEnd();
+
+            if (m == 0 || (m & (m - 1)) != 0)
+            {
+                throw new InvalidDataException(
+                    $"Estimator has {m} registers, which is not a power of two. The " +
+                    "register index is taken from the top bits of a hash, so a count " +
+                    "that is not a power of two cannot be indexed.");
+            }
+
+            if (registers.Length != m)
+            {
+                throw new InvalidDataException(
+                    $"Estimator has {m} registers by its own account and {registers.Length} " +
+                    "stored.");
+            }
+
+            // Built through the constructor, so that b and alpha are derived exactly the
+            // way a fresh estimator derives them, rather than trusted from the payload.
+            // b was computed wrongly before 3.1.0, and storing it would have kept that.
+            var hyperLogLog = new HyperLogLog(m)
+            {
+                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+            };
+
+            registers.CopyTo(hyperLogLog.Registers, 0);
+            return hyperLogLog;
         }
 
         /// <summary>
