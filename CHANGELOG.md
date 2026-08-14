@@ -53,6 +53,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps every index inside the array and non-zero. Stored filter contents are
   unaffected; only which region a bit is attributed to changes.
 
+- **`CountingBloomFilter` removals no longer hide elements that are still present.**
+  A counter that reaches its maximum has stopped tracking how many elements it stands
+  for, but removals decremented it anyway, resuming the count from the ceiling. Enough
+  of those drove it to zero while elements needing it were still in the filter --
+  precisely the false negative that a counting filter exists to avoid. Saturated
+  counters are now left alone, which costs space rather than correctness: the elements
+  covering them become permanently unremovable.
+
+  The effect scaled with how quickly counters saturate. Removing half of 2000 elements
+  left **745 of the 1000 survivors unfindable at 1 bit per counter** and 42 at 2 bits.
+  The default 4-bit counters showed none at that load, which is why this went unseen.
+
+  Removing an element that was never added still introduces false negatives. That one
+  is inherent -- a filter cannot tell such a removal from a real one -- and is now
+  documented rather than fixed.
+
+- **A bucket width of zero is rejected** with `ArgumentOutOfRangeException` rather than
+  throwing `IndexOutOfRangeException` on first use. `new CountingBloomFilter(n, 0, r)`
+  allocated no storage and then read from it.
+
 ## [3.0.1] - 2026-08-13
 
 ### Fixed

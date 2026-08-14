@@ -17,6 +17,17 @@ namespace ProbabilisticDataStructures
     /// allow elements to be removed, they introduce a non-zero probability of false
     /// negatives in addition to the possibility of false positives.
     ///
+    /// That probability has one source, and it is unavoidable: removing an element
+    /// that was never added. A filter cannot tell such a removal from a real one, so
+    /// it decrements counters that other elements still depend on. Only remove what
+    /// was added.
+    ///
+    /// Counters that reach their maximum are a separate matter. Such a counter has
+    /// stopped tracking how many elements it stands for, so it is never decremented
+    /// again and the elements covering it become permanently unremovable. This costs
+    /// space rather than correctness, and is the reason removals and additions do not
+    /// balance. Wider buckets saturate later.
+    ///
     /// Counting Bloom Filters are useful for cases where elements are both added
     /// and removed from the data set. Since they use n-bit buckets, CBFs use
     /// roughly n-times more memory than traditional Bloom filters.
@@ -219,9 +230,22 @@ namespace ProbabilisticDataStructures
 
             if (member)
             {
+                // A counter that reached its maximum stopped counting, so it no longer
+                // knows how many elements it stands for. Decrementing it would assume
+                // it does, and the count it resumes from is too low by however many
+                // increments were dropped -- enough of those and the counter reaches
+                // zero while elements that need it are still present. Deleting without
+                // introducing false negatives is the whole of what a counting filter
+                // adds to a plain one, so a saturated counter is left alone instead.
+                // The cost is that its space is never reclaimed, which is the lesser
+                // of the two: the filter stays correct and merely gets fuller.
+                var max = this.Buckets.MaxBucketValue();
                 foreach (var idx in this.indexBuffer)
                 {
-                    this.Buckets.Increment(idx, -1);
+                    if (this.Buckets.Get(idx) < max)
+                    {
+                        this.Buckets.Increment(idx, -1);
+                    }
                 }
                 this.count--;
             }
