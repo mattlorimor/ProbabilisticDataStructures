@@ -35,7 +35,31 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private const int MAX_NUM_KICKS = 500;
 
-        internal byte[]?[][] Buckets { get; set; }
+        /// <summary>
+        /// Every fingerprint, packed end to end. Entry j of bucket i begins at
+        /// (i * B + j) * F.
+        /// </summary>
+        /// <remarks>
+        /// One array rather than a jagged one. Holding each fingerprint in its own
+        /// byte[] cost a 24-byte object header on two bytes of payload, plus an array
+        /// of references per bucket: a filter sized for 100,000 items took 3.8 MB
+        /// holding nothing and 11.5 MB holding them, against 256 KB of actual
+        /// fingerprints.
+        /// </remarks>
+        internal byte[] Fingerprints { get; set; }
+
+        /// <summary>
+        /// One bit per entry, saying whether it holds a fingerprint.
+        /// </summary>
+        /// <remarks>
+        /// A separate bit rather than treating an all-zero fingerprint as empty. That
+        /// would be smaller, but a fingerprint is taken from a hash and can legitimately
+        /// be all zero, so it would need forcing to something else -- which changes
+        /// which bucket the element's alternate index resolves to, and so cannot be
+        /// applied to fingerprints already written by an earlier version. Six percent of
+        /// the fingerprint bytes buys reading every payload ever written unchanged.
+        /// </remarks>
+        internal Buckets Occupied { get; set; }
         /// <summary>
         /// Hash algorithm.
         /// </summary>
@@ -101,14 +125,16 @@ namespace ProbabilisticDataStructures
             // for 100,000 items allocated 122 MB while holding nothing, against 124 KB
             // for a Bloom filter of the same capacity and rate.
             var m = Power2((uint)Math.Ceiling(n / (b * LoadFactor)));
-            var buckets = new byte[m][][];
-
-            for (uint i = 0; i < m; i++)
+            var entries = (ulong)m * b;
+            if (entries * f > int.MaxValue)
             {
-                buckets[i] = new byte[b][];
+                throw new ArgumentOutOfRangeException(nameof(n), n,
+                    $"A filter for {n} items at this rate needs {entries * f} bytes of " +
+                    "fingerprints, which cannot be held in a single array.");
             }
 
-            this.Buckets = buckets;
+            this.Fingerprints = new byte[entries * f];
+            this.Occupied = new Buckets((uint)entries, 1);
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.random = seed is null ? new Random() : new Random(seed.Value);
             this.M = m;
@@ -167,22 +193,8 @@ namespace ProbabilisticDataStructures
             var i2 = components.Hash2;
             var f = components.Fingerprint;
 
-            // If either bucket containsf, it's a member.
-            var b1 = this.Buckets[i1 % this.M];
-            foreach (var sequence in b1)
-            {
-                if (sequence != null)
-                    if (Enumerable.SequenceEqual(sequence, f))
-                        return true;
-            }
-            var b2 = this.Buckets[i2 % this.M];
-            foreach (var sequence in b2)
-            {
-                if (sequence != null)
-                    if (Enumerable.SequenceEqual(sequence, f))
-                        return true;
-            }
-            return false;
+            // If either bucket contains f, it's a member.
+            return Contains(i1 % this.M, f) || Contains(i2 % this.M, f);
         }
 
         /// <summary>
@@ -226,27 +238,9 @@ namespace ProbabilisticDataStructures
             var f = components.Fingerprint;
 
             // If either bucket contains f, it's a member.
-            var b1 = this.Buckets[i1 % this.M];
-            foreach (var sequence in b1)
+            if (Contains(i1 % this.M, f) || Contains(i2 % this.M, f))
             {
-                if (sequence != null)
-                { 
-                    if (Enumerable.SequenceEqual(sequence, f))
-                    {
-                        return TestAndAddReturnValue.Create(true, false);
-                    }
-                }
-            }
-            var b2 = this.Buckets[i2 % this.M];
-            foreach (var sequence in b2)
-            {
-                if (sequence != null)
-                {
-                    if (Enumerable.SequenceEqual(sequence, f))
-                    {
-                        return TestAndAddReturnValue.Create(true, false);
-                    }
-                }
+                return TestAndAddReturnValue.Create(true, false);
             }
 
             return TestAndAddReturnValue.Create(false, this.Insert(i1, i2, f));
@@ -267,24 +261,18 @@ namespace ProbabilisticDataStructures
             var i2 = components.Hash2;
             var f = components.Fingerprint;
 
-            // Try to remove from bucket[i1].
-            var b1 = this.Buckets[i1 % this.M];
-            var idx = IndexOf(b1, f);
-            if (idx != -1)
+            // Try bucket[i1], then bucket[i2]. Clearing the occupancy bit is what
+            // empties an entry; the fingerprint bytes are left where they are and
+            // overwritten by whatever lands there next.
+            foreach (var bucket in stackalloc[] { i1 % this.M, i2 % this.M })
             {
-                b1[idx] = null;
-                this.count--;
-                return true;
-            }
-
-            // Try to remove from bucket[i2].
-            var b2 = this.Buckets[i2 % this.M];
-            idx = IndexOf(b2, f);
-            if (idx != -1)
-            {
-                b2[idx] = null;
-                this.count--;
-                return true;
+                var idx = IndexOf(bucket, f);
+                if (idx != -1)
+                {
+                    SetOccupied(bucket, (uint)idx, false);
+                    this.count--;
+                    return true;
+                }
             }
 
             return false;
@@ -297,12 +285,9 @@ namespace ProbabilisticDataStructures
         /// <returns>The CuckooBloomFilter</returns>
         public CuckooBloomFilter Reset()
         {
-            var buckets = new byte[this.M][][];
-            for (uint i = 0; i < this.M; i++)
-            {
-                buckets[i] = new byte[this.B][];
-            }
-            this.Buckets = buckets;
+            // Only the occupancy needs clearing: an entry nothing claims is never
+            // read, so the fingerprint bytes left behind are unreachable.
+            this.Occupied.Reset();
             this.count = 0;
             return this;
         }
@@ -329,7 +314,7 @@ namespace ProbabilisticDataStructures
             {
                 for (uint j = 0; j < this.B; j++)
                 {
-                    if (this.Buckets[i][j] is not null)
+                    if (IsOccupied(i, j))
                     {
                         occupied++;
                     }
@@ -341,12 +326,11 @@ namespace ProbabilisticDataStructures
             {
                 for (uint j = 0; j < this.B; j++)
                 {
-                    var fingerprint = this.Buckets[i][j];
-                    if (fingerprint is not null)
+                    if (IsOccupied(i, j))
                     {
                         payload.WriteUInt32(i);
                         payload.WriteUInt32(j);
-                        payload.WriteBytes(fingerprint);
+                        payload.WriteBytes(EntryAt(i, j));
                     }
                 }
             }
@@ -407,11 +391,16 @@ namespace ProbabilisticDataStructures
                     $"Filter claims {m} buckets, beyond anything this library builds.");
             }
 
-            var buckets = new byte[m][][];
-            for (uint i = 0; i < m; i++)
+            var entries = (ulong)m * b;
+            if (entries * f > int.MaxValue)
             {
-                buckets[i] = new byte[b][];
+                throw new InvalidDataException(
+                    $"Filter claims {m} buckets of {b} entries at {f} bytes, which " +
+                    "cannot be held in a single array.");
             }
+
+            var fingerprints = new byte[entries * f];
+            var occupancy = new Buckets((uint)entries, 1);
 
             var occupied = reader.ReadUInt32();
             if (occupied > m * (ulong)b)
@@ -432,14 +421,24 @@ namespace ProbabilisticDataStructures
                         $"its {m} buckets of {b}.");
                 }
 
-                buckets[bucket][entry] = reader.ReadBytes();
+                var fingerprint = reader.ReadBytes();
+                if (fingerprint.Length != f)
+                {
+                    throw new InvalidDataException(
+                        $"Filter holds a {fingerprint.Length}-byte fingerprint where its " +
+                        $"own fingerprint size is {f}.");
+                }
+
+                fingerprint.CopyTo(fingerprints.AsSpan((int)((bucket * b + entry) * f)));
+                occupancy.Set(bucket * b + entry, 1);
             }
 
             reader.ExpectEnd();
 
             return new CuckooBloomFilter
             {
-                Buckets = buckets,
+                Fingerprints = fingerprints,
+                Occupied = occupancy,
                 M = m,
                 B = b,
                 F = f,
@@ -454,7 +453,8 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private CuckooBloomFilter()
         {
-            this.Buckets = null!;
+            this.Fingerprints = null!;
+            this.Occupied = null!;
         }
 
         /// <summary>
@@ -473,12 +473,34 @@ namespace ProbabilisticDataStructures
         /// Indicates if the given fingerprint is contained in one of the bucket's
         /// entries.
         /// </summary>
-        /// <param name="bucket">The bucket to search.</param>
-        /// <param name="f">Fingerprint</param>
         /// <returns>
         /// Whether or not the fingerprint is contained in one of the bucket's entries.
         /// </returns>
-        private static bool Contains(byte[]?[] bucket, byte[] f)
+        /// <summary>
+        /// The bytes of one entry, addressed directly in the packed array.
+        /// </summary>
+        private Span<byte> EntryAt(uint bucket, uint entry)
+        {
+            return this.Fingerprints.AsSpan((int)((bucket * this.B + entry) * this.F), (int)this.F);
+        }
+
+        /// <summary>
+        /// Whether an entry holds a fingerprint.
+        /// </summary>
+        private bool IsOccupied(uint bucket, uint entry)
+        {
+            return this.Occupied.Get(bucket * this.B + entry) != 0;
+        }
+
+        private void SetOccupied(uint bucket, uint entry, bool occupied)
+        {
+            this.Occupied.Set(bucket * this.B + entry, occupied ? (byte)1 : (byte)0);
+        }
+
+        /// <summary>
+        /// Whether a bucket holds this fingerprint.
+        /// </summary>
+        private bool Contains(uint bucket, ReadOnlySpan<byte> f)
         {
             return IndexOf(bucket, f) != -1;
         }
@@ -487,23 +509,21 @@ namespace ProbabilisticDataStructures
         /// Returns the entry index of the given fingerprint or -1 if it's not in the
         /// bucket.
         /// </summary>
-        /// <param name="bucket">The bucket to search.</param>
-        /// <param name="f">Fingerprint</param>
         /// <returns>The entry index of the fingerprint or -1 if it's not in the
         /// bucket</returns>
-        private static int IndexOf(byte[]?[] bucket, byte[] f)
+        /// <summary>
+        /// Where this fingerprint sits in a bucket, or -1.
+        /// </summary>
+        private int IndexOf(uint bucket, ReadOnlySpan<byte> f)
         {
-            for (int i = 0; i < bucket.Count(); i++)
+            for (uint entry = 0; entry < this.B; entry++)
             {
-                var sequence = bucket[i];
-                if (sequence != null)
+                if (IsOccupied(bucket, entry) && EntryAt(bucket, entry).SequenceEqual(f))
                 {
-                    if (Enumerable.SequenceEqual(f, sequence))
-                    {
-                        return i;
-                    }
+                    return (int)entry;
                 }
             }
+
             return -1;
         }
 
@@ -512,15 +532,19 @@ namespace ProbabilisticDataStructures
         /// full.
         /// </summary>
         /// <returns></returns>
-        private static int GetEmptyEntry(byte[]?[] bucket)
+        /// <summary>
+        /// A free entry in a bucket, or -1 if it is full.
+        /// </summary>
+        private int GetEmptyEntry(uint bucket)
         {
-            for (int i = 0; i < bucket.Count(); i++)
+            for (uint entry = 0; entry < this.B; entry++)
             {
-                if (bucket[i] == null)
+                if (!IsOccupied(bucket, entry))
                 {
-                    return i;
+                    return (int)entry;
                 }
             }
+
             return -1;
         }
 
@@ -528,44 +552,44 @@ namespace ProbabilisticDataStructures
         /// Will insert the fingerprint into the filter returning false if the filter is
         /// full.
         /// </summary>
-        /// <param name="i1"></param>
-        /// <param name="i2"></param>
-        /// <param name="f"></param>
+        /// <param name="i1">The element's first candidate bucket.</param>
+        /// <param name="i2">The element's second candidate bucket.</param>
+        /// <param name="f">The fingerprint to insert.</param>
         /// <returns>
         /// True if the insert was successful. False if the filter is full
         /// </returns>
         private bool Insert(uint i1, uint i2, byte[] f)
         {
-            // Try to insert into bucket[i1].
-            var b1 = this.Buckets[i1 % this.M];
-            var idx = GetEmptyEntry(b1);
-            if (idx != -1)
+            // Try to insert into bucket[i1], then bucket[i2].
+            foreach (var bucket in stackalloc[] { i1 % this.M, i2 % this.M })
             {
-                b1[idx] = f;
-                this.count++;
-                return true;
+                var free = GetEmptyEntry(bucket);
+                if (free != -1)
+                {
+                    Place(bucket, (uint)free, f);
+                    this.count++;
+                    return true;
+                }
             }
 
-            // Try to insert into bucket[i2].
-            var b2 = this.Buckets[i2 % this.M];
-            var idx2 = GetEmptyEntry(b2);
-            if (idx2 != -1)
-            {
-                b2[idx2] = f;
-                this.count++;
-                return true;
-            }
-
-            // Must relocate existing items. Each step displaces whatever is in a
-            // chosen entry, puts the fingerprint in hand there, and looks for a home
-            // for what was displaced.
+            // Must relocate existing items. Each step displaces whatever is in a chosen
+            // entry, puts the fingerprint in hand there, and looks for a home for what
+            // was displaced.
             //
-            // Where each displacement happened is recorded, because the loop can run
-            // out of kicks while still holding one. Dropping it there loses an element
-            // the filter had already accepted, which is a false negative -- the one
-            // thing this filter, like every other here, promises not to produce.
+            // Where each displacement happened is recorded, because the loop can run out
+            // of kicks while still holding one. Dropping it there loses an element the
+            // filter had already accepted, which is a false negative -- the one thing
+            // this filter, like every other here, promises not to produce.
             Span<uint> trailBucket = stackalloc uint[MAX_NUM_KICKS];
             Span<uint> trailEntry = stackalloc uint[MAX_NUM_KICKS];
+
+            // The fingerprint in hand and the one just displaced, both on the stack.
+            // Copying between them rather than allocating a fresh array per kick: the
+            // loop runs up to MAX_NUM_KICKS times and again to unwind, so an allocation
+            // here is a thousand of them on a filter that is refusing the insert anyway.
+            Span<byte> current = stackalloc byte[(int)this.F];
+            Span<byte> displaced = stackalloc byte[(int)this.F];
+            f.CopyTo(current);
 
             var i = i1;
             var depth = 0;
@@ -574,26 +598,24 @@ namespace ProbabilisticDataStructures
             {
                 var bucketIdx = i % this.M;
                 var entryIdx = (uint)random.Next((int)this.B);
-                var tempF = f;
 
-                // The loop only relocates out of a bucket with no free entry, so
-                // every slot in it is occupied. Reaching a null here would have
-                // thrown before these annotations existed, so this records the
-                // existing invariant rather than assuming a new one.
-                f = this.Buckets[bucketIdx][entryIdx]!;
-                this.Buckets[bucketIdx][entryIdx] = tempF;
+                // The loop only relocates out of a bucket with no free entry, so every
+                // entry in it is occupied and what comes out is a real fingerprint.
+                EntryAt(bucketIdx, entryIdx).CopyTo(displaced);
+                Place(bucketIdx, entryIdx, current);
 
                 trailBucket[depth] = bucketIdx;
                 trailEntry[depth] = entryIdx;
                 depth++;
 
-                i = i ^ ComputeHashSum32(f);
-                var b = this.Buckets[i % this.M];
+                displaced.CopyTo(current);
+                i = i ^ ComputeHashSum32(current);
 
-                idx = GetEmptyEntry(b);
-                if (idx != -1)
+                var alternate = i % this.M;
+                var free = GetEmptyEntry(alternate);
+                if (free != -1)
                 {
-                    b[idx] = f;
+                    Place(alternate, (uint)free, current);
                     this.count++;
                     return true;
                 }
@@ -607,14 +629,21 @@ namespace ProbabilisticDataStructures
                 var bucket = trailBucket[n];
                 var entry = trailEntry[n];
 
-                // Every entry on the trail was written to on the way in, so none of
-                // them is empty.
-                var occupant = this.Buckets[bucket][entry]!;
-                this.Buckets[bucket][entry] = f;
-                f = occupant;
+                EntryAt(bucket, entry).CopyTo(displaced);
+                Place(bucket, entry, current);
+                displaced.CopyTo(current);
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Writes a fingerprint into an entry and marks it occupied.
+        /// </summary>
+        private void Place(uint bucket, uint entry, ReadOnlySpan<byte> f)
+        {
+            f.CopyTo(EntryAt(bucket, entry));
+            SetOccupied(bucket, entry, true);
         }
 
         /// <summary>
@@ -704,7 +733,10 @@ namespace ProbabilisticDataStructures
             var bits = Math.Ceiling(Math.Log2(2 * b / epsilon));
             var bytes = (uint)Math.Ceiling(bits / 8);
 
-            return bytes < 1 ? 1 : bytes;
+            // The hash supplies 64 bits, so a fingerprint cannot be wider than eight
+            // bytes however small a rate is asked for. Anything past that would be
+            // storage reserved for bits that never arrive.
+            return Math.Clamp(bytes, 1u, 8u);
         }
 
         /// <summary>

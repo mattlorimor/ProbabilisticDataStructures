@@ -183,13 +183,15 @@ namespace TestProbabilisticDataStructures
             var resetFilter = f.Reset();
             Assert.AreSame(f, resetFilter);
 
-            for (int i = 0; i < f.BucketCount(); i++)
+            // Occupancy is what says an entry holds something; the fingerprint bytes
+            // behind a cleared entry are unreachable and are not cleared.
+            for (uint i = 0; i < f.BucketCount(); i++)
             {
                 for (uint j = 0; j < f.B; j++)
                 {
-                    if (f.Buckets[i][j] != null)
+                    if (f.Occupied.Get(i * f.B + j) != 0)
                     {
-                        Assert.Fail("Exected all buckets to be cleared");
+                        Assert.Fail($"Expected all entries to be cleared; bucket {i} entry {j} is not");
                     }
                 }
             }

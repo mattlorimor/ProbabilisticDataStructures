@@ -512,6 +512,41 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The filter's storage is allocated once, so what it costs does not depend on
+        /// how much it holds. Fingerprints used to be individual byte arrays, which meant
+        /// a 24-byte object header on two bytes of payload and a bucket-sized array of
+        /// references besides: a filter for 100,000 items took 3.8 MB holding nothing and
+        /// 11.5 MB holding them, against 291 KB now either way.
+        /// </summary>
+        [TestMethod]
+        public void TestCuckooFilterStorageDoesNotGrowWithLoad()
+        {
+            var empty = new CuckooBloomFilter(2000, 0.01, seed: 4);
+            var loaded = new CuckooBloomFilter(2000, 0.01, seed: 4);
+
+            for (int i = 0; i < 5000; i++)
+            {
+                loaded.Add(Key($"item-{i}"));
+            }
+
+            // Same dimensions, so the same fixed storage, however much is in it.
+            Assert.AreEqual(empty.Fingerprints.Length, loaded.Fingerprints.Length);
+            Assert.AreEqual(empty.Occupied.count, loaded.Occupied.count);
+
+            // And adding allocates nothing that the filter keeps.
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 5000; i < 5100; i++)
+            {
+                loaded.Add(Key($"later-{i}"));
+            }
+            var perAdd = (GC.GetAllocatedBytesForCurrentThread() - before) / 100;
+
+            Assert.IsLessThan(512, perAdd,
+                $"Add allocated {perAdd} bytes per call; the filter's storage is fixed, " +
+                "so anything here is scratch and should stay small");
+        }
+
+        /// <summary>
         /// The inverse filter is a bounded "recently seen" cache rather than a growing
         /// set: an element whose slot is claimed by a later one is forgotten. False
         /// negatives are therefore expected here, which is the opposite of every other
