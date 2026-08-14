@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - Unreleased
+
+### Fixed
+
+- **Filter constructors now validate their arguments and throw
+  `ArgumentOutOfRangeException`** instead of failing later, or not at all.
+
+  Three problems, all of which reported something true about the internals and
+  nothing about the mistake:
+
+  - A false positive rate of 0, 1, a negative, a value above 1, or `NaN` surfaced as
+    an `OverflowException` from a numeric conversion inside the sizing math. A rate of
+    exactly 1 was worse: it constructed successfully and produced a filter with zero
+    bits and zero hash functions, which silently reported every element as present.
+
+  - Sizing a filter for zero items constructed successfully and then threw
+    `DivideByZeroException` on first use, far from the cause. This affected
+    `BloomFilter`, `BloomFilter64`, `CountingBloomFilter`, `PartitionedBloomFilter`
+    and `CuckooBloomFilter`.
+
+  - `DeletableBloomFilter` splits its bits between a data region and a collision
+    region. Passing a collision count at or above the filter's size underflowed the
+    `uint` subtraction `m - r`, so `new DeletableBloomFilter(0, 10, 0.01)` silently
+    allocated roughly **512 MB** and reported a capacity above four billion.
+
+  Valid arguments are unaffected. `HyperLogLog` and `TopK` already validated theirs;
+  this brings the rest of the library in line.
+
 ## [3.0.1] - 2026-08-13
 
 ### Fixed
@@ -251,6 +279,7 @@ This release modernizes the entire build. The library had not been touched since
 - Initial release: a C# port of [Tyler Treat's](https://github.com/tylertreat)
   [BoomFilters](https://github.com/tylertreat/BoomFilters) Go project.
 
+[3.1.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v3.0.1...HEAD
 [3.0.1]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v2.0.1...v3.0.0
 [2.0.1]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v2.0.0...v2.0.1

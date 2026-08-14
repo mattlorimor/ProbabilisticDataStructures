@@ -65,8 +65,16 @@ namespace ProbabilisticDataStructures
         /// <param name="fpRate">Desired false positive rate</param>
         public DeletableBloomFilter(uint n, uint r, double fpRate)
         {
+            Guard.ValidItemCount(n, nameof(n));
+            Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
+
             var m = Utils.OptimalM(n, fpRate);
             var k = Utils.OptimalK(fpRate);
+
+            // r shares the filter's bits with the data region, so it has to leave
+            // room; a larger value underflows m - r and allocates enormously.
+            Guard.ValidCollisionRegionCount(r, m, nameof(r));
+
 
             this.Buckets = new Buckets(m - r, 1);
             this.Collisions = new Buckets(r, 1);

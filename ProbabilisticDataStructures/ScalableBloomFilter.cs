@@ -72,6 +72,9 @@ namespace ProbabilisticDataStructures
         /// <param name="r"></param>
         public ScalableBloomFilter(uint hint, double fpRate, double r)
         {
+            Guard.ValidItemCount(hint, nameof(hint));
+            Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
+
             this.Filters = new List<PartitionedBloomFilter>();
             this.R = r;
             this.FP = fpRate;

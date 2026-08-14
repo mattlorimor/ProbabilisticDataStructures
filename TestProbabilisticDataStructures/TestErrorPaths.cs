@@ -94,19 +94,68 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Records that a zero false-positive rate is rejected, and how.
+        /// A false positive rate must sit strictly between zero and one. Previously
+        /// these surfaced as an OverflowException from a numeric conversion deep in
+        /// the sizing math, which reported something true about the machinery and
+        /// nothing about the mistake.
+        /// </summary>
+        [TestMethod]
+        public void TestFilterRejectsFalsePositiveRateOutsideZeroToOne()
+        {
+            foreach (var bad in new[] { 0.0, 1.0, -0.5, 2.0, double.NaN })
+            {
+                var ex = Assert.Throws<ArgumentOutOfRangeException>(
+                    () => new BloomFilter(100, bad),
+                    $"a false positive rate of {bad} should be rejected");
+                Assert.AreEqual("fpRate", ex.ParamName);
+            }
+
+            // A rate inside the range is accepted.
+            _ = new BloomFilter(100, 0.5);
+        }
+
+        /// <summary>
+        /// Sizing a filter for zero items produced one with no buckets, which
+        /// constructed successfully and then threw DivideByZeroException on first
+        /// use -- a failure reported far from its cause.
+        /// </summary>
+        [TestMethod]
+        public void TestFilterRejectsZeroItemCount()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => new BloomFilter(0, 0.01));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new BloomFilter64(0, 0.01));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new PartitionedBloomFilter(0, 0.01));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new CuckooBloomFilter(0, 0.01));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new CountingBloomFilter(0, 4, 0.01));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new DeletableBloomFilter(0, 10, 0.01));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new StableBloomFilter(0, 1, 0.01));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new ScalableBloomFilter(0, 0.01, 0.8));
+        }
+
+        /// <summary>
+        /// The deletable filter splits its bits between data and collision
+        /// information, so the collision count has to leave room for the data.
         /// <para>
-        /// OptimalM divides by the log of the rate, which overflows when converting
-        /// the resulting infinity to a uint. OverflowException is not a good way to
-        /// report an invalid argument -- ArgumentOutOfRangeException would say what
-        /// the caller did wrong -- but it is the current behavior, and pinning it
-        /// means a future change to argument validation is a deliberate one.
+        /// Without this check the subtraction m - r underflowed a uint: constructing
+        /// with more collision bits than the filter has silently allocated about
+        /// 512 MB and reported a capacity of over four billion.
         /// </para>
         /// </summary>
         [TestMethod]
-        public void TestBloomFilterRejectsZeroFalsePositiveRate()
+        public void TestDeletableFilterRejectsCollisionRegionLargerThanFilter()
         {
-            Assert.Throws<OverflowException>(() => new BloomFilter(100, 0.0));
+            var m = Utils.OptimalM(100, 0.01);
+
+            var ex = Assert.Throws<ArgumentOutOfRangeException>(
+                () => new DeletableBloomFilter(100, m + 1, 0.01));
+            Assert.AreEqual("r", ex.ParamName);
+
+            Assert.Throws<ArgumentOutOfRangeException>(() => new DeletableBloomFilter(100, m, 0.01));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new DeletableBloomFilter(100, 0, 0.01));
+
+            // A value leaving room for the data region is accepted.
+            var f = new DeletableBloomFilter(100, 10, 0.01);
+            Assert.IsLessThanOrEqualTo(m, f.Capacity());
         }
     }
 }

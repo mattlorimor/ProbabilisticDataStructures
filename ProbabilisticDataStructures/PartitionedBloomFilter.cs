@@ -66,6 +66,9 @@ namespace ProbabilisticDataStructures
         /// <param name="fpRate">Desired false-positive rate</param>
         public PartitionedBloomFilter(uint n, double fpRate)
         {
+            Guard.ValidItemCount(n, nameof(n));
+            Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
+
             var m = Utils.OptimalM(n, fpRate);
             var k = Utils.OptimalK(fpRate);
             var partitions = new Buckets[k];

@@ -59,6 +59,9 @@ namespace ProbabilisticDataStructures
         /// <param name="fpRate">Desired false positive rate.</param>
         public CountingBloomFilter(uint n, byte b, double fpRate)
         {
+            Guard.ValidItemCount(n, nameof(n));
+            Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
+
             var m = Utils.OptimalM(n, fpRate);
             var k = Utils.OptimalK(fpRate);
             this.Buckets =  new Buckets(m, b);
