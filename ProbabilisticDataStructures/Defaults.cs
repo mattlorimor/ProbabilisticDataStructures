@@ -43,5 +43,33 @@ namespace ProbabilisticDataStructures
         {
             return DefaultHash;
         }
+
+        /// <summary>
+        /// Whether a hash function is the one this library installs, rather than one a
+        /// caller supplied through SetHash.
+        /// </summary>
+        /// <remarks>
+        /// Compares the method a delegate points at, not the delegate itself. Each call
+        /// to <see cref="GetDefaultHashFunction"/> creates a fresh delegate over the
+        /// same method, so reference equality would answer no to a filter that had
+        /// never been given anything else.
+        /// <para>
+        /// This is what persistence uses to decide whether a structure's hash can be
+        /// named in the payload it writes. Getting it wrong in the cautious direction
+        /// costs a caller an explicit argument when reading; getting it wrong the other
+        /// way would let a custom hash be recorded as the default and silently replaced.
+        /// A delegate that wraps the default in something else is therefore not the
+        /// default, which is the answer this gives.
+        /// </para>
+        /// </remarks>
+        internal static bool IsDefaultHashFunction(Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            return hash is not null
+                && hash.Target is null
+                && hash.Method == DefaultHashMethod;
+        }
+
+        private static readonly System.Reflection.MethodInfo DefaultHashMethod =
+            ((Func<ReadOnlySpan<byte>, ulong>)DefaultHash).Method;
     }
 }

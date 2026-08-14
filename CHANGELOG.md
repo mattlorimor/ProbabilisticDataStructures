@@ -5,6 +5,37 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - Unreleased
+
+### Added
+
+- **Structures can be written to a stream and read back**, which is
+  [#2](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/2). `WriteTo`
+  and `ReadFrom` on each type, `ToByteArray` and `FromByteArray` for callers with no
+  stream to hand, and `IBinaryPersistable<T>` for writing persistence code that does not
+  name a structure's type.
+
+  This release covers `BloomFilter` and `CountMinSketch`; the remaining structures
+  follow, and their ids are already assigned in the format.
+
+  The layout is specified in [FORMAT.md](FORMAT.md) and is **stable**: a payload written
+  by any version is readable by every later one or is refused with an explanation, never
+  guessed at. Payloads written by this version are checked in as test fixtures, so a
+  change that would break stored data fails in CI rather than in somebody's storage.
+
+  A payload is refused if its marker is wrong, its format version is later than the
+  reader knows, it holds a different structure than the one being read, or its CRC-32
+  does not match. The checksum covers the header as well as the payload, so a corrupted
+  length or structure id is caught rather than acted on.
+
+  **The hash function is named in the payload rather than assumed.** A structure's
+  answers depend entirely on it, and a delegate cannot be written down; a filter read
+  back under the wrong hash does not look broken, it looks empty. The identifier names
+  the algorithm rather than "the default", because the default is not fixed for all time
+  -- this library's was MD5 until 3.0.0. A structure written while using a hash set
+  through `SetHash` can only be read by supplying that function again, and an identifier
+  the reader does not recognise is refused rather than substituted.
+
 ## [3.1.0] - 2026-08-14
 
 ### Fixed

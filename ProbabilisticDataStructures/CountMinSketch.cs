@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Security.Cryptography;
 
 namespace ProbabilisticDataStructures
@@ -24,7 +25,7 @@ namespace ProbabilisticDataStructures
     /// space-efficient solutions like the CMS. For approximating set cardinality, refer
     /// to the HyperLogLog.
     /// </summary>
-    public class CountMinSketch
+    public class CountMinSketch : IBinaryPersistable<CountMinSketch>
     {
         /// <summary>
         /// Count matrix
@@ -224,8 +225,118 @@ namespace ProbabilisticDataStructures
             this.Hash = h;
         }
 
-        // TODO: Implement these later.
-        // WriteDataTo()
-        // ReadDataFrom()
+        /// <summary>
+        /// Writes this sketch to a stream, in the format documented in FORMAT.md.
+        /// </summary>
+        /// <param name="stream">The stream to write to.</param>
+        public void WriteTo(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = new PayloadWriter();
+            payload.WriteDouble(this.epsilon);
+            payload.WriteDouble(this.delta);
+            payload.WriteUInt32(this.Width);
+            payload.WriteUInt32(this.Depth);
+            payload.WriteUInt64(this.count);
+
+            // Row by row, each cell little-endian. The matrix is the bulk of a sketch,
+            // so this is where a payload's size comes from: depth * width * 8 bytes.
+            for (uint i = 0; i < this.Depth; i++)
+            {
+                for (uint j = 0; j < this.Width; j++)
+                {
+                    payload.WriteUInt64(this.Matrix[i][j]);
+                }
+            }
+
+            PersistenceFormat.Write(
+                stream,
+                StructureId.CountMinSketch,
+                PersistenceFormat.Identify(this.Hash),
+                payload.WrittenSpan);
+        }
+
+        /// <summary>
+        /// Reads a sketch written by <see cref="WriteTo"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <returns>The sketch that was written.</returns>
+        public static CountMinSketch ReadFrom(Stream stream)
+        {
+            return Read(stream, null);
+        }
+
+        /// <summary>
+        /// Reads a sketch written by <see cref="WriteTo"/>, using the supplied hash
+        /// function rather than the one named in the payload.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function the sketch was written with.</param>
+        /// <returns>The sketch that was written.</returns>
+        public static CountMinSketch ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            return Read(stream, hash);
+        }
+
+        private static CountMinSketch Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = PersistenceFormat.Read(stream, StructureId.CountMinSketch, out var hashId);
+            var reader = new PayloadReader(payload);
+
+            var epsilon = reader.ReadDouble();
+            var delta = reader.ReadDouble();
+            var width = reader.ReadUInt32();
+            var depth = reader.ReadUInt32();
+            var count = reader.ReadUInt64();
+
+            // The stored dimensions are authoritative, not epsilon and delta. They are
+            // what the sketch indexes by, and recomputing them would silently relocate
+            // every cell if the sizing were ever adjusted. Epsilon and delta are kept
+            // only because Epsilon() and Delta() report them.
+            if (width == 0 || depth == 0)
+            {
+                throw new InvalidDataException(
+                    $"Sketch has a {depth} by {width} matrix. A sketch with no rows " +
+                    "reports every element as seen ulong.MaxValue times, and one with " +
+                    "no columns divides by zero.");
+            }
+
+            var matrix = new UInt64[depth][];
+            for (uint i = 0; i < depth; i++)
+            {
+                matrix[i] = new UInt64[width];
+                for (uint j = 0; j < width; j++)
+                {
+                    matrix[i][j] = reader.ReadUInt64();
+                }
+            }
+
+            reader.ExpectEnd();
+
+            return new CountMinSketch
+            {
+                Matrix = matrix,
+                Width = width,
+                Depth = depth,
+                count = count,
+                epsilon = epsilon,
+                delta = delta,
+                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+            };
+        }
+
+        /// <summary>
+        /// Used only by <see cref="Read"/>, which sets every field itself. The public
+        /// constructor derives the matrix dimensions from epsilon and delta, which is
+        /// not how a sketch being restored gets them.
+        /// </summary>
+        private CountMinSketch()
+        {
+            this.Matrix = null!;
+        }
     }
 }

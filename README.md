@@ -54,6 +54,43 @@ Packages are published to
 release is also tagged on the
 [releases page](https://github.com/mattlorimor/ProbabilisticDataStructures/releases).
 
+## Persistence
+
+`BloomFilter` and `CountMinSketch` can be written to a stream and read back. The
+remaining structures follow in later releases.
+
+```C#
+using var file = File.Create("filter.bin");
+filter.WriteTo(file);
+```
+
+```C#
+using var file = File.OpenRead("filter.bin");
+var filter = BloomFilter.ReadFrom(file);
+```
+
+`ToByteArray()` and `Persistence.FromByteArray<T>(bytes)` do the same without a stream.
+
+The layout is specified in [FORMAT.md](FORMAT.md) and is stable: a payload written by
+any version of this library is readable by every later one, or is refused with an
+explanation. A payload that has been corrupted, truncated, or read as the wrong
+structure throws `InvalidDataException` rather than producing a structure that answers
+incorrectly.
+
+### The hash function
+
+A structure's answers depend entirely on its hash function, and a delegate cannot be
+written to a file, so the payload records **which** hash was in use. Reading one written
+under the default needs nothing extra. Reading one written under a hash you set with
+`SetHash` requires you to supply the same function:
+
+```C#
+var filter = BloomFilter.ReadFrom(file, myHashFunction);
+```
+
+Without it the read fails. That is deliberate: a filter restored under the wrong hash
+does not look broken, it looks empty, and would answer no to everything it holds.
+
 ## Thread safety
 
 **None of the filters in this library are thread-safe.** No operation is synchronized,

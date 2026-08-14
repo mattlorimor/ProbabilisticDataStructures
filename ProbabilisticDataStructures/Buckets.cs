@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 
 namespace ProbabilisticDataStructures
 {
@@ -47,6 +48,38 @@ namespace ProbabilisticDataStructures
             } 
         }
         internal uint count { get; set; }
+
+        /// <summary>
+        /// The packed bucket data, for persistence. Exposed rather than copied because
+        /// this is the largest thing a filter holds.
+        /// </summary>
+        internal ReadOnlySpan<byte> RawData => this.Data;
+
+        /// <summary>
+        /// The width of each bucket, in bits, for persistence.
+        /// </summary>
+        internal byte BucketSize => this.bucketSize;
+
+        /// <summary>
+        /// Rebuilds a Buckets from data previously taken from <see cref="RawData"/>.
+        /// </summary>
+        /// <exception cref="InvalidDataException">
+        /// The data is not the length the count and bucket size imply.
+        /// </exception>
+        internal static Buckets Restore(uint count, byte bucketSize, byte[] data)
+        {
+            var buckets = new Buckets(count, bucketSize);
+
+            if (data.Length != buckets.Data.Length)
+            {
+                throw new InvalidDataException(
+                    $"{count} buckets of {bucketSize} bits need {buckets.Data.Length} " +
+                    $"bytes and {data.Length} were stored.");
+            }
+
+            buckets.Data = data;
+            return buckets;
+        }
 
         /// <summary>
         /// Creates a new Buckets with the provided number of buckets where each bucket

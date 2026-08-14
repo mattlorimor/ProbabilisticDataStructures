@@ -9,6 +9,9 @@
     <!-- The word list is data, not code. Embedding it keeps 235,886 entries out of
          the compiler's input. -->
     <EmbeddedResource Include="words.txt" LogicalName="TestProbabilisticDataStructures.words.txt" />
+    <!-- Payloads written by 3.2.0, kept byte-for-byte so that a change to the format
+         fails here rather than in a user's stored data. -->
+    <EmbeddedResource Include="fixtures\*.bin" LogicalName="TestProbabilisticDataStructures.fixtures.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>
