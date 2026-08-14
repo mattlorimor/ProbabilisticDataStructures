@@ -65,7 +65,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Hash algorithm
         /// </summary>
-        private HashAlgorithm Hash { get; set; }
+        private Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
 
         /// <summary>
         /// Creates a new HyperLogLog with m registers. Returns an error if m isn't a
@@ -83,7 +83,7 @@ namespace ProbabilisticDataStructures
             this.M = m;
             this.B = (uint)Math.Ceiling(Math.Log(m, 2));
             this.Alpha = CalculateAlpha(m);
-            this.Hash = Defaults.GetDefaultHashAlgorithm();
+            this.Hash = Defaults.GetDefaultHashFunction();
         }
 
         /// <summary>
@@ -195,8 +195,8 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Sets the hashing function used in the filter.
         /// </summary>
-        /// <param name="h">The HashAlgorithm to use.</param>
-        public void SetHash(HashAlgorithm h)
+        /// <param name="h">The hash function to use.</param>
+        public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
             this.Hash = h;
         }
@@ -208,15 +208,7 @@ namespace ProbabilisticDataStructures
         /// <returns>32-bit hash value</returns>
         private uint CalculateHash(byte[] data)
         {
-            Span<byte> sum = stackalloc byte[64];
-            if (Hash.TryComputeHash(data, sum, out int written))
-            {
-                return Utils.HashBytesToUInt32(sum.Slice(0, written));
-            }
-
-            // Digest larger than the stack buffer, which only a non-standard
-            // HashAlgorithm produces. Fall back to the allocating path.
-            return Utils.HashBytesToUInt32(Hash.ComputeHash(data));
+            return (uint)(this.Hash(data) & 0xffffffff);
         }
 
         /// <summary>

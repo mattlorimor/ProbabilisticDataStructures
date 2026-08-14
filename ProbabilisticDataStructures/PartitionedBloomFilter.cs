@@ -40,7 +40,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Hash algorithm
         /// </summary>
-        internal HashAlgorithm Hash { get; set; }
+        internal Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
         /// <summary>
         /// Filter size (divided into k partitions)
         /// </summary>
@@ -77,7 +77,7 @@ namespace ProbabilisticDataStructures
             }
 
             this.Partitions = partitions;
-            this.Hash = Defaults.GetDefaultHashAlgorithm();
+            this.Hash = Defaults.GetDefaultHashFunction();
             this.M = m;
             this.k = k;
             this.S = s;
@@ -234,9 +234,9 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Sets the hashing function used in the filter.
         /// </summary>
-        /// <param name="h">The HashAlgorithm to use.</param>
+        /// <param name="h">The hash function to use.</param>
         // TODO: Add SetHash to the IFilter interface?
-        public void SetHash(HashAlgorithm h)
+        public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
             this.Hash = h;
         }

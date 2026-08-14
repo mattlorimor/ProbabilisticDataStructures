@@ -21,7 +21,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Hash algorithm
         /// </summary>
-        private HashAlgorithm Hash { get; set; }
+        private Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
         /// <summary>
         /// Filter size
         /// </summary>
@@ -46,7 +46,7 @@ namespace ProbabilisticDataStructures
             var m = Utils.OptimalM64(n, fpRate);
             var k = Utils.OptimalK(fpRate);
             Buckets = new Buckets64(m, 1);
-            Hash = Defaults.GetDefaultHashAlgorithm();
+            Hash = Defaults.GetDefaultHashFunction();
             this.m = m;
             this.k = k;
         }
@@ -189,9 +189,9 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Sets the hashing function used in the filter.
         /// </summary>
-        /// <param name="h">The HashAlgorithm to use.</param>
+        /// <param name="h">The hash function to use.</param>
         // TODO: Add SetHash to the IFilter interface?
-        public void SetHash(HashAlgorithm h)
+        public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
             this.Hash = h;
         }

@@ -1,4 +1,5 @@
-﻿using System.Security.Cryptography;
+﻿using System;
+using System.IO.Hashing;
 using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("TestProbabilisticDataStructures")]
 
@@ -16,22 +17,31 @@ namespace ProbabilisticDataStructures
         public const double FILL_RATIO = 0.5;
 
         /// <summary>
-        /// Returns the default hashing algorithm for the library.
+        /// The default hash function: XxHash3, a non-cryptographic 64-bit hash.
         /// </summary>
         /// <remarks>
-        /// MD5 is used here for bucket indexing, not for any security purpose, so
-        /// analyzer warnings about it being cryptographically broken do not apply.
+        /// Filters need a fast, well-distributed hash, not a cryptographic one.
+        /// XxHash3 is roughly twenty times faster end-to-end than the MD5 this
+        /// library used previously, and returns 64 bits directly rather than a
+        /// digest buffer that has to be sliced apart.
         ///
-        /// Changing the algorithm changes where every element lands, so it would
-        /// invalidate any filter a caller has persisted and is a breaking change.
-        /// It is not, however, required for compatibility with Go BoomFilters:
-        /// that project hashes with FNV-1a, so filters from the two libraries were
-        /// never interchangeable regardless of what is chosen here.
+        /// It is not resistant to chosen-input attacks. An adversary who controls
+        /// the data being inserted can provoke collisions and inflate the observed
+        /// false-positive rate. MD5 was no better in this respect, only slower;
+        /// callers needing that property should supply a keyed hash such as
+        /// SipHash through the relevant filter's SetHash.
         /// </remarks>
-        /// <returns>The default hashing algorithm for the library</returns>
-        internal static HashAlgorithm GetDefaultHashAlgorithm()
+        internal static ulong DefaultHash(ReadOnlySpan<byte> data)
         {
-            return MD5.Create();
+            return XxHash3.HashToUInt64(data);
+        }
+
+        /// <summary>
+        /// Returns the default hash function for the library.
+        /// </summary>
+        internal static Func<ReadOnlySpan<byte>, ulong> GetDefaultHashFunction()
+        {
+            return DefaultHash;
         }
     }
 }

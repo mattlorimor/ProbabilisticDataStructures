@@ -60,38 +60,64 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Returns the upper and lower base hash values from which the k hashes are
-        /// derived.  The result will be the same regardless of the endianness of the
+        /// derived. The result is the same regardless of the endianness of the
         /// architecture.
         /// </summary>
         /// <param name="data">The data bytes to hash.</param>
-        /// <param name="algorithm">The hashing algorithm to use.</param>
+        /// <param name="hash">The hash function to use.</param>
         /// <returns>A HashKernel</returns>
-        public static HashKernelReturnValue HashKernel(byte[] data, HashAlgorithm algorithm)
+        public static HashKernelReturnValue HashKernel(byte[] data, Func<ReadOnlySpan<byte>, ulong> hash)
         {
-            Span<byte> sum = stackalloc byte[MaxStackHashSize];
-            if (algorithm.TryComputeHash(data, sum, out int written))
-            {
-                return HashKernelFromHashBytes(sum.Slice(0, written));
-            }
+            return HashKernelFromSum(hash(data));
+        }
 
-            // Digest larger than the stack buffer, which only a non-standard
-            // HashAlgorithm produces. Fall back to the allocating path.
-            return HashKernelFromHashBytes(algorithm.ComputeHash(data));
+        /// <summary>
+        /// Splits a 64-bit hash into the lower and upper base values.
+        /// </summary>
+        /// <param name="sum">The 64-bit hash value.</param>
+        /// <returns>A HashKernel</returns>
+        public static HashKernelReturnValue HashKernelFromSum(ulong sum)
+        {
+            return HashKernelReturnValue.Create(
+                (uint)(sum & 0xffffffff),
+                (uint)((sum >> 32) & 0xffffffff));
         }
 
         /// <summary>
         /// Returns the upper and lower base hash values from which the k hashes are
-        /// derived using the given hash bytes directly.  The result will be the
-        /// same regardless of the endianness of the architecture.
-        ///
-        /// A unit test pins this extraction against Go BoomFilters' convention:
-        /// given the same digest bytes, this produces the same lower and upper
-        /// values that Go's hashKernel derives from a 64-bit sum. That is a
-        /// statement about the arithmetic only. The two libraries do not produce
-        /// interchangeable filters, because they hash with different algorithms by
-        /// default -- MD5 here, FNV-1a in Go.
+        /// derived, for filters large enough to need a 128-bit kernel.
         /// </summary>
-        /// <param name="hashBytes">The hash bytes.</param>
+        /// <remarks>
+        /// The hash function supplies 64 bits, so the second value is derived by
+        /// hashing the first. This keeps the two halves independent without
+        /// requiring callers to provide a 128-bit hash.
+        /// </remarks>
+        /// <param name="data">The data bytes to hash.</param>
+        /// <param name="hash">The hash function to use.</param>
+        /// <returns>A HashKernel128</returns>
+        public static HashKernel128ReturnValue HashKernel128(byte[] data, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            ulong lower = hash(data);
+
+            Span<byte> lowerBytes = stackalloc byte[8];
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(lowerBytes, lower);
+            ulong upper = hash(lowerBytes);
+
+            return HashKernel128ReturnValue.Create(lower, upper);
+        }
+
+        /// <summary>
+        /// Returns the upper and lower base hash values for a digest the caller has
+        /// already computed.
+        /// </summary>
+        /// <remarks>
+        /// A unit test pins this against Go BoomFilters' convention: given the same
+        /// digest bytes, this produces the same lower and upper values Go's
+        /// hashKernel derives from a 64-bit sum. That is a statement about the
+        /// extraction arithmetic only -- the two libraries hash with different
+        /// functions, so their filters are not interchangeable.
+        /// </remarks>
+        /// <param name="hashBytes">The digest bytes.</param>
         /// <returns>A HashKernel</returns>
         public static HashKernelReturnValue HashKernelFromHashBytes(byte[] hashBytes)
         {
@@ -99,46 +125,15 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Returns the upper and lower base hash values from which the k hashes are
-        /// derived using the given hash bytes directly.  Identical to the array
-        /// overload, but accepts a span so callers can hash into a buffer they own
-        /// rather than allocating one per call.
+        /// Span overload of <see cref="HashKernelFromHashBytes(byte[])"/>.
         /// </summary>
-        /// <param name="hashBytes">The hash bytes.</param>
+        /// <param name="hashBytes">The digest bytes.</param>
         /// <returns>A HashKernel</returns>
         public static HashKernelReturnValue HashKernelFromHashBytes(ReadOnlySpan<byte> hashBytes)
         {
             return HashKernelReturnValue.Create(
                 HashBytesToUInt32(hashBytes, 0),
-                HashBytesToUInt32(hashBytes, 4)
-                );
-        }
-
-        /// <summary>
-        /// Returns the upper and lower base hash values from which the k hashes are
-        /// derived.
-        /// </summary>
-        /// <param name="data">The data bytes to hash.</param>
-        /// <param name="algorithm">The hashing algorithm to use.</param>
-        /// <returns>A HashKernel</returns>
-        public static HashKernel128ReturnValue HashKernel128(byte[] data, HashAlgorithm algorithm)
-        {
-            Span<byte> sum = stackalloc byte[MaxStackHashSize];
-            if (!algorithm.TryComputeHash(data, sum, out int written))
-            {
-                // Digest larger than the stack buffer, which only a non-standard
-                // HashAlgorithm produces. Fall back to the allocating path.
-                byte[] allocated = algorithm.ComputeHash(data);
-                return HashKernel128ReturnValue.Create(
-                    HashBytesToUInt64(allocated, 0),
-                    HashBytesToUInt64(allocated, 8)
-                    );
-            }
-
-            return HashKernel128ReturnValue.Create(
-                HashBytesToUInt64(sum.Slice(0, written), 0),
-                HashBytesToUInt64(sum.Slice(0, written), 8)
-                );
+                HashBytesToUInt32(hashBytes, 4));
         }
 
         /// <summary>

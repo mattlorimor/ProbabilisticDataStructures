@@ -1,5 +1,6 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
+using System.IO.Hashing;
 using System.Security.Cryptography;
 
 namespace TestProbabilisticDataStructures
@@ -81,67 +82,65 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Ensures that HashKernel() returns the proper upper and lower base when using
-        /// MD5.
+        /// Pins the 32-bit kernel for the library's default hash function.
+        /// <para>
+        /// These values record this library's behavior; they are not shared with any
+        /// other implementation. The Go-convention check lives in
+        /// TestHashKernelFromHashBytes, which feeds digest bytes directly.
+        /// </para>
         /// </summary>
         [TestMethod]
-        public void TestHashKernelMD5()
+        public void TestHashKernelDefault()
         {
             var data = new byte[] { 0, 1, 2, 3 };
-            var hashAlgorithm = MD5.Create();
             var hashKernel = ProbabilisticDataStructures
-                .Utils.HashKernel(data, hashAlgorithm);
+                .Utils.HashKernel(data, ProbabilisticDataStructures.Defaults.GetDefaultHashFunction());
 
-            Assert.AreEqual(4254774583u, hashKernel.LowerBaseHash);
-            Assert.AreEqual(4179961689u, hashKernel.UpperBaseHash);
+            Assert.AreEqual(2776764914u, hashKernel.LowerBaseHash);
+            Assert.AreEqual(1624944694u, hashKernel.UpperBaseHash);
         }
 
         /// <summary>
-        /// Ensures that HashKernel() returns the proper upper and lower base when using
-        /// SHA256.
+        /// The kernel is agnostic to the hash it is given: supplying a different
+        /// function changes the result and nothing else.
         /// </summary>
         [TestMethod]
-        public void TestHashKernelSHA256()
+        public void TestHashKernelWithSuppliedHashFunction()
         {
             var data = new byte[] { 0, 1, 2, 3 };
-            var hashAlgorithm = SHA256.Create();
             var hashKernel = ProbabilisticDataStructures
-                .Utils.HashKernel(data, hashAlgorithm);
+                .Utils.HashKernel(data, d => XxHash64.HashToUInt64(d));
 
-            Assert.AreEqual(3252571653u, hashKernel.LowerBaseHash);
-            Assert.AreEqual(1646207440u, hashKernel.UpperBaseHash);
+            Assert.AreEqual(1146342430u, hashKernel.LowerBaseHash);
+            Assert.AreEqual(4291745888u, hashKernel.UpperBaseHash);
         }
 
         /// <summary>
-        /// Ensures that HashKernel() returns the proper upper and lower base when using
-        /// MD5.
+        /// Pins the 128-bit kernel for the library's default hash function.
         /// </summary>
         [TestMethod]
-        public void TestHashKerne128lMD5()
+        public void TestHashKernel128Default()
         {
             var data = new byte[] { 0, 1, 2, 3 };
-            var hashAlgorithm = MD5.Create();
             var hashKernel = ProbabilisticDataStructures
-                .Utils.HashKernel128(data, hashAlgorithm);
+                .Utils.HashKernel128(data, ProbabilisticDataStructures.Defaults.GetDefaultHashFunction());
 
-            Assert.AreEqual(17952798757042697527ul, hashKernel.LowerBaseHash);
-            Assert.AreEqual(7516929291713011248ul, hashKernel.UpperBaseHash);
+            Assert.AreEqual(6979084321315492338ul, hashKernel.LowerBaseHash);
+            Assert.AreEqual(11802759203604782174ul, hashKernel.UpperBaseHash);
         }
 
         /// <summary>
-        /// Ensures that HashKernel() returns the proper upper and lower base when using
-        /// SHA256.
+        /// The 128-bit kernel is likewise agnostic to the supplied hash function.
         /// </summary>
         [TestMethod]
-        public void TestHashKernel128SHA256()
+        public void TestHashKernel128WithSuppliedHashFunction()
         {
             var data = new byte[] { 0, 1, 2, 3 };
-            var hashAlgorithm = SHA256.Create();
             var hashKernel = ProbabilisticDataStructures
-                .Utils.HashKernel128(data, hashAlgorithm);
+                .Utils.HashKernel128(data, d => XxHash64.HashToUInt64(d));
 
-            Assert.AreEqual(7070407120484453893ul, hashKernel.LowerBaseHash);
-            Assert.AreEqual(4682007113097866575ul, hashKernel.UpperBaseHash);
+            Assert.AreEqual(18432908232848821278ul, hashKernel.LowerBaseHash);
+            Assert.AreEqual(2251845698506980445ul, hashKernel.UpperBaseHash);
         }
 
         /// <summary>

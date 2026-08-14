@@ -187,9 +187,9 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Sets the hashing function used in the filter.
         /// </summary>
-        /// <param name="h">The HashAlgorithm to use.</param>
+        /// <param name="h">The hash function to use.</param>
         // TODO: Add SetHash to the IFilter interface?
-        public void SetHash(HashAlgorithm h)
+        public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
             foreach (var filter in this.Filters)
             {

@@ -34,50 +34,39 @@ amortizes the setup, keeping it out of the measurement.
 
 ## Results
 
-Apple Silicon Mac, .NET 10, `--job short`. "Before" is the original
-`HashAlgorithm.ComputeHash` path; "after" is hashing into a stack buffer via
-`TryComputeHash`. Absolute times are machine-specific; the **allocation** figures are
-not, and are the interesting part.
-
-### Hash kernel
-
-| Method | DataSize | Mean before | Mean after | Allocated before | Allocated after |
-| --- | --- | --- | --- | --- | --- |
-| `HashKernel` | 8 | 282.0 ns | 254.0 ns | 80 B | **0 B** |
-| `HashKernel` | 64 | 383.6 ns | 348.7 ns | 80 B | **0 B** |
-| `HashKernel` | 1024 | 1,483.4 ns | 1,451.1 ns | 80 B | **0 B** |
+Apple Silicon Mac, .NET 10, `--job short`. Absolute times are machine-specific.
 
 ### Membership tests
 
-| Method | Mean before | Mean after | Allocated before | Allocated after |
-| --- | --- | --- | --- | --- |
-| `Bloom_Hit` | 277.3 ns | 249.7 ns | 80 B | **0 B** |
-| `Counting_Hit` | 283.0 ns | 250.5 ns | 80 B | **0 B** |
-| `Partitioned_Hit` | 280.7 ns | 251.0 ns | 80 B | **0 B** |
-| `Scalable_Hit` | 285.0 ns | 255.6 ns | 80 B | **0 B** |
-| `Stable_Hit` | 279.1 ns | 248.1 ns | 80 B | **0 B** |
-| `Deletable_Hit` | 283.6 ns | 252.3 ns | 80 B | **0 B** |
-| `Cuckoo_Hit` | 871.2 ns | 755.1 ns | 320 B | **32 B** |
+"MD5" is the previous default hash with allocation already removed; "XxHash3" is the
+current default.
+
+| Method | MD5 | XxHash3 | Speedup |
+| --- | --- | --- | --- |
+| `Bloom_Hit` | 249.7 ns | **10.46 ns** | 24x |
+| `Counting_Hit` | 250.5 ns | **10.23 ns** | 24x |
+| `Partitioned_Hit` | 251.0 ns | **10.56 ns** | 24x |
+| `Scalable_Hit` | 255.6 ns | **10.56 ns** | 24x |
+| `Deletable_Hit` | 252.3 ns | **10.12 ns** | 25x |
+| `Stable_Hit` | 248.1 ns | **5.45 ns** | 46x |
+| `Cuckoo_Hit` | 755.1 ns | **11.24 ns** | **67x** |
+
+Nothing allocates except the Cuckoo filter's 32-byte fingerprint, which is stored in a
+bucket and cannot be avoided.
 
 ## What the numbers show
 
-**Allocation on the hot path is gone.** The original 80 B per operation was constant
-regardless of input size, because it came from `HashAlgorithm.ComputeHash` returning a
-freshly allocated digest on every call rather than from the data being hashed. Hashing
-into a stack buffer removes it entirely, and Gen0 collections with it.
+**The hash was the entire cost of an operation.** Removing the per-call allocation
+earlier bought about 10%; replacing MD5 with a non-cryptographic hash bought 24x. MD5 is
+built to resist collision attacks, which a filter does not need and pays for on every
+probe.
 
-**Time improved by roughly 10% at small inputs and less at large ones**, which is what
-should be expected: removing an allocation matters most when the allocation is a
-meaningful share of the work. At 1024-byte inputs the MD5 computation dominates and the
-gain shrinks to about 2%. The timing gain is modest relative to the ~5% noise floor
-documented below; it is believable mainly because it appears consistently across every
-benchmark. The allocation result is the unambiguous one.
+**Cuckoo gains the most** because it hashes three times per operation where the others
+hash once, so it was paying the MD5 cost three times over.
 
-**Cuckoo still allocates, but far less.** Its digests now go into stack buffers and the
-LINQ `Take(...).ToArray()` is a direct copy, taking it from 320 B to 32 B. What remains
-is the fingerprint array itself, which cannot go away while it is stored in a bucket.
-It continues to compute three hashes per operation; reducing that would change the
-index values it derives, so it is not a performance question alone.
+**Bloom_Miss is now faster than Bloom_Hit** (3.39 ns against 10.46 ns). A miss
+short-circuits at the first unset bit, and with hashing no longer dominating, that
+difference finally shows up in the measurement.
 
 ## Why these are not run in CI
 

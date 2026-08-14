@@ -37,7 +37,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Hash algorightm
         /// </summary>
-        private HashAlgorithm Hash { get; set; } = null!;
+        private Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
         /// <summary>
         /// Number of cells
         /// </summary>
@@ -90,7 +90,7 @@ namespace ProbabilisticDataStructures
 
             var cells = new Buckets(m, d);
 
-            this.Hash = Defaults.GetDefaultHashAlgorithm();
+            this.Hash = Defaults.GetDefaultHashFunction();
             this.M = m;
             this.k = k;
             this.p = OptimalStableP(m, k, d, fpRate);
@@ -127,7 +127,7 @@ namespace ProbabilisticDataStructures
 
             return new StableBloomFilter
             {
-                Hash = Defaults.GetDefaultHashAlgorithm(),
+                Hash = Defaults.GetDefaultHashFunction(),
                 M = m,
                 k = k,
                 p = 0,
@@ -290,9 +290,9 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Sets the hashing function used in the filter.
         /// </summary>
-        /// <param name="h">The HashAlgorithm to use.</param>
+        /// <param name="h">The hash function to use.</param>
         // TODO: Add SetHash to the IFilter interface?
-        public void SetHash(HashAlgorithm h)
+        public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
             this.Hash = h;
         }

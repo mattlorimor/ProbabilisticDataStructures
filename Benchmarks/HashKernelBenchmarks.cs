@@ -1,4 +1,5 @@
-using System.Security.Cryptography;
+using System;
+using System.IO.Hashing;
 using BenchmarkDotNet.Attributes;
 using ProbabilisticDataStructures;
 
@@ -15,7 +16,7 @@ namespace Benchmarks
     [MemoryDiagnoser]
     public class HashKernelBenchmarks
     {
-        private HashAlgorithm _md5 = null!;
+        private Func<ReadOnlySpan<byte>, ulong> _hash = null!;
         private byte[] _data = null!;
 
         /// <summary>Input sizes spanning a short key and a realistic record.</summary>
@@ -25,7 +26,7 @@ namespace Benchmarks
         [GlobalSetup]
         public void Setup()
         {
-            _md5 = MD5.Create();
+            _hash = d => XxHash3.HashToUInt64(d);
             _data = new byte[DataSize];
             for (int i = 0; i < DataSize; i++)
             {
@@ -33,13 +34,10 @@ namespace Benchmarks
             }
         }
 
-        [GlobalCleanup]
-        public void Cleanup() => _md5.Dispose();
-
         [Benchmark(Baseline = true)]
-        public HashKernelReturnValue HashKernel() => Utils.HashKernel(_data, _md5);
+        public HashKernelReturnValue HashKernel() => Utils.HashKernel(_data, _hash);
 
         [Benchmark]
-        public HashKernel128ReturnValue HashKernel128() => Utils.HashKernel128(_data, _md5);
+        public HashKernel128ReturnValue HashKernel128() => Utils.HashKernel128(_data, _hash);
     }
 }
