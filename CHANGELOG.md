@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.1] - Unreleased
+
+### Changed
+
+- **`TopK.Add` no longer costs more as `k` grows**, which is
+  [#7](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/7). Deciding
+  whether an arriving element was already held meant comparing its data against every
+  element in the heap. That was the only cost here that scaled with `k`, and past a few
+  hundred it was most of what an add did. The heap is now indexed by element data.
+
+  | k | before | after |
+  | --- | --- | --- |
+  | 10 | 32.71 ns | 35.81 ns |
+  | 100 | 33.71 ns | 35.35 ns |
+  | 1000 | 194.92 ns | 56.70 ns |
+  | 5000 | 4153.29 ns | 82.44 ns |
+
+  Measured over a stream that cycles through more distinct keys than the heap holds, so
+  every add reaches the lookup rather than being turned away before it. A stream with a
+  heavy head is rejected earlier and never reached this. Small `k` pays about three
+  nanoseconds for hashing a key instead of comparing a handful, which is the trade.
+  Allocation is unchanged.
+
+  Behavior is unchanged, including the exact bytes a top-k writes.
+
 ## [4.0.0] - 2026-08-14
 
 ### Fixed

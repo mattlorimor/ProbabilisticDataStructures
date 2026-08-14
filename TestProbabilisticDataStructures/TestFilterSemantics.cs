@@ -377,6 +377,73 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The heap is indexed by element data so that deciding whether an arrival is
+        /// already held does not mean scanning it. That index has to stay in step with
+        /// the heap through every reordering, and the way it can quietly fail is an
+        /// entry left behind for an element that was evicted: a later arrival of the
+        /// same data would then be found at a position holding something else.
+        /// <para>
+        /// Churning far more distinct elements than the heap can hold, so eviction and
+        /// re-arrival happen constantly, and asserting what drift would break.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestTopKHoldsEachElementOnceUnderChurn()
+        {
+            const uint k = 20;
+            var topK = new TopK(0.001, 0.01, k);
+            var rand = new Random(3);
+
+            for (int i = 0; i < 50000; i++)
+            {
+                // A small enough pool that elements are evicted and come back, which is
+                // the case a stale index entry would corrupt.
+                topK.Add(Key($"e{rand.Next(200)}"));
+            }
+
+            var elements = topK.Elements();
+
+            Assert.IsLessThanOrEqualTo((int)k, elements.Length,
+                "the heap holds more than k elements");
+
+            var distinct = elements
+                .Select(e => Encoding.ASCII.GetString(e.Data))
+                .Distinct()
+                .Count();
+
+            Assert.AreEqual(elements.Length, distinct,
+                "the same element is held more than once");
+
+            // Still ordered, which a misplaced update would break.
+            var freqs = elements.Select(e => e.Freq).ToArray();
+            CollectionAssert.AreEqual(freqs.OrderBy(f => f).ToArray(), freqs,
+                "Elements() is no longer ascending by frequency");
+        }
+
+        /// <summary>
+        /// Elements are identified by what their data holds, not by which array it
+        /// arrived in. Indexing on the array itself would hold the same element twice
+        /// for a caller who does not reuse one buffer.
+        /// </summary>
+        [TestMethod]
+        public void TestTopKIdentifiesElementsByContentNotByArray()
+        {
+            var topK = new TopK(0.001, 0.01, 10);
+
+            for (int i = 0; i < 50; i++)
+            {
+                // A fresh array holding the same bytes every time.
+                topK.Add(Encoding.ASCII.GetBytes("recurring"));
+            }
+
+            var elements = topK.Elements();
+
+            Assert.HasCount(1, elements);
+            Assert.AreEqual("recurring", Encoding.ASCII.GetString(elements[0].Data));
+            Assert.AreEqual(50ul, elements[0].Freq);
+        }
+
+        /// <summary>
         /// The inverse filter is a bounded "recently seen" cache rather than a growing
         /// set: an element whose slot is claimed by a later one is forgotten. False
         /// negatives are therefore expected here, which is the opposite of every other
