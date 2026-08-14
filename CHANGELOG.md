@@ -33,6 +33,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Valid arguments are unaffected. `HyperLogLog` and `TopK` already validated theirs;
   this brings the rest of the library in line.
 
+- **`HyperLogLog` threw `IndexOutOfRangeException` at 2^29 registers.** `b` splits the
+  hash into a register index and the bits `rho` scans, so it has to be exactly
+  `log2(m)`. Deriving it as `Ceiling(Log(m, 2))` is not exact: at `m = 2^29` the
+  floating-point logarithm lands just above 29 and the ceiling returns 30, leaving the
+  register index able to exceed the array. It is now derived with `BitOperations.Log2`.
+  Separately, a register count of zero passed the power-of-two check, because `0 - 1`
+  underflows to all ones; it is now rejected. The estimator itself is unchanged.
+
+- **`DeletableBloomFilter` threw `IndexOutOfRangeException` for any collision region
+  count that is a multiple of eight**, including `8`, `16`, `32` and `64`. The region
+  size was rounded down, so the trailing bits of the data region mapped to region index
+  `r` -- one past the last collision bucket. Whether that was fatal depended on
+  something unrelated: the collision bitmap allocates whole bytes, and for most values
+  of `r` the stray index landed in the leftover padding bits and went unnoticed, but a
+  multiple of eight leaves no padding and the write ran off the array. Passing an `r`
+  larger than the `m - r` data bits rounded the region size down to zero and threw
+  `DivideByZeroException` on the first `Add`. The region size is now rounded up, which
+  keeps every index inside the array and non-zero. Stored filter contents are
+  unaffected; only which region a bit is attributed to changes.
+
 ## [3.0.1] - 2026-08-13
 
 ### Fixed

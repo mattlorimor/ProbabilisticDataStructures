@@ -66,6 +66,63 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The number of collision regions is a free parameter, so every value has to
+        /// work. It did not: the region size was rounded down, which sent the trailing
+        /// bits of the data region to region index r -- one past the last collision
+        /// bucket. Buckets does not bounds-check, so what happened next depended on
+        /// whether the bitmap had padding to absorb the write. A multiple of eight has
+        /// none, and Add threw; other values landed in padding and worked by accident.
+        /// </summary>
+        [TestMethod]
+        public void TestDeletableFilterAcceptsAnyRegionCount()
+        {
+            // Powers of two are the values a caller reaches for first, and are exactly
+            // the ones that used to throw.
+            uint[] regionCounts = { 1, 2, 3, 7, 8, 10, 16, 32, 64, 100, 128, 1000 };
+
+            foreach (var r in regionCounts)
+            {
+                const int count = 500;
+                var f = new DeletableBloomFilter(count, r, 0.01);
+
+                for (int i = 0; i < count; i++)
+                {
+                    f.Add(Key($"r{r}-item-{i}"));
+                }
+
+                for (int i = 0; i < count / 2; i++)
+                {
+                    f.TestAndRemove(Key($"r{r}-item-{i}"));
+                }
+
+                var missing = Enumerable.Range(count / 2, count / 2)
+                    .Count(i => !f.Test(Key($"r{r}-item-{i}")));
+
+                Assert.AreEqual(0, missing,
+                    $"r={r}: {missing} elements disappeared after removing unrelated ones.");
+            }
+        }
+
+        /// <summary>
+        /// r is only required to be smaller than the filter's m bits, so it is allowed
+        /// to exceed the m - r bits left for data. Rounding the region size down gave
+        /// zero in that case and the first Add divided by it.
+        /// </summary>
+        [TestMethod]
+        public void TestDeletableFilterHandlesMoreRegionsThanDataBits()
+        {
+            // 1000 items at a 1% rate sizes m at 9586 bits, so this leaves 11 for data
+            // and asks for more regions than there are bits to put in them.
+            var f = new DeletableBloomFilter(1000, 9575, 0.01);
+            Assert.IsGreaterThan(0u, f.Capacity(), "the data region should not be empty");
+
+            var a = Key("present");
+            f.Add(a);
+            Assert.IsTrue(f.Test(a), "an added element must be found");
+            Assert.IsTrue(f.TestAndRemove(a), "removing a present element reports present");
+        }
+
+        /// <summary>
         /// The inverse filter is a bounded "recently seen" cache rather than a growing
         /// set: an element whose slot is claimed by a later one is forgotten. False
         /// negatives are therefore expected here, which is the opposite of every other
