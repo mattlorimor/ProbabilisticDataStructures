@@ -90,7 +90,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void BenchmarkBucketsIncrement()
         {
-            var buckets = new Buckets(10000, 10);
+            var buckets = new Buckets(10000, 8);
             for (uint i = 0; i < buckets.count; i++)
             {
                 buckets.Increment(i % 10000, 1);
@@ -100,7 +100,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void BenchmarkBucketsSet()
         {
-            var buckets = new Buckets(10000, 10);
+            var buckets = new Buckets(10000, 8);
             for (uint i = 0; i < buckets.count; i++)
             {
                 buckets.Set(i % 10000, 1);
@@ -110,7 +110,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void BenchmarkBucketsGet()
         {
-            var buckets = new Buckets(10000, 10);
+            var buckets = new Buckets(10000, 8);
             for (uint i = 0; i < buckets.count; i++)
             {
                 buckets.Get(i % 10000);

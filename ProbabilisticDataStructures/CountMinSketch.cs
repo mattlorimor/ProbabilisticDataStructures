@@ -114,6 +114,8 @@ namespace ProbabilisticDataStructures
         /// <returns>The CountMinSketch</returns>
         public CountMinSketch Add(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;

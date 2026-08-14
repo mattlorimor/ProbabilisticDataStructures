@@ -149,6 +149,8 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was found</returns>
         public bool Test(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
@@ -173,6 +175,8 @@ namespace ProbabilisticDataStructures
         /// <returns>The PartitionedBloomFilter</returns>
         public IFilter Add(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
@@ -197,6 +201,8 @@ namespace ProbabilisticDataStructures
         /// </returns>
         public bool TestAndAdd(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;

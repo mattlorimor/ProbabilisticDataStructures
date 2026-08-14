@@ -106,6 +106,8 @@ namespace ProbabilisticDataStructures
         /// <returns>The HyperLogLog</returns>
         public HyperLogLog Add(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var hash = CalculateHash(data);
             var k = 32 - this.B;
             var r = CalculateRho(hash << (int)this.B, k);

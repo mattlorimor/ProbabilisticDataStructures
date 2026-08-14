@@ -5,6 +5,44 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - Unreleased
+
+### Fixed
+
+- **Passing `null` as data now throws `ArgumentNullException` again.** In 3.0.0 it
+  silently succeeded and was indistinguishable from an empty array, because a null
+  array converts to an empty span and hashes to the same value.
+
+  This was a regression. Version 2.x threw, because hashing went through
+  `HashAlgorithm.ComputeHash`, which rejects null. Moving to span-based hashing
+  removed the check without anyone noticing, and nothing in the test suite passed
+  null to anything.
+
+  It matters more than a missing argument check usually would: without it, a caller's
+  null bug does not surface at the call site. It quietly inserts a phantom element
+  that collides with empty input and produces a wrong answer later, elsewhere.
+
+  Empty input remains valid and distinct from null.
+
+### Changed
+
+- **`Buckets` and `Buckets64` now reject a bucket size wider than 8 bits** with
+  `ArgumentOutOfRangeException`, rather than accepting it and capping the value at 255.
+
+  A bucket's maximum is stored in a byte, so a wider bucket allocated the extra space
+  without being able to hold a larger value -- a 16-bit bucket cost twice the memory
+  for no additional range. The bit packing itself handles wider buckets correctly; only
+  the maximum could not.
+
+  This resolves a long-standing `TODO` questioning whether the cap was intended. It is:
+  upstream Go BoomFilters stores its maximum in a `uint8` too, where the same
+  expression wraps to 255 rather than clamping. Both implementations have always
+  capped at 255, so this rejects a request neither could honor.
+
+  These are internal types. Reaching the limit requires passing a bucket size above 8
+  to `CountingBloomFilter` or `StableBloomFilter`, which would previously have wasted
+  memory silently.
+
 ## [3.0.0] - 2026-08-13
 
 ### Changed

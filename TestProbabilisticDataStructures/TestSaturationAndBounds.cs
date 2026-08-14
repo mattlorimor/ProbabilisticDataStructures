@@ -1,3 +1,4 @@
+using System;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -56,30 +57,48 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Buckets store their maximum in a byte, so a bucket size wider than eight
-        /// bits allocates the extra space but cannot use the extra range: the
-        /// maximum clamps to 255.
+        /// A bucket's maximum value is held in a byte, so eight bits is the widest
+        /// bucket that can be fully used. Wider ones are rejected rather than
+        /// accepted and silently capped: the bit packing would allocate the extra
+        /// space, but the value could still never exceed 255, so the memory would be
+        /// paid for and unreachable.
         /// <para>
-        /// This pins current behavior rather than endorsing it. Buckets.cs carries a
-        /// TODO questioning whether the clamp is correct; whichever way that is
-        /// resolved, it should be a deliberate change with this test updated, not a
-        /// silent one.
+        /// Upstream Go reaches the same 255 ceiling by different means -- its max
+        /// field is a uint8, so the expression wraps rather than clamping -- so this
+        /// rejects a request that has never been honorable in either implementation.
         /// </para>
         /// </summary>
         [TestMethod]
-        public void TestBucketSizeWiderThanAByteClampsToByteMax()
+        public void TestBucketSizeWiderThanAByteIsRejected()
         {
-            var narrow = new Buckets(10, 8);
-            Assert.AreEqual((byte)255, narrow.MaxBucketValue());
+            var widest = new Buckets(10, 8);
+            Assert.AreEqual((byte)255, widest.MaxBucketValue());
 
-            var wide = new Buckets(10, 16);
-            Assert.AreEqual((byte)255, wide.MaxBucketValue(),
-                "a 16-bit bucket allocates 16 bits but its maximum still clamps to 255.");
+            var ex = Assert.Throws<ArgumentOutOfRangeException>(() => new Buckets(10, 9));
+            StringAssert.Contains(ex.Message, "at most 8 bits");
 
-            // The clamp is a cap, not a failure: the bucket still round-trips values
-            // inside the reachable range.
-            wide.Set(0, 200);
-            Assert.AreEqual(200u, wide.Get(0));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new Buckets64(10, 16));
+        }
+
+        /// <summary>
+        /// Every bucket width up to the limit round-trips values across its full
+        /// range, including the boundary where a bucket spans two bytes.
+        /// </summary>
+        [TestMethod]
+        public void TestSupportedBucketWidthsRoundTrip()
+        {
+            for (byte bits = 1; bits <= 8; bits++)
+            {
+                var b = new Buckets(16, bits);
+                var max = b.MaxBucketValue();
+
+                b.Set(0, max);
+                b.Set(3, max);
+
+                Assert.AreEqual((uint)max, b.Get(0), $"bucketSize {bits} lost its value");
+                Assert.AreEqual((uint)max, b.Get(3), $"bucketSize {bits} lost a spanning value");
+                Assert.AreEqual(0u, b.Get(1), $"bucketSize {bits} bled into a neighbour");
+            }
         }
     }
 }
