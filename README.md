@@ -56,8 +56,7 @@ release is also tagged on the
 
 ## Persistence
 
-`BloomFilter` and `CountMinSketch` can be written to a stream and read back. The
-remaining structures follow in later releases.
+Every structure can be written to a stream and read back.
 
 ```C#
 using var file = File.Create("filter.bin");

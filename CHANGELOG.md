@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.2.0] - Unreleased
+## [3.2.0] - 2026-08-14
 
 ### Added
 
@@ -15,8 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stream to hand, and `IBinaryPersistable<T>` for writing persistence code that does not
   name a structure's type.
 
-  This release covers `BloomFilter` and `CountMinSketch`; the remaining structures
-  follow, and their ids are already assigned in the format.
+  Every structure is covered: the seven Bloom variants, the cuckoo filter, the count-min
+  sketch, HyperLogLog and top-k.
+
+  A structure held by another -- a top-k's sketch, a scalable filter's contained filters
+  -- keeps its own envelope rather than being flattened into the outer payload. It costs
+  eighteen bytes each and means the inner structure names its own hash, can be read on
+  its own, and can change without the outer layout changing with it.
 
   The layout is specified in [FORMAT.md](FORMAT.md) and is **stable**: a payload written
   by any version is readable by every later one or is refused with an explanation, never

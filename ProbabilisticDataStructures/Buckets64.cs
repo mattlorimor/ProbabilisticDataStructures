@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Diagnostics.CodeAnalysis;
 using System.Collections.Generic;
 using System.Linq;
@@ -55,6 +56,48 @@ namespace ProbabilisticDataStructures
             }
         }
         internal ulong count { get; set; }
+
+        /// <summary>
+        /// The packed bucket data, for persistence. Held as several arrays rather than
+        /// one because a 64-bit filter can need more bytes than a single array holds.
+        /// </summary>
+        internal byte[][] RawData => this.Data;
+
+        /// <summary>
+        /// The width of each bucket, in bits, for persistence.
+        /// </summary>
+        internal byte BucketSize => this.bucketSize;
+
+        /// <summary>
+        /// Rebuilds a Buckets64 from data previously taken from <see cref="RawData"/>.
+        /// </summary>
+        /// <exception cref="InvalidDataException">
+        /// The data is not shaped the way the count and bucket size imply.
+        /// </exception>
+        internal static Buckets64 Restore(ulong count, byte bucketSize, byte[][] data)
+        {
+            var buckets = new Buckets64(count, bucketSize);
+
+            if (data.Length != buckets.Data.Length)
+            {
+                throw new InvalidDataException(
+                    $"{count} buckets of {bucketSize} bits need {buckets.Data.Length} " +
+                    $"arrays and {data.Length} were stored.");
+            }
+
+            for (int i = 0; i < data.Length; i++)
+            {
+                if (data[i].Length != buckets.Data[i].Length)
+                {
+                    throw new InvalidDataException(
+                        $"Array {i} of the bucket data needs {buckets.Data[i].Length} " +
+                        $"bytes and {data[i].Length} were stored.");
+                }
+            }
+
+            buckets.Data = data;
+            return buckets;
+        }
 
         /// <summary>
         /// Creates a new Buckets64 with the provided number of buckets where each bucket

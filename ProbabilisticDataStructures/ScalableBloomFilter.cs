@@ -15,6 +15,7 @@ copies or substantial portions of the Software.
 */
 
 using System;
+using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
@@ -39,7 +40,7 @@ namespace ProbabilisticDataStructures
     /// For situations where memory is bounded, consider using Inverse or Stable
     /// Bloom Filters.
     /// </summary>
-    public class ScalableBloomFilter : IFilter
+    public class ScalableBloomFilter : IFilter, IBinaryPersistable<ScalableBloomFilter>
     {
         /// <summary>
         /// Filters with geometrically decreasing error rates
@@ -192,6 +193,112 @@ namespace ProbabilisticDataStructures
             var member = this.Test(data);
             this.Add(data);
             return member;
+        }
+
+        /// <summary>
+        /// Writes this filter to a stream, in the format documented in FORMAT.md.
+        /// </summary>
+        /// <param name="stream">The stream to write to.</param>
+        public void WriteTo(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = new PayloadWriter();
+            payload.WriteDouble(this.R);
+            payload.WriteDouble(this.FP);
+            payload.WriteDouble(this.P);
+            payload.WriteUInt32(this.Hint);
+
+            // Each contained filter keeps its own envelope rather than being flattened
+            // into this one. It costs eighteen bytes each and means a filter added
+            // later cannot disagree with this one about its own layout or its hash.
+            payload.WriteUInt32((uint)this.Filters.Count);
+            foreach (var filter in this.Filters)
+            {
+                PersistenceFormat.WriteNested(payload, filter);
+            }
+
+            PersistenceFormat.Write(
+                stream,
+                StructureId.ScalableBloomFilter,
+                PersistenceFormat.Identify(this.Filters[0].Hash),
+                payload.WrittenSpan);
+        }
+
+        /// <summary>
+        /// Reads a filter written by <see cref="WriteTo"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <returns>The filter that was written.</returns>
+        public static ScalableBloomFilter ReadFrom(Stream stream)
+        {
+            return Read(stream, null);
+        }
+
+        /// <summary>
+        /// Reads a filter written by <see cref="WriteTo"/>, using the supplied hash
+        /// function rather than the one named in the payload.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function the filter was written with.</param>
+        /// <returns>The filter that was written.</returns>
+        public static ScalableBloomFilter ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            return Read(stream, hash);
+        }
+
+        private static ScalableBloomFilter Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = PersistenceFormat.Read(stream, StructureId.ScalableBloomFilter, out _);
+            var reader = new PayloadReader(payload);
+
+            var r = reader.ReadDouble();
+            var fp = reader.ReadDouble();
+            var p = reader.ReadDouble();
+            var hint = reader.ReadUInt32();
+
+            var filterCount = reader.ReadUInt32();
+            if (filterCount == 0)
+            {
+                throw new InvalidDataException(
+                    "Filter holds no contained filters. A scalable filter always has at " +
+                    "least the one it started with, and indexes it on every add.");
+            }
+
+            if (filterCount > PersistenceFormat.MaxNestedCount)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {filterCount} contained filters, beyond anything " +
+                    "this library builds.");
+            }
+
+            var filters = new List<PartitionedBloomFilter>((int)filterCount);
+            for (uint i = 0; i < filterCount; i++)
+            {
+                filters.Add(PersistenceFormat.ReadNested<PartitionedBloomFilter>(ref reader, hash));
+            }
+
+            reader.ExpectEnd();
+
+            return new ScalableBloomFilter
+            {
+                Filters = filters,
+                R = r,
+                FP = fp,
+                P = p,
+                Hint = hint,
+            };
+        }
+
+        /// <summary>
+        /// Used only by <see cref="Read"/>, which sets every field itself.
+        /// </summary>
+        private ScalableBloomFilter()
+        {
+            this.Filters = null!;
         }
 
         /// <summary>

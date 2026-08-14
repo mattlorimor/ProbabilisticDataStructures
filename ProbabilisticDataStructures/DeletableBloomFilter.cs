@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Security.Cryptography;
 
 namespace ProbabilisticDataStructures
@@ -19,7 +20,7 @@ namespace ProbabilisticDataStructures
     /// but cannot allow false negatives. This means they can be safely swapped in
     /// place of traditional Bloom filters.
     /// </summary>
-    public class DeletableBloomFilter : IFilter
+    public class DeletableBloomFilter : IFilter, IBinaryPersistable<DeletableBloomFilter>
     {
         /// <summary>
         /// Filter data
@@ -270,6 +271,106 @@ namespace ProbabilisticDataStructures
             this.Collisions.Reset();
             this.count = 0;
             return this;
+        }
+
+        /// <summary>
+        /// Writes this filter to a stream, in the format documented in FORMAT.md.
+        /// </summary>
+        /// <param name="stream">The stream to write to.</param>
+        public void WriteTo(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = new PayloadWriter();
+            payload.WriteUInt32(this.M);
+            payload.WriteUInt32(this.k);
+            payload.WriteUInt32(this.count);
+            PersistenceFormat.WriteBuckets(payload, this.Buckets);
+            PersistenceFormat.WriteBuckets(payload, this.Collisions);
+
+            PersistenceFormat.Write(
+                stream,
+                StructureId.DeletableBloomFilter,
+                PersistenceFormat.Identify(this.Hash),
+                payload.WrittenSpan);
+        }
+
+        /// <summary>
+        /// Reads a filter written by <see cref="WriteTo"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <returns>The filter that was written.</returns>
+        public static DeletableBloomFilter ReadFrom(Stream stream)
+        {
+            return Read(stream, null);
+        }
+
+        /// <summary>
+        /// Reads a filter written by <see cref="WriteTo"/>, using the supplied hash
+        /// function rather than the one named in the payload.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function the filter was written with.</param>
+        /// <returns>The filter that was written.</returns>
+        public static DeletableBloomFilter ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            return Read(stream, hash);
+        }
+
+        private static DeletableBloomFilter Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = PersistenceFormat.Read(stream, StructureId.DeletableBloomFilter, out var hashId);
+            var reader = new PayloadReader(payload);
+
+            var m = reader.ReadUInt32();
+            var k = reader.ReadUInt32();
+            var count = reader.ReadUInt32();
+            var buckets = PersistenceFormat.ReadBuckets(ref reader);
+            var collisions = PersistenceFormat.ReadBuckets(ref reader);
+            reader.ExpectEnd();
+
+            if (m == 0 || buckets.count != m)
+            {
+                throw new InvalidDataException(
+                    $"Filter has a data region of {m} bits and {buckets.count} buckets " +
+                    "to hold them, which do not describe the same filter.");
+            }
+
+            if (collisions.count == 0)
+            {
+                throw new InvalidDataException(
+                    "Filter has no collision regions, which is what makes its deletions " +
+                    "safe; it divides by that count on first use.");
+            }
+
+            return new DeletableBloomFilter
+            {
+                Buckets = buckets,
+                Collisions = collisions,
+                M = m,
+                k = k,
+                count = count,
+                // Derived rather than stored, deliberately. This is a function of the
+                // filter's dimensions, and that function was wrong before 3.1.0:
+                // storing what it computed would have carried the defect into stored
+                // data, where no later fix could reach it.
+                RegionSize = (m + collisions.count - 1) / collisions.count,
+                IndexBuffer = new uint[k],
+                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+            };
+        }
+
+        /// <summary>
+        /// Used only by <see cref="Read"/>, which sets every field itself.
+        /// </summary>
+        private DeletableBloomFilter()
+        {
+            this.Buckets = null!;
+            this.Collisions = null!;
+            this.IndexBuffer = null!;
         }
 
         /// <summary>

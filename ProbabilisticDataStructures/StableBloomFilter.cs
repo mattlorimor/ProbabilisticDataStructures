@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Security.Cryptography;
 
 namespace ProbabilisticDataStructures
@@ -28,7 +29,7 @@ namespace ProbabilisticDataStructures
     /// events from an unbounded event stream with a specified upper bound on false
     /// positives and minimal false negatives.
     /// </summary>
-    public class StableBloomFilter : IFilter
+    public class StableBloomFilter : IFilter, IBinaryPersistable<StableBloomFilter>
     {
         /// <summary>
         /// Filter data
@@ -294,6 +295,89 @@ namespace ProbabilisticDataStructures
         {
             this.cells.Reset();
             return this;
+        }
+
+        /// <summary>
+        /// Writes this filter to a stream, in the format documented in FORMAT.md.
+        /// </summary>
+        /// <param name="stream">The stream to write to.</param>
+        public void WriteTo(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = new PayloadWriter();
+            payload.WriteUInt32(this.M);
+            payload.WriteUInt32(this.k);
+            payload.WriteUInt32(this.p);
+            PersistenceFormat.WriteBuckets(payload, this.cells);
+
+            PersistenceFormat.Write(
+                stream,
+                StructureId.StableBloomFilter,
+                PersistenceFormat.Identify(this.Hash),
+                payload.WrittenSpan);
+        }
+
+        /// <summary>
+        /// Reads a filter written by <see cref="WriteTo"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <returns>The filter that was written.</returns>
+        public static StableBloomFilter ReadFrom(Stream stream)
+        {
+            return Read(stream, null);
+        }
+
+        /// <summary>
+        /// Reads a filter written by <see cref="WriteTo"/>, using the supplied hash
+        /// function rather than the one named in the payload.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function the filter was written with.</param>
+        /// <returns>The filter that was written.</returns>
+        public static StableBloomFilter ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            return Read(stream, hash);
+        }
+
+        private static StableBloomFilter Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = PersistenceFormat.Read(stream, StructureId.StableBloomFilter, out var hashId);
+            var reader = new PayloadReader(payload);
+
+            var m = reader.ReadUInt32();
+            var k = reader.ReadUInt32();
+            var p = reader.ReadUInt32();
+            var cells = PersistenceFormat.ReadBuckets(ref reader);
+            reader.ExpectEnd();
+
+            if (m == 0 || cells.count != m)
+            {
+                throw new InvalidDataException(
+                    $"Filter has {m} cells by its own account and {cells.count} to hold " +
+                    "them, which do not describe the same filter.");
+            }
+
+            if (k == 0)
+            {
+                throw new InvalidDataException(
+                    "Filter has no hash functions, so it would set no cells and test none.");
+            }
+
+            return new StableBloomFilter
+            {
+                cells = cells,
+                M = m,
+                k = k,
+                p = p,
+                // Follows from the cell width, which the cells carry.
+                Max = cells.MaxBucketValue(),
+                IndexBuffer = new uint[k],
+                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+            };
         }
 
         /// <summary>

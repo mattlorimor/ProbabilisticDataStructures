@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 
@@ -20,7 +21,7 @@ namespace ProbabilisticDataStructures
     /// For applications that store many items and target moderately low false-positive
     /// rates, cuckoo filters have lower space overhead than space-optimized Bloom filters.
     /// </summary>
-    public class CuckooBloomFilter
+    public class CuckooBloomFilter : IBinaryPersistable<CuckooBloomFilter>
     {
         /// <summary>
         /// Size of the stack buffer used when hashing. 64 bytes holds the largest
@@ -272,6 +273,156 @@ namespace ProbabilisticDataStructures
             this.Buckets = buckets;
             this.count = 0;
             return this;
+        }
+
+        /// <summary>
+        /// Writes this filter to a stream, in the format documented in FORMAT.md.
+        /// </summary>
+        /// <param name="stream">The stream to write to.</param>
+        public void WriteTo(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = new PayloadWriter();
+            payload.WriteUInt32(this.M);
+            payload.WriteUInt32(this.B);
+            payload.WriteUInt32(this.F);
+            payload.WriteUInt32(this.count);
+            payload.WriteUInt32(this.N);
+
+            // Occupied slots only, each located by bucket and entry. A cuckoo filter
+            // sized for a load it has not reached is mostly empty slots.
+            var occupied = 0u;
+            for (uint i = 0; i < this.M; i++)
+            {
+                for (uint j = 0; j < this.B; j++)
+                {
+                    if (this.Buckets[i][j] is not null)
+                    {
+                        occupied++;
+                    }
+                }
+            }
+
+            payload.WriteUInt32(occupied);
+            for (uint i = 0; i < this.M; i++)
+            {
+                for (uint j = 0; j < this.B; j++)
+                {
+                    var fingerprint = this.Buckets[i][j];
+                    if (fingerprint is not null)
+                    {
+                        payload.WriteUInt32(i);
+                        payload.WriteUInt32(j);
+                        payload.WriteBytes(fingerprint);
+                    }
+                }
+            }
+
+            PersistenceFormat.Write(
+                stream,
+                StructureId.CuckooBloomFilter,
+                PersistenceFormat.Identify(this.Hash),
+                payload.WrittenSpan);
+        }
+
+        /// <summary>
+        /// Reads a filter written by <see cref="WriteTo"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <returns>The filter that was written.</returns>
+        public static CuckooBloomFilter ReadFrom(Stream stream)
+        {
+            return Read(stream, null);
+        }
+
+        /// <summary>
+        /// Reads a filter written by <see cref="WriteTo"/>, using the supplied hash
+        /// function rather than the one named in the payload.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function the filter was written with.</param>
+        /// <returns>The filter that was written.</returns>
+        public static CuckooBloomFilter ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            return Read(stream, hash);
+        }
+
+        private static CuckooBloomFilter Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = PersistenceFormat.Read(stream, StructureId.CuckooBloomFilter, out var hashId);
+            var reader = new PayloadReader(payload);
+
+            var m = reader.ReadUInt32();
+            var b = reader.ReadUInt32();
+            var f = reader.ReadUInt32();
+            var count = reader.ReadUInt32();
+            var n = reader.ReadUInt32();
+
+            if (m == 0 || b == 0)
+            {
+                throw new InvalidDataException(
+                    $"Filter has {m} buckets of {b} entries, leaving nowhere to put " +
+                    "anything.");
+            }
+
+            if (m > PersistenceFormat.MaxNestedCount)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {m} buckets, beyond anything this library builds.");
+            }
+
+            var buckets = new byte[m][][];
+            for (uint i = 0; i < m; i++)
+            {
+                buckets[i] = new byte[b][];
+            }
+
+            var occupied = reader.ReadUInt32();
+            if (occupied > m * (ulong)b)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {occupied} occupied entries in {m} buckets of {b}.");
+            }
+
+            for (uint e = 0; e < occupied; e++)
+            {
+                var bucket = reader.ReadUInt32();
+                var entry = reader.ReadUInt32();
+
+                if (bucket >= m || entry >= b)
+                {
+                    throw new InvalidDataException(
+                        $"Filter holds an entry at bucket {bucket} slot {entry}, outside " +
+                        $"its {m} buckets of {b}.");
+                }
+
+                buckets[bucket][entry] = reader.ReadBytes();
+            }
+
+            reader.ExpectEnd();
+
+            return new CuckooBloomFilter
+            {
+                Buckets = buckets,
+                M = m,
+                B = b,
+                F = f,
+                count = count,
+                N = n,
+                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+            };
+        }
+
+        /// <summary>
+        /// Used only by <see cref="Read"/>, which sets every field itself.
+        /// </summary>
+        private CuckooBloomFilter()
+        {
+            this.Buckets = null!;
         }
 
         /// <summary>
