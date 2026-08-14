@@ -64,7 +64,12 @@ namespace ProbabilisticDataStructures
         /// <param name="n">Number of items</param>
         /// <param name="r">Number of bits to use to store collision information</param>
         /// <param name="fpRate">Desired false positive rate</param>
-        public DeletableBloomFilter(uint n, uint r, double fpRate)
+        /// <param name="hash">
+        /// The hash function to use, or null for the default. Passing it here is the
+        /// only way to have one hash cover everything the structure will ever hold:
+        /// once anything has been added, the hash can no longer be replaced.
+        /// </param>
+        public DeletableBloomFilter(uint n, uint r, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
             Guard.ValidItemCount(n, nameof(n));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
@@ -79,7 +84,7 @@ namespace ProbabilisticDataStructures
 
             this.Buckets = new Buckets(m - r, 1);
             this.Collisions = new Buckets(r, 1);
-            this.Hash = Defaults.GetDefaultHashFunction();
+            this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.M = m - r;
             // Rounded up, not down. The data region rarely divides evenly into r
             // regions, and rounding down leaves a remainder that maps to region
@@ -380,6 +385,9 @@ namespace ProbabilisticDataStructures
         // TODO: Add SetHash to the IFilter interface?
         public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
+            ArgumentNullException.ThrowIfNull(h);
+            Guard.HashMayBeReplaced(this.count == 0, nameof(DeletableBloomFilter));
+
             this.Hash = h;
         }
     }

@@ -62,6 +62,19 @@ namespace ProbabilisticDataStructures
         /// Filter size hint
         /// </summary>
         internal uint Hint { get; set; }
+        /// <summary>
+        /// The hash every contained filter is built with, or null for the default.
+        /// Held because filters are added as the structure grows, long after the
+        /// constructor has run.
+        /// </summary>
+        private Func<ReadOnlySpan<byte>, ulong>? Hash { get; set; }
+
+        /// <summary>
+        /// Whether anything has been added. A scalable filter that has grown holds more
+        /// than the filter it started with; the first one having a count is the other
+        /// way it can be non-empty.
+        /// </summary>
+        private bool IsEmpty => this.Filters.Count == 1 && this.Filters[0].Count() == 0;
 
         /// <summary>
         /// Creates a new Scalable Bloom Filter with the specified target false-positive
@@ -71,7 +84,13 @@ namespace ProbabilisticDataStructures
         /// <param name="hint"></param>
         /// <param name="fpRate"></param>
         /// <param name="r"></param>
-        public ScalableBloomFilter(uint hint, double fpRate, double r)
+        /// <param name="hash">
+        /// The hash function to use, or null for the default. Passing it here is the
+        /// only way to have one hash cover everything the structure will ever hold:
+        /// once anything has been added, the hash can no longer be replaced.
+        /// </param>
+        public ScalableBloomFilter(uint hint, double fpRate, double r,
+            Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
             Guard.ValidItemCount(hint, nameof(hint));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
@@ -82,6 +101,7 @@ namespace ProbabilisticDataStructures
             this.FP = fpRate;
             this.P = Defaults.FILL_RATIO;
             this.Hint = hint;
+            this.Hash = hash;
 
             this.AddFilter();
         }
@@ -308,6 +328,14 @@ namespace ProbabilisticDataStructures
         // TODO: Add SetHash to the IFilter interface?
         public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
+            ArgumentNullException.ThrowIfNull(h);
+
+            // Checked here rather than left to the contained filters, so that the
+            // failure names this filter and nothing is half converted before one of
+            // them refuses.
+            Guard.HashMayBeReplaced(this.IsEmpty, nameof(ScalableBloomFilter));
+
+            this.Hash = h;
             foreach (var filter in this.Filters)
             {
                 filter.SetHash(h);
@@ -325,11 +353,10 @@ namespace ProbabilisticDataStructures
             // after the first takes its hash from Filters[0], so dropping the list
             // without carrying the hash across would quietly restore the default and
             // leave a caller who set their own hashing elsewhere than they left it.
-            var hash = this.Filters[0].Hash;
+            this.Hash = this.Filters[0].Hash;
 
             this.Filters = new List<PartitionedBloomFilter>();
             this.AddFilter();
-            this.Filters[0].SetHash(hash);
             return this;
         }
 
@@ -340,11 +367,11 @@ namespace ProbabilisticDataStructures
         internal void AddFilter()
         {
             var fpRate = this.FP * Math.Pow(this.R, this.Filters.Count());
-            var p = new PartitionedBloomFilter(this.Hint, fpRate);
-            if (this.Filters.Count() > 0)
-            {
-                p.SetHash(this.Filters[0].Hash);
-            }
+            // The hash is passed to the filter rather than set on it afterwards: a
+            // filter is only safe to re-hash while empty, and building it with the
+            // right one removes the window entirely.
+            var inherited = this.Filters.Count > 0 ? this.Filters[0].Hash : this.Hash;
+            var p = new PartitionedBloomFilter(this.Hint, fpRate, inherited);
             this.Filters.Add(p);
         }
     }

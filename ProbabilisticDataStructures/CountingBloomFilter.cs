@@ -69,7 +69,12 @@ namespace ProbabilisticDataStructures
         /// <param name="n">Number of items to store.</param>
         /// <param name="b">Bucket size.</param>
         /// <param name="fpRate">Desired false positive rate.</param>
-        public CountingBloomFilter(uint n, byte b, double fpRate)
+        /// <param name="hash">
+        /// The hash function to use, or null for the default. Passing it here is the
+        /// only way to have one hash cover everything the structure will ever hold:
+        /// once anything has been added, the hash can no longer be replaced.
+        /// </param>
+        public CountingBloomFilter(uint n, byte b, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
             Guard.ValidItemCount(n, nameof(n));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
@@ -77,7 +82,7 @@ namespace ProbabilisticDataStructures
             var m = Utils.OptimalM(n, fpRate);
             var k = Utils.OptimalK(fpRate);
             this.Buckets =  new Buckets(m, b);
-            this.Hash = Defaults.GetDefaultHashFunction();
+            this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.m = m;
             this.k = k;
             this.indexBuffer = new uint[k];
@@ -359,6 +364,9 @@ namespace ProbabilisticDataStructures
         // TODO: Add SetHash to the IFilter interface?
         public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
+            ArgumentNullException.ThrowIfNull(h);
+            Guard.HashMayBeReplaced(this.count == 0, nameof(CountingBloomFilter));
+
             this.Hash = h;
         }
     }

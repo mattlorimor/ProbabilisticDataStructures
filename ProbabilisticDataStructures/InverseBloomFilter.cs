@@ -65,15 +65,41 @@ namespace ProbabilisticDataStructures
         private uint capacity { get; set; }
 
         /// <summary>
+        /// Whether any slot is occupied, which is what decides if the hash can
+        /// still be replaced. Derived rather than tracked, so that a filter read
+        /// back from a payload answers this the way the one that wrote it would.
+        /// </summary>
+        private bool IsEmpty
+        {
+            get
+            {
+                foreach (var slot in this.Array)
+                {
+                    if (slot is not null)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+        }
+
+        /// <summary>
         /// Instantiates an InverseBloomFilter with the specified capacity.
         /// </summary>
         /// <param name="capacity">The capacity of the filter</param>
-        public InverseBloomFilter(uint capacity)
+        /// <param name="hash">
+        /// The hash function to use, or null for the default. Passing it here is the
+        /// only way to have one hash cover everything the structure will ever hold:
+        /// once anything has been added, the hash can no longer be replaced.
+        /// </param>
+        public InverseBloomFilter(uint capacity, Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
             Guard.ValidItemCount(capacity, nameof(capacity));
 
             this.Array = new byte[capacity][];
-            this.Hash = Defaults.GetDefaultHashFunction();
+            this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.capacity = capacity;
         }
 
@@ -319,6 +345,9 @@ namespace ProbabilisticDataStructures
         // TODO: Add SetHash to the IFilter interface?
         public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
+            ArgumentNullException.ThrowIfNull(h);
+            Guard.HashMayBeReplaced(this.IsEmpty, nameof(InverseBloomFilter));
+
             this.Hash = h;
         }
     }

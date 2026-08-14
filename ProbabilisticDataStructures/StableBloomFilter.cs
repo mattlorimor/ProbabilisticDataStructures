@@ -63,6 +63,27 @@ namespace ProbabilisticDataStructures
         private Random random = new Random();
 
         /// <summary>
+        /// Whether any cell has been set, which is what decides if the hash can
+        /// still be replaced. Derived rather than tracked, so that a filter read
+        /// back from a payload answers this the way the one that wrote it would.
+        /// </summary>
+        private bool IsEmpty
+        {
+            get
+            {
+                for (uint i = 0; i < this.cells.count; i++)
+                {
+                    if (this.cells.Get(i) != 0)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+        }
+
+        /// <summary>
         /// Used by NewUnstableBloomFilter, which populates every member through an
         /// object initializer. The compiler cannot see that, so the members it sets
         /// are marked null-forgiving at their declarations.
@@ -77,7 +98,18 @@ namespace ProbabilisticDataStructures
         /// <param name="m">Number of cells to decrement</param>
         /// <param name="d">Bits per cell</param>
         /// <param name="fpRate">Desired false-positive rate</param>
-        public StableBloomFilter(uint m, byte d, double fpRate)
+        /// <param name="hash">
+        /// The hash function to use, or null for the default. Passing it here is the
+        /// only way to have one hash cover everything the structure will ever hold:
+        /// once anything has been added, the hash can no longer be replaced.
+        /// </param>
+        /// <param name="seed">
+        /// A seed for the random choices this filter makes, or null to seed it
+        /// unpredictably. Supplying one makes the filter reproducible, which is what
+        /// makes its behavior assertable rather than only describable.
+        /// </param>
+        public StableBloomFilter(uint m, byte d, double fpRate,
+            Func<ReadOnlySpan<byte>, ulong>? hash = null, int? seed = null)
         {
             Guard.ValidItemCount(m, nameof(m));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
@@ -94,7 +126,8 @@ namespace ProbabilisticDataStructures
 
             var cells = new Buckets(m, d);
 
-            this.Hash = Defaults.GetDefaultHashFunction();
+            this.Hash = hash ?? Defaults.GetDefaultHashFunction();
+            this.random = seed is null ? new Random() : new Random(seed.Value);
             this.M = m;
             this.k = k;
             this.p = OptimalStableP(m, k, d, fpRate);
@@ -387,6 +420,9 @@ namespace ProbabilisticDataStructures
         // TODO: Add SetHash to the IFilter interface?
         public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
+            ArgumentNullException.ThrowIfNull(h);
+            Guard.HashMayBeReplaced(this.IsEmpty, nameof(StableBloomFilter));
+
             this.Hash = h;
         }
 

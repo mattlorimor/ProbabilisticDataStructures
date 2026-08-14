@@ -42,7 +42,12 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="n">Number of items to store.</param>
         /// <param name="fpRate">Desired false positive rate.</param>
-        public BloomFilter64(ulong n, double fpRate)
+        /// <param name="hash">
+        /// The hash function to use, or null for the default. Passing it here is the
+        /// only way to have one hash cover everything the structure will ever hold:
+        /// once anything has been added, the hash can no longer be replaced.
+        /// </param>
+        public BloomFilter64(ulong n, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
             Guard.ValidItemCount(n, nameof(n));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
@@ -50,7 +55,7 @@ namespace ProbabilisticDataStructures
             var m = Utils.OptimalM64(n, fpRate);
             var k = Utils.OptimalK(fpRate);
             Buckets = new Buckets64(m, 1);
-            Hash = Defaults.GetDefaultHashFunction();
+            Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.m = m;
             this.k = k;
         }
@@ -292,6 +297,9 @@ namespace ProbabilisticDataStructures
         // TODO: Add SetHash to the IFilter interface?
         public void SetHash(Func<ReadOnlySpan<byte>, ulong> h)
         {
+            ArgumentNullException.ThrowIfNull(h);
+            Guard.HashMayBeReplaced(this.count == 0, nameof(BloomFilter64));
+
             this.Hash = h;
         }
     }
