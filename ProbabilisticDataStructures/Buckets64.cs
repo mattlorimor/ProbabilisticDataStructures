@@ -12,7 +12,12 @@ namespace ProbabilisticDataStructures
     /// Buckets64 is a fast, space-efficient array of buckets where each bucket can store
     /// up to a configured maximum value.
     /// </summary>
-    public class Buckets64
+    /// <remarks>
+    /// Internal: every member on this type already was, so as a public type it offered
+    /// a consumer nothing but a name in their completion list. It is the packed array
+    /// the filters are built on, not part of what this library is for.
+    /// </remarks>
+    internal class Buckets64
     {
         /// <summary>
         /// The widest bucket supported, in bits.

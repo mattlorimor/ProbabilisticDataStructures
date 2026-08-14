@@ -15,6 +15,13 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// Ensures that Buckets returns the number of buckets, m, in the Cuckoo Filter.
+        /// <para>
+        /// 100 items in buckets of four, with room above the load factor, needs 27
+        /// buckets, rounded up to 32. This expected 1024 -- eight buckets per item
+        /// rather than one per four, which is what issue 47 was about. The filter still
+        /// holds what it is asked to; it simply no longer allocates thirty-two times
+        /// the space to do it.
+        /// </para>
         /// </summary>
         [TestMethod]
         public void TestCuckooBuckets()
@@ -22,7 +29,7 @@ namespace TestProbabilisticDataStructures
             var f = new CuckooBloomFilter(100, 0.1);
             var buckets = f.BucketCount();
 
-            Assert.AreEqual(1024u, buckets);
+            Assert.AreEqual(32u, buckets);
         }
 
         /// <summary>

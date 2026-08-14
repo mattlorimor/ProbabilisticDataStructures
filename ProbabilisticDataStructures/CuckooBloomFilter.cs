@@ -87,7 +87,20 @@ namespace ProbabilisticDataStructures
 
             var b = (uint)4;
             var f = CalculateF(b, fpRate);
-            var m = Power2(n / f * 8);
+
+            // Buckets needed to hold n items at b entries each, with room to spare so
+            // that inserts still find a home near capacity: a cuckoo filter's load
+            // factor is around 0.95 for four-entry buckets, and inserts start failing
+            // as it is approached. Rounded up to a power of two, which the index
+            // arithmetic requires.
+            //
+            // This used to be Power2(n / f * 8), which is not a bucket count at all.
+            // The 8 undoes a division by 8 in CalculateF that had already floored to
+            // nothing, and what came out was roughly eight buckets per item rather than
+            // one per four items -- thirty-two times more than needed. A filter asked
+            // for 100,000 items allocated 122 MB while holding nothing, against 124 KB
+            // for a Bloom filter of the same capacity and rate.
+            var m = Power2((uint)Math.Ceiling(n / (b * LoadFactor)));
             var buckets = new byte[m][][];
 
             for (uint i = 0; i < m; i++)
@@ -114,9 +127,16 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Returns the number of items the filter can store.
+        /// Returns the number of items the filter was sized for.
         /// </summary>
-        /// <returns>The number of items the filter can store</returns>
+        /// <remarks>
+        /// This is the count passed to the constructor, and the load the false positive
+        /// rate was chosen to hold at. It is not a hard limit: buckets are allocated in
+        /// powers of two and with room above the load factor, so a filter will usually
+        /// accept somewhat more than this before it starts refusing inserts. It used to
+        /// accept thirty to fifty times more, which is what issue 47 was about.
+        /// </remarks>
+        /// <returns>The number of items the filter was sized for</returns>
         public uint Capacity()
         {
             return this.N;
@@ -536,12 +556,24 @@ namespace ProbabilisticDataStructures
                 return true;
             }
 
-            // Must relocate existing items.
+            // Must relocate existing items. Each step displaces whatever is in a
+            // chosen entry, puts the fingerprint in hand there, and looks for a home
+            // for what was displaced.
+            //
+            // Where each displacement happened is recorded, because the loop can run
+            // out of kicks while still holding one. Dropping it there loses an element
+            // the filter had already accepted, which is a false negative -- the one
+            // thing this filter, like every other here, promises not to produce.
+            Span<uint> trailBucket = stackalloc uint[MAX_NUM_KICKS];
+            Span<uint> trailEntry = stackalloc uint[MAX_NUM_KICKS];
+
             var i = i1;
+            var depth = 0;
+
             for (int n = 0; n < MAX_NUM_KICKS; n++)
             {
                 var bucketIdx = i % this.M;
-                var entryIdx = random.Next((int)this.B);
+                var entryIdx = (uint)random.Next((int)this.B);
                 var tempF = f;
 
                 // The loop only relocates out of a bucket with no free entry, so
@@ -550,6 +582,11 @@ namespace ProbabilisticDataStructures
                 // existing invariant rather than assuming a new one.
                 f = this.Buckets[bucketIdx][entryIdx]!;
                 this.Buckets[bucketIdx][entryIdx] = tempF;
+
+                trailBucket[depth] = bucketIdx;
+                trailEntry[depth] = entryIdx;
+                depth++;
+
                 i = i ^ ComputeHashSum32(f);
                 var b = this.Buckets[i % this.M];
 
@@ -560,6 +597,21 @@ namespace ProbabilisticDataStructures
                     this.count++;
                     return true;
                 }
+            }
+
+            // Out of kicks. Undo every displacement, in reverse, so the filter holds
+            // exactly what it held before this call, and refuse the new element rather
+            // than silently keeping it in place of one that was already there.
+            for (int n = depth - 1; n >= 0; n--)
+            {
+                var bucket = trailBucket[n];
+                var entry = trailEntry[n];
+
+                // Every entry on the trail was written to on the way in, so none of
+                // them is empty.
+                var occupant = this.Buckets[bucket][entry]!;
+                this.Buckets[bucket][entry] = f;
+                f = occupant;
             }
 
             return false;
@@ -630,16 +682,36 @@ namespace ProbabilisticDataStructures
         /// <param name="b">Bucket size</param>
         /// <param name="epsilon">False positive rate</param>
         /// <returns>The optimal fingerprint length</returns>
+        /// <summary>
+        /// The fingerprint size, in bytes, that holds the false positive rate to
+        /// epsilon. A cuckoo filter's rate is about 2b / 2^f for a fingerprint of f
+        /// bits, so f is log2(2b / epsilon), rounded up to whole bytes.
+        /// </summary>
+        /// <remarks>
+        /// Both steps used to be wrong in the same direction. The logarithm was natural
+        /// rather than base two, which understates the bits needed by a factor of
+        /// ln(2); and the conversion to bytes divided rather than rounding up, which
+        /// floors to zero for every rate this library accepts and was then clamped to
+        /// one. The result was a one-byte fingerprint whatever epsilon was asked for --
+        /// eight bits, for a rate of about 3%, whether the caller wanted 1% or 0.001%.
+        /// <para>
+        /// Whole bytes mean the rate delivered is usually better than the rate asked
+        /// for, since the last partial byte is rounded up rather than away.
+        /// </para>
+        /// </remarks>
         private static uint CalculateF(uint b, double epsilon)
         {
-            var f = (uint)Math.Ceiling(Math.Log(2 * b / epsilon));
-            f = f / 8;
-            if (f <= 0)
-            {
-                f = 1;
-            }
-            return f;
+            var bits = Math.Ceiling(Math.Log2(2 * b / epsilon));
+            var bytes = (uint)Math.Ceiling(bits / 8);
+
+            return bytes < 1 ? 1 : bytes;
         }
+
+        /// <summary>
+        /// The share of a cuckoo filter's entries that can be filled before inserts
+        /// start being refused. Four-entry buckets reach about this in practice.
+        /// </summary>
+        private const double LoadFactor = 0.95;
 
         /// <summary>
         /// Calculates the next power of two for the given value.

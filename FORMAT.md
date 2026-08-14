@@ -52,6 +52,7 @@ checksum still matches.
 | 10 | `CountMinSketch` |
 | 11 | `HyperLogLog` |
 | 12 | `TopK` |
+| 13 | `MinHashSignature` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
@@ -276,6 +277,23 @@ The elements are re-heaped on read rather than being trusted to arrive in heap o
 They are the same elements either way and `Elements()` sorts them, so nothing about the
 answer depends on the order they were stored in — but a payload that has been edited
 cannot leave the heap in a state where the root is not the minimum.
+
+### `MinHashSignature` (id 13)
+
+```
+u32     the number of hash functions, k
+u64     k minimum values, one per hash function
+```
+
+A signature's hash functions are **not** a caller's to choose. They are XxHash3 seeded
+with `0` through `k-1`, which is a fixed convention rather than stored state: it is what
+lets a signature be compared against one computed by another process or another version.
+A payload naming any other hash is refused rather than read, because comparing signatures
+built with different functions produces a number that means nothing.
+
+Changing those functions would silently invalidate every stored signature, so they are
+fixed in the same sense the rest of this format is, and the test suite pins the values a
+known bag produces.
 
 ## What is not stored
 

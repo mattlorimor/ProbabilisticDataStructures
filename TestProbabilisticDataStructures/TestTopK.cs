@@ -51,7 +51,7 @@ namespace TestProbabilisticDataStructures
 
             var expectedNames = new[] { "alice", "bob", "fred", "sara", "tyler" };
             var actualNames = actual
-                .Select(e => Encoding.ASCII.GetString(e.Data))
+                .Select(e => Encoding.ASCII.GetString(e.Data.Span))
                 .OrderBy(x => x, System.StringComparer.Ordinal)
                 .ToArray();
             CollectionAssert.AreEqual(expectedNames, actualNames,

@@ -286,7 +286,7 @@ namespace TestProbabilisticDataStructures
                     }
 
                     var got = topK.Elements()
-                        .Select(e => Encoding.ASCII.GetString(e.Data))
+                        .Select(e => Encoding.ASCII.GetString(e.Data.Span))
                         .ToHashSet();
                     var want = Enumerable.Range(0, (int)k)
                         .Select(i => $"i{i:D4}")
@@ -324,7 +324,7 @@ namespace TestProbabilisticDataStructures
             Encoding.ASCII.GetBytes("zzzz").CopyTo(buffer, 0);
 
             var names = topK.Elements()
-                .Select(e => Encoding.ASCII.GetString(e.Data))
+                .Select(e => Encoding.ASCII.GetString(e.Data.Span))
                 .OrderBy(x => x, StringComparer.Ordinal)
                 .ToArray();
 
@@ -407,7 +407,7 @@ namespace TestProbabilisticDataStructures
                 "the heap holds more than k elements");
 
             var distinct = elements
-                .Select(e => Encoding.ASCII.GetString(e.Data))
+                .Select(e => Encoding.ASCII.GetString(e.Data.Span))
                 .Distinct()
                 .Count();
 
@@ -439,8 +439,76 @@ namespace TestProbabilisticDataStructures
             var elements = topK.Elements();
 
             Assert.HasCount(1, elements);
-            Assert.AreEqual("recurring", Encoding.ASCII.GetString(elements[0].Data));
+            Assert.AreEqual("recurring", Encoding.ASCII.GetString(elements[0].Data.Span));
             Assert.AreEqual(50ul, elements[0].Freq);
+        }
+
+        /// <summary>
+        /// A cuckoo filter makes room by displacing what is already there, and gives up
+        /// after a bounded number of attempts. Whatever it is holding at that moment
+        /// was displaced out of a bucket and has nowhere to go: dropping it loses an
+        /// element the filter had already accepted, which is a false negative.
+        /// <para>
+        /// The displacements are undone instead, so a refused insert leaves the filter
+        /// holding exactly what it held before. This went unseen because the filter
+        /// allocated about thirty-two times the buckets it needed, so the relocation
+        /// loop never ran long enough to give up.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestCuckooFilterKeepsWhatItAcceptedWhenAnInsertIsRefused()
+        {
+            var f = new CuckooBloomFilter(1000, 0.01, seed: 11);
+            var accepted = new List<string>();
+            var refused = 0;
+
+            // Well past capacity, so inserts start being refused and the rollback runs.
+            for (int i = 0; i < 20000; i++)
+            {
+                var word = $"item-{i}";
+                if (f.Add(Key(word)))
+                {
+                    accepted.Add(word);
+                }
+                else
+                {
+                    refused++;
+                }
+            }
+
+            Assert.IsGreaterThan(0, refused,
+                "nothing was refused, so the path this covers never ran");
+            Assert.IsGreaterThan(0, accepted.Count);
+
+            var missing = accepted.Count(w => !f.Test(Key(w)));
+            Assert.AreEqual(0, missing,
+                $"{missing} of {accepted.Count} accepted elements were lost, most of " +
+                "them displaced by inserts that were themselves refused");
+        }
+
+        /// <summary>
+        /// The filter is sized for the load it was asked for rather than for tens of
+        /// times that. Buckets hold four entries and fill to about 95%, so the count
+        /// follows from n directly.
+        /// </summary>
+        [TestMethod]
+        public void TestCuckooFilterIsSizedForTheLoadItWasAskedFor()
+        {
+            foreach (uint n in new uint[] { 100, 1000, 10000, 100000 })
+            {
+                var f = new CuckooBloomFilter(n, 0.01);
+                var slots = f.BucketCount() * 4;
+
+                Assert.IsGreaterThanOrEqualTo(n, slots,
+                    $"n={n}: the filter has fewer slots than the items it was sized for");
+
+                // Powers of two mean up to a factor of two of slack, and the load
+                // factor a little more. Four times the requested load is generous and
+                // still catches the thirty-two times this used to allocate.
+                Assert.IsLessThanOrEqualTo(n * 4, slots,
+                    $"n={n}: {slots} slots for {n} items is more headroom than the " +
+                    "sizing should produce");
+            }
         }
 
         /// <summary>

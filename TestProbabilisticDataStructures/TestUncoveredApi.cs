@@ -85,7 +85,7 @@ namespace TestProbabilisticDataStructures
             var elements = topK.Elements();
             Assert.HasCount(3, elements);
 
-            var words = elements.Select(e => Encoding.ASCII.GetString(e.Data)).ToArray();
+            var words = elements.Select(e => Encoding.ASCII.GetString(e.Data.Span)).ToArray();
             CollectionAssert.AreEquivalent(
                 new[] { "charlie", "bravo", "alpha" }, words,
                 "the three most frequent elements should survive and the rest be evicted");
