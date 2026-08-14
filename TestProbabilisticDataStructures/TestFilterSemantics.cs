@@ -177,6 +177,67 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The inverse filter's one hard guarantee is that it never reports an item it
+        /// has not seen. It is the only filter here that stores the data rather than
+        /// only hashing it, and it kept the caller's array instead of copying, so the
+        /// caller's next write into that buffer changed what the filter held.
+        /// <para>
+        /// Reusing one buffer per record is ordinary and is the reason callers work in
+        /// bytes at all. It left every written slot pointing at the same array, so a
+        /// value never added could be read straight back out of a slot it was never
+        /// put in: 38.8% of never-added values were reported present.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestInverseFilterNeverReportsUnseenData()
+        {
+            const uint capacity = 1000;
+            var f = new InverseBloomFilter(capacity);
+            var buffer = new byte[8];
+
+            for (int i = 0; i < 500; i++)
+            {
+                Encoding.ASCII.GetBytes($"rec-{i:D3}").CopyTo(buffer, 0);
+                f.Add(buffer);
+            }
+
+            var falsePositives = 0;
+            for (int i = 0; i < 10000; i++)
+            {
+                var unseen = Encoding.ASCII.GetBytes($"nev-{i:D4}");
+                // As a caller would on their next read, before querying.
+                unseen.CopyTo(buffer, 0);
+                if (f.Test(unseen))
+                {
+                    falsePositives++;
+                }
+            }
+
+            Assert.AreEqual(0, falsePositives,
+                $"{falsePositives} values that were never added were reported present; " +
+                "this filter must never report a false positive.");
+        }
+
+        /// <summary>
+        /// The same guarantee stated at its smallest: one element, mutated in place
+        /// after being added.
+        /// </summary>
+        [TestMethod]
+        public void TestInverseFilterIsUnaffectedByMutatingAddedData()
+        {
+            var f = new InverseBloomFilter(1000);
+            var data = new byte[] { 1, 2, 3 };
+
+            f.Add(data);
+            data[0] = 9;
+
+            Assert.IsTrue(f.Test(new byte[] { 1, 2, 3 }),
+                "what was added should still be found after the caller reuses its array");
+            Assert.IsFalse(f.Test(new byte[] { 9, 2, 3 }),
+                "what was never added should not be found");
+        }
+
+        /// <summary>
         /// The inverse filter is a bounded "recently seen" cache rather than a growing
         /// set: an element whose slot is claimed by a later one is forgotten. False
         /// negatives are therefore expected here, which is the opposite of every other

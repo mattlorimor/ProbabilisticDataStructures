@@ -37,9 +37,9 @@ using System.Security.Cryptography;
 namespace ProbabilisticDataStructures
 {
     /// <summary>
-    /// InverseBloomFilter is a concurrent "inverse" Bloom filter, which is
-    /// effectively the opposite of a classic Bloom filter. This was originally
-    /// described and written by Jeff Hodges:
+    /// InverseBloomFilter is an "inverse" Bloom filter, which is effectively the
+    /// opposite of a classic Bloom filter. This was originally described and
+    /// written by Jeff Hodges:
     ///
     /// http://www.somethingsimilar.com/2012/05/21/the-opposite-of-a-bloom-filter/
     ///
@@ -51,6 +51,11 @@ namespace ProbabilisticDataStructures
     ///
     /// An example use case is deduplicating events while processing a stream of
     /// data. Ideally, duplicate events are relatively close together.
+    ///
+    /// This filter stores the data itself rather than only its hash, and takes its
+    /// own copy on <see cref="Add"/> so that a caller reusing their buffer cannot
+    /// change what it holds. It is not thread-safe: the original swaps the stored
+    /// value atomically, and this reads and writes the slot in two steps.
     /// </summary>
     public class InverseBloomFilter : IFilter
     {
@@ -64,6 +69,8 @@ namespace ProbabilisticDataStructures
         /// <param name="capacity">The capacity of the filter</param>
         public InverseBloomFilter(uint capacity)
         {
+            Guard.ValidItemCount(capacity, nameof(capacity));
+
             this.Array = new byte[capacity][];
             this.Hash = Defaults.GetDefaultHashFunction();
             this.capacity = capacity;
@@ -146,7 +153,22 @@ namespace ProbabilisticDataStructures
         private byte[] GetAndSet(uint index, byte[] data)
         {
             var oldData = this.Array[index];
-            this.Array[index] = data;
+
+            // Copied, not retained. This filter is the only one here that keeps the
+            // data rather than just hashing it, and Test answers by comparing the
+            // stored bytes against the query. Holding the caller's array would let
+            // their next write into it change what this filter believes it holds --
+            // and callers do reuse buffers, which is the whole reason they are fast.
+            //
+            // That is not a small error. A caller filling one buffer per record leaves
+            // every written slot pointing at the same array, so the filter answers
+            // every one of them with whatever that buffer holds now. Querying a value
+            // never added then reads it straight back out of a slot it was never put
+            // in, and the filter reports it present: measured at 38.8% against a
+            // structure whose defining property is that it never reports a false
+            // positive at all.
+            this.Array[index] = (byte[])data.Clone();
+
             return oldData;
         }
 

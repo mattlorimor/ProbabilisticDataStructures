@@ -130,6 +130,8 @@ namespace TestProbabilisticDataStructures
             Assert.Throws<ArgumentOutOfRangeException>(() => new DeletableBloomFilter(0, 10, 0.01));
             Assert.Throws<ArgumentOutOfRangeException>(() => new StableBloomFilter(0, 1, 0.01));
             Assert.Throws<ArgumentOutOfRangeException>(() => new ScalableBloomFilter(0, 0.01, 0.8));
+            // A capacity of zero left nowhere to put anything and divided by it.
+            Assert.Throws<ArgumentOutOfRangeException>(() => new InverseBloomFilter(0));
         }
 
         /// <summary>

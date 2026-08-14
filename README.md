@@ -63,9 +63,8 @@ This is deliberate and matches the Go implementation this library is a port of. 
 locks would impose a cost on the single-threaded case, which is the common one, and the
 right granularity depends on the caller's access pattern rather than the filter's.
 
-`Test` is not safe to call concurrently with `Add` or `TestAndAdd`, and it is not safe
-to call `Test` concurrently with itself either: the filters hold a `HashAlgorithm`
-instance and reuse it across calls, and `HashAlgorithm` is itself not thread-safe.
+`Test` is not safe to call concurrently with `Add` or `TestAndAdd`: the filters mutate
+their bucket arrays in place, without synchronization.
 
 If you need concurrent access, synchronize externally:
 
@@ -82,9 +81,10 @@ public bool Contains(byte[] data)
 }
 ```
 
-A reader-writer lock will not help without further care, because concurrent `Test` calls
-still share the same `HashAlgorithm`. Give each thread its own filter, or hold an
-exclusive lock for every operation.
+Concurrent `Test` calls are safe against each other under the default hashing, which is
+a pure function over the input, so a reader-writer lock is enough if you supply no hash
+of your own. A hash function passed to `SetHash` is shared by every call, so one holding
+mutable state -- a reused `HashAlgorithm` instance, for example -- takes that away.
 
 ## Contributions
 Pull-requests are welcome, but submitting an issue is probably the best place to start if you have complex critiques or suggestions.
@@ -184,11 +184,13 @@ namespace FilterExample
 
 ## Inverse Bloom Filter
 
-An Inverse Bloom Filter, or "the opposite of a Bloom filter", is a concurrent, probabilistic data structure used to test whether an item has been observed or not. This implementation, [originally described and written by Jeff Hodges](http://www.somethingsimilar.com/2012/05/21/the-opposite-of-a-bloom-filter/), replaces the use of MD5 hashing with a non-cryptographic FNV-1 function.
+An Inverse Bloom Filter, or "the opposite of a Bloom filter", is a probabilistic data structure used to test whether an item has been observed or not. It was [originally described and written by Jeff Hodges](http://www.somethingsimilar.com/2012/05/21/the-opposite-of-a-bloom-filter/).
 
 The Inverse Bloom Filter may report a false negative but can never report a false positive. That is, it may report that an item has not been seen when it actually has, but it will never report an item as seen which it hasn't come across. This behaves in a similar manner to a fixed-size hashmap which does not handle conflicts.
 
-This structure is particularly well-suited to streams in which duplicates are relatively close together. It uses a CAS-style approach, which makes it thread-safe.
+This structure is particularly well-suited to streams in which duplicates are relatively close together.
+
+It is not thread-safe. Jeff Hodges' original swaps the stored value atomically; this implementation reads and writes the slot in two steps, so concurrent use can lose an entry or tear one. See [Thread safety](#thread-safety).
 
 ### Usage
 

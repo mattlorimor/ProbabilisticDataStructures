@@ -69,6 +69,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is inherent -- a filter cannot tell such a removal from a real one -- and is now
   documented rather than fixed.
 
+- **`InverseBloomFilter` no longer reports data it never saw.** This is the only filter
+  here that stores the data rather than only hashing it, and `Test` answers by comparing
+  the stored bytes against the query. It kept the caller's array instead of copying,
+  so the caller's next write into that buffer changed what the filter held.
+
+  Reusing a single buffer per record -- ordinary, and the reason callers work in bytes
+  at all -- left every written slot pointing at the same array, so a value never added
+  could be read straight back out of a slot it was never put in. **38.8% of never-added
+  values were reported present**, against a structure whose defining property is that it
+  never reports a false positive at all. `Add` and `TestAndAdd` now copy. `Test` is
+  unchanged and still does not allocate.
+
+- **`new InverseBloomFilter(0)`** throws `ArgumentOutOfRangeException` rather than
+  `DivideByZeroException` on first use.
+
+- **Corrected the claim that the inverse filter is thread-safe.** The README said it
+  "uses a CAS-style approach, which makes it thread-safe" while its own thread-safety
+  section said no filter in the library is. The second is right: Jeff Hodges' original
+  swaps the stored value atomically, and this reads and writes the slot in two steps.
+  The README also credited the implementation with FNV-1 hashing, which it has never
+  used, and explained the absence of thread safety by a `HashAlgorithm` instance the
+  filters stopped holding in 3.0.0. Concurrent `Test` calls are in fact safe against
+  each other under the default hashing, which is now what the README says.
+
 - **`ScalableBloomFilter` validates its tightening ratio.** The ratio scales each new
   filter's false positive rate down from the last, and the structure's guarantee -- a
   compound rate bounded by `P0 / (1 - r)` -- is a geometric series that only converges
