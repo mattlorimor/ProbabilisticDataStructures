@@ -16,6 +16,7 @@ included in all copies or substantial portions of the Software.
 */
 
 using System;
+using System.Numerics;
 using System.Linq;
 using System.Security.Cryptography;
 
@@ -74,6 +75,11 @@ namespace ProbabilisticDataStructures
         /// <param name="m">Number of registers (must be a power of two)</param>
         public HyperLogLog(uint m)
         {
+            // Zero passes the power-of-two test below, because 0 - 1 underflows to
+            // all ones and 0 & anything is 0. It would build an estimator with no
+            // registers, which then indexes an empty array.
+            Guard.ValidItemCount(m, nameof(m));
+
             if ((m & (m - 1)) != 0)
             {
                 throw new ArgumentException(String.Format("{0} is not a power of two", m));
@@ -81,7 +87,12 @@ namespace ProbabilisticDataStructures
 
             this.Registers = new byte[m];
             this.M = m;
-            this.B = (uint)Math.Ceiling(Math.Log(m, 2));
+
+            // Exact by construction. Computing this as Ceiling(Log(m, 2)) is not:
+            // for m = 2^29 the floating-point logarithm lands just above 29, so the
+            // ceiling returns 30. That leaves k = 32 - b too small, and the register
+            // index derived from it can exceed the register array.
+            this.B = (uint)BitOperations.Log2(m);
             this.Alpha = CalculateAlpha(m);
             this.Hash = Defaults.GetDefaultHashFunction();
         }

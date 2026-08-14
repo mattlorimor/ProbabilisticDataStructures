@@ -1,5 +1,6 @@
 ﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
+using System.Linq;
 using System.Text;
 
 namespace TestProbabilisticDataStructures
@@ -22,15 +23,25 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(0.8, f.R);
         }
 
+        /// <summary>
+        /// Capacity is the sum over the contained filters. This used to be asserted as
+        /// the constant 15, which required a tightening ratio of 1 so that all three
+        /// filters came out the same size -- a ratio the constructor now rejects,
+        /// because it leaves the compound false positive rate unbounded. Summing the
+        /// parts states the contract directly and does not depend on the sizing math.
+        /// </summary>
         [TestMethod]
         public void TestScalableBloomCapacity()
         {
-            var f = new ScalableBloomFilter(1, 0.1, 1);
+            var f = new ScalableBloomFilter(1, 0.1, 0.8);
+            var first = f.Capacity();
+
             f.AddFilter();
             f.AddFilter();
 
-            var capacity = f.Capacity();
-            Assert.AreEqual(15u, capacity);
+            Assert.AreEqual(f.Filters.Sum(x => (long)x.Capacity()), (long)f.Capacity());
+            Assert.IsGreaterThan(first, f.Capacity(),
+                "adding filters should increase the total capacity");
         }
 
         // Ensures that K returns the number of hash functions used in each Bloom filter.

@@ -65,14 +65,33 @@ namespace ProbabilisticDataStructures
         /// <param name="fpRate">Desired false positive rate</param>
         public DeletableBloomFilter(uint n, uint r, double fpRate)
         {
+            Guard.ValidItemCount(n, nameof(n));
+            Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
+
             var m = Utils.OptimalM(n, fpRate);
             var k = Utils.OptimalK(fpRate);
+
+            // r shares the filter's bits with the data region, so it has to leave
+            // room; a larger value underflows m - r and allocates enormously.
+            Guard.ValidCollisionRegionCount(r, m, nameof(r));
+
 
             this.Buckets = new Buckets(m - r, 1);
             this.Collisions = new Buckets(r, 1);
             this.Hash = Defaults.GetDefaultHashFunction();
             this.M = m - r;
-            this.RegionSize = (m - r) / r;
+            // Rounded up, not down. The data region rarely divides evenly into r
+            // regions, and rounding down leaves a remainder that maps to region
+            // index r -- one past the last collision bucket. Rounding up keeps
+            // every index inside the array: for RegionSize >= M/r, the largest
+            // index (M - 1) / RegionSize is at most r(M - 1)/M, which is below r.
+            // The final region is correspondingly shorter, which is the intent:
+            // regions partition the data bits, so the last one holds what is left.
+            //
+            // Rounding up also keeps RegionSize non-zero. r is only required to be
+            // smaller than m, so it may exceed the data region m - r, and dividing
+            // down would then floor to zero and fault on the first Add.
+            this.RegionSize = (this.M + r - 1) / r;
             this.k = k;
             this.IndexBuffer = new uint[k];
         }

@@ -78,6 +78,9 @@ namespace ProbabilisticDataStructures
         /// <param name="fpRate">Desired false-positive rate</param>
         public StableBloomFilter(uint m, byte d, double fpRate)
         {
+            Guard.ValidItemCount(m, nameof(m));
+            Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
+
             var k = Utils.OptimalK(fpRate) / 2;
             if (k > m)
             {

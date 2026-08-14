@@ -66,6 +66,317 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The number of collision regions is a free parameter, so every value has to
+        /// work. It did not: the region size was rounded down, which sent the trailing
+        /// bits of the data region to region index r -- one past the last collision
+        /// bucket. Buckets does not bounds-check, so what happened next depended on
+        /// whether the bitmap had padding to absorb the write. A multiple of eight has
+        /// none, and Add threw; other values landed in padding and worked by accident.
+        /// </summary>
+        [TestMethod]
+        public void TestDeletableFilterAcceptsAnyRegionCount()
+        {
+            // Powers of two are the values a caller reaches for first, and are exactly
+            // the ones that used to throw.
+            uint[] regionCounts = { 1, 2, 3, 7, 8, 10, 16, 32, 64, 100, 128, 1000 };
+
+            foreach (var r in regionCounts)
+            {
+                const int count = 500;
+                var f = new DeletableBloomFilter(count, r, 0.01);
+
+                for (int i = 0; i < count; i++)
+                {
+                    f.Add(Key($"r{r}-item-{i}"));
+                }
+
+                for (int i = 0; i < count / 2; i++)
+                {
+                    f.TestAndRemove(Key($"r{r}-item-{i}"));
+                }
+
+                var missing = Enumerable.Range(count / 2, count / 2)
+                    .Count(i => !f.Test(Key($"r{r}-item-{i}")));
+
+                Assert.AreEqual(0, missing,
+                    $"r={r}: {missing} elements disappeared after removing unrelated ones.");
+            }
+        }
+
+        /// <summary>
+        /// r is only required to be smaller than the filter's m bits, so it is allowed
+        /// to exceed the m - r bits left for data. Rounding the region size down gave
+        /// zero in that case and the first Add divided by it.
+        /// </summary>
+        [TestMethod]
+        public void TestDeletableFilterHandlesMoreRegionsThanDataBits()
+        {
+            // 1000 items at a 1% rate sizes m at 9586 bits, so this leaves 11 for data
+            // and asks for more regions than there are bits to put in them.
+            var f = new DeletableBloomFilter(1000, 9575, 0.01);
+            Assert.IsGreaterThan(0u, f.Capacity(), "the data region should not be empty");
+
+            var a = Key("present");
+            f.Add(a);
+            Assert.IsTrue(f.Test(a), "an added element must be found");
+            Assert.IsTrue(f.TestAndRemove(a), "removing a present element reports present");
+        }
+
+        /// <summary>
+        /// A scalable filter's guarantee is a compound false positive rate bounded by
+        /// P0 / (1 - r). That is the sum of a geometric series, so it only converges
+        /// for a ratio strictly between zero and one.
+        /// <para>
+        /// A ratio of exactly 1 was accepted and never tightened anything: asking for
+        /// 1% and adding 20,000 items to a filter hinted at 100 measured **83%**. The
+        /// filter kept working and simply stopped honoring the rate requested of it,
+        /// which is worse than refusing the argument. Ratios outside the range in the
+        /// other direction did throw, but from inside Add and blaming fpRate -- a
+        /// parameter the caller had passed correctly.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestScalableFilterRejectsRatiosThatDoNotTighten()
+        {
+            foreach (var r in new[] { -0.5, 0.0, 1.0, 1.5, 2.0, double.NaN })
+            {
+                Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => new ScalableBloomFilter(100, 0.01, r),
+                    $"a tightening ratio of {r} does not bound the compound rate");
+            }
+
+            // The open interval between them is what the structure is defined on.
+            foreach (var r in new[] { 0.001, 0.5, 0.8, 0.999 })
+            {
+                _ = new ScalableBloomFilter(100, 0.01, r);
+            }
+        }
+
+        /// <summary>
+        /// Reset empties a filter; it does not reconfigure it. The scalable filter
+        /// rebuilds its list from scratch, and did so without carrying the hash across,
+        /// so a caller who had set their own was quietly returned to the default.
+        /// </summary>
+        [TestMethod]
+        public void TestScalableFilterResetKeepsTheHashFunction()
+        {
+            var f = new ScalableBloomFilter(100, 0.01, 0.8);
+
+            // Degenerate on purpose: a constant hash puts every key in the same place,
+            // so any key reads as present. Nothing else produces that.
+            f.SetHash(_ => 12345UL);
+            f.Add(Key("a"));
+            Assert.IsTrue(f.Test(Key("unrelated")),
+                "sanity: with a constant hash every key collides");
+
+            f.Reset();
+            f.Add(Key("a"));
+
+            Assert.IsTrue(f.Test(Key("unrelated")),
+                "Reset restored the default hash and discarded the one that was set");
+        }
+
+        /// <summary>
+        /// The inverse filter's one hard guarantee is that it never reports an item it
+        /// has not seen. It is the only filter here that stores the data rather than
+        /// only hashing it, and it kept the caller's array instead of copying, so the
+        /// caller's next write into that buffer changed what the filter held.
+        /// <para>
+        /// Reusing one buffer per record is ordinary and is the reason callers work in
+        /// bytes at all. It left every written slot pointing at the same array, so a
+        /// value never added could be read straight back out of a slot it was never
+        /// put in: 38.8% of never-added values were reported present.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestInverseFilterNeverReportsUnseenData()
+        {
+            const uint capacity = 1000;
+            var f = new InverseBloomFilter(capacity);
+            var buffer = new byte[8];
+
+            for (int i = 0; i < 500; i++)
+            {
+                Encoding.ASCII.GetBytes($"rec-{i:D3}").CopyTo(buffer, 0);
+                f.Add(buffer);
+            }
+
+            var falsePositives = 0;
+            for (int i = 0; i < 10000; i++)
+            {
+                var unseen = Encoding.ASCII.GetBytes($"nev-{i:D4}");
+                // As a caller would on their next read, before querying.
+                unseen.CopyTo(buffer, 0);
+                if (f.Test(unseen))
+                {
+                    falsePositives++;
+                }
+            }
+
+            Assert.AreEqual(0, falsePositives,
+                $"{falsePositives} values that were never added were reported present; " +
+                "this filter must never report a false positive.");
+        }
+
+        /// <summary>
+        /// The same guarantee stated at its smallest: one element, mutated in place
+        /// after being added.
+        /// </summary>
+        [TestMethod]
+        public void TestInverseFilterIsUnaffectedByMutatingAddedData()
+        {
+            var f = new InverseBloomFilter(1000);
+            var data = new byte[] { 1, 2, 3 };
+
+            f.Add(data);
+            data[0] = 9;
+
+            Assert.IsTrue(f.Test(new byte[] { 1, 2, 3 }),
+                "what was added should still be found after the caller reuses its array");
+            Assert.IsFalse(f.Test(new byte[] { 9, 2, 3 }),
+                "what was never added should not be found");
+        }
+
+        /// <summary>
+        /// A top-k structure has one job. Given a stream whose frequencies are all
+        /// distinct, and a sketch wide enough to count it without error, the answer is
+        /// not approximate and there is nothing to be lenient about.
+        /// <para>
+        /// It got this wrong across most configurations, because its min-heap was not
+        /// one. Pop removed the root with List.Remove, which slides every later element
+        /// down a position rather than restoring the ordering, and an element already
+        /// in the heap had its frequency raised in place with no re-ordering at all.
+        /// The root therefore stopped being the minimum, and the root is both what new
+        /// elements are compared against and what gets evicted. 89 of these 150
+        /// configurations returned the wrong set.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestTopKReturnsTheExactTopKWhenCountsAreExact()
+        {
+            const int distinct = 200;
+
+            foreach (uint k in new uint[] { 1, 2, 5, 10, 25, 50 })
+            {
+                for (int seed = 0; seed < 5; seed++)
+                {
+                    // Item i occurs (distinct - i + 5) times, so every frequency
+                    // differs and the correct answer is exactly items 0..k-1.
+                    var stream = new List<int>();
+                    for (int i = 0; i < distinct; i++)
+                    {
+                        for (int j = 0; j < distinct - i + 5; j++)
+                        {
+                            stream.Add(i);
+                        }
+                    }
+
+                    var rand = new Random(seed);
+                    for (int i = stream.Count - 1; i > 0; i--)
+                    {
+                        int j = rand.Next(i + 1);
+                        (stream[i], stream[j]) = (stream[j], stream[i]);
+                    }
+
+                    // Wide and deep enough that the sketch counts this stream exactly.
+                    var topK = new TopK(0.0001, 0.001, k);
+                    foreach (var x in stream)
+                    {
+                        topK.Add(Key($"i{x:D4}"));
+                    }
+
+                    var got = topK.Elements()
+                        .Select(e => Encoding.ASCII.GetString(e.Data))
+                        .ToHashSet();
+                    var want = Enumerable.Range(0, (int)k)
+                        .Select(i => $"i{i:D4}")
+                        .ToHashSet();
+
+                    Assert.IsTrue(got.SetEquals(want),
+                        $"k={k} seed={seed}: missing {string.Join(", ", want.Except(got))}, " +
+                        $"unexpected {string.Join(", ", got.Except(want))}");
+
+                    // And ordered from lowest to highest frequency, as documented.
+                    var freqs = topK.Elements().Select(e => e.Freq).ToArray();
+                    CollectionAssert.AreEqual(freqs.OrderBy(x => x).ToArray(), freqs,
+                        $"k={k} seed={seed}: Elements() must be ascending by frequency");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Elements() hands the stored arrays back to the caller, and the heap kept the
+        /// arrays it was given rather than copying them, so a caller reusing one buffer
+        /// to add from would find every entry holding their last write.
+        /// </summary>
+        [TestMethod]
+        public void TestTopKIsUnaffectedByMutatingAddedData()
+        {
+            var topK = new TopK(0.001, 0.01, 3);
+            var buffer = new byte[4];
+
+            foreach (var name in new[] { "aaaa", "bbbb", "cccc" })
+            {
+                Encoding.ASCII.GetBytes(name).CopyTo(buffer, 0);
+                topK.Add(buffer);
+            }
+
+            Encoding.ASCII.GetBytes("zzzz").CopyTo(buffer, 0);
+
+            var names = topK.Elements()
+                .Select(e => Encoding.ASCII.GetString(e.Data))
+                .OrderBy(x => x, StringComparer.Ordinal)
+                .ToArray();
+
+            CollectionAssert.AreEqual(new[] { "aaaa", "bbbb", "cccc" }, names,
+                "the heap held the caller's buffer rather than a copy of it");
+        }
+
+        /// <summary>
+        /// Reset restores a filter to its original state, and a filter in its original
+        /// state holds nothing. Three of them emptied their buckets and left the item
+        /// count where it was, so a filter reporting itself empty by every other
+        /// measure still claimed the items it used to hold.
+        /// <para>
+        /// The count is not only reported. EstimatedFillRatio is derived from it, and
+        /// a partitioned filter's is what a scalable filter consults to decide when to
+        /// grow, so a stale count made a freshly emptied filter look 44% full.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestResetEmptiesTheItemCount()
+        {
+            const int added = 800;
+
+            var bloom = new BloomFilter(1000, 0.01);
+            var bloom64 = new BloomFilter64(1000, 0.01);
+            var partitioned = new PartitionedBloomFilter(1000, 0.01);
+            var counting = new CountingBloomFilter(1000, 4, 0.01);
+            var deletable = new DeletableBloomFilter(1000, 10, 0.01);
+
+            for (int i = 0; i < added; i++)
+            {
+                var key = Key($"item-{i}");
+                bloom.Add(key);
+                bloom64.Add(key);
+                partitioned.Add(key);
+                counting.Add(key);
+                deletable.Add(key);
+            }
+
+            Assert.AreEqual(0u, bloom.Reset().Count());
+            Assert.AreEqual(0ul, bloom64.Reset().Count());
+            Assert.AreEqual(0u, partitioned.Reset().Count());
+            Assert.AreEqual(0u, counting.Reset().Count());
+            Assert.AreEqual(0u, deletable.Reset().Count());
+
+            // The count feeds the fill estimate, which is what actually acts on it.
+            Assert.AreEqual(0.0, bloom.EstimatedFillRatio());
+            Assert.AreEqual(0.0, bloom64.EstimatedFillRatio());
+            Assert.AreEqual(0.0, partitioned.EstimatedFillRatio());
+        }
+
+        /// <summary>
         /// The inverse filter is a bounded "recently seen" cache rather than a growing
         /// set: an element whose slot is claimed by a later one is forgotten. False
         /// negatives are therefore expected here, which is the opposite of every other

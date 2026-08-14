@@ -5,6 +5,183 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-08-14
+
+### Fixed
+
+- **Filter constructors now validate their arguments and throw
+  `ArgumentOutOfRangeException`** instead of failing later, or not at all.
+
+  Three problems, all of which reported something true about the internals and
+  nothing about the mistake:
+
+  - A false positive rate of 0, 1, a negative, a value above 1, or `NaN` surfaced as
+    an `OverflowException` from a numeric conversion inside the sizing math. A rate of
+    exactly 1 was worse: it constructed successfully and produced a filter with zero
+    bits and zero hash functions, which silently reported every element as present.
+
+  - Sizing a filter for zero items constructed successfully and then threw
+    `DivideByZeroException` on first use, far from the cause. This affected
+    `BloomFilter`, `BloomFilter64`, `CountingBloomFilter`, `PartitionedBloomFilter`
+    and `CuckooBloomFilter`.
+
+  - `DeletableBloomFilter` splits its bits between a data region and a collision
+    region. Passing a collision count at or above the filter's size underflowed the
+    `uint` subtraction `m - r`, so `new DeletableBloomFilter(0, 10, 0.01)` silently
+    allocated roughly **512 MB** and reported a capacity above four billion.
+
+  Valid arguments are unaffected. `HyperLogLog` and `TopK` already validated theirs;
+  this brings the rest of the library in line.
+
+- **`HyperLogLog` threw `IndexOutOfRangeException` at 2^29 registers.** `b` splits the
+  hash into a register index and the bits `rho` scans, so it has to be exactly
+  `log2(m)`. Deriving it as `Ceiling(Log(m, 2))` is not exact: at `m = 2^29` the
+  floating-point logarithm lands just above 29 and the ceiling returns 30, leaving the
+  register index able to exceed the array. It is now derived with `BitOperations.Log2`.
+  Separately, a register count of zero passed the power-of-two check, because `0 - 1`
+  underflows to all ones; it is now rejected. The estimator itself is unchanged.
+
+- **`DeletableBloomFilter` threw `IndexOutOfRangeException` for any collision region
+  count that is a multiple of eight**, including `8`, `16`, `32` and `64`. The region
+  size was rounded down, so the trailing bits of the data region mapped to region index
+  `r` -- one past the last collision bucket. Whether that was fatal depended on
+  something unrelated: the collision bitmap allocates whole bytes, and for most values
+  of `r` the stray index landed in the leftover padding bits and went unnoticed, but a
+  multiple of eight leaves no padding and the write ran off the array. Passing an `r`
+  larger than the `m - r` data bits rounded the region size down to zero and threw
+  `DivideByZeroException` on the first `Add`. The region size is now rounded up, which
+  keeps every index inside the array and non-zero. Stored filter contents are
+  unaffected; only which region a bit is attributed to changes.
+
+- **`CountingBloomFilter` removals no longer hide elements that are still present.**
+  A counter that reaches its maximum has stopped tracking how many elements it stands
+  for, but removals decremented it anyway, resuming the count from the ceiling. Enough
+  of those drove it to zero while elements needing it were still in the filter --
+  precisely the false negative that a counting filter exists to avoid. Saturated
+  counters are now left alone, which costs space rather than correctness: the elements
+  covering them become permanently unremovable.
+
+  The effect scaled with how quickly counters saturate. Removing half of 2000 elements
+  left **745 of the 1000 survivors unfindable at 1 bit per counter** and 42 at 2 bits.
+  The default 4-bit counters showed none at that load, which is why this went unseen.
+
+  Removing an element that was never added still introduces false negatives. That one
+  is inherent -- a filter cannot tell such a removal from a real one -- and is now
+  documented rather than fixed.
+
+
+- **`Reset()` clears the item count** on `BloomFilter`, `BloomFilter64` and
+  `PartitionedBloomFilter`. All three emptied their buckets and left the count where it
+  was, so a filter that was empty by every other measure still reported the items it
+  used to hold. `CountingBloomFilter` and `DeletableBloomFilter` already cleared theirs.
+
+  The count is not only reported: `EstimatedFillRatio()` is derived from it, and a
+  partitioned filter's is what a scalable filter consults to decide when to grow. A
+  filter emptied after 800 additions reported an estimated fill ratio of **44%**.
+
+- **`CountMinSketch` validates `epsilon` and `delta`.** `delta` is the probability that
+  an estimate exceeds the error `epsilon` allows, and the matrix depth `ln(1 / delta)`
+  is only positive below one. At one and above the matrix had **no rows**, and a sketch
+  with no rows did not fail: `Count` minimises over an empty set of rows and returns its
+  initial value, so **every element was reported as having been seen 18446744073709551615
+  times**. Values at or below zero, and `NaN`, surfaced as `OverflowException` or
+  `DivideByZeroException` from the sizing arithmetic. An `epsilon` small enough to need
+  a matrix wider than `uint.MaxValue` is now rejected rather than wrapping.
+
+- **`CountMinSketch.Count(null)` and `Merge(null)` throw `ArgumentNullException`.**
+  `Count` hashed the empty span and returned a number; `Merge` threw
+  `NullReferenceException`.
+
+- **`CountMinSketch.Merge` throws `ArgumentException` rather than the bare `Exception`**
+  on a width or depth mismatch, which could not be caught without catching every
+  unrelated failure alongside it. The message now names both dimensions and the
+  parameter each follows from.
+
+- **`TopK` returns the top k.** Its min-heap was not one. `Pop` removed the root with
+  `List.Remove`, which slides every later element down a position instead of restoring
+  the ordering, and an element already in the heap had its frequency raised in place
+  with no re-ordering at all. The root therefore stopped being the minimum -- and the
+  root is both what an arriving element is compared against and what gets evicted, so
+  the structure discarded frequent elements and kept rare ones. `Down`, the sift that
+  both paths needed, was present and never called.
+
+  Given a stream with distinct frequencies and a sketch wide enough to count it
+  exactly, so that the right answer is unambiguous, **89 of 150 configurations returned
+  the wrong set**. All 150 are now correct. Reported frequencies were also stale, since
+  an element's count was only refreshed on the path the broken ordering skipped.
+
+- **`TopK` copies the data it stores.** It handed the caller's arrays back through
+  `Elements()` without copying, so a caller reusing one buffer to add from found every
+  entry holding their last write.
+
+- **`new TopK(epsilon, delta, 0)`** throws `ArgumentOutOfRangeException` rather than
+  indexing its empty heap on the first `Add`.
+
+- **`InverseBloomFilter` no longer reports data it never saw.** This is the only filter
+  here that stores the data rather than only hashing it, and `Test` answers by comparing
+  the stored bytes against the query. It kept the caller's array instead of copying,
+  so the caller's next write into that buffer changed what the filter held.
+
+  Reusing a single buffer per record -- ordinary, and the reason callers work in bytes
+  at all -- left every written slot pointing at the same array, so a value never added
+  could be read straight back out of a slot it was never put in. **38.8% of never-added
+  values were reported present**, against a structure whose defining property is that it
+  never reports a false positive at all. `Add` and `TestAndAdd` now copy. `Test` is
+  unchanged and still does not allocate.
+
+- **`new InverseBloomFilter(0)`** throws `ArgumentOutOfRangeException` rather than
+  `DivideByZeroException` on first use.
+
+- **Corrected the claim that the inverse filter is thread-safe.** The README said it
+  "uses a CAS-style approach, which makes it thread-safe" while its own thread-safety
+  section said no filter in the library is. The second is right: Jeff Hodges' original
+  swaps the stored value atomically, and this reads and writes the slot in two steps.
+  The README also credited the implementation with FNV-1 hashing, which it has never
+  used, and explained the absence of thread safety by a `HashAlgorithm` instance the
+  filters stopped holding in 3.0.0. Concurrent `Test` calls are in fact safe against
+  each other under the default hashing, which is now what the README says.
+
+- **`ScalableBloomFilter` validates its tightening ratio.** The ratio scales each new
+  filter's false positive rate down from the last, and the structure's guarantee -- a
+  compound rate bounded by `P0 / (1 - r)` -- is a geometric series that only converges
+  below 1. A ratio of exactly 1 was accepted and tightened nothing: asking for 1% and
+  adding 20,000 items measured **83%**. The filter kept working and quietly stopped
+  honoring the rate requested of it. Ratios at or below 0 and above 1 did throw, but
+  from inside `Add`, naming `fpRate` -- a parameter the caller had passed correctly.
+
+- **`ScalableBloomFilter.Reset()` keeps a hash function set with `SetHash`.** It
+  rebuilds its list of filters from scratch and did not carry the hash across, silently
+  restoring the default. Every other filter's `Reset` preserves it.
+
+- **A bucket width of zero is rejected** with `ArgumentOutOfRangeException` rather than
+  throwing `IndexOutOfRangeException` on first use. `new CountingBloomFilter(n, 0, r)`
+  allocated no storage and then read from it.
+
+### Changed
+
+- **`MinHash.Similarity` returns the resemblance it documents.** Broder's resemblance is
+  the Jaccard index -- distinct words in both bags over distinct words in either. This
+  returned the Sørensen–Dice coefficient, `2|A∩B| / (|A|+|B|)`, which is related as
+  `D = 2J / (1 + J)` and so is consistently higher: **bags of one third resemblance were
+  reported at one half**.
+
+  None of the MinHash machinery contributed to that result. It generated `k` hash
+  permutations and never used them, because the loop over them ignored its own index,
+  and returned agreement over element positions instead. The same input gave the same
+  answer on every run despite the random hashes, which is the tell.
+
+  The result is now computed exactly rather than estimated. Broder's estimator earns its
+  error when a set is too large to hold or a signature can be reused across many
+  comparisons, and neither applies to a call handed both bags in full; estimating would
+  cost accuracy and time and buy nothing. A signature-based API, which is where the
+  estimator does pay, is being considered alongside serialization.
+
+  Removing the unused permutations also removed their cost: comparing two 400-word bags
+  took 163 ms and now takes about 15 µs.
+
+  Two empty bags now return 1 rather than `NaN`, and a null bag throws
+  `ArgumentNullException` rather than `NullReferenceException`.
+
 ## [3.0.1] - 2026-08-13
 
 ### Fixed
@@ -251,6 +428,7 @@ This release modernizes the entire build. The library had not been touched since
 - Initial release: a C# port of [Tyler Treat's](https://github.com/tylertreat)
   [BoomFilters](https://github.com/tylertreat/BoomFilters) Go project.
 
+[3.1.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v3.0.1...HEAD
 [3.0.1]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v2.0.1...v3.0.0
 [2.0.1]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v2.0.0...v2.0.1

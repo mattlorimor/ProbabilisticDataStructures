@@ -64,6 +64,9 @@ namespace ProbabilisticDataStructures
         /// <param name="delta">Relative-accuracy probability</param>
         public CountMinSketch(double epsilon, double delta)
         {
+            Guard.ValidSketchEpsilon(epsilon, nameof(epsilon));
+            Guard.ValidSketchDelta(delta, nameof(delta));
+
             var width = (uint)(Math.Ceiling(Math.E / epsilon));
             var depth = (uint)(Math.Ceiling(Math.Log(1 / delta)));
             this.Matrix = new UInt64[depth][];
@@ -138,6 +141,8 @@ namespace ProbabilisticDataStructures
         /// <returns>The data to count.</returns>
         public UInt64 Count(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
@@ -160,14 +165,25 @@ namespace ProbabilisticDataStructures
         /// <returns>True if successful.</returns>
         public bool Merge(CountMinSketch other)
         {
+            ArgumentNullException.ThrowIfNull(other);
+
+            // ArgumentException rather than Exception: a caller who wants to fall back
+            // to merging some other way cannot catch the bare one without catching
+            // every unrelated failure alongside it.
             if (this.Depth != other.Depth)
             {
-                throw new Exception("Matrix depth must match.");
+                throw new ArgumentException(
+                    $"Matrix depth must match. This sketch is {this.Depth} rows deep " +
+                    $"and the other is {other.Depth}; depth follows from delta, so the " +
+                    "two sketches were built with different ones.", nameof(other));
             }
 
             if (this.Width != other.Width)
             {
-                throw new Exception("Matrix width must match.");
+                throw new ArgumentException(
+                    $"Matrix width must match. This sketch is {this.Width} columns wide " +
+                    $"and the other is {other.Width}; width follows from epsilon, so the " +
+                    "two sketches were built with different ones.", nameof(other));
             }
 
             for (uint i = 0; i < this.Depth; i++)

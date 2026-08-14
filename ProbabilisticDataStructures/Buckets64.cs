@@ -64,6 +64,14 @@ namespace ProbabilisticDataStructures
         /// <param name="bucketSize">Number of bits per bucket.</param>
         internal Buckets64(ulong count, byte bucketSize)
         {
+            if (bucketSize == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bucketSize), bucketSize,
+                    "Bucket size must be at least 1 bit. A zero-bit bucket holds no " +
+                    "value and allocates no storage, so reading one indexes an empty " +
+                    "array.");
+            }
+
             if (bucketSize > MaxBucketSizeBits)
             {
                 throw new ArgumentOutOfRangeException(nameof(bucketSize), bucketSize,

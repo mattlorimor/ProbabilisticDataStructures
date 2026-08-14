@@ -69,9 +69,23 @@ namespace ProbabilisticDataStructures
         /// <returns>The Element that was removed</returns>
         internal Element Pop()
         {
-            var elementToRemove = this.Heap[0];
-            this.Heap.Remove(elementToRemove);
-            return elementToRemove;
+            // Removing the root by List.Remove shifts every later element down one
+            // position, which is not a heap operation: the array that comes back is
+            // the old one slid left, and its parent/child relationships are whatever
+            // that shift happened to produce. The heap has no minimum at the root
+            // afterwards, so the next Pop evicts an arbitrary element.
+            //
+            // Extraction is instead the standard three steps -- take the root, move
+            // the last element into its place, and sift that element down until the
+            // ordering holds again. Down existed for this and was never called.
+            var min = this.Heap[0];
+            var last = this.Len() - 1;
+
+            this.Swap(0, last);
+            this.Heap.RemoveAt(last);
+            this.Down(0, this.Len());
+
+            return min;
         }
 
         internal void Up(int j)
@@ -144,8 +158,15 @@ namespace ProbabilisticDataStructures
                 var element = this.Heap[i];
                 if (Enumerable.SequenceEqual(data, element.Data))
                 {
-                    // Element already in top-k.
+                    // Element already in top-k. Raising its frequency in place leaves
+                    // it possibly greater than a child's, so the ordering has to be
+                    // restored or the root stops being the minimum -- and the root is
+                    // what isTop compares against and what Pop evicts.
+                    //
+                    // Sifting down is enough: a frequency read from the sketch only
+                    // ever grows, so an updated element can only sink.
                     element.Freq = freq;
+                    this.Down(i, this.Len());
                     return;
                 }
             }
@@ -156,10 +177,12 @@ namespace ProbabilisticDataStructures
                 this.Pop();
             }
 
-            // Add element to top-k.
+            // Add element to top-k. The data is copied rather than retained: it is
+            // handed back to callers through Elements(), and a caller reusing the
+            // buffer they added from would otherwise rewrite every entry in the heap.
             this.Push(new Element
             {
-                Data = data,
+                Data = (byte[])data.Clone(),
                 Freq = freq,
             });
         }

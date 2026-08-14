@@ -43,6 +43,9 @@ namespace ProbabilisticDataStructures
         /// <param name="fpRate">Desired false positive rate.</param>
         public BloomFilter64(ulong n, double fpRate)
         {
+            Guard.ValidItemCount(n, nameof(n));
+            Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
+
             var m = Utils.OptimalM64(n, fpRate);
             var k = Utils.OptimalK(fpRate);
             Buckets = new Buckets64(m, 1);
@@ -189,6 +192,7 @@ namespace ProbabilisticDataStructures
         public BloomFilter64 Reset()
         {
             this.Buckets.Reset();
+            this.count = 0;
             return this;
         }
 

@@ -70,6 +70,9 @@ namespace ProbabilisticDataStructures
         /// <param name="fpRate">Target false-positive rate</param>
         public CuckooBloomFilter(uint n, double fpRate)
         {
+            Guard.ValidItemCount(n, nameof(n));
+            Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
+
             var b = (uint)4;
             var f = CalculateF(b, fpRate);
             var m = Power2(n / f * 8);

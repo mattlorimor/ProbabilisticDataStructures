@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -16,17 +17,18 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// A counting filter's counters saturate, and once they do the filter can no
-        /// longer tell how many times an element was added. Removals then clear it
-        /// after at most max steps rather than after as many steps as there were
-        /// adds.
+        /// longer tell how many elements they stand for. A saturated counter is
+        /// therefore never decremented: the element becomes permanently unremovable
+        /// and its space is never reclaimed.
         /// <para>
-        /// This is inherent to counting Bloom filters rather than a defect, but it is
-        /// a sharp edge: Count() keeps rising while the counters stop, so the two
-        /// disagree. Callers who delete must not assume adds and removes balance.
+        /// The alternative -- resuming the count from the ceiling -- reaches zero
+        /// while elements that need the counter are still present, which is a false
+        /// negative. Deleting without introducing those is the whole of what a
+        /// counting filter adds to a plain one, so leaking space is the lesser cost.
         /// </para>
         /// </summary>
         [TestMethod]
-        public void TestCountingFilterCountersSaturate()
+        public void TestCountingFilterSaturatedCountersAreNotDecremented()
         {
             const byte bitsPerCounter = 4;
             const int max = (1 << bitsPerCounter) - 1;   // 15
@@ -39,21 +41,69 @@ namespace TestProbabilisticDataStructures
                 f.Add(a);
             }
 
-            // Count tracks insertions, not counter state, so it keeps climbing.
+            // Count tracks insertions, not counter state, so it keeps climbing past
+            // the ceiling the counters stopped at.
             Assert.AreEqual((uint)adds, f.Count());
             Assert.IsTrue(f.Test(a));
 
-            var removals = 0;
-            while (f.Test(a) && removals <= adds)
+            // Every counter is saturated, so no number of removals clears it.
+            for (int i = 0; i < adds + max; i++)
             {
                 f.TestAndRemove(a);
-                removals++;
             }
 
-            Assert.IsFalse(f.Test(a), "element should be removable");
-            Assert.IsLessThanOrEqualTo(max, removals,
-                $"counters cap at {max}, so clearing the element should take at most that " +
-                $"many removals, not the {adds} additions performed.");
+            Assert.IsTrue(f.Test(a),
+                $"counters saturated at {max} after {adds} additions, so they can no " +
+                "longer be safely decremented and the element stays present.");
+        }
+
+        /// <summary>
+        /// The property that distinguishes a counting filter from a plain one:
+        /// removing elements must not make the remaining ones disappear. Narrow
+        /// counters make this sharp, because they saturate at ordinary loads -- with
+        /// one bit per counter every shared bucket saturates immediately.
+        /// <para>
+        /// Decrementing saturated counters broke this badly. At one bit per counter
+        /// 745 of 1000 surviving elements became unfindable, and at two bits, 42.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestCountingFilterRemovalNeverHidesRemainingElements()
+        {
+            foreach (byte bitsPerCounter in new byte[] { 1, 2, 4, 8 })
+            {
+                const int count = 2000;
+                var f = new CountingBloomFilter(count, bitsPerCounter, 0.01);
+
+                for (int i = 0; i < count; i++)
+                {
+                    f.Add(Key($"b{bitsPerCounter}-item-{i}"));
+                }
+
+                for (int i = 0; i < count / 2; i++)
+                {
+                    f.TestAndRemove(Key($"b{bitsPerCounter}-item-{i}"));
+                }
+
+                var missing = Enumerable.Range(count / 2, count / 2)
+                    .Count(i => !f.Test(Key($"b{bitsPerCounter}-item-{i}")));
+
+                Assert.AreEqual(0, missing,
+                    $"{bitsPerCounter}-bit counters: {missing} elements disappeared " +
+                    "after removing unrelated ones.");
+            }
+        }
+
+        /// <summary>
+        /// A zero-bit bucket holds no value and allocates no storage, so the first
+        /// read indexed an empty array and threw IndexOutOfRangeException. It is
+        /// rejected where it is passed instead.
+        /// </summary>
+        [TestMethod]
+        public void TestZeroWidthBucketIsRejected()
+        {
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new CountingBloomFilter(100, 0, 0.01));
         }
 
         /// <summary>
