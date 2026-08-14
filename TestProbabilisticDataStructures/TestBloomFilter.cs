@@ -83,7 +83,15 @@ namespace TestProbabilisticDataStructures
             f.Add(C_BYTES);
 
             var ratio = f.FillRatio();
-            Assert.AreEqual(0.025, ratio);
+
+            // Three items probed by k hash functions set at most 3*k of m bits, and
+            // fewer if any of those probes collide. Whether they collide depends on
+            // the hash function, so this bounds the ratio rather than pinning an
+            // exact value -- the previous assertion of 0.025 was really recording
+            // that MD5 happened to produce no collisions for these three inputs.
+            var upperBound = (double)(3 * f.K()) / f.Capacity();
+            Assert.IsGreaterThan(0.0, ratio);
+            Assert.IsLessThanOrEqualTo(upperBound, ratio);
         }
 
         /// <summary>

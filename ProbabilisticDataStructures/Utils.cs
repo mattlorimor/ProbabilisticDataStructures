@@ -107,6 +107,36 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Returns the upper and lower base hash values for a digest the caller has
+        /// already computed.
+        /// </summary>
+        /// <remarks>
+        /// A unit test pins this against Go BoomFilters' convention: given the same
+        /// digest bytes, this produces the same lower and upper values Go's
+        /// hashKernel derives from a 64-bit sum. That is a statement about the
+        /// extraction arithmetic only -- the two libraries hash with different
+        /// functions, so their filters are not interchangeable.
+        /// </remarks>
+        /// <param name="hashBytes">The digest bytes.</param>
+        /// <returns>A HashKernel</returns>
+        public static HashKernelReturnValue HashKernelFromHashBytes(byte[] hashBytes)
+        {
+            return HashKernelFromHashBytes((ReadOnlySpan<byte>)hashBytes);
+        }
+
+        /// <summary>
+        /// Span overload of <see cref="HashKernelFromHashBytes(byte[])"/>.
+        /// </summary>
+        /// <param name="hashBytes">The digest bytes.</param>
+        /// <returns>A HashKernel</returns>
+        public static HashKernelReturnValue HashKernelFromHashBytes(ReadOnlySpan<byte> hashBytes)
+        {
+            return HashKernelReturnValue.Create(
+                HashBytesToUInt32(hashBytes, 0),
+                HashBytesToUInt32(hashBytes, 4));
+        }
+
+        /// <summary>
         /// Returns the uint represented by the given hash bytes, starting at
         /// byte <paramref name="offset"/>.  The result will be the same
         /// regardless of the endianness of the architecture.

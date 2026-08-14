@@ -68,9 +68,9 @@ namespace TestProbabilisticDataStructures
         public void TestHashKernelAllocation()
         {
             var data = Key("allocation-probe");
-            using var md5 = MD5.Create();
+            var hash = Defaults.GetDefaultHashFunction();
 
-            var bytes = BytesPerOperation(() => Utils.HashKernel(data, md5));
+            var bytes = BytesPerOperation(() => Utils.HashKernel(data, hash));
 
             Assert.AreEqual(0, bytes,
                 $"Utils.HashKernel allocated {bytes} B per call; the hot path must not allocate.");
@@ -85,10 +85,10 @@ namespace TestProbabilisticDataStructures
         {
             var small = new byte[8];
             var large = new byte[8192];
-            using var md5 = MD5.Create();
+            var hash = Defaults.GetDefaultHashFunction();
 
-            var smallBytes = BytesPerOperation(() => Utils.HashKernel(small, md5));
-            var largeBytes = BytesPerOperation(() => Utils.HashKernel(large, md5));
+            var smallBytes = BytesPerOperation(() => Utils.HashKernel(small, hash));
+            var largeBytes = BytesPerOperation(() => Utils.HashKernel(large, hash));
 
             Assert.AreEqual(smallBytes, largeBytes,
                 $"Allocation scaled with input size: {smallBytes} B for 8 bytes of input " +

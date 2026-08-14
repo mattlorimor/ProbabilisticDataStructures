@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.0.0] - Unreleased
 
+### Changed
+
+- **The default hash is now XxHash3 rather than MD5, and `SetHash` takes a
+  `Func<ReadOnlySpan<byte>, ulong>` instead of a `HashAlgorithm`.**
+
+  Membership tests are roughly **24x faster**, and the Cuckoo filter **67x** because it
+  hashes three times per operation. `Bloom_Hit` goes from 249.7 ns to 10.46 ns. Hashing
+  was the entire cost of a filter operation; MD5 is built to resist collision attacks,
+  which a filter does not need and paid for on every probe.
+
+  This changes where every element lands, so filters persisted by earlier versions
+  cannot be read. It also changes the `SetHash` signature on every filter: supply a
+  function returning 64 bits rather than a `HashAlgorithm`. A `byte[]` converts to
+  `ReadOnlySpan<byte>` implicitly, so call sites passing arrays are unaffected.
+
+  XxHash3 is not resistant to chosen-input attacks: an adversary controlling inserted
+  data can provoke collisions and inflate the observed false-positive rate. MD5 was no
+  better in this respect, only slower. Callers needing that property should supply a
+  keyed hash such as SipHash through `SetHash`.
+
 ### Fixed
 
 - **The Cuckoo filter could report false negatives.** `GetComponents` derived the second
