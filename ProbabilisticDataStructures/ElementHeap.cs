@@ -30,12 +30,12 @@ namespace ProbabilisticDataStructures
         /// Where each element sits in <see cref="Heap"/>, kept in step with it by every
         /// operation that moves an element.
         /// </summary>
-        private readonly Dictionary<byte[], int> positions;
+        private readonly Dictionary<ReadOnlyMemory<byte>, int> positions;
 
         internal ElementHeap(int k)
         {
             this.Heap = new List<Element>(k);
-            this.positions = new Dictionary<byte[], int>(k, ByteArrayComparer.Instance);
+            this.positions = new Dictionary<ReadOnlyMemory<byte>, int>(k, ByteContentComparer.Instance);
         }
 
         internal int Len()
@@ -177,23 +177,23 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Compares byte arrays by their contents, which is what identifies an element
-        /// here. The default comparer would compare references, so an element added
-        /// twice from two arrays holding the same bytes would be held twice.
+        /// Compares by content, which is what identifies an element here. Comparing the
+        /// underlying arrays by reference instead would hold the same element twice for
+        /// a caller who does not add it from the same buffer each time.
         /// </summary>
-        private sealed class ByteArrayComparer : IEqualityComparer<byte[]>
+        private sealed class ByteContentComparer : IEqualityComparer<ReadOnlyMemory<byte>>
         {
-            internal static readonly ByteArrayComparer Instance = new ByteArrayComparer();
+            internal static readonly ByteContentComparer Instance = new ByteContentComparer();
 
-            public bool Equals(byte[]? x, byte[]? y)
+            public bool Equals(ReadOnlyMemory<byte> x, ReadOnlyMemory<byte> y)
             {
-                return x.AsSpan().SequenceEqual(y.AsSpan());
+                return x.Span.SequenceEqual(y.Span);
             }
 
-            public int GetHashCode(byte[] obj)
+            public int GetHashCode(ReadOnlyMemory<byte> obj)
             {
                 var hash = new HashCode();
-                hash.AddBytes(obj);
+                hash.AddBytes(obj.Span);
                 return hash.ToHashCode();
             }
         }

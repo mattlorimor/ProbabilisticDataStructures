@@ -89,7 +89,7 @@ namespace ProbabilisticDataStructures
             payload.WriteUInt32((uint)elements.Count);
             foreach (var element in elements)
             {
-                payload.WriteBytes(element.Data);
+                payload.WriteBytes(element.Data.Span);
                 payload.WriteUInt64(element.Freq);
             }
 

@@ -159,11 +159,30 @@ namespace TestProbabilisticDataStructures
             var t = TopK.ReadFrom(Fixture("topk-v1.bin"));
 
             var elements = t.Elements()
-                .Select(e => (Encoding.ASCII.GetString(e.Data), e.Freq))
+                .Select(e => (Encoding.ASCII.GetString(e.Data.Span), e.Freq))
                 .ToArray();
 
             CollectionAssert.AreEqual(
                 new[] { ("t2", 3ul), ("t3", 4ul), ("t4", 5ul) }, elements);
+        }
+
+        [TestMethod]
+        public void TestStoredMinHashSignatureStillReads()
+        {
+            var signature = MinHashSignature.ReadFrom(Fixture("minhashsignature-v1.bin"));
+
+            Assert.AreEqual(16, signature.Length);
+            Assert.AreEqual(31797598974978550ul, signature.Values[0]);
+            Assert.AreEqual(661719492639586765ul, signature.Values[15]);
+
+            // A stored signature has to still compare against one computed now, which
+            // is the whole reason to store one.
+            var recomputed = MinHash.Signature(
+                new[] { "alpha", "beta", "gamma", "delta", "epsilon" }, 16);
+
+            Assert.AreEqual(1.0f, MinHash.Similarity(signature, recomputed),
+                "a signature stored by an earlier version no longer matches one " +
+                "computed now for the same bag");
         }
 
         /// <summary>
@@ -228,6 +247,9 @@ namespace TestProbabilisticDataStructures
             }
 
             AssertBytes("topk-v1.bin", topK.ToByteArray());
+
+            AssertBytes("minhashsignature-v1.bin", MinHash.Signature(
+                new[] { "alpha", "beta", "gamma", "delta", "epsilon" }, 16).ToByteArray());
         }
 
         /// <summary>
@@ -253,6 +275,7 @@ namespace TestProbabilisticDataStructures
                 ("countminsketch-v1.bin", 10),
                 ("hyperloglog-v1.bin", 11),
                 ("topk-v1.bin", 12),
+                ("minhashsignature-v1.bin", 13),
             };
 
             foreach (var (fixture, id) in expected)

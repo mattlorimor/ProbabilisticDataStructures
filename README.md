@@ -668,6 +668,31 @@ Before 3.1.0 this returned the Sørensen–Dice coefficient instead, which is re
 `D = 2J / (1 + J)` and so is consistently higher: bags of one third resemblance were
 reported at one half. See the [changelog](CHANGELOG.md) if you depended on those values.
 
+### Comparing many documents
+
+`Similarity` above is exact, and needs both bags. Comparing *n* documents pairwise that
+way is *n²* full comparisons. A signature reduces a bag once, and signatures compare in
+time proportional to their length rather than to the bags:
+
+```C#
+var a = MinHash.Signature(documentA, k: 128);
+var b = MinHash.Signature(documentB, k: 128);
+
+float resemblance = MinHash.Similarity(a, b);
+```
+
+This one is an estimate. The error is roughly `1/sqrt(k)` — about 9% at `k = 128`, about
+3% at `k = 1024` — traded against the signature's size.
+
+Signatures can be stored and compared later, including against signatures computed by a
+different process or a different version of this library. The `k` hash functions are a
+fixed convention rather than something chosen per call, so nothing about them has to be
+carried alongside:
+
+```C#
+File.WriteAllBytes("doc-a.sig", a.ToByteArray());
+```
+
 ### Usage
 
 ```C#

@@ -231,9 +231,9 @@ namespace TestProbabilisticDataStructures
             var restored = RoundTrip(topK);
 
             var before = topK.Elements()
-                .Select(e => (Encoding.ASCII.GetString(e.Data), e.Freq)).ToArray();
+                .Select(e => (Encoding.ASCII.GetString(e.Data.Span), e.Freq)).ToArray();
             var after = restored.Elements()
-                .Select(e => (Encoding.ASCII.GetString(e.Data), e.Freq)).ToArray();
+                .Select(e => (Encoding.ASCII.GetString(e.Data.Span), e.Freq)).ToArray();
 
             CollectionAssert.AreEqual(before, after, "restored top-k held different elements");
 
@@ -247,8 +247,8 @@ namespace TestProbabilisticDataStructures
             }
 
             CollectionAssert.AreEqual(
-                topK.Elements().Select(e => (Encoding.ASCII.GetString(e.Data), e.Freq)).ToArray(),
-                restored.Elements().Select(e => (Encoding.ASCII.GetString(e.Data), e.Freq)).ToArray(),
+                topK.Elements().Select(e => (Encoding.ASCII.GetString(e.Data.Span), e.Freq)).ToArray(),
+                restored.Elements().Select(e => (Encoding.ASCII.GetString(e.Data.Span), e.Freq)).ToArray(),
                 "restored top-k diverged from the original as the stream continued");
         }
 

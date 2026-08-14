@@ -23,6 +23,7 @@ namespace ProbabilisticDataStructures
         CountMinSketch = 10,
         HyperLogLog = 11,
         TopK = 12,
+        MinHashSignature = 13,
     }
 
     /// <summary>

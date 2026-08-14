@@ -5,6 +5,81 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.0] - 2026-08-14
+
+### Fixed
+
+- **`CuckooBloomFilter` no longer allocates about thirty-two times the space it needs**,
+  which is [#47](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/47).
+  An empty filter sized for 100,000 items took **122 MB**, against 124 KB for a
+  `BloomFilter` of the same capacity and rate. It now takes 3.8 MB.
+
+  Two errors compounded. The fingerprint size was computed with a natural logarithm
+  where the relation needs base two, then converted from bits to bytes by a division
+  that floors to zero for every rate this library accepts and was clamped to one — so
+  every filter got an eight-bit fingerprint whatever rate was asked for. And the bucket
+  count was `Power2(n / f * 8)`, which is not a bucket count: the `8` undoes a division
+  that had already floored away, leaving roughly eight buckets per item rather than one
+  per four.
+
+  The over-allocation was hiding the fingerprint error, since a filter that empty rarely
+  finds anything to collide with. Measured false positive rates did not respond to the
+  requested rate at all before; they now do, and beat it.
+
+- **A refused cuckoo insert no longer loses an element the filter already held.** When
+  relocation runs out of attempts, the filter is holding a fingerprint it displaced out
+  of a bucket. It was dropped, which is a false negative — the one thing this filter,
+  like every other here, promises not to produce. The displacements are now undone, so a
+  refused insert leaves the filter holding exactly what it held before.
+
+  This was unreachable until the sizing above was fixed: the relocation loop never ran
+  long enough to give up.
+
+- **`CuckooBloomFilter.Capacity()` describes what it returns.** It reports the count the
+  filter was sized for, and was documented as "the number of items the filter can store"
+  while the filter would accept thirty to fifty times that.
+
+### Changed
+
+- **`Element.Data` and `Element.Freq` are read-only to callers**, which is
+  [#48](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/48). `Data` is
+  now `ReadOnlyMemory<byte>`; use `.Span` or `.ToArray()`.
+
+  `TopK.Elements()` hands back the objects the structure holds rather than copies, so a
+  caller writing to the array they were given corrupted it: the same array is the key the
+  heap is indexed by, and changing its contents changed what it hashes to without the
+  index being rebuilt. The element became unreachable and the next arrival of the same
+  data was held a second time.
+
+- **`Buckets` and `Buckets64` are internal**, which is
+  [#49](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/49). Every
+  member on them already was, so as public types they offered a consumer nothing but a
+  name in their completion list.
+
+### Added
+
+- **`MinHash.Signature`**, which is
+  [#50](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/50). A bag is
+  reduced once to a fixed-size signature, and signatures compare in time proportional to
+  their length rather than to the bags behind them — so comparing *n* documents pairwise
+  costs *n* reductions rather than *n²* full comparisons.
+
+  ```C#
+  var a = MinHash.Signature(documentA, k: 128);
+  var b = MinHash.Signature(documentB, k: 128);
+  float resemblance = MinHash.Similarity(a, b);
+  ```
+
+  This one estimates rather than computes; the error is roughly `1/sqrt(k)`. The exact
+  `Similarity(string[], string[])` is unchanged and is still the right call when both
+  bags are to hand.
+
+  Signatures are persistable and comparable across processes and across versions, because
+  the `k` hash functions are a fixed convention — XxHash3 seeded `0` through `k-1` —
+  rather than state that has to be carried alongside. The test suite pins the values a
+  known bag produces, since changing them would silently invalidate every stored
+  signature.
+
 ## [4.0.1] - 2026-08-14
 
 ### Changed

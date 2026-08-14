@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO.Hashing;
+using System.Text;
 
 namespace ProbabilisticDataStructures
 {
@@ -71,6 +73,118 @@ namespace ProbabilisticDataStructures
             // Inclusion-exclusion, so the union is never materialized.
             var union = first.Count + second.Count - intersection;
             return (float)intersection / union;
+        }
+
+        /// <summary>
+        /// Reduces a bag to a fixed-size signature, from which its resemblance to
+        /// another bag can be estimated without either bag.
+        /// </summary>
+        /// <param name="bag">The bag to reduce.</param>
+        /// <param name="k">
+        /// The number of hash functions, and so the length of the signature. The error
+        /// is roughly one over its square root: 128 gives about 9%, 1024 about 3%.
+        /// </param>
+        /// <returns>The signature.</returns>
+        /// <exception cref="ArgumentNullException">
+        /// The bag, or a word in it, is null.
+        /// </exception>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// <paramref name="k"/> is not positive.
+        /// </exception>
+        /// <remarks>
+        /// This is what the estimator is for. Comparing n documents pairwise by
+        /// <see cref="Similarity(string[], string[])"/> is n squared full comparisons,
+        /// each proportional to the size of both bags; with signatures it is n
+        /// reductions and then n squared comparisons of k numbers.
+        /// <para>
+        /// Signatures are comparable across processes and across versions of this
+        /// library, because the k hash functions are a fixed convention rather than
+        /// something chosen per call. A signature can be stored and compared later
+        /// against one computed anywhere else.
+        /// </para>
+        /// </remarks>
+        public static MinHashSignature Signature(string[] bag, int k)
+        {
+            ArgumentNullException.ThrowIfNull(bag);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(k);
+
+            var values = new ulong[k];
+            for (int i = 0; i < k; i++)
+            {
+                values[i] = ulong.MaxValue;
+            }
+
+            // Distinct words only: a signature describes a set, and a repeated word
+            // would take the same minimum again without changing anything.
+            var seen = new HashSet<string>(bag, StringComparer.Ordinal);
+
+            // Long enough for most words without renting, and grown only if one is not.
+            Span<byte> buffer = stackalloc byte[256];
+
+            foreach (var word in seen)
+            {
+                ArgumentNullException.ThrowIfNull(word, nameof(bag));
+
+                var needed = Encoding.UTF8.GetByteCount(word);
+                var bytes = needed <= buffer.Length ? buffer[..needed] : new byte[needed];
+                Encoding.UTF8.GetBytes(word, bytes);
+
+                for (int i = 0; i < k; i++)
+                {
+                    // Seeding one hash function is what makes the k of them, so that
+                    // nothing about which functions were used has to be written down.
+                    var h = XxHash3.HashToUInt64(bytes, i);
+                    if (h < values[i])
+                    {
+                        values[i] = h;
+                    }
+                }
+            }
+
+            return new MinHashSignature(values);
+        }
+
+        /// <summary>
+        /// Estimates the resemblance of the two bags the signatures were taken from, as
+        /// the fraction of positions at which they agree.
+        /// </summary>
+        /// <param name="signature1">The first signature.</param>
+        /// <param name="signature2">The second signature.</param>
+        /// <returns>
+        /// The estimated resemblance, from 0 to 1. Two signatures of empty bags agree
+        /// everywhere and give 1, matching what the exact overload returns for them.
+        /// </returns>
+        /// <exception cref="ArgumentNullException">Either signature is null.</exception>
+        /// <exception cref="ArgumentException">
+        /// The signatures are different lengths, so they were not built with the same
+        /// hash functions and there is no position-by-position comparison to make.
+        /// </exception>
+        public static float Similarity(MinHashSignature signature1, MinHashSignature signature2)
+        {
+            ArgumentNullException.ThrowIfNull(signature1);
+            ArgumentNullException.ThrowIfNull(signature2);
+
+            if (signature1.Length != signature2.Length)
+            {
+                throw new ArgumentException(
+                    $"Signatures are {signature1.Length} and {signature2.Length} long. " +
+                    "Only signatures of the same length share hash functions, and only " +
+                    "those can be compared.", nameof(signature2));
+            }
+
+            var first = signature1.Values;
+            var second = signature2.Values;
+            var agreeing = 0;
+
+            for (int i = 0; i < first.Length; i++)
+            {
+                if (first[i] == second[i])
+                {
+                    agreeing++;
+                }
+            }
+
+            return (float)agreeing / first.Length;
         }
     }
 }
