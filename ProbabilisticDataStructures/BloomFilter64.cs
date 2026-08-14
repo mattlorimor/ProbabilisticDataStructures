@@ -192,6 +192,7 @@ namespace ProbabilisticDataStructures
         public BloomFilter64 Reset()
         {
             this.Buckets.Reset();
+            this.count = 0;
             return this;
         }
 

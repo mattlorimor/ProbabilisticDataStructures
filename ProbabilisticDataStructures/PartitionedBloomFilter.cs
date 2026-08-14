@@ -237,6 +237,8 @@ namespace ProbabilisticDataStructures
             {
                 partition.Reset();
             }
+
+            this.count = 0;
             return this;
         }
 

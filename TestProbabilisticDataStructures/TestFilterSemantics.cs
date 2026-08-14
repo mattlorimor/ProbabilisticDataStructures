@@ -333,6 +333,50 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Reset restores a filter to its original state, and a filter in its original
+        /// state holds nothing. Three of them emptied their buckets and left the item
+        /// count where it was, so a filter reporting itself empty by every other
+        /// measure still claimed the items it used to hold.
+        /// <para>
+        /// The count is not only reported. EstimatedFillRatio is derived from it, and
+        /// a partitioned filter's is what a scalable filter consults to decide when to
+        /// grow, so a stale count made a freshly emptied filter look 44% full.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestResetEmptiesTheItemCount()
+        {
+            const int added = 800;
+
+            var bloom = new BloomFilter(1000, 0.01);
+            var bloom64 = new BloomFilter64(1000, 0.01);
+            var partitioned = new PartitionedBloomFilter(1000, 0.01);
+            var counting = new CountingBloomFilter(1000, 4, 0.01);
+            var deletable = new DeletableBloomFilter(1000, 10, 0.01);
+
+            for (int i = 0; i < added; i++)
+            {
+                var key = Key($"item-{i}");
+                bloom.Add(key);
+                bloom64.Add(key);
+                partitioned.Add(key);
+                counting.Add(key);
+                deletable.Add(key);
+            }
+
+            Assert.AreEqual(0u, bloom.Reset().Count());
+            Assert.AreEqual(0ul, bloom64.Reset().Count());
+            Assert.AreEqual(0u, partitioned.Reset().Count());
+            Assert.AreEqual(0u, counting.Reset().Count());
+            Assert.AreEqual(0u, deletable.Reset().Count());
+
+            // The count feeds the fill estimate, which is what actually acts on it.
+            Assert.AreEqual(0.0, bloom.EstimatedFillRatio());
+            Assert.AreEqual(0.0, bloom64.EstimatedFillRatio());
+            Assert.AreEqual(0.0, partitioned.EstimatedFillRatio());
+        }
+
+        /// <summary>
         /// The inverse filter is a bounded "recently seen" cache rather than a growing
         /// set: an element whose slot is claimed by a later one is forgotten. False
         /// negatives are therefore expected here, which is the opposite of every other

@@ -69,6 +69,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is inherent -- a filter cannot tell such a removal from a real one -- and is now
   documented rather than fixed.
 
+- **`Reset()` clears the item count** on `BloomFilter`, `BloomFilter64` and
+  `PartitionedBloomFilter`. All three emptied their buckets and left the count where it
+  was, so a filter that was empty by every other measure still reported the items it
+  used to hold. `CountingBloomFilter` and `DeletableBloomFilter` already cleared theirs.
+
+  The count is not only reported: `EstimatedFillRatio()` is derived from it, and a
+  partitioned filter's is what a scalable filter consults to decide when to grow. A
+  filter emptied after 800 additions reported an estimated fill ratio of **44%**.
+
 - **`CountMinSketch` validates `epsilon` and `delta`.** `delta` is the probability that
   an estimate exceeds the error `epsilon` allows, and the matrix depth `ln(1 / delta)`
   is only positive below one. At one and above the matrix had **no rows**, and a sketch
