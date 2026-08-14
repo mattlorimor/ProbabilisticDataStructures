@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.0.0] - Unreleased
+## [3.0.0] - 2026-08-13
 
 ### Changed
 
@@ -213,7 +213,7 @@ This release modernizes the entire build. The library had not been touched since
 - Initial release: a C# port of [Tyler Treat's](https://github.com/tylertreat)
   [BoomFilters](https://github.com/tylertreat/BoomFilters) Go project.
 
-[3.0.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v2.0.1...HEAD
+[3.0.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v2.0.1...v3.0.0
 [2.0.1]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v1.0.9...v2.0.0
 [1.0.9]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v1.0.8...v1.0.9
