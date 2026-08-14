@@ -1,4 +1,5 @@
-﻿namespace ProbabilisticDataStructures
+﻿using System;
+namespace ProbabilisticDataStructures
 {
     /// <summary>
     /// TopK uses a Count-Min Sketch to calculate the top-K frequent elements in a
@@ -35,6 +36,8 @@
         /// <returns>The TopK</returns>
         public TopK Add(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             this.Cms.Add(data);
             this.N++;
 

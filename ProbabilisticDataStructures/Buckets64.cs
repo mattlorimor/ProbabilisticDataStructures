@@ -13,6 +13,23 @@ namespace ProbabilisticDataStructures
     /// </summary>
     public class Buckets64
     {
+        /// <summary>
+        /// The widest bucket supported, in bits.
+        /// </summary>
+        /// <remarks>
+        /// A bucket's maximum value is held in a byte, so eight bits is the widest
+        /// that can be fully used. The bit-packing itself would handle more --
+        /// GetBits and SetBits span byte boundaries correctly -- but a wider bucket
+        /// would allocate the extra space and still cap its value at 255, so the
+        /// memory would be paid for and unusable.
+        ///
+        /// Upstream Go BoomFilters has the same cap, reached differently: its max
+        /// field is a uint8, so (1 &lt;&lt; bucketSize) - 1 wraps to 255 for any size of
+        /// eight or more rather than being clamped. Rejecting the argument is
+        /// preferred here over silently accepting a request that cannot be honored.
+        /// </remarks>
+        private const byte MaxBucketSizeBits = 8;
+
         // The largest C# array to create; the largest power of 2 that C# can support.
         private const uint maxArraySize = 1U << 30;
         private byte[][] Data { get; set; }
@@ -27,9 +44,10 @@ namespace ProbabilisticDataStructures
             }
             set
             {
-                // TODO: Figure out this truncation thing.
-                // I'm not sure if MaxValue is always supposed to be capped at 255 via
-                // a byte conversion or not...
+                // Capping at 255 is correct and matches upstream: Go's Buckets
+                // stores max in a uint8, so the same expression wraps to 255 there.
+                // The constructor now rejects bucket sizes that would reach this
+                // branch, so it remains only as a guard.
                 if (value > byte.MaxValue)
                     _max = byte.MaxValue;
                 else
@@ -46,6 +64,14 @@ namespace ProbabilisticDataStructures
         /// <param name="bucketSize">Number of bits per bucket.</param>
         internal Buckets64(ulong count, byte bucketSize)
         {
+            if (bucketSize > MaxBucketSizeBits)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bucketSize), bucketSize,
+                    $"Bucket size must be at most {MaxBucketSizeBits} bits. A bucket's " +
+                    "maximum value is stored in a byte, so wider buckets would allocate " +
+                    "the extra space without being able to hold a larger value.");
+            }
+
             this.count = count;
             this.bucketSize = bucketSize;
             AllocateArray(count, bucketSize);

@@ -124,6 +124,8 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data is a member</returns>
         public bool Test(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var components = this.GetComponents(data);
             var i1 = components.Hash1;
             var i2 = components.Hash2;
@@ -159,6 +161,8 @@ namespace ProbabilisticDataStructures
         /// </returns>
         public bool Add(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var components = this.GetComponents(data);
             var i1 = components.Hash1;
             var i2 = components.Hash2;
@@ -178,6 +182,8 @@ namespace ProbabilisticDataStructures
         /// </returns>
         public TestAndAddReturnValue TestAndAdd(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var components = this.GetComponents(data);
             var i1 = components.Hash1;
             var i2 = components.Hash2;
@@ -218,6 +224,8 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether the data was a member or not</returns>
         public bool TestAndRemove(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var components = this.GetComponents(data);
             var i1 = components.Hash1;
             var i2 = components.Hash2;

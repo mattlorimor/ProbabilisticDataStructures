@@ -138,6 +138,8 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data is maybe contained in the filter.</returns>
         public bool Test(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             // Querying is made by testing for the presence in each filter.
             foreach (var filter in this.Filters)
             {
@@ -158,6 +160,8 @@ namespace ProbabilisticDataStructures
         /// <returns>The ScalableBloomFilter</returns>
         public IFilter Add(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var idx = this.Filters.Count() - 1;
 
             // If the last filter has reached its fill ratio, add a new one.
@@ -179,6 +183,8 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was present before adding it</returns>
         public bool TestAndAdd(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var member = this.Test(data);
             this.Add(data);
             return member;

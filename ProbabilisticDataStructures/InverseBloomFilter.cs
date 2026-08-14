@@ -81,6 +81,8 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data is present</returns>
         public bool Test(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var index = this.Index(data);
             var val = this.Array[index];
             if (val == null)
@@ -97,6 +99,8 @@ namespace ProbabilisticDataStructures
         /// <returns></returns>
         public IFilter Add(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var index = this.Index(data);
             this.GetAndSet(index, data);
             return this;
@@ -110,6 +114,8 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether the data was already a member</returns>
         public bool TestAndAdd(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var index = this.Index(data);
             var oldId = this.GetAndSet(index, data);
             if (oldId == null)

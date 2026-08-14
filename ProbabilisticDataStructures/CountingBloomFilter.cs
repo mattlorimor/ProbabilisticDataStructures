@@ -118,6 +118,8 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data is maybe contained in the filter.</returns>
         public bool Test(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
@@ -141,6 +143,8 @@ namespace ProbabilisticDataStructures
         /// <returns>The filter.</returns>
         public IFilter Add(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
@@ -163,6 +167,8 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was probably contained in the filter.</returns>
         public bool TestAndAdd(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
@@ -191,6 +197,8 @@ namespace ProbabilisticDataStructures
         /// <returns>Whether or not the data was in the filter before removal.</returns>
         public bool TestAndRemove(byte[] data)
         {
+            ArgumentNullException.ThrowIfNull(data);
+
             var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
