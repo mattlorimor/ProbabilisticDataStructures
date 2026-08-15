@@ -272,6 +272,7 @@ namespace TestProbabilisticDataStructures
             Assert.HasCount(0, RoundTrip(new TopK(0.001, 0.01, 10)).Elements());
 
             Assert.AreEqual(0ul, RoundTrip(new CountMinSketch(0.01, 0.01)).TotalCount());
+            Assert.AreEqual(0u, RoundTrip(BinaryFuseFilter.Build(Array.Empty<byte[]>())).Count());
 
             // A signature of an empty bag is the one case here that is not all zeroes:
             // every position holds the identity ulong.MaxValue, which a restore that
@@ -301,7 +302,10 @@ namespace TestProbabilisticDataStructures
             var cuckoo = new CuckooBloomFilter(1000, 0.01); cuckoo.SetHash(custom);
             var hll = new HyperLogLog(1024); hll.SetHash(custom);
             var scalable = new ScalableBloomFilter(100, 0.01, 0.8); scalable.SetHash(custom);
+            var fuse = BinaryFuseFilter.Build(
+                Present.Select(Key), BinaryFuseWidth.Eight, custom);
 
+            AssertRefusesThenAccepts(fuse.ToByteArray(), b => Persistence.FromByteArray<BinaryFuseFilter>(b), b => Persistence.FromByteArray<BinaryFuseFilter>(b, custom));
             AssertRefusesThenAccepts(bloom.ToByteArray(), b => Persistence.FromByteArray<BloomFilter>(b), b => Persistence.FromByteArray<BloomFilter>(b, custom));
             AssertRefusesThenAccepts(sketch.ToByteArray(), b => Persistence.FromByteArray<CountMinSketch>(b), b => Persistence.FromByteArray<CountMinSketch>(b, custom));
             AssertRefusesThenAccepts(bloom64.ToByteArray(), b => Persistence.FromByteArray<BloomFilter64>(b), b => Persistence.FromByteArray<BloomFilter64>(b, custom));
@@ -348,6 +352,7 @@ namespace TestProbabilisticDataStructures
                 ("HyperLogLog", new HyperLogLog(1024).ToByteArray()),
                 ("TopK", new TopK(0.001, 0.01, 10).ToByteArray()),
                 ("MinHashSignature", MinHash.Signature(new[] { "a" }, 8).ToByteArray()),
+                ("BinaryFuseFilter", BinaryFuseFilter.Build(new[] { Key("a") }).ToByteArray()),
             };
 
             // Read every payload as a BloomFilter; only its own may succeed.
@@ -394,6 +399,7 @@ namespace TestProbabilisticDataStructures
                 ("BloomFilter", b => Persistence.FromByteArray<BloomFilter>(b), Filled(new BloomFilter(200, 0.01))),
                 ("CountMinSketch", b => Persistence.FromByteArray<CountMinSketch>(b), FilledSketch()),
                 ("MinHashSignature", b => Persistence.FromByteArray<MinHashSignature>(b), FilledSignature()),
+                ("BinaryFuseFilter", b => Persistence.FromByteArray<BinaryFuseFilter>(b), FilledFuse()),
             };
 
             foreach (var (name, read, clean) in payloads)
@@ -429,6 +435,13 @@ namespace TestProbabilisticDataStructures
             var h = new HyperLogLog(64);
             for (int i = 0; i < 40; i++) h.Add(Key($"w{i}"));
             return h.ToByteArray();
+        }
+
+        // Not an IFilter: the set is fixed at construction, so there is no Add.
+        private static byte[] FilledFuse()
+        {
+            return BinaryFuseFilter.Build(
+                Enumerable.Range(0, 40).Select(i => Key($"w{i}"))).ToByteArray();
         }
 
         private static byte[] FilledSketch()

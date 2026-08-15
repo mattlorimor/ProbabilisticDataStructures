@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [6.0.0] - Unreleased
 
+### Added
+
+- **`BinaryFuseFilter`**, the first structure here whose set is fixed at construction,
+  which is [#57](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/57).
+  Graf and Lemire's binary fuse filter (2022). There is no `Add` and there cannot be:
+  building it solves a system of equations over the whole set at once.
+
+  Measured over a million keys against a `BloomFilter` at the same false positive rate:
+
+  | | binary fuse | Bloom |
+  | --- | --- | --- |
+  | bits per entry | **9.04** | 11.54 |
+  | lookup | **5.4 ns** | 50.5 ns |
+
+  Three memory accesses and one hash, against a loop over eight hash functions. It does
+  not implement `IFilter`, whose contract is mostly about adding, and it has no
+  `SetHash` -- the set is hashed during construction, so a hash chosen afterwards could
+  not apply to anything the filter already holds. It is passed to `Build` instead.
+
+  The false positive rate is fixed by fingerprint width rather than chosen freely:
+  `BinaryFuseWidth.Eight` gives 2^-8 and `Sixteen` gives 2^-16. Passing a target rate
+  picks the narrower width meeting it, and a rate no width can reach is refused rather
+  than quietly capped. Builds are deterministic, so a filter can ship as a build
+  artifact. Persistence takes structure id 14.
+
 ### Fixed
 
 - **A restored `StableBloomFilter` or `CuckooBloomFilter` resumes the random sequence it

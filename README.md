@@ -14,6 +14,7 @@ The descriptions for each filter were lifted directly from the BoomFilters' READ
 > property of the arithmetic rather than of the filters.
 
 ## Included Structures
+* [Binary fuse filter](https://github.com/mattlorimor/ProbabilisticDataStructures#static-sets)
 * [Count-Min Sketch](https://github.com/mattlorimor/ProbabilisticDataStructures#count-min-sketch)
 * [Counting Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#counting-bloom-filter)
 * [Cuckoo filter](https://github.com/mattlorimor/ProbabilisticDataStructures#cuckoo-filter)
@@ -133,6 +134,39 @@ it moves none of it, so every lookup would go somewhere else — the structure w
 items it can no longer find. It would not look broken, it would look empty.
 
 `SetHash` remains available before anything has been added, including after `Reset()`.
+
+## Static sets
+
+`BinaryFuseFilter` is the one filter here whose set is fixed when it is built. There is
+no `Add`, and there cannot be: constructing it solves a system of equations over the
+whole set at once.
+
+```C#
+var filter = BinaryFuseFilter.Build(items);          // 0.39%, one byte per entry
+var filter = BinaryFuseFilter.Build(items, 0.001);   // widened to meet the rate
+bool maybe = filter.Test(item);
+```
+
+What the constraint buys, measured over a million keys against a `BloomFilter` at the
+same false positive rate:
+
+| | binary fuse | Bloom |
+| --- | --- | --- |
+| bits per entry | **9.04** | 11.54 |
+| lookup | **5.4 ns** | 50.5 ns |
+| measured false positive rate | 0.384% | — |
+
+Three memory accesses and a single hash, against a loop over eight hash functions. Use
+it for a set you know in full — a blocklist, a shipped index, a compiled artifact — and
+one of the others for a set you are still adding to.
+
+The false positive rate is fixed by the fingerprint width rather than chosen freely:
+`BinaryFuseWidth.Eight` gives 2^-8 and `Sixteen` gives 2^-16. Passing a target rate
+picks the narrower width that meets it, so the rate delivered is never worse than the
+one asked for.
+
+Builds are deterministic: the same set gives the same bytes, so a filter can be shipped
+as a build artifact.
 
 ## Reproducibility
 
