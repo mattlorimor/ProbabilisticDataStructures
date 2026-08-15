@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`InvertibleBloomLookupTable`**, which recovers *which* keys two sets differ by, and is
+  [#76](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/76). Goodrich and
+  Mitzenmacher (2011). `ThetaSketch` can tell you two sets differ by about ten; this hands
+  you the ten keys.
+
+  Two sets of 100,000 keys differing by ten reconcile through a table of **360 bytes**,
+  because the sizing is against the expected difference rather than the set size. Nothing
+  else here is sized that way.
+
+  It can fail and says so: if the difference exceeds what the table was sized for, peeling
+  stalls and `TryDecode` returns false rather than a partial answer. A partial
+  reconciliation that looked complete would be far worse than a refusal, since the caller
+  would act on it. Keys are combined by exclusive-or so they must all be the same width,
+  fixed at construction, and one of the wrong size is refused rather than quietly
+  corrupting the table. Persistence takes structure id 21, with signed counts -- a
+  subtracted table is mostly negative.
+
 - **`CountSketch`**, frequency estimation without Count-Min's one-sided bias, which is
   [#77](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/77). Charikar,
   Chen and Farach-Colton (2002). Each row hashes an item to a cell and to a sign, so

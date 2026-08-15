@@ -1,6 +1,6 @@
 # Probabilistic Data Structures for C<span>#</span> [![CI](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml/badge.svg)](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml) [![NuGet](https://img.shields.io/nuget/v/MattLorimor.ProbabilisticDataStructures.svg)](https://www.nuget.org/packages/MattLorimor.ProbabilisticDataStructures/)
 
-Twenty structures that answer questions about data too large to keep, by keeping
+Twenty-one structures that answer questions about data too large to keep, by keeping
 something much smaller and being approximately right.
 
 Each one trades exactness for space. What makes them usable is that the trade is
@@ -37,6 +37,7 @@ eleven structures the Go library does not have.
 | …and a false positive would be expensive | `InverseBloomFilter` | [Membership](#membership) |
 | How many distinct things are there? | `HyperLogLogPlus` | [Cardinality](#cardinality) |
 | How many are in **both** of these sets? | `ThetaSketch` | [Cardinality](#cardinality) |
+| **Which** keys do these two sets differ by? | `InvertibleBloomLookupTable` | [Cardinality](#cardinality) |
 | How often have I seen this particular thing? | `CountMinSketch` | [Frequency](#frequency) |
 | …and it is rare, or I need to subtract | `CountSketch` | [Frequency](#frequency) |
 | What are the most common things? | `TopK` | [Frequency](#frequency) |
@@ -560,6 +561,44 @@ rather than the intersection, so a small enough intersection between large enoug
 still beyond reach. It is better arithmetic, not a different kind of answer.
 
 Counts are exact while the sketch holds fewer values than it retains.
+
+### `InvertibleBloomLookupTable`
+
+Recovers **which** keys two sets differ by, where `ThetaSketch` tells you only how many.
+
+**Reach for it when** two replicas mostly agree and you need to exchange just the
+difference — set reconciliation. The cost is proportional to the size of the
+**difference**, not of the sets, which is unlike everything else here.
+
+**Look elsewhere if** you only need the count (`ThetaSketch` is far smaller), or if the
+difference might be much larger than you sized for — see below.
+
+```C#
+var mine = new InvertibleBloomLookupTable(expectedDifferences: 20, keySize: 8);
+foreach (var key in myKeys) mine.Add(key);
+// ...theirs is built the same way, elsewhere, and sent over
+
+if (mine.Subtract(theirs).TryDecode(out var onlyMine, out var onlyTheirs))
+{
+    // the actual keys, not a count
+}
+```
+
+Two sets of **100,000 keys differing by ten**, reconciled by a table of **360 bytes**.
+That is the whole idea: sizing is against the expected *difference*, and sizing it against
+the set size would waste almost all of it.
+
+**It can fail, and says so.** If the difference is larger than the table was sized for,
+peeling stalls and `TryDecode` returns `false` rather than a partial answer — a partial
+reconciliation that looked complete would be far worse, since you would act on it. Size for
+more differences than you expect, and treat `false` as "ask for a bigger table" rather than
+as an error.
+
+Keys are combined by exclusive-or, so every key must be the same width, fixed at
+construction. A key of the wrong size is refused rather than silently corrupting the table.
+
+From Goodrich and Mitzenmacher,
+[Invertible Bloom Lookup Tables](https://arxiv.org/abs/1101.2245).
 
 ---
 

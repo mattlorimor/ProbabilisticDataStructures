@@ -31,6 +31,7 @@ namespace ProbabilisticDataStructures
         ThetaSketch = 18,
         SimHashSignature = 19,
         CountSketch = 20,
+        InvertibleBloomLookupTable = 21,
     }
 
     /// <summary>

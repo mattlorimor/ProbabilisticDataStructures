@@ -172,6 +172,21 @@ namespace TestProbabilisticDataStructures
         /// is scaled wrongly.
         /// </summary>
         [TestMethod]
+        public void TestStoredInvertibleBloomLookupTableStillReads()
+        {
+            var table = InvertibleBloomLookupTable.ReadFrom(Fixture("iblt-v1.bin"));
+
+            Assert.AreEqual(15u, table.Cells());
+            Assert.AreEqual(8, table.KeySize());
+
+            // The keys come back out, which is the whole point -- a table that read back
+            // its counts but not its xored keys would decode to nothing and look fine.
+            Assert.IsTrue(table.TryDecode(out var held, out var owed));
+            Assert.HasCount(6, held);
+            Assert.HasCount(0, owed);
+        }
+
+        [TestMethod]
         public void TestStoredCountSketchStillReads()
         {
             var sketch = CountSketch.ReadFrom(Fixture("countsketch-v1.bin"));
@@ -446,6 +461,16 @@ namespace TestProbabilisticDataStructures
 
             AssertBytes("countsketch-v1.bin", countSketch.ToByteArray());
 
+            var iblt = new InvertibleBloomLookupTable(10, 8);
+            for (var i = 0; i < 6; i++)
+            {
+                var key = new byte[8];
+                key[0] = (byte)i;
+                iblt.Add(key);
+            }
+
+            AssertBytes("iblt-v1.bin", iblt.ToByteArray());
+
             var denseHll = new HyperLogLogPlus(14);
             for (var i = 0; i < 50000; i++)
             {
@@ -507,6 +532,7 @@ namespace TestProbabilisticDataStructures
                 ("thetasketch-v1.bin", 18, 1),
                 ("simhashsignature-v1.bin", 19, 1),
                 ("countsketch-v1.bin", 20, 1),
+                ("iblt-v1.bin", 21, 1),
             };
 
             foreach (var (fixture, id, version) in expected)
