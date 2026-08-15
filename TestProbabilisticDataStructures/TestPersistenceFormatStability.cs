@@ -172,6 +172,18 @@ namespace TestProbabilisticDataStructures
         /// is scaled wrongly.
         /// </summary>
         [TestMethod]
+        public void TestStoredSimHashSignatureStillReads()
+        {
+            var signature = SimHashSignature.ReadFrom(Fixture("simhashsignature-v1.bin"));
+
+            // The fingerprint the current implementation computes for the same words, so
+            // a change to the hash or the weighting fails here rather than in somebody's
+            // stored index.
+            Assert.AreEqual(SimHash.Signature(Words).Value, signature.Value);
+            Assert.AreEqual(1f, SimHash.Similarity(signature, SimHash.Signature(Words)));
+        }
+
+        [TestMethod]
         public void TestStoredThetaSketchStillReads()
         {
             var sketch = ThetaSketch.ReadFrom(Fixture("thetasketch-v1.bin"));
@@ -412,6 +424,8 @@ namespace TestProbabilisticDataStructures
 
             AssertBytes("thetasketch-v1.bin", theta.ToByteArray());
 
+            AssertBytes("simhashsignature-v1.bin", SimHash.Signature(Words).ToByteArray());
+
             var denseHll = new HyperLogLogPlus(14);
             for (var i = 0; i < 50000; i++)
             {
@@ -471,6 +485,7 @@ namespace TestProbabilisticDataStructures
                 ("hyperloglogplus-dense-v1.bin", 16, 1),
                 ("quotientfilter-v1.bin", 17, 1),
                 ("thetasketch-v1.bin", 18, 1),
+                ("simhashsignature-v1.bin", 19, 1),
             };
 
             foreach (var (fixture, id, version) in expected)

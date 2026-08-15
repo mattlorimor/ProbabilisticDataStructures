@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`SimHash`** and **`SimHashSignature`**, for near-duplicate detection, which is
+  [#62](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/62). Charikar
+  (2002). One 64-bit fingerprint per document, compared by Hamming distance.
+
+  It sits beside `MinHash` and answers a different question, which the README now states
+  before anything else, because the two are easy to pick between by accident. MinHash
+  answers about **sets**, by Jaccard resemblance. SimHash answers about **documents**, by
+  cosine similarity over weighted term vectors, where a term repeated often counts for
+  more. A document of 40 "apple" and 2 "banana" against one of 2 "apple" and 40 "banana"
+  holds the same set, so MinHash calls them identical and SimHash calls them unrelated.
+  Both are right about their own question, and the test suite asserts exactly that pair.
+
+  The other difference is size. For one 500-term document a SimHash fingerprint stores in
+  **26 bytes** against a k=128 MinHash signature's 1,046, and compares in 19.5 ns against
+  37.0 ns.
+
+  Accuracy is documented for what it is rather than advertised: 64 bits distinguishes a
+  near-duplicate from a different document, and does not rank two moderately similar
+  documents against each other. At 90% shared terms the estimate is 0.90; at 50% it is
+  0.67 against a true 0.50. The README says to threshold on Hamming distance rather than
+  treat the similarity as a measurement.
+
+  As with a MinHash signature, the hash is fixed by convention rather than chosen, and the
+  suite pins the fingerprint a known document produces. Persistence takes structure id 19.
+
 - **`ThetaSketch`**, which estimates distinct counts and can intersect them, and is
   [#61](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/61). Union,
   intersection and difference, all of which produce another sketch.

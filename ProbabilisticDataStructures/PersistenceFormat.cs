@@ -29,6 +29,7 @@ namespace ProbabilisticDataStructures
         HyperLogLogPlus = 16,
         QuotientFilter = 17,
         ThetaSketch = 18,
+        SimHashSignature = 19,
     }
 
     /// <summary>
