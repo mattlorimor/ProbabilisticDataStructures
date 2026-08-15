@@ -166,6 +166,35 @@ namespace TestProbabilisticDataStructures
             Assert.IsLessThan(0.02, Math.Abs((double)dense.Count() - 50000) / 50000);
         }
 
+        /// <summary>
+        /// Loaded past its retained size, so the fixture pins the sampled case rather
+        /// than the exact one -- theta itself has to come back, or every later estimate
+        /// is scaled wrongly.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredThetaSketchStillReads()
+        {
+            var sketch = ThetaSketch.ReadFrom(Fixture("thetasketch-v1.bin"));
+
+            // It trims to 16 and then refills, so where it stops depends on the stream.
+            Assert.AreEqual(30u, sketch.Retained());
+
+            // 210 is what this sketch estimates for the 200 items it was given, and
+            // pinning the estimate rather than the truth is the point: a theta that came
+            // back wrong would scale this and nothing else would notice.
+            Assert.AreEqual(210ul, sketch.Count());
+
+            // And still combines with a sketch built now.
+            var other = new ThetaSketch(16);
+            for (var i = 100; i < 300; i++)
+            {
+                other.Add(Key($"w{i}"));
+            }
+
+            Assert.IsGreaterThan(0ul, sketch.Intersect(other).Count(),
+                "the stored sketch shares nothing with a set it overlaps");
+        }
+
         [TestMethod]
         public void TestStoredQuotientFilterStillReads()
         {
@@ -375,6 +404,14 @@ namespace TestProbabilisticDataStructures
 
             AssertBytes("quotientfilter-v1.bin", quotient.ToByteArray());
 
+            var theta = new ThetaSketch(16);
+            for (var i = 0; i < 200; i++)
+            {
+                theta.Add(Key($"w{i}"));
+            }
+
+            AssertBytes("thetasketch-v1.bin", theta.ToByteArray());
+
             var denseHll = new HyperLogLogPlus(14);
             for (var i = 0; i < 50000; i++)
             {
@@ -433,6 +470,7 @@ namespace TestProbabilisticDataStructures
                 ("hyperloglogplus-sparse-v1.bin", 16, 1),
                 ("hyperloglogplus-dense-v1.bin", 16, 1),
                 ("quotientfilter-v1.bin", 17, 1),
+                ("thetasketch-v1.bin", 18, 1),
             };
 
             foreach (var (fixture, id, version) in expected)

@@ -76,6 +76,7 @@ checksum still matches.
 | 15 | `DDSketch` |
 | 16 | `HyperLogLogPlus` |
 | 17 | `QuotientFilter` |
+| 18 | `ThetaSketch` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
@@ -434,6 +435,27 @@ is why an entry can be moved without its slot's occupied bit moving with it.
 
 A payload claiming more entries than there are slots is refused, as is one whose table is
 not the size its two widths call for.
+
+### `ThetaSketch` (id 18)
+
+```
+u32     the retained size, k
+u64     theta, the threshold below which values are kept
+u32     how many values are held
+u64     each value, strictly increasing
+```
+
+Theta is the sampling rate as well as the threshold, so it is the one field that scales
+every answer the sketch gives. A payload whose theta is wrong does not look broken; it
+looks like a different cardinality.
+
+The values are written strictly increasing, and a payload where they are not is refused —
+they are the sketch's count as well as its contents, so a repeat would be counted twice. A
+value at or above theta is refused for the same reason: it was not sampled at the rate the
+estimate applies.
+
+A sketch never holds more than twice what it retains, because that is when it trims, so a
+payload claiming more than `2k` values is refused.
 
 ## The random generator's state
 

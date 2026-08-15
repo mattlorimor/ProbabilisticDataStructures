@@ -29,6 +29,7 @@ The descriptions for each filter were lifted directly from the BoomFilters' READ
 * [Quotient filter](https://github.com/mattlorimor/ProbabilisticDataStructures#deleting-and-merging)
 * [Scalable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#scalable-bloom-filter)
 * [Stable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#stable-bloom-filter)
+* [Theta sketch](https://github.com/mattlorimor/ProbabilisticDataStructures#set-operations-on-cardinality)
 * [TopK](https://github.com/mattlorimor/ProbabilisticDataStructures#top-k)
 
 ## Installation
@@ -184,6 +185,52 @@ Every addition is stored, including a repeat of something already held, so it ta
 many removals to empty an item out as it took additions to put it in. Collapsing repeats
 would mean collapsing two different items whose fingerprints agree, and removing either
 would then make the filter answer no for the other.
+
+## Set operations on cardinality
+
+`ThetaSketch` estimates distinct counts like `HyperLogLogPlus`, and unlike it can
+**intersect**.
+
+```C#
+var a = new ThetaSketch(nominalEntries: 16384);
+var b = new ThetaSketch(nominalEntries: 16384);
+
+ulong both   = a.Intersect(b).Count();
+ulong either = a.Union(b).Count();
+ulong onlyA  = a.Difference(b).Count();
+```
+
+**Reach for `HyperLogLogPlus` unless you need that.** At comparable accuracy the theta
+sketch costs sixteen times the memory, measured over five streams of a million items:
+
+| | bytes | error |
+| --- | --- | --- |
+| `HyperLogLogPlus` p=14 | **16,384** | 0.43% |
+| `ThetaSketch` k=16384 | 262,144 | 0.37% |
+| `ThetaSketch` k=4096 | 65,536 | 0.78% |
+
+What it buys is the question two cardinality estimators cannot answer. "How many were in
+both" can be forced out of them by inclusion-exclusion — `|A| + |B| - |A ∪ B|` — and the
+answer is worthless when the intersection is small, because each of those three terms
+carries an error proportional to sets far larger than the number being estimated, and the
+errors do not cancel.
+
+Two sets of 200,000 sharing 500, mean absolute error over five trials:
+
+| | error | true answer |
+| --- | --- | --- |
+| `ThetaSketch.Intersect` | **38** | 500 |
+| `HyperLogLogPlus` inclusion-exclusion | 1,947 | 500 |
+
+The direct estimate is off by 8%. The arithmetic is off by four times the answer.
+
+Read the error on an intersection carefully even so: it scales with the size of the sets
+rather than the size of the intersection, so a small enough intersection between large
+enough sets is still beyond reach. It is better arithmetic, not a different kind of
+answer.
+
+Counts are exact while the sketch is holding fewer values than it retains, as with the
+sparse form of `HyperLogLogPlus`.
 
 ## Distinct counts
 
