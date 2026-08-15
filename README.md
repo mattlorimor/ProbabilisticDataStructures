@@ -147,6 +147,16 @@ var filter = new StableBloomFilter(10000, 2, 0.01, seed: 42);
 Omitting it seeds unpredictably. Every other structure here is already deterministic
 given its inputs.
 
+A seeded filter stays reproducible across serialization: both store their generator's
+position, so a filter read back resumes the sequence it was partway through rather than
+restarting it. That matters most for a filter checkpointed on a schedule, which would
+otherwise replay the same choices after every load. See
+[FORMAT.md](FORMAT.md#the-random-generators-state).
+
+The sequence a given seed produces changed in 6.0.0, when these filters moved off
+`System.Random` — which will not report its position, and so cannot be stored. A seed is
+as reproducible as it ever was; it produces different numbers than it did in 4.x and 5.x.
+
 ## Thread safety
 
 **None of the filters in this library are thread-safe.** No operation is synchronized,

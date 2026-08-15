@@ -60,7 +60,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private uint[] IndexBuffer { get; set; } = null!;
 
-        private Random random = new Random();
+        private SeededRandom random;
 
         /// <summary>
         /// Whether any cell has been set, which is what decides if the hash can
@@ -127,7 +127,9 @@ namespace ProbabilisticDataStructures
             var cells = new Buckets(m, d);
 
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
-            this.random = seed is null ? new Random() : new Random(seed.Value);
+            this.random = seed is null
+                ? SeededRandom.Unpredictable()
+                : new SeededRandom((ulong)seed.Value);
             this.M = m;
             this.k = k;
             this.p = OptimalStableP(m, k, d, fpRate);
@@ -343,12 +345,14 @@ namespace ProbabilisticDataStructures
             payload.WriteUInt32(this.k);
             payload.WriteUInt32(this.p);
             PersistenceFormat.WriteBuckets(payload, this.cells);
+            payload.WriteUInt64(this.random.State);
 
             PersistenceFormat.Write(
                 stream,
                 StructureId.StableBloomFilter,
                 PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+                payload.WrittenSpan,
+                PersistenceFormat.RandomStateVersion);
         }
 
         /// <summary>
@@ -378,13 +382,23 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(stream);
 
-            var payload = PersistenceFormat.Read(stream, StructureId.StableBloomFilter, out var hashId);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.StableBloomFilter, out var hashId, out var version);
             var reader = new PayloadReader(payload);
 
             var m = reader.ReadUInt32();
             var k = reader.ReadUInt32();
             var p = reader.ReadUInt32();
             var cells = PersistenceFormat.ReadBuckets(ref reader);
+
+            // Version 1 predates the stored generator state. Such a filter resumes with
+            // an unpredictable one: its cells are exactly right, and only the sequence of
+            // cells it will decay next is unknowable, which is the most that can be
+            // recovered from a payload that never recorded it.
+            var random = version >= PersistenceFormat.RandomStateVersion
+                ? new SeededRandom(reader.ReadUInt64())
+                : SeededRandom.Unpredictable();
+
             reader.ExpectEnd();
 
             if (m == 0 || cells.count != m)
@@ -410,6 +424,7 @@ namespace ProbabilisticDataStructures
                 Max = cells.MaxBucketValue(),
                 IndexBuffer = new uint[k],
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+                random = random,
             };
         }
 
@@ -434,7 +449,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private void Decrement()
         {
-            var r = random.Next((int)this.M);
+            var r = this.random.NextBelow(this.M);
             for (uint i = 0; i < this.p; i++)
             {
                 var idx = (r + i) % this.M;

@@ -18,7 +18,7 @@ Every structure is written inside the same envelope.
 | Offset | Size | Field |
 | --- | --- | --- |
 | 0 | 4 | Magic, the ASCII bytes `PDS\0` |
-| 4 | 2 | Format version (currently 1) |
+| 4 | 2 | Format version (see below) |
 | 6 | 2 | Structure id |
 | 8 | 2 | Hash id |
 | 10 | 4 | Payload length in bytes |
@@ -29,6 +29,25 @@ The checksum covers the header as well as the payload, so a corrupted length or
 structure id is caught by the same check rather than being acted on first. The magic is
 outside it: a payload whose magic is wrong is not this format at all, and there is
 nothing to checksum.
+
+### Format versions
+
+The version travels in each payload rather than being a property of the library, so a
+structure whose layout changes bumps only its own.
+
+| Version | Written by | Structures |
+| --- | --- | --- |
+| 1 | 3.1.0 onwards | every structure except the two below |
+| 2 | 6.0.0 onwards | `StableBloomFilter`, `CuckooBloomFilter` |
+
+Version 2 exists because those two gained a stored random-generator state in 6.0.0.
+Raising every structure's version together would have made every payload unreadable to
+5.x in order to record a change that eleven of them did not have.
+
+A version 1 payload of either filter still reads. It carries no generator state, so the
+restored filter resumes with an unpredictable one: its cells or fingerprints are exactly
+right, and only the sequence of choices it will make next is unrecoverable, because it
+was never written down.
 
 A reader refuses a payload whose magic does not match, whose version is `0` or greater
 than the version it knows, whose structure id is not the type being read, or whose
@@ -215,9 +234,13 @@ u32     m, the number of cells
 u32     k
 u32     p, the number of cells decremented per add
 Buckets the cells
+u64     the random generator's state    (version 2 onwards)
 ```
 
 The maximum cell value follows from the cell width the cells carry.
+
+The generator's state is the last field, and version 1 payloads simply end before it.
+See [The random generator's state](#the-random-generators-state).
 
 ### `InverseBloomFilter` (id 8)
 
@@ -246,10 +269,14 @@ u32     occupied entry count
 u32       bucket index
 u32       entry index
 bytes     the fingerprint
+u64     the random generator's state    (version 2 onwards)
 ```
 
 Occupied entries only, for the same reason as above: a filter sized for a load it has
 not reached is mostly empty slots.
+
+The generator's state is the last field, and version 1 payloads simply end before it.
+See [The random generator's state](#the-random-generators-state).
 
 ### `HyperLogLog` (id 11)
 
@@ -294,6 +321,25 @@ built with different functions produces a number that means nothing.
 Changing those functions would silently invalidate every stored signature, so they are
 fixed in the same sense the rest of this format is, and the test suite pins the values a
 known bag produces.
+
+## The random generator's state
+
+`StableBloomFilter` chooses which cells to decay and `CuckooBloomFilter` chooses which
+entry to evict, one draw per add in each. Both store their generator's position, so a
+restored filter resumes the sequence it was partway through.
+
+Storing the seed alone would have been simpler and is subtly wrong. The bits come back
+correct either way, but a filter re-seeded on read sits at the start of its sequence
+while the original sits wherever its adds left it. The case that makes this matter is
+the one persistence exists for: a filter checkpointed on a schedule would replay the
+same first draws after every load, and the stable filter's bound on its false positive
+rate assumes its decay is spread across cells rather than aimed at the same ones after
+every restart.
+
+That is also why the generator is this library's own SplitMix64 rather than
+`System.Random`, which will not say where it is. The sequence for a given seed therefore
+changed in 6.0.0 — the seed parameter arrived in 4.0.0, and this is the only breaking
+part of the change.
 
 ## What is not stored
 

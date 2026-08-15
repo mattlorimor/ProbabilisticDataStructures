@@ -85,7 +85,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private uint N { get; set; }
 
-        private Random random = new Random();
+        private SeededRandom random;
 
         /// <summary>
         /// Creates a new Cuckoo Bloom filter optimized to store n items with a specified
@@ -136,7 +136,9 @@ namespace ProbabilisticDataStructures
             this.Fingerprints = new byte[entries * f];
             this.Occupied = new Buckets((uint)entries, 1);
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
-            this.random = seed is null ? new Random() : new Random(seed.Value);
+            this.random = seed is null
+                ? SeededRandom.Unpredictable()
+                : new SeededRandom((ulong)seed.Value);
             this.M = m;
             this.B = b;
             this.F = f;
@@ -335,11 +337,14 @@ namespace ProbabilisticDataStructures
                 }
             }
 
+            payload.WriteUInt64(this.random.State);
+
             PersistenceFormat.Write(
                 stream,
                 StructureId.CuckooBloomFilter,
                 PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+                payload.WrittenSpan,
+                PersistenceFormat.RandomStateVersion);
         }
 
         /// <summary>
@@ -369,7 +374,8 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(stream);
 
-            var payload = PersistenceFormat.Read(stream, StructureId.CuckooBloomFilter, out var hashId);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.CuckooBloomFilter, out var hashId, out var version);
             var reader = new PayloadReader(payload);
 
             var m = reader.ReadUInt32();
@@ -433,6 +439,13 @@ namespace ProbabilisticDataStructures
                 occupancy.Set(bucket * b + entry, 1);
             }
 
+            // Version 1 predates the stored generator state. Such a filter resumes with
+            // an unpredictable one: its fingerprints are exactly right, and only the
+            // sequence of entries it will evict next is unknowable.
+            var random = version >= PersistenceFormat.RandomStateVersion
+                ? new SeededRandom(reader.ReadUInt64())
+                : SeededRandom.Unpredictable();
+
             reader.ExpectEnd();
 
             return new CuckooBloomFilter
@@ -445,6 +458,7 @@ namespace ProbabilisticDataStructures
                 count = count,
                 N = n,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+                random = random,
             };
         }
 
@@ -597,7 +611,7 @@ namespace ProbabilisticDataStructures
             for (int n = 0; n < MAX_NUM_KICKS; n++)
             {
                 var bucketIdx = i % this.M;
-                var entryIdx = (uint)random.Next((int)this.B);
+                var entryIdx = this.random.NextBelow(this.B);
 
                 // The loop only relocates out of a bucket with no free entry, so every
                 // entry in it is occupied and what comes out is a real fingerprint.

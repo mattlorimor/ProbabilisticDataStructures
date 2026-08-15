@@ -5,6 +5,61 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.0] - Unreleased
+
+### Fixed
+
+- **A restored `StableBloomFilter` or `CuckooBloomFilter` resumes the random sequence it
+  was partway through**, rather than starting over. Both filters accepted a `seed` from
+  4.0.0 onwards, and neither carried it through serialization: the filter came back with
+  a fresh `System.Random`, so a seeded filter stopped being reproducible the moment it
+  was written to a file. Nothing tested it.
+
+  Storing the seed would not have been enough. The bits come back correct either way, but
+  a filter re-seeded on read sits at the start of its sequence while the original sits
+  wherever its adds left it. The case that makes this matter is the one persistence exists
+  for: a filter checkpointed on a schedule would replay the same first draws after every
+  load, and the stable filter's bound on its false positive rate assumes its decay is
+  spread across cells rather than aimed at the same ones after every restart.
+
+  The tests for this assert against a filter that was **never written out**. Two filters
+  restored from the same payload agree under either design, so the comparison one would
+  naturally write is the comparison this defect passes.
+
+### Changed
+
+- **`StableBloomFilter` and `CuckooBloomFilter` draw from SplitMix64 instead of
+  `System.Random`**, whose position cannot be read out of it and so cannot be stored.
+  Both filters remain deterministic for a given seed, but **the sequence a seed produces
+  has changed**. Code that pinned exact values for a given seed will see different ones;
+  code that only relies on a seed being reproducible is unaffected. This is the whole of
+  the breaking change.
+
+- **The persistence format's version now travels per payload.** `StableBloomFilter` and
+  `CuckooBloomFilter` write version 2, carrying the generator state as a trailing `u64`.
+  The other eleven structures still write version 1 and remain readable by 3.1.0 onwards.
+  Raising every structure's version together would have made every payload unreadable to
+  5.x to record a change that eleven of them did not have.
+
+  Version 1 payloads of both filters still read, and are pinned by fixtures alongside the
+  new version 2 ones. Such a filter resumes with an unpredictable generator: its cells or
+  fingerprints are exactly right, and only the sequence of choices it will make next is
+  unrecoverable, because it was never written down.
+
+### Added
+
+- **Tests for the format guards the corruption sweep cannot reach.** That sweep flips
+  single bits and leaves the trailing CRC alone, so every one of its cases dies at the
+  checksum — it proved the checksum works and nothing behind it. All six `MaxNestedCount`
+  guard sites, the version-zero check and the oversized-length check were unexercised.
+  The new tests repair the CRC after editing, so a guard is what has to refuse them.
+
+- **The every-structure persistence sweeps now cover every structure.** `CountMinSketch`
+  has `SetHash` but was absent from the hash-substitution sweep; it, `BloomFilter` and
+  `MinHashSignature` were absent from the corruption sweep. Adding the signature to the
+  read-as-another sweep also makes its structure-id distinctness assertion cover all
+  thirteen ids rather than twelve.
+
 ## [5.2.0] - 2026-08-14
 
 ### Changed
