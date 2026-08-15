@@ -273,6 +273,7 @@ namespace TestProbabilisticDataStructures
 
             Assert.AreEqual(0ul, RoundTrip(new CountMinSketch(0.01, 0.01)).TotalCount());
             Assert.AreEqual(0u, RoundTrip(BinaryFuseFilter.Build(Array.Empty<byte[]>())).Count());
+            Assert.AreEqual(0ul, RoundTrip(new DDSketch(0.01)).Count());
 
             // A signature of an empty bag is the one case here that is not all zeroes:
             // every position holds the identity ulong.MaxValue, which a restore that
@@ -353,6 +354,7 @@ namespace TestProbabilisticDataStructures
                 ("TopK", new TopK(0.001, 0.01, 10).ToByteArray()),
                 ("MinHashSignature", MinHash.Signature(new[] { "a" }, 8).ToByteArray()),
                 ("BinaryFuseFilter", BinaryFuseFilter.Build(new[] { Key("a") }).ToByteArray()),
+                ("DDSketch", FilledSketchOfNumbers()),
             };
 
             // Read every payload as a BloomFilter; only its own may succeed.
@@ -400,6 +402,7 @@ namespace TestProbabilisticDataStructures
                 ("CountMinSketch", b => Persistence.FromByteArray<CountMinSketch>(b), FilledSketch()),
                 ("MinHashSignature", b => Persistence.FromByteArray<MinHashSignature>(b), FilledSignature()),
                 ("BinaryFuseFilter", b => Persistence.FromByteArray<BinaryFuseFilter>(b), FilledFuse()),
+                ("DDSketch", b => Persistence.FromByteArray<DDSketch>(b), FilledSketchOfNumbers()),
             };
 
             foreach (var (name, read, clean) in payloads)
@@ -435,6 +438,18 @@ namespace TestProbabilisticDataStructures
             var h = new HyperLogLog(64);
             for (int i = 0; i < 40; i++) h.Add(Key($"w{i}"));
             return h.ToByteArray();
+        }
+
+        // Takes numbers rather than bytes, so it shares no helper with the rest.
+        private static byte[] FilledSketchOfNumbers()
+        {
+            var sketch = new DDSketch(0.1);
+            for (var i = 1; i <= 40; i++)
+            {
+                sketch.Add(i);
+            }
+
+            return sketch.ToByteArray();
         }
 
         // Not an IFilter: the set is fixed at construction, so there is no Add.

@@ -25,6 +25,7 @@ namespace ProbabilisticDataStructures
         TopK = 12,
         MinHashSignature = 13,
         BinaryFuseFilter = 14,
+        DDSketch = 15,
     }
 
     /// <summary>
@@ -54,6 +55,19 @@ namespace ProbabilisticDataStructures
         /// The 64-bit XxHash3 that <see cref="Defaults"/> installs, current since 3.0.0.
         /// </summary>
         XxHash3_64 = 1,
+
+        /// <summary>
+        /// The structure does not hash anything, so there is no hash to record and none
+        /// to supply on reading.
+        /// </summary>
+        /// <remarks>
+        /// This is not "the hash is unknown" -- that is <see cref="Custom"/>. It is a
+        /// positive statement that the structure takes values rather than bytes, which
+        /// <see cref="DDSketch"/> is the first here to do. A reader that is handed a
+        /// hash for one of these refuses it rather than ignoring it, because a caller
+        /// supplying one has misunderstood something about what they are reading.
+        /// </remarks>
+        None = 2,
     }
 
     /// <summary>
