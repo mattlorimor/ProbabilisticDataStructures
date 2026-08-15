@@ -148,6 +148,21 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestStoredDDSketchStillReads()
+        {
+            var sketch = DDSketch.ReadFrom(Fixture("ddsketch-v1.bin"));
+
+            Assert.AreEqual(100ul, sketch.Count());
+            Assert.AreEqual(0.01, sketch.RelativeAccuracy());
+            Assert.AreEqual(1.0, sketch.Min());
+            Assert.AreEqual(100.0, sketch.Max());
+
+            // The buckets came back, not just the totals: the median of 1..100 is 50,
+            // within the accuracy the sketch was built with.
+            Assert.IsLessThanOrEqualTo(0.01, Math.Abs(sketch.Quantile(0.5) - 50.0) / 50.0);
+        }
+
+        [TestMethod]
         public void TestStoredInverseBloomFilterStillReads()
         {
             var f = InverseBloomFilter.ReadFrom(Fixture("inversebloomfilter-v1.bin"));
@@ -302,6 +317,14 @@ namespace TestProbabilisticDataStructures
             AssertBytes("binaryfusefilter-v1.bin",
                 BinaryFuseFilter.Build(Words.Select(Key)).ToByteArray());
 
+            var sketch = new DDSketch(0.01);
+            for (var i = 1; i <= 100; i++)
+            {
+                sketch.Add(i);
+            }
+
+            AssertBytes("ddsketch-v1.bin", sketch.ToByteArray());
+
             // The words go in first so they are all findable, then a load heavy enough
             // to make buckets collide and the relocation path run -- but short of
             // saturating the filter, which would refuse inserts rather than relocate.
@@ -348,6 +371,7 @@ namespace TestProbabilisticDataStructures
                 ("stablebloomfilter-v2.bin", 7, 2),
                 ("cuckoobloomfilter-v2.bin", 9, 2),
                 ("binaryfusefilter-v1.bin", 14, 1),
+                ("ddsketch-v1.bin", 15, 1),
             };
 
             foreach (var (fixture, id, version) in expected)

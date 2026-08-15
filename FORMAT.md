@@ -73,6 +73,7 @@ checksum still matches.
 | 12 | `TopK` |
 | 13 | `MinHashSignature` |
 | 14 | `BinaryFuseFilter` |
+| 15 | `DDSketch` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
@@ -82,6 +83,7 @@ Ids are assigned once and never reused, including for structures that no longer 
 | --- | --- |
 | 0 | A function supplied through `SetHash`, which cannot be recorded |
 | 1 | 64-bit XxHash3, the default since 3.0.0 |
+| 2 | None: the structure holds numbers rather than bytes and does not hash |
 
 A structure's answers depend entirely on its hash function, and a delegate cannot be
 written to a file. Recording which one was in use is what stops a reader installing a
@@ -344,6 +346,38 @@ The seed matters as much as the fingerprints. It is not a tuning parameter — i
 seed the construction's peel happened to succeed on, and every position in the filter is
 computed from it. A filter read back under a different seed would find nothing.
 
+### `DDSketch` (id 15)
+
+```
+f64     the relative accuracy
+u64     the total number of values added
+u64     how many of them were zero
+f64     the smallest value added
+f64     the largest value added
+store   the positive buckets
+store   the negative buckets, indexed by magnitude
+```
+
+where a store is
+
+```
+i32     the index of its first bucket
+bytes   a u64 count per bucket, from that index upward
+```
+
+The counts run contiguously from the first occupied bucket, so the store's bounds and
+its total follow from the run itself rather than being written alongside it and given
+the chance to disagree with it. A payload whose buckets do not add up to the recorded
+total is refused: every quantile would land at the wrong rank while each individual
+bucket still looked reasonable.
+
+`gamma`, which is `(1+a)/(1-a)`, is derived from the accuracy rather than stored. So is
+the log of it. See [What is not stored](#what-is-not-stored).
+
+This is the only structure whose payload names hash id 2. It holds numbers, hashes
+nothing, and reading it with a supplied hash function is refused rather than ignored —
+a caller passing one has misunderstood what they are reading.
+
 ## The random generator's state
 
 `StableBloomFilter` chooses which cells to decay and `CuckooBloomFilter` chooses which
@@ -375,5 +409,9 @@ it.
 derivation was wrong at 2^29 registers before 3.1.0, and an estimator is rebuilt through
 its constructor on read so that `b` and `alpha` come out the way a fresh one computes
 them.
+
+`DDSketch`'s `gamma` is the third: it is `(1+a)/(1-a)` for the relative accuracy `a`,
+which is stored, and deriving it on read means the bucket boundaries a sketch is read
+with are exactly the ones a fresh sketch of the same accuracy computes.
 
 Scratch buffers are not stored either. They hold nothing between calls.

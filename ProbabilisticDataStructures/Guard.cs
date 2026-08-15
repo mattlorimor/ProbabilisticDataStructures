@@ -193,5 +193,23 @@ namespace ProbabilisticDataStructures
                     "A larger value underflows the data region.");
             }
         }
+        /// <summary>
+        /// A relative accuracy sets the ratio between one bucket and the next, and only
+        /// describes a sketch when it sits strictly between zero and one.
+        /// </summary>
+        /// <param name="accuracy">The accuracy to check.</param>
+        /// <param name="paramName">The parameter it came from.</param>
+        internal static void ValidRelativeAccuracy(double accuracy, string paramName)
+        {
+            if (!(accuracy > 0 && accuracy < 1))
+            {
+                throw new ArgumentOutOfRangeException(
+                    paramName, accuracy,
+                    "Relative accuracy must be greater than 0 and less than 1. At zero " +
+                    "every value would need its own bucket, and at one or above a " +
+                    "bucket would be allowed to report anything at all.");
+            }
+        }
+
     }
 }

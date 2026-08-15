@@ -16,6 +16,7 @@ The descriptions for each filter were lifted directly from the BoomFilters' READ
 ## Included Structures
 * [Binary fuse filter](https://github.com/mattlorimor/ProbabilisticDataStructures#static-sets)
 * [Count-Min Sketch](https://github.com/mattlorimor/ProbabilisticDataStructures#count-min-sketch)
+* [DDSketch (quantiles)](https://github.com/mattlorimor/ProbabilisticDataStructures#quantiles)
 * [Counting Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#counting-bloom-filter)
 * [Cuckoo filter](https://github.com/mattlorimor/ProbabilisticDataStructures#cuckoo-filter)
 * [Classic Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#classic-bloom-filter)
@@ -134,6 +135,36 @@ it moves none of it, so every lookup would go somewhere else — the structure w
 items it can no longer find. It would not look broken, it would look empty.
 
 `SetHash` remains available before anything has been added, including after `Reset()`.
+
+## Quantiles
+
+`DDSketch` answers what a stream of numbers looks like — the median, the p99, the shape
+of the tail.
+
+```C#
+var sketch = new DDSketch(0.01);
+foreach (var latency in latencies) sketch.Add(latency);
+
+double p99 = sketch.Quantile(0.99);   // within 1% of the true p99
+```
+
+Its guarantee is on the **value**, not the rank: `Quantile(0.99)` comes back within 1% of
+the real 99th percentile. That is the guarantee latency measurement wants — "within 1% of
+the truth" rather than "within 1% of the right rank", which says nothing about how wrong
+the number is when the tail is steep.
+
+Nothing about it is probabilistic. The counts are exact and the buckets are exact ranges,
+so the only error is a bucket's width, and the accuracy is a hard bound rather than an
+expectation. `Merge` is exact too: merging two sketches gives the sketch that would have
+been built from both streams.
+
+Negative values and zero are fine. `Min()` and `Max()` are exact rather than bucketed.
+Memory grows with the *logarithm* of the dynamic range — a stream spanning 10^-120 to
+10^120 fits in well under a megabyte.
+
+It is the only structure here that takes numbers rather than bytes, and so the only one
+that never hashes: there is no `SetHash`, and its payload records that it uses no hash
+rather than naming one.
 
 ## Static sets
 

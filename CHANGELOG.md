@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`DDSketch`**, which answers what a stream of numbers looks like, and is
+  [#60](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/60). Masson,
+  Rim and Lee (2019). Nothing here answered anything about a distribution before this:
+  the median, the p99, the shape of a tail.
+
+  Its guarantee is on the **value** rather than the rank — `Quantile(0.99)` returns
+  within the relative accuracy of the true 99th percentile, which is the guarantee
+  latency measurement actually wants. Nothing about it is probabilistic: the counts are
+  exact and the buckets are exact ranges, so the accuracy is a hard bound rather than an
+  expectation, and `Merge` is exact rather than approximate.
+
+  It is the first structure here that takes numbers rather than bytes, and so the first
+  that never hashes. There is no `SetHash`, and its payload records hash id 2, `None`,
+  rather than naming a hash it does not use — reading one with a supplied hash function
+  is refused rather than ignored. Negative values and zero are held; `Min()` and `Max()`
+  are exact rather than bucketed; memory grows with the logarithm of the dynamic range.
+  Persistence takes structure id 15.
+
 - **`BinaryFuseFilter`**, the first structure here whose set is fixed at construction,
   which is [#57](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/57).
   Graf and Lemire's binary fuse filter (2022). There is no `Add` and there cannot be:
