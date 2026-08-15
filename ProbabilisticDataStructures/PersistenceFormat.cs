@@ -30,6 +30,7 @@ namespace ProbabilisticDataStructures
         QuotientFilter = 17,
         ThetaSketch = 18,
         SimHashSignature = 19,
+        CountSketch = 20,
     }
 
     /// <summary>

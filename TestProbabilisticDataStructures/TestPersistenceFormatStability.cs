@@ -172,6 +172,20 @@ namespace TestProbabilisticDataStructures
         /// is scaled wrongly.
         /// </summary>
         [TestMethod]
+        public void TestStoredCountSketchStillReads()
+        {
+            var sketch = CountSketch.ReadFrom(Fixture("countsketch-v1.bin"));
+
+            Assert.AreEqual(100u, sketch.Width());
+            Assert.AreEqual(5u, sketch.Depth());
+
+            // Signed cells, which is the thing this sketch stores that a Count-Min one
+            // does not, so a payload read back as unsigned would come out wrong here.
+            Assert.AreEqual(-500L, sketch.Count(Key("removed")));
+            Assert.AreEqual(300L, sketch.Count(Key("alpha")));
+        }
+
+        [TestMethod]
         public void TestStoredSimHashSignatureStillReads()
         {
             var signature = SimHashSignature.ReadFrom(Fixture("simhashsignature-v1.bin"));
@@ -426,6 +440,12 @@ namespace TestProbabilisticDataStructures
 
             AssertBytes("simhashsignature-v1.bin", SimHash.Signature(Words).ToByteArray());
 
+            var countSketch = new CountSketch(0.1, 0.01);
+            countSketch.Add(Key("alpha"), 300);
+            countSketch.Add(Key("removed"), -500);
+
+            AssertBytes("countsketch-v1.bin", countSketch.ToByteArray());
+
             var denseHll = new HyperLogLogPlus(14);
             for (var i = 0; i < 50000; i++)
             {
@@ -486,6 +506,7 @@ namespace TestProbabilisticDataStructures
                 ("quotientfilter-v1.bin", 17, 1),
                 ("thetasketch-v1.bin", 18, 1),
                 ("simhashsignature-v1.bin", 19, 1),
+                ("countsketch-v1.bin", 20, 1),
             };
 
             foreach (var (fixture, id, version) in expected)

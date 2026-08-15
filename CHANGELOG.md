@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`CountSketch`**, frequency estimation without Count-Min's one-sided bias, which is
+  [#77](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/77). Charikar,
+  Chen and Farach-Colton (2002). Each row hashes an item to a cell and to a sign, so
+  collisions cancel in expectation rather than accumulate.
+
+  Matched on shape against a `CountMinSketch` and asked about an item seen ten times among
+  two million observations, Count-Min was off by **700** and this by **100**. Both are
+  accurate about a genuine heavy hitter, and there is a test asserting that too -- the
+  point is not that Count-Min is worse, it is that Count-Min is worse at one thing.
+
+  It also supports removal, which Count-Min cannot: a negative update is just an update.
+  Estimates can come back negative, meaning the true count is near zero and the noise went
+  the other way, and its epsilon bounds error against the stream's L2 norm rather than its
+  L1 -- so the two cannot be compared at equal epsilon, and the README says so. Persistence
+  takes structure id 20, with signed cells.
+
 - **A filter sized past what 32 bits can address now says so.** `BloomFilter`,
   `CountingBloomFilter`, `PartitionedBloomFilter` and `DeletableBloomFilter` address at
   most 4.29 billion bits, which is about 448 million items at 1% and fewer at a tighter

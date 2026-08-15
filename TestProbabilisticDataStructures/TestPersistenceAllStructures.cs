@@ -277,6 +277,7 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(0ul, RoundTrip(new HyperLogLogPlus(14)).Count());
             Assert.AreEqual(0u, RoundTrip(new QuotientFilter(1000, 0.01)).Count());
             Assert.AreEqual(0ul, RoundTrip(new ThetaSketch(4096)).Count());
+            Assert.AreEqual(0L, RoundTrip(new CountSketch(0.05, 0.01)).Count(Key("x")));
 
             // A signature of an empty bag is the one case here that is not all zeroes:
             // every position holds the identity ulong.MaxValue, which a restore that
@@ -308,6 +309,8 @@ namespace TestProbabilisticDataStructures
             var scalable = new ScalableBloomFilter(100, 0.01, 0.8); scalable.SetHash(custom);
             var fuse = BinaryFuseFilter.Build(
                 Present.Select(Key), BinaryFuseWidth.Eight, custom);
+            var countSketch = new CountSketch(0.05, 0.01); countSketch.SetHash(custom);
+            countSketch.Add(Key("a"));
             var theta = new ThetaSketch(4096); theta.SetHash(custom);
             foreach (var w in Present) theta.Add(Key(w));
             var quotient = new QuotientFilter(1000, 0.01); quotient.SetHash(custom);
@@ -315,6 +318,7 @@ namespace TestProbabilisticDataStructures
             var hllPlus = new HyperLogLogPlus(14); hllPlus.SetHash(custom);
             foreach (var w in Present) hllPlus.Add(Key(w));
 
+            AssertRefusesThenAccepts(countSketch.ToByteArray(), b => Persistence.FromByteArray<CountSketch>(b), b => Persistence.FromByteArray<CountSketch>(b, custom));
             AssertRefusesThenAccepts(theta.ToByteArray(), b => Persistence.FromByteArray<ThetaSketch>(b), b => Persistence.FromByteArray<ThetaSketch>(b, custom));
             AssertRefusesThenAccepts(quotient.ToByteArray(), b => Persistence.FromByteArray<QuotientFilter>(b), b => Persistence.FromByteArray<QuotientFilter>(b, custom));
             AssertRefusesThenAccepts(hllPlus.ToByteArray(), b => Persistence.FromByteArray<HyperLogLogPlus>(b), b => Persistence.FromByteArray<HyperLogLogPlus>(b, custom));
@@ -371,6 +375,7 @@ namespace TestProbabilisticDataStructures
                 ("QuotientFilter", new QuotientFilter(1000, 0.01).Add(Key("a")).ToByteArray()),
                 ("ThetaSketch", new ThetaSketch(4096).Add(Key("a")).ToByteArray()),
                 ("SimHashSignature", SimHash.Signature(new[] { "a" }).ToByteArray()),
+                ("CountSketch", new CountSketch(0.5, 0.5).Add(Key("a")).ToByteArray()),
             };
 
             // Read every payload as a BloomFilter; only its own may succeed.
@@ -426,6 +431,7 @@ namespace TestProbabilisticDataStructures
                 ("ThetaSketch", b => Persistence.FromByteArray<ThetaSketch>(b), FilledTheta()),
                 ("SimHashSignature", b => Persistence.FromByteArray<SimHashSignature>(b),
                     SimHash.Signature(new[] { "a", "b", "c", "d" }).ToByteArray()),
+                ("CountSketch", b => Persistence.FromByteArray<CountSketch>(b), FilledCountSketch()),
             };
 
             foreach (var (name, read, clean) in payloads)
@@ -465,6 +471,17 @@ namespace TestProbabilisticDataStructures
 
         // Loaded past its retained size so the payload carries a lowered theta rather
         // than the exact-count case.
+        private static byte[] FilledCountSketch()
+        {
+            var sketch = new CountSketch(0.5, 0.5);
+            for (var i = 0; i < 40; i++)
+            {
+                sketch.Add(Key($"w{i}"), i % 5);
+            }
+
+            return sketch.ToByteArray();
+        }
+
         private static byte[] FilledTheta()
         {
             var sketch = new ThetaSketch(16);

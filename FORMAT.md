@@ -78,6 +78,7 @@ checksum still matches.
 | 17 | `QuotientFilter` |
 | 18 | `ThetaSketch` |
 | 19 | `SimHashSignature` |
+| 20 | `CountSketch` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
@@ -473,6 +474,22 @@ hash is refused rather than read.
 Changing the hash, or the way its bits become the fingerprint, would silently invalidate
 every stored fingerprint: the new ones would be perfectly self-consistent and would match
 none of the old ones. The test suite pins the value a known document produces.
+
+### `CountSketch` (id 20)
+
+```
+u32     width, the cells per row
+u32     depth, the rows
+bytes   an i64 per cell, row by row
+```
+
+The cells are **signed**, unlike a `CountMinSketch`'s, because a count sketch adds and
+subtracts at each cell rather than only adding. A payload read as unsigned would come back
+with every negative cell as an enormous positive one, so they are written as `i64` rather
+than reinterpreted.
+
+A payload with no rows or no columns is refused, as is one whose cells do not come to
+`width * depth * 8` bytes.
 
 ## The random generator's state
 
