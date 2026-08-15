@@ -22,6 +22,7 @@ The descriptions for each filter were lifted directly from the BoomFilters' READ
 * [Classic Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#classic-bloom-filter)
 * [Deletable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#deletable-bloom-filter)
 * [HyperLogLog](https://github.com/mattlorimor/ProbabilisticDataStructures#hyperloglog)
+* [HyperLogLog++](https://github.com/mattlorimor/ProbabilisticDataStructures#distinct-counts)
 * [Inverse Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#inverse-bloom-filter)
 * [MinHash](https://github.com/mattlorimor/ProbabilisticDataStructures#minhash)
 * [Partitioned Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#partitioned-bloom-filter)
@@ -135,6 +136,48 @@ it moves none of it, so every lookup would go somewhere else — the structure w
 items it can no longer find. It would not look broken, it would look empty.
 
 `SetHash` remains available before anything has been added, including after `Reset()`.
+
+## Distinct counts
+
+`HyperLogLogPlus` estimates how many distinct items a stream held. It sits alongside
+`HyperLogLog` rather than replacing it — replacing it would change the number an existing
+estimator answers with, including one read back from a payload written years ago.
+
+```C#
+var estimator = new HyperLogLogPlus(precision: 14);   // 2^14 registers, ~0.81% error
+foreach (var item in stream) estimator.Add(item);
+
+ulong distinct = estimator.Count();
+```
+
+Three things differ from `HyperLogLog`:
+
+**The whole 64-bit hash is used.** The older estimator keeps only the low 32 bits, so
+items whose hashes agree there are one item as far as it can tell. That is not a tail
+risk: hashing consecutive integers finds a colliding pair within 67,297 of them, and at
+a hundred million items the resulting undercount is systematic and no number of registers
+fixes it.
+
+**Small counts are exact.** Below the point where registers would be cheaper, the
+estimator keeps the hashes themselves. Ten distinct items is `10`, not an estimate near
+it — and takes 107 bytes rather than 16 KB.
+
+**There is no bad band.** The older estimator switches from linear counting to the raw
+estimate at 2.5m, and is at its worst where it changes over. Mean absolute error over 20
+independent streams at 2^14 registers, against a nominal 0.81%:
+
+| items | `HyperLogLog` | `HyperLogLogPlus` |
+| --- | --- | --- |
+| 2.00 m | 0.61% | 0.60% |
+| **2.50 m** | **2.44%** | **0.65%** |
+| 2.75 m | 1.53% | 0.69% |
+| 3.00 m | 1.04% | 0.70% |
+| 4.00 m | 0.62% | 0.65% |
+
+The spike is a systematic overestimate rather than noise. It is what HyperLogLog++ was
+written to correct, and this corrects it without the paper's tables of measured bias —
+see [the class documentation](ProbabilisticDataStructures/HyperLogLogPlus.cs) for what
+it does instead.
 
 ## Quantiles
 

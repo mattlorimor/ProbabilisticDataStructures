@@ -147,6 +147,25 @@ namespace TestProbabilisticDataStructures
             AssertAllPresent(f.Test);
         }
 
+        /// <summary>
+        /// Both of the estimator's representations, which are different payload layouts
+        /// behind one structure id, so both have to keep reading.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredHyperLogLogPlusStillReads()
+        {
+            var sparse = HyperLogLogPlus.ReadFrom(Fixture("hyperloglogplus-sparse-v1.bin"));
+            Assert.AreEqual(10ul, sparse.Count(), "the sparse form counts exactly");
+            Assert.IsTrue(sparse.IsSparse);
+
+            var dense = HyperLogLogPlus.ReadFrom(Fixture("hyperloglogplus-dense-v1.bin"));
+            Assert.IsFalse(dense.IsSparse);
+            Assert.AreEqual(14u, dense.Precision());
+
+            // Within the nominal error for 2^14 registers over 50,000 items.
+            Assert.IsLessThan(0.02, Math.Abs((double)dense.Count() - 50000) / 50000);
+        }
+
         [TestMethod]
         public void TestStoredDDSketchStillReads()
         {
@@ -325,6 +344,22 @@ namespace TestProbabilisticDataStructures
 
             AssertBytes("ddsketch-v1.bin", sketch.ToByteArray());
 
+            var sparseHll = new HyperLogLogPlus(14);
+            foreach (var word in Words)
+            {
+                sparseHll.Add(Key(word));
+            }
+
+            AssertBytes("hyperloglogplus-sparse-v1.bin", sparseHll.ToByteArray());
+
+            var denseHll = new HyperLogLogPlus(14);
+            for (var i = 0; i < 50000; i++)
+            {
+                denseHll.Add(Key($"n{i}"));
+            }
+
+            AssertBytes("hyperloglogplus-dense-v1.bin", denseHll.ToByteArray());
+
             // The words go in first so they are all findable, then a load heavy enough
             // to make buckets collide and the relocation path run -- but short of
             // saturating the filter, which would refuse inserts rather than relocate.
@@ -372,6 +407,8 @@ namespace TestProbabilisticDataStructures
                 ("cuckoobloomfilter-v2.bin", 9, 2),
                 ("binaryfusefilter-v1.bin", 14, 1),
                 ("ddsketch-v1.bin", 15, 1),
+                ("hyperloglogplus-sparse-v1.bin", 16, 1),
+                ("hyperloglogplus-dense-v1.bin", 16, 1),
             };
 
             foreach (var (fixture, id, version) in expected)
