@@ -138,6 +138,16 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestStoredBinaryFuseFilterStillReads()
+        {
+            var f = BinaryFuseFilter.ReadFrom(Fixture("binaryfusefilter-v1.bin"));
+
+            Assert.AreEqual(10u, f.Count());
+            Assert.AreEqual(BinaryFuseWidth.Eight, f.Width());
+            AssertAllPresent(f.Test);
+        }
+
+        [TestMethod]
         public void TestStoredInverseBloomFilterStillReads()
         {
             var f = InverseBloomFilter.ReadFrom(Fixture("inversebloomfilter-v1.bin"));
@@ -287,6 +297,11 @@ namespace TestProbabilisticDataStructures
 
             AssertBytes("stablebloomfilter-v2.bin", stable.ToByteArray());
 
+            // The build is deterministic -- a fixed seed sequence over a fixed set --
+            // which is what lets its bytes be pinned at all.
+            AssertBytes("binaryfusefilter-v1.bin",
+                BinaryFuseFilter.Build(Words.Select(Key)).ToByteArray());
+
             // The words go in first so they are all findable, then a load heavy enough
             // to make buckets collide and the relocation path run -- but short of
             // saturating the filter, which would refuse inserts rather than relocate.
@@ -332,6 +347,7 @@ namespace TestProbabilisticDataStructures
                 ("minhashsignature-v1.bin", 13, 1),
                 ("stablebloomfilter-v2.bin", 7, 2),
                 ("cuckoobloomfilter-v2.bin", 9, 2),
+                ("binaryfusefilter-v1.bin", 14, 1),
             };
 
             foreach (var (fixture, id, version) in expected)

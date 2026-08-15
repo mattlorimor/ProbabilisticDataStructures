@@ -72,6 +72,7 @@ checksum still matches.
 | 11 | `HyperLogLog` |
 | 12 | `TopK` |
 | 13 | `MinHashSignature` |
+| 14 | `BinaryFuseFilter` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
@@ -321,6 +322,27 @@ built with different functions produces a number that means nothing.
 Changing those functions would silently invalidate every stored signature, so they are
 fixed in the same sense the rest of this format is, and the test suite pins the values a
 known bag produces.
+
+### `BinaryFuseFilter` (id 14)
+
+```
+u32     the number of distinct keys the filter was built from
+u32     segment length, a power of two
+u32     segment count
+u64     the seed the peel succeeded on
+u8      fingerprint width in bits, 8 or 16
+bytes   the fingerprints, width/8 bytes each
+```
+
+The segment length mask, the segment count length and the array length are all derived
+from the two lengths above rather than stored, so a payload cannot disagree with itself
+about its own geometry. A segment length that is not a power of two is refused: it is
+used as a mask, and one that is not a power of two would put keys where a lookup does
+not go.
+
+The seed matters as much as the fingerprints. It is not a tuning parameter — it is the
+seed the construction's peel happened to succeed on, and every position in the filter is
+computed from it. A filter read back under a different seed would find nothing.
 
 ## The random generator's state
 

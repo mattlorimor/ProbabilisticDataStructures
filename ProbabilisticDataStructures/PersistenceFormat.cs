@@ -24,6 +24,7 @@ namespace ProbabilisticDataStructures
         HyperLogLog = 11,
         TopK = 12,
         MinHashSignature = 13,
+        BinaryFuseFilter = 14,
     }
 
     /// <summary>
