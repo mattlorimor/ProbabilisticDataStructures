@@ -1,6 +1,6 @@
 # Probabilistic Data Structures for C<span>#</span> [![CI](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml/badge.svg)](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml) [![NuGet](https://img.shields.io/nuget/v/MattLorimor.ProbabilisticDataStructures.svg)](https://www.nuget.org/packages/MattLorimor.ProbabilisticDataStructures/)
 
-Twenty-four structures that answer questions about data too large to keep, by keeping
+Twenty-five structures that answer questions about data too large to keep, by keeping
 something much smaller and being approximately right.
 
 Each one trades exactness for space. What makes them usable is that the trade is
@@ -46,6 +46,7 @@ eleven structures the Go library does not have.
 | Are these two **documents** near-duplicates? | `SimHash` | [Similarity](#similarity) |
 | …across a corpus, without comparing every pair | `MinHashIndex`, `SimHashIndex` | [Similarity](#similarity) |
 | What does this distribution look like? p50, p99? | `DDSketch` | [Distributions](#distributions) |
+| …but only about the **last hour** | `SlidingWindow<T>` | [Recent data](#recent-data) |
 
 ### If you only read one thing
 
@@ -868,6 +869,43 @@ bytes, and so the only one that never hashes.
 
 From Masson, Rim and Lee,
 [DDSketch](https://arxiv.org/abs/1908.10693).
+
+---
+
+## Recent data
+
+Every structure above answers about the whole stream since it was created. `SlidingWindow<T>`
+answers about the recent past instead, which is how most of these questions are actually
+asked: distinct users today, the p99 of the last five minutes, top paths this hour.
+
+```C#
+var window = new SlidingWindow<HyperLogLogPlus>(
+    window: TimeSpan.FromHours(1),
+    buckets: 60,
+    create: () => new HyperLogLogPlus(14),
+    merge: (a, b) => a.Merge(b));
+
+window.Current.Add(item);              // writes to the bucket covering now
+ulong lastHour = window.Merged().Count();   // combines the buckets still in the window
+```
+
+**Reach for it when** the age of the data matters. **Look elsewhere if** it does not — a
+plain structure is one object rather than sixty.
+
+It is a wrapper rather than a family of windowed structures because so much of this library
+merges exactly. A ring of sub-structures combined on query gets the same answer from one
+implementation, instead of a paper's worth of work per structure. What it costs is memory —
+one structure per bucket — and precision at the edge: **the window is only as sharp as a
+bucket is wide**. Sixty buckets over an hour means the boundary is accurate to a minute.
+
+> **Only window a structure whose merge is exact.** Merging is what makes the answer mean
+> anything, so an approximate merge gives a window that is wrong in a way no amount of
+> bucketing fixes. `TopK` is the one here that qualifies, and it is **refused by name** —
+> an element genuinely in the top-k of the whole window can be absent from every bucket's
+> own top-k, so combining them would lose it and nothing about the result would look wrong.
+> Window a `CountMinSketch` and take the heavy hitters from that.
+
+Pass a clock to the constructor to test a window's behaviour without waiting for it.
 
 ---
 
