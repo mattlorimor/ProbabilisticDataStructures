@@ -26,6 +26,7 @@ namespace ProbabilisticDataStructures
         MinHashSignature = 13,
         BinaryFuseFilter = 14,
         DDSketch = 15,
+        HyperLogLogPlus = 16,
     }
 
     /// <summary>

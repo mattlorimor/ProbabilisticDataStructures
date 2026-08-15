@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`HyperLogLogPlus`**, a better distinct-count estimator, which is
+  [#58](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/58). It sits
+  alongside `HyperLogLog` rather than replacing it: replacing it would change the number
+  an existing estimator answers with, including one read back from a payload written
+  years ago.
+
+  **The whole 64-bit hash is used.** The older estimator keeps only the low 32 bits, so
+  two items whose hashes agree there are one item as far as it can tell. Hashing
+  consecutive integers finds such a pair within 67,297 of them, and the test suite pins
+  it.
+
+  **Small counts are exact**, because the estimator keeps the hashes themselves until
+  registers would be cheaper. Ten items is `10`, in 107 bytes rather than 16 KB.
+
+  **The older estimator's worst band is gone.** It switches from linear counting to the
+  raw estimate at 2.5m and is at its worst where it changes over — mean absolute error
+  over 20 streams at 2^14 registers is 2.44% there against a nominal 0.81%, and it stays
+  above nominal until about 4m. The new one holds 0.6-0.7% straight through.
+
+  It reaches that without the paper's tables of measured bias, using Ertl's estimator
+  (2017) instead: it accounts for the registers at each end as terms rather than as
+  cases to switch on, so it needs no threshold and has no band between thresholds to be
+  worst in. Persistence takes structure id 16, and the payload says which representation
+  it holds.
+
 - **`DDSketch`**, which answers what a stream of numbers looks like, and is
   [#60](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/60). Masson,
   Rim and Lee (2019). Nothing here answered anything about a distribution before this:
