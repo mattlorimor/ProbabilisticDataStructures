@@ -29,6 +29,23 @@ namespace ProbabilisticDataStructures
         {
             var optimalM = Math.Ceiling((double)n / ((Math.Log(Defaults.FILL_RATIO) *
                 Math.Log(1 - Defaults.FILL_RATIO)) / Math.Abs(Math.Log(fpRate))));
+
+            // A 32-bit filter addresses at most uint.MaxValue bits, which is about 448
+            // million items at 1% and fewer at a tighter rate. Left to the conversion
+            // this arrives as an OverflowException from inside the sizing arithmetic,
+            // which says something true about the machinery and nothing about the
+            // mistake or about the two structures that would work.
+            if (optimalM > uint.MaxValue)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(n), n,
+                    $"Holding {n} items at a false positive rate of {fpRate} needs " +
+                    $"{optimalM:N0} bits, and a 32-bit filter addresses at most " +
+                    $"{uint.MaxValue:N0}. Use BloomFilter64, which sizes in 64 bits, or " +
+                    "ScalableBloomFilter, which grows by adding filters rather than by " +
+                    "making one larger.");
+            }
+
             return Convert.ToUInt32(optimalM);
         }
 

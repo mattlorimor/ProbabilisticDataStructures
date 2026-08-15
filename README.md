@@ -287,11 +287,22 @@ bool wasAlreadyThere = filter.TestAndAdd(bytes);
 
 The same structure with 64-bit sizing throughout.
 
-**Reach for it when** the filter needs more than about 4 billion bits — roughly 500 million
-items at 1%. `BloomFilter` sizes with 32-bit arithmetic and cannot address past that.
+**Reach for it when** the filter needs more than 4.29 billion bits — about **448 million
+items at 1%**, and fewer at a tighter rate. `BloomFilter`, `CountingBloomFilter`,
+`PartitionedBloomFilter` and `DeletableBloomFilter` all size in 32 bits and refuse past
+that, naming this structure when they do.
 
 **Look elsewhere otherwise.** Below that ceiling it is the same filter with wider
-arithmetic, so `BloomFilter` is the plainer choice.
+arithmetic, so `BloomFilter` is the plainer choice. And above it, consider
+`ScalableBloomFilter` instead: it grows by adding filters rather than by making one
+larger, so it has no single-filter ceiling at all, and it does not need you to know the
+size in advance.
+
+Only the Bloom family has this ceiling. `CuckooBloomFilter` and `BinaryFuseFilter` hold
+around 2.1 billion entries before they run into .NET's 2 GB array limit, and the sketches —
+`HyperLogLogPlus`, `ThetaSketch`, `CountMinSketch`, `TopK`, `DDSketch` — are a few hundred
+kilobytes at their largest sensible settings however much data passes through them. Their
+counters are already 64-bit.
 
 ### `PartitionedBloomFilter`
 

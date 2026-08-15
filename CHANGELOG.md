@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A filter sized past what 32 bits can address now says so.** `BloomFilter`,
+  `CountingBloomFilter`, `PartitionedBloomFilter` and `DeletableBloomFilter` address at
+  most 4.29 billion bits, which is about 448 million items at 1% and fewer at a tighter
+  rate. Asking for more arrived as `OverflowException: Value was either too large or too
+  small for a UInt32` from inside the sizing arithmetic -- the same defect 3.0.0 fixed for
+  the false positive rate, and the same complaint: it reported something true about the
+  machinery and nothing about the mistake. It is now an `ArgumentOutOfRangeException` that
+  gives the bits needed against the bits available, and names `BloomFilter64` and
+  `ScalableBloomFilter` as the two ways out.
+
 - **`CuckooBloomFilter.SizeInBytes()`**, reporting the storage the filter actually holds.
   `Capacity()` reports how many items it is sized for, which is a different number and was
   the only one available -- so the README's comparison of the membership structures could

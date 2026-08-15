@@ -183,5 +183,56 @@ namespace TestProbabilisticDataStructures
             var f = new DeletableBloomFilter(100, 10, 0.01);
             Assert.IsLessThanOrEqualTo(m, f.Capacity());
         }
+        /// <summary>
+        /// A 32-bit filter cannot size itself past about 4.29 billion bits, which is
+        /// roughly 448 million items at 1%. Asking for more used to surface as an
+        /// <see cref="OverflowException"/> from a numeric conversion deep in the sizing
+        /// math -- the same defect this class already fixes for the false positive rate,
+        /// and the same complaint: it reports something true about the machinery and
+        /// nothing about the mistake, or about the two structures that would work.
+        /// </summary>
+        [TestMethod]
+        public void TestFilterRejectsAnItemCountItCannotSize()
+        {
+            foreach (var (name, construct) in new (string, Action)[]
+            {
+                ("BloomFilter", () => new BloomFilter(1_000_000_000, 0.01)),
+                ("CountingBloomFilter", () => new CountingBloomFilter(1_000_000_000, 4, 0.01)),
+                ("PartitionedBloomFilter", () => new PartitionedBloomFilter(1_000_000_000, 0.01)),
+                ("DeletableBloomFilter", () => new DeletableBloomFilter(1_000_000_000, 10, 0.01)),
+            })
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => construct(), $"{name} did not refuse an item count it cannot size");
+
+                // The message has to name the way out, or it is only marginally better
+                // than the overflow it replaces.
+                StringAssert.Contains(ex.Message, "BloomFilter64");
+                StringAssert.Contains(ex.Message, "ScalableBloomFilter");
+            }
+
+            // A count it can size is still accepted, and the boundary is not moved by
+            // this check -- 400 million items at 1% is under the ceiling.
+            _ = Utils.OptimalM(400_000_000, 0.01);
+
+            // And the 64-bit filter takes what the 32-bit ones refuse.
+            Assert.IsGreaterThan(uint.MaxValue, Utils.OptimalM64(1_000_000_000, 0.01));
+        }
+
+        /// <summary>
+        /// A tighter rate needs more bits per item, so the ceiling moves down with it.
+        /// The check has to be against the bits actually needed rather than a fixed
+        /// item count.
+        /// </summary>
+        [TestMethod]
+        public void TestTheCeilingDependsOnTheRateAsWellAsTheCount()
+        {
+            // Comfortable at 1%, impossible at one in a million.
+            _ = new BloomFilter(400_000_000, 0.01);
+
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new BloomFilter(400_000_000, 0.000001));
+        }
+
     }
 }
