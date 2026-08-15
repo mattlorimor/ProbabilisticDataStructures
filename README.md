@@ -66,8 +66,11 @@ BloomFilter
 
 ### What each one costs
 
-All four asked for the same thing — 100,000 items at a 1% false positive rate — and sized
-from each structure's own geometry rather than measured off the heap.
+The four you would realistically choose between for plain membership, all asked for the
+same thing — 100,000 items at a 1% false positive rate — and sized from each structure's own
+geometry rather than measured off the heap. The rest of the family exists for a
+circumstance rather than for a number: an unknown set size, an endless stream, a set that
+never changes, a key that carries a value.
 
 | | bytes | bits/item | measured fp | delete | merge |
 | --- | --- | --- | --- | --- | --- |
@@ -151,7 +154,7 @@ a keyed hash such as SipHash if that is your threat model.
 
 ### Persistence
 
-Every structure writes to a stream and reads back.
+Every structure that holds data writes to a stream and reads back.
 
 ```C#
 using var file = File.Create("filter.bin");
@@ -169,6 +172,13 @@ truncation, or reading a payload as the wrong structure throws `InvalidDataExcep
 rather than producing something that answers incorrectly. Every structure has a fixture
 checked in that pins its bytes, so a change that would break stored data fails in CI
 rather than in your storage.
+
+Three things deliberately do not persist. `MinHashIndex` and `SimHashIndex` are derived
+data, rebuildable from signatures that already persist, and storing them would mean keeping
+two things in step. `SlidingWindow<T>` holds structures that each persist individually, but
+its buckets are tied to a clock that will have moved on by the time anything is read back —
+what should happen to a bucket that expired while the window was on disk is a question with
+no good answer, so it is not offered.
 
 A payload records **which** hash was in use. Reading one written under a hash you set with
 `SetHash` requires you to supply the same function:
@@ -190,9 +200,12 @@ var merged = shardA.Merge(shardB).Merge(shardC);
 ```
 
 Available on `BloomFilter`, `BloomFilter64`, `PartitionedBloomFilter`,
-`CountingBloomFilter`, `CountMinSketch`, `HyperLogLog`, `HyperLogLogPlus`, `DDSketch`,
-`QuotientFilter` and `TopK`. `ThetaSketch` combines through `Union`, `Intersect` and
-`Difference` instead, since union is only one of the three things it does.
+`CountingBloomFilter`, `CountMinSketch`, `CountSketch`, `HyperLogLog`, `HyperLogLogPlus`,
+`DDSketch`, `QuotientFilter` and `TopK`.
+
+Two combine under other names because merging is not the only thing they do.
+`ThetaSketch` has `Union`, `Intersect` and `Difference`;
+`InvertibleBloomLookupTable` has `Subtract`, which is the operation it exists for.
 
 Both structures must have the same dimensions **and the same hash function**. A merge of
 two that hash differently is refused, because the result would answer confidently about
@@ -201,8 +214,9 @@ positions neither of them meant.
 Not available on `InverseBloomFilter` (a slot holds one element, so a merge would have to
 choose between them), `StableBloomFilter` (its contents are a function of the order things
 arrived in), `CuckooBloomFilter` (a fingerprint only means anything relative to the bucket
-it landed in — use `QuotientFilter` if you need this) or `BinaryFuseFilter` (its whole set
-is solved for at construction).
+it landed in — use `QuotientFilter` if you need this), `BinaryFuseFilter` or
+`BloomierFilter` (both solve for their whole set at construction, so there is nothing to
+combine into).
 
 Two caveats worth knowing before you rely on it:
 
@@ -212,7 +226,9 @@ Two caveats worth knowing before you rely on it:
   `ThetaSketch` estimate the true union instead.
 - `TopK.Merge` is approximate in a way the others are not: two sketches can disagree about
   what was frequent, and the merged top-k can miss an element that was genuinely in the
-  top-k of the union. See the notes on `TopK` below.
+  top-k of the union. See the notes on `TopK` below. Every other merge here is **exact** —
+  the merged structure is the one that would have been built by feeding it both streams —
+  which is what [`SlidingWindow<T>`](#recent-data) relies on, and why it refuses `TopK`.
 
 ### Reproducibility
 
