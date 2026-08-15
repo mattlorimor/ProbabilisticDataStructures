@@ -67,7 +67,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Number of buckets
         /// </summary>
-        private uint M { get; set; }
+        internal uint M { get; set; }
         /// <summary>
         /// Number of entries per bucket
         /// </summary>
@@ -75,7 +75,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Length of fingerprints (in bytes)
         /// </summary>
-        private uint F { get; set; }
+        internal uint F { get; set; }
         /// <summary>
         /// Number of items in the filter
         /// </summary>
@@ -168,6 +168,22 @@ namespace ProbabilisticDataStructures
         public uint Capacity()
         {
             return this.N;
+        }
+
+        /// <summary>
+        /// The filter's storage in bytes: one packed fingerprint per entry, plus one
+        /// occupancy bit per entry.
+        /// </summary>
+        /// <remarks>
+        /// Distinct from <see cref="Capacity"/>, which reports how many items the filter
+        /// is sized for rather than how much room it takes. Fixed once constructed --
+        /// since 5.2.0 the fingerprints live in one array allocated up front, so this
+        /// does not change as the filter fills.
+        /// </remarks>
+        /// <returns>The number of bytes the filter occupies.</returns>
+        public ulong SizeInBytes()
+        {
+            return (ulong)this.Fingerprints.LongLength + (ulong)this.Occupied.RawData.Length;
         }
 
         /// <summary>

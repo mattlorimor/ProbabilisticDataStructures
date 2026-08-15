@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`CuckooBloomFilter.SizeInBytes()`**, reporting the storage the filter actually holds.
+  `Capacity()` reports how many items it is sized for, which is a different number and was
+  the only one available -- so the README's comparison of the membership structures could
+  not be written from the public API. `BinaryFuseFilter`, `QuotientFilter`, `ThetaSketch`
+  and `HyperLogLogPlus` already had this.
+
 - **`SimHash`** and **`SimHashSignature`**, for near-duplicate detection, which is
   [#62](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/62). Charikar
   (2002). One 64-bit fingerprint per document, compared by Hamming distance.

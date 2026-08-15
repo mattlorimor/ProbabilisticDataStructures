@@ -303,5 +303,30 @@ namespace TestProbabilisticDataStructures
                 $"{missing} of {added.Count} elements reported as added could not be found. " +
                 "A cuckoo filter must not produce false negatives for elements it accepted.");
         }
+        /// <summary>
+        /// What the filter costs, which is the question the README's comparison table
+        /// answers and could not answer from <see cref="CuckooBloomFilter.Capacity"/> --
+        /// that reports how many items it is sized for, not how many bytes it occupies.
+        /// </summary>
+        [TestMethod]
+        public void TestSizeInBytesIsTheStorageItActuallyHolds()
+        {
+            var f = new CuckooBloomFilter(100000, 0.01);
+
+            // One packed fingerprint per entry, plus one occupancy bit per entry.
+            var entries = (ulong)f.M * f.B;
+            Assert.AreEqual(entries * f.F + ((entries + 7) / 8), f.SizeInBytes());
+
+            // And it does not change as the filter fills, since 5.2.0 packed the
+            // fingerprints into one array allocated up front.
+            var empty = f.SizeInBytes();
+            for (var i = 0; i < 50000; i++)
+            {
+                f.Add(Encoding.ASCII.GetBytes($"k{i}"));
+            }
+
+            Assert.AreEqual(empty, f.SizeInBytes());
+        }
+
     }
 }
