@@ -90,3 +90,56 @@ than the machine and reproduces exactly. That lives in
 `TestProbabilisticDataStructures/TestAllocations.cs` as ordinary unit tests using
 `GC.GetAllocatedBytesForCurrentThread`, which run in about 35 ms as part of the normal
 suite. Update the bounds there when the hash path changes.
+
+## Accuracy studies
+
+Not everything measured here is a timing. An accuracy study answers "which of these is
+closer to the truth" rather than "how fast", so it does not run under BenchmarkDotNet
+and is dispatched separately.
+
+```
+dotnet run -c Release --project Benchmarks -- study hll-bias 14
+```
+
+### `hll-bias` — HyperLogLog++'s tables against the estimator we ship
+
+`HyperLogLogPlus` uses Ertl's estimator rather than HyperLogLog++'s tables of measured
+bias. This is what that decision rests on.
+
+The study derives the tables the way the paper did — measuring the raw estimator's bias
+over many streams at known cardinalities — rather than embedding the published ones. The
+published tables are empirical data, and data reproduced incorrectly would be invisible:
+the estimator would simply be quietly worse in the band the tables exist to fix.
+Deriving them makes the comparison checkable, and against this library's own hash
+besides.
+
+The tables are trained on one set of streams and scored on another, given a threshold
+chosen to minimise their own error, and both estimators are measured over the same bare
+register array so that what is compared is the estimator alone.
+
+Mean absolute error across nineteen cardinalities from 0.125m to 20m, sixty held-out
+streams each:
+
+| precision | Ertl | tables |
+| --- | --- | --- |
+| 10 | 2.127% | 2.158% |
+| 12 | 1.095% | **1.087%** |
+| 14 | 0.563% | 0.569% |
+| 16 | 0.262% | 0.269% |
+
+A tie. The gaps are one to three percent of each other, inside the noise of sixty
+streams, the sign changes with the precision, and the worst point of each agrees to
+three digits at every precision.
+
+So accuracy does not choose between them and everything else does. Ertl is forty lines
+and no data, works at any precision without being trained for it, and has no threshold
+to place. The tables are six thousand measured numbers plus a threshold per precision,
+all of which have to be right for the estimator to be better in the band they exist for,
+and none of which announce themselves when wrong.
+
+One thing the study taught along the way: the threshold matters more than the tables. An
+earlier version picked it by first crossover, which landed it where the two estimators
+happen to cross and left the choice unstable exactly there — 3.04% error at that
+cardinality against Ertl's 0.48%. Choosing it to minimise error over the training range,
+using per-stream errors rather than the error of the means, removed that entirely. The
+tables were never the problem; the switch between them and linear counting was.
