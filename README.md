@@ -28,6 +28,7 @@ The descriptions for each filter were lifted directly from the BoomFilters' READ
 * [Partitioned Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#partitioned-bloom-filter)
 * [Quotient filter](https://github.com/mattlorimor/ProbabilisticDataStructures#deleting-and-merging)
 * [Scalable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#scalable-bloom-filter)
+* [SimHash](https://github.com/mattlorimor/ProbabilisticDataStructures#near-duplicate-detection)
 * [Stable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#stable-bloom-filter)
 * [Theta sketch](https://github.com/mattlorimor/ProbabilisticDataStructures#set-operations-on-cardinality)
 * [TopK](https://github.com/mattlorimor/ProbabilisticDataStructures#top-k)
@@ -185,6 +186,67 @@ Every addition is stored, including a repeat of something already held, so it ta
 many removals to empty an item out as it took additions to put it in. Collapsing repeats
 would mean collapsing two different items whose fingerprints agree, and removing either
 would then make the filter answer no for the other.
+
+## Near-duplicate detection
+
+`SimHash` reduces a document to one 64-bit fingerprint whose Hamming distance tracks how
+alike two documents are.
+
+```C#
+var a = SimHash.Signature(termsOfDocumentA);
+var b = SimHash.Signature(termsOfDocumentB);
+
+int  differingBits = SimHash.HammingDistance(a, b);   // 0 means identical
+float similarity   = SimHash.Similarity(a, b);
+```
+
+### Which one: SimHash or MinHash?
+
+They answer different questions, and picking by whichever you found first will give you
+the wrong one.
+
+**`MinHash` answers about sets** — how much do these two *collections of things* overlap,
+by Jaccard resemblance. **`SimHash` answers about documents** — how alike are these two
+*weighted term vectors*, by cosine similarity, where a term repeated often counts for more.
+
+One input where they disagree completely: a document of 40 "apple" and 2 "banana" against
+one of 2 "apple" and 40 "banana". They hold the same *set*, so MinHash calls them
+identical — correctly, for its question. SimHash calls them unrelated — correctly, for
+its. Neither is wrong.
+
+The other difference is size. For one 500-term document:
+
+| | stored | comparison |
+| --- | --- | --- |
+| `SimHash` | **26 bytes** | 19.5 ns |
+| `MinHash` signature k=64 | 534 bytes | — |
+| `MinHash` signature k=128 | 1,046 bytes | 37.0 ns |
+
+Forty times smaller, which for the canonical use — deduplicating a crawl — is what decides
+whether the index fits.
+
+### Read the accuracy for what it is
+
+It is precise where near-duplicate detection needs it and loose in the middle. Measured on
+500-term documents:
+
+| shared terms | true cosine | estimated |
+| --- | --- | --- |
+| 100% | 1.00 | **1.00** |
+| 95% | 0.95 | **0.97** |
+| 90% | 0.90 | **0.90** |
+| 80% | 0.80 | 0.74 |
+| 50% | 0.50 | 0.67 |
+| 0% | 0.00 | −0.05 |
+
+Sixty-four bits is enough to tell a near-duplicate from a different document, which is the
+job. It is not enough to rank two moderately similar documents against each other. Use the
+Hamming distance as a threshold — a handful of differing bits means near-duplicate — rather
+than treating the similarity as a measurement.
+
+A slightly negative similarity means the documents are unrelated, not opposite: term
+vectors are non-negative, so a true cosine below zero is impossible and the value is noise
+around it.
 
 ## Set operations on cardinality
 

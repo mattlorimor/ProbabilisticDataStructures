@@ -370,6 +370,7 @@ namespace TestProbabilisticDataStructures
                 ("HyperLogLogPlus", new HyperLogLogPlus(14).Add(Key("a")).ToByteArray()),
                 ("QuotientFilter", new QuotientFilter(1000, 0.01).Add(Key("a")).ToByteArray()),
                 ("ThetaSketch", new ThetaSketch(4096).Add(Key("a")).ToByteArray()),
+                ("SimHashSignature", SimHash.Signature(new[] { "a" }).ToByteArray()),
             };
 
             // Read every payload as a BloomFilter; only its own may succeed.
@@ -423,6 +424,8 @@ namespace TestProbabilisticDataStructures
                 ("HyperLogLogPlus dense", b => Persistence.FromByteArray<HyperLogLogPlus>(b), FilledHllPlus(200)),
                 ("QuotientFilter", b => Persistence.FromByteArray<QuotientFilter>(b), FilledQuotient()),
                 ("ThetaSketch", b => Persistence.FromByteArray<ThetaSketch>(b), FilledTheta()),
+                ("SimHashSignature", b => Persistence.FromByteArray<SimHashSignature>(b),
+                    SimHash.Signature(new[] { "a", "b", "c", "d" }).ToByteArray()),
             };
 
             foreach (var (name, read, clean) in payloads)

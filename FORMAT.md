@@ -77,6 +77,7 @@ checksum still matches.
 | 16 | `HyperLogLogPlus` |
 | 17 | `QuotientFilter` |
 | 18 | `ThetaSketch` |
+| 19 | `SimHashSignature` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
@@ -456,6 +457,22 @@ estimate applies.
 
 A sketch never holds more than twice what it retains, because that is when it trims, so a
 payload claiming more than `2k` values is refused.
+
+### `SimHashSignature` (id 19)
+
+```
+u64     the fingerprint
+```
+
+As with a `MinHashSignature`, the hash is **not** a caller's to choose. It is XxHash3 over
+each term's UTF-8 bytes, with a term weighted by how many times it appears, and that is a
+fixed convention rather than stored state — it is what lets a fingerprint be compared
+against one computed by another process or another version. A payload naming any other
+hash is refused rather than read.
+
+Changing the hash, or the way its bits become the fingerprint, would silently invalidate
+every stored fingerprint: the new ones would be perfectly self-consistent and would match
+none of the old ones. The test suite pins the value a known document produces.
 
 ## The random generator's state
 
