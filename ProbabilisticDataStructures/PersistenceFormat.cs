@@ -28,6 +28,7 @@ namespace ProbabilisticDataStructures
         DDSketch = 15,
         HyperLogLogPlus = 16,
         QuotientFilter = 17,
+        ThetaSketch = 18,
     }
 
     /// <summary>

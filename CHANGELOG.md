@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ThetaSketch`**, which estimates distinct counts and can intersect them, and is
+  [#61](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/61). Union,
+  intersection and difference, all of which produce another sketch.
+
+  Intersection is the point. Two cardinality estimators can be forced to answer "how many
+  were in both" by inclusion-exclusion, and the answer is worthless when the intersection
+  is small, because each term carries an error proportional to sets far larger than the
+  number being estimated and the errors do not cancel. Two sets of 200,000 sharing 500,
+  mean absolute error over five trials: **38 for a direct intersection against 1,947 for
+  the arithmetic**, on a true answer of 500.
+
+  It is a trade rather than an upgrade, and the README says which to reach for. At
+  comparable accuracy over a million items it costs sixteen times the memory of
+  `HyperLogLogPlus`: 262,144 bytes at 0.37% against 16,384 at 0.43%.
+
+  Values are kept in a sorted buffer rather than a hash set, which costs the values
+  themselves and nothing per value besides -- a hash set spent three times as much on
+  entry overhead, which matters precisely because memory is this structure's weak side.
+  It also makes the three set operations linear merges rather than lookups. Counts are
+  exact while the sketch holds fewer values than it retains. Persistence takes structure
+  id 18.
+
 - **`QuotientFilter`**, a membership filter that both deletes and merges, which is
   [#59](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/59). Bender et
   al. (2012). Nothing else here does both: the cuckoo filter deletes but cannot merge,
