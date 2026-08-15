@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`SlidingWindow<T>`**, so questions can be asked about recent data rather than about
+  everything since the structure was made, which is
+  [#75](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/75). It holds one
+  structure per time bucket and combines the live ones on demand.
+
+  A wrapper rather than a family of windowed structures, because 5.1.0 and 6.0.0 made most
+  of the library merge exactly -- a ring of sub-structures gets the same answer from one
+  implementation instead of a paper's worth of work per structure. It costs memory, one
+  structure per bucket, and precision at the edge: the window is only as sharp as a bucket
+  is wide.
+
+  **`TopK` is refused by name.** Its merge is approximate -- an element genuinely in the
+  top-k of the whole window can be absent from every bucket's own top-k -- so a window over
+  it would drop elements as buckets rolled and nothing about the result would look wrong.
+  The exception says to window a `CountMinSketch` instead.
+
+  The clock is injectable, which is what makes a window's behaviour testable without
+  waiting for it.
+
 - **`MinHashIndex` and `SimHashIndex`**, so that the signatures this library produces can
   be searched rather than only compared, which is
   [#74](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/74). Without an
