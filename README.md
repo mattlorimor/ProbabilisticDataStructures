@@ -1,6 +1,6 @@
 # Probabilistic Data Structures for C<span>#</span> [![CI](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml/badge.svg)](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml) [![NuGet](https://img.shields.io/nuget/v/MattLorimor.ProbabilisticDataStructures.svg)](https://www.nuget.org/packages/MattLorimor.ProbabilisticDataStructures/)
 
-Nineteen structures that answer questions about data too large to keep, by keeping
+Twenty structures that answer questions about data too large to keep, by keeping
 something much smaller and being approximately right.
 
 Each one trades exactness for space. What makes them usable is that the trade is
@@ -38,6 +38,7 @@ eleven structures the Go library does not have.
 | How many distinct things are there? | `HyperLogLogPlus` | [Cardinality](#cardinality) |
 | How many are in **both** of these sets? | `ThetaSketch` | [Cardinality](#cardinality) |
 | How often have I seen this particular thing? | `CountMinSketch` | [Frequency](#frequency) |
+| …and it is rare, or I need to subtract | `CountSketch` | [Frequency](#frequency) |
 | What are the most common things? | `TopK` | [Frequency](#frequency) |
 | How alike are these two **sets**? | `MinHash` | [Similarity](#similarity) |
 | Are these two **documents** near-duplicates? | `SimHash` | [Similarity](#similarity) |
@@ -573,8 +574,7 @@ for, and you want a bound that **never undercounts**. That one-sided error is th
 the count feeds a threshold nothing may slip under, this is the structure that guarantees it.
 
 **Look elsewhere if** you want an unbiased estimate rather than an upper bound, or need to
-subtract — Count-Min is biased high and cannot meaningfully decrement. (A Count Sketch would
-cover that; see [#77](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/77).)
+subtract — that is `CountSketch`, below.
 
 ```C#
 var sketch = new CountMinSketch(epsilon: 0.001, delta: 0.01);
@@ -584,6 +584,48 @@ ulong count = sketch.Count(bytes);
 
 Described by Cormode and Muthukrishnan in
 [An Improved Data Stream Summary](http://dimacs.rutgers.edu/~graham/pubs/papers/cm-full.pdf).
+
+### `CountSketch`
+
+The same question as `CountMinSketch`, answered without the one-sided bias.
+
+**Reach for it when** you are asking about something *rare* in a stream that carries a lot
+of weight, or when you need to **subtract**. Each row hashes an item to a cell and to a
+sign, so collisions cancel in expectation instead of accumulating.
+
+**Look elsewhere if** you want a bound that never undercounts. Count-Min's bias is a
+*guarantee* — if the count feeds a threshold nothing may slip under, that one-sidedness is
+the feature and this gives it up. Count-Min is also smaller for the same accuracy on heavy
+hitters.
+
+Matched on shape — about 2,700 columns by 5 rows each — and asked about an item seen ten
+times among two million observations:
+
+| | error on the rare item | error on a heavy hitter |
+| --- | --- | --- |
+| `CountMinSketch` | 700 | small |
+| `CountSketch` | **100** | small |
+
+Both are fine about heavy hitters. The difference is entirely about the rare one, because
+Count-Min's error grows with the *total weight* of the stream while this one's grows with
+its Euclidean norm.
+
+```C#
+var sketch = new CountSketch(epsilon: 0.01, delta: 0.01);
+sketch.Add(bytes);
+sketch.Add(bytes, 500);     // weighted
+sketch.Add(bytes, -200);    // and removal, which Count-Min cannot do
+long count = sketch.Count(bytes);
+```
+
+Two things will surprise you if the docs do not say them. **Estimates can be negative** —
+it means the true count is near zero and the noise went the other way. And **epsilon means
+something different here**: it bounds error against the stream's L2 norm rather than its
+L1, so the two sketches size differently for the same number and cannot be compared at
+equal epsilon.
+
+From Charikar, Chen and Farach-Colton,
+[Finding Frequent Items in Data Streams](https://www.cs.princeton.edu/courses/archive/spring04/cos598B/bib/CharikarCF.pdf).
 
 ### `TopK`
 
