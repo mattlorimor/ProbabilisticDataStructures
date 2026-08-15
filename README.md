@@ -26,6 +26,7 @@ The descriptions for each filter were lifted directly from the BoomFilters' READ
 * [Inverse Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#inverse-bloom-filter)
 * [MinHash](https://github.com/mattlorimor/ProbabilisticDataStructures#minhash)
 * [Partitioned Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#partitioned-bloom-filter)
+* [Quotient filter](https://github.com/mattlorimor/ProbabilisticDataStructures#deleting-and-merging)
 * [Scalable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#scalable-bloom-filter)
 * [Stable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#stable-bloom-filter)
 * [TopK](https://github.com/mattlorimor/ProbabilisticDataStructures#top-k)
@@ -136,6 +137,53 @@ it moves none of it, so every lookup would go somewhere else — the structure w
 items it can no longer find. It would not look broken, it would look empty.
 
 `SetHash` remains available before anything has been added, including after `Reset()`.
+
+## Deleting and merging
+
+`QuotientFilter` is a membership filter you can delete from *and* merge, which no other
+structure here manages together.
+
+```C#
+var filter = new QuotientFilter(10000, 0.01);
+filter.Add(item);
+filter.TestAndRemove(item);
+filter.Merge(other);
+```
+
+Measured at n = 100,000 against the two filters closest to it, retained bytes rather than
+total allocated:
+
+| | bits/item | hit | miss | measured fp | delete | merge |
+| --- | --- | --- | --- | --- | --- | --- |
+| `QuotientFilter` | 26.2 | 63.6 ns | 20.4 ns | 0.284% | yes | **yes** |
+| `CuckooBloomFilter` | 23.6 | 34.6 ns | 40.2 ns | 0.012% | yes | no |
+| `BloomFilter` | 9.6 | 58.9 ns | 21.4 ns | 1.000% | no | yes |
+
+**Be honest about what this buys.** Against a cuckoo filter it is slightly larger, faster
+on misses, slower on hits, and worse at the same nominal rate. The one thing it does that
+a cuckoo filter cannot is merge: a cuckoo fingerprint only means anything relative to the
+bucket it landed in, so two of them cannot be combined, while a quotient filter keeps each
+entry's quotient in its position and can hand every fingerprint back whole. **If you do
+not need merging, use the cuckoo filter.**
+
+Memory per item is not a single number, because the table is a power of two and the
+filter is sized to stay under 75% load. Where `n` falls decides the load, and the load
+decides both the memory and the false positive rate:
+
+| n | slots | load | bits/item |
+| --- | --- | --- | --- |
+| 98,000 | 131,072 | 75% | **13.4** |
+| 100,000 | 262,144 | 38% | 26.2 |
+| 196,000 | 262,144 | 75% | **13.4** |
+
+A filter sized just past a power of two costs twice one sized just under it. The false
+positive rate moves the other way — it is roughly the load times `2^-remainder bits`, so
+a lightly loaded table is also a more accurate one.
+
+Every addition is stored, including a repeat of something already held, so it takes as
+many removals to empty an item out as it took additions to put it in. Collapsing repeats
+would mean collapsing two different items whose fingerprints agree, and removing either
+would then make the filter answer no for the other.
 
 ## Distinct counts
 

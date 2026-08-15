@@ -27,6 +27,7 @@ namespace ProbabilisticDataStructures
         BinaryFuseFilter = 14,
         DDSketch = 15,
         HyperLogLogPlus = 16,
+        QuotientFilter = 17,
     }
 
     /// <summary>

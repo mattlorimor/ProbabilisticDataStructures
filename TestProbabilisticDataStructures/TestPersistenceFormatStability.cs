@@ -167,6 +167,21 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestStoredQuotientFilterStillReads()
+        {
+            var filter = QuotientFilter.ReadFrom(Fixture("quotientfilter-v1.bin"));
+
+            Assert.AreEqual(10u, filter.Count());
+            AssertAllPresent(filter.Test);
+
+            // The metadata came back, not just the remainders: removing still finds the
+            // right entry and leaves the rest of the cluster alone.
+            Assert.IsTrue(filter.TestAndRemove(Key("alpha")));
+            Assert.IsFalse(filter.Test(Key("alpha")));
+            Assert.IsTrue(filter.Test(Key("beta")));
+        }
+
+        [TestMethod]
         public void TestStoredDDSketchStillReads()
         {
             var sketch = DDSketch.ReadFrom(Fixture("ddsketch-v1.bin"));
@@ -352,6 +367,14 @@ namespace TestProbabilisticDataStructures
 
             AssertBytes("hyperloglogplus-sparse-v1.bin", sparseHll.ToByteArray());
 
+            var quotient = new QuotientFilter(100, 0.01);
+            foreach (var word in Words)
+            {
+                quotient.Add(Key(word));
+            }
+
+            AssertBytes("quotientfilter-v1.bin", quotient.ToByteArray());
+
             var denseHll = new HyperLogLogPlus(14);
             for (var i = 0; i < 50000; i++)
             {
@@ -409,6 +432,7 @@ namespace TestProbabilisticDataStructures
                 ("ddsketch-v1.bin", 15, 1),
                 ("hyperloglogplus-sparse-v1.bin", 16, 1),
                 ("hyperloglogplus-dense-v1.bin", 16, 1),
+                ("quotientfilter-v1.bin", 17, 1),
             };
 
             foreach (var (fixture, id, version) in expected)
