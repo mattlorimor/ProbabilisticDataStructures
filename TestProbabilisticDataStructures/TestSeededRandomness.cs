@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -37,9 +38,9 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// Enough items that both of some item's buckets fill and the eviction path
-        /// runs. The filter is sized far more generously than its stated capacity --
-        /// 100 items gives 1024 buckets of 4 -- so a load near the stated figure never
-        /// reaches the random choice at all.
+        /// runs. A load near the stated capacity never reaches the random choice at all,
+        /// so this goes well past it: 100 items sizes the filter at 32 buckets of 4, and
+        /// the evictions start once those 128 entries begin to collide.
         /// </summary>
         private static CuckooBloomFilter FilledCuckoo(int? seed)
         {
@@ -140,5 +141,124 @@ namespace TestProbabilisticDataStructures
                 Assert.IsTrue(f.Test(Key(word)), $"{word} was accepted and cannot be found");
             }
         }
+        /// <summary>
+        /// A filter that is written out and read back resumes the draw sequence it was
+        /// partway through, rather than starting it over.
+        /// <para>
+        /// Storing the seed alone would not do this. The bits come back correct either
+        /// way, but a filter re-seeded on read sits at the start of the sequence while
+        /// the original sits wherever its adds left it, so the two answer differently
+        /// from then on. What makes that worth guarding rather than tolerating is the
+        /// case persistence exists for: a filter checkpointed on a schedule would replay
+        /// the same first draws after every load, and the stable filter's bound on its
+        /// false positive rate assumes its decay is spread across cells rather than
+        /// aimed at the same ones after every restart.
+        /// </para>
+        /// <para>
+        /// Asserted against a filter that was never written out, because two filters
+        /// restored from the same payload agree under either design -- that comparison
+        /// is the one this defect passes.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestARestoredStableFilterResumesItsDrawSequence()
+        {
+            var original = FilledStable(seed: 42);
+            var restored = Persistence.FromByteArray<StableBloomFilter>(original.ToByteArray());
+
+            Assert.AreEqual(Fingerprint(original), Fingerprint(restored),
+                "the restore differed before either filter was used again");
+
+            for (int i = 3000; i < 9000; i++)
+            {
+                var key = Key($"w{i}");
+                original.Add(key);
+                restored.Add(key);
+            }
+
+            Assert.AreEqual(Fingerprint(original), Fingerprint(restored),
+                "the restored filter decayed different cells from the original");
+        }
+
+        [TestMethod]
+        public void TestARestoredCuckooFilterResumesItsDrawSequence()
+        {
+            var original = FilledCuckoo(seed: 42);
+            var restored = Persistence.FromByteArray<CuckooBloomFilter>(original.ToByteArray());
+
+            Assert.AreEqual(Fingerprint(original), Fingerprint(restored),
+                "the restore differed before either filter was used again");
+
+            for (int i = 3000; i < 9000; i++)
+            {
+                var key = Key($"w{i}");
+                original.Add(key);
+                restored.Add(key);
+            }
+
+            Assert.AreEqual(Fingerprint(original), Fingerprint(restored),
+                "the restored filter evicted different entries from the original");
+        }
+
+        /// <summary>
+        /// The case above, run the way it would actually arise: a long-lived filter
+        /// checkpointed repeatedly rather than round-tripped once. A filter re-seeded on
+        /// each read would draw the same numbers after every one of these loads.
+        /// </summary>
+        [TestMethod]
+        public void TestCheckpointingRepeatedlyDoesNotReplayTheSameDraws()
+        {
+            var uninterrupted = FilledStable(seed: 42);
+            var checkpointed = FilledStable(seed: 42);
+
+            for (int round = 0; round < 20; round++)
+            {
+                // Save and reload between every batch, as a long-running process would.
+                checkpointed = Persistence.FromByteArray<StableBloomFilter>(
+                    checkpointed.ToByteArray());
+
+                for (int i = 0; i < 500; i++)
+                {
+                    var key = Key($"r{round}-{i}");
+                    uninterrupted.Add(key);
+                    checkpointed.Add(key);
+                }
+            }
+
+            Assert.AreEqual(Fingerprint(uninterrupted), Fingerprint(checkpointed),
+                "twenty checkpoints left the filter somewhere the uninterrupted one never went");
+        }
+
+        /// <summary>
+        /// A payload written before 6.0.0 carries no generator state, and is read rather
+        /// than refused: every cell is exactly right, and only the sequence of cells the
+        /// filter will decay next is unrecoverable, because it was never written down.
+        /// </summary>
+        [TestMethod]
+        public void TestAPayloadWithoutAStoredGeneratorStateStillReads()
+        {
+            var v1 = ReadFixture("stablebloomfilter-v1.bin");
+            Assert.AreEqual(1, v1[4] | (v1[5] << 8), "fixture is no longer a version 1 payload");
+
+            var f = Persistence.FromByteArray<StableBloomFilter>(v1);
+            Assert.AreEqual(1000u, f.Cells());
+
+            // And it keeps working, which is the part that needs a generator at all.
+            for (int i = 0; i < 2000; i++)
+            {
+                f.Add(Key($"later{i}"));
+            }
+        }
+
+        private static byte[] ReadFixture(string name)
+        {
+            using var stream = typeof(TestSeededRandomness).Assembly.GetManifestResourceStream(
+                $"TestProbabilisticDataStructures.fixtures.{name}")
+                ?? throw new InvalidOperationException($"fixture {name} is not embedded");
+            using var memory = new MemoryStream();
+            stream.CopyTo(memory);
+            return memory.ToArray();
+        }
+
     }
 }

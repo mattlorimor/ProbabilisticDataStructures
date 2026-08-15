@@ -83,10 +83,31 @@ namespace ProbabilisticDataStructures
         internal static ReadOnlySpan<byte> Magic => "PDS\0"u8;
 
         /// <summary>
-        /// The format version this library writes. Readers refuse anything higher,
-        /// since a later version may mean the payload differently.
+        /// The highest format version this library can read. Readers refuse anything
+        /// above it, since a later version may mean the payload differently.
         /// </summary>
-        internal const ushort CurrentVersion = 1;
+        internal const ushort MaxSupportedVersion = 2;
+
+        /// <summary>
+        /// The version a payload is written at unless its structure asks for another.
+        /// </summary>
+        /// <remarks>
+        /// The version travels in each payload rather than being a property of the
+        /// library, so a structure whose layout changes bumps only its own. Version 2
+        /// exists for the two filters that gained a stored random-generator state in
+        /// 6.0.0; the other eleven still write version 1 and stay readable by 3.x
+        /// onwards. Raising all of them together would have made every payload
+        /// unreadable to older versions to record a change that eleven of them did not
+        /// have.
+        /// </remarks>
+        internal const ushort DefaultVersion = 1;
+
+        /// <summary>
+        /// The version at which <see cref="StableBloomFilter"/> and
+        /// <see cref="CuckooBloomFilter"/> began storing their random generator's state,
+        /// so that a restored filter resumes its draw sequence rather than restarting it.
+        /// </summary>
+        internal const ushort RandomStateVersion = 2;
 
         private const int MagicLength = 4;
         private const int HeaderLength = 14;
@@ -99,12 +120,13 @@ namespace ProbabilisticDataStructures
             Stream stream,
             StructureId structure,
             HashId hash,
-            ReadOnlySpan<byte> payload)
+            ReadOnlySpan<byte> payload,
+            ushort version = DefaultVersion)
         {
             var frame = new byte[HeaderLength + payload.Length + ChecksumLength];
 
             Magic.CopyTo(frame);
-            BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(4), CurrentVersion);
+            BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(4), version);
             BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(6), (ushort)structure);
             BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(8), (ushort)hash);
             BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(10), (uint)payload.Length);
@@ -129,6 +151,20 @@ namespace ProbabilisticDataStructures
         /// </exception>
         internal static byte[] Read(Stream stream, StructureId expected, out HashId hash)
         {
+            return Read(stream, expected, out hash, out _);
+        }
+
+        /// <summary>
+        /// Reads and validates an envelope, also reporting the format version it was
+        /// written at, for structures whose payload layout depends on it.
+        /// </summary>
+        /// <exception cref="InvalidDataException">
+        /// The stream does not hold a payload of this format, holds a later version of
+        /// it, holds a different structure, or has been corrupted.
+        /// </exception>
+        internal static byte[] Read(
+            Stream stream, StructureId expected, out HashId hash, out ushort version)
+        {
             var header = ReadExactly(stream, HeaderLength, "header");
 
             if (!header.AsSpan(0, MagicLength).SequenceEqual(Magic))
@@ -138,12 +174,12 @@ namespace ProbabilisticDataStructures
                     "payload; its first bytes are not the expected marker.");
             }
 
-            var version = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(4));
-            if (version == 0 || version > CurrentVersion)
+            version = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(4));
+            if (version == 0 || version > MaxSupportedVersion)
             {
                 throw new InvalidDataException(
                     $"Payload is format version {version}, and this library reads up to " +
-                    $"version {CurrentVersion}. It was written by a later version.");
+                    $"version {MaxSupportedVersion}. It was written by a later version.");
             }
 
             var structure = (StructureId)BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(6));

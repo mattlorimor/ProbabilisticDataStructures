@@ -112,6 +112,31 @@ namespace TestProbabilisticDataStructures
             AssertAllPresent(f.Test);
         }
 
+        /// <summary>
+        /// The version 2 layout, which added the stored generator state in 6.0.0. The
+        /// version 1 fixture above is not replaced by this one: both have to keep
+        /// reading, which is the whole of what raising the version bought.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredStableBloomFilterAtVersionTwoStillReads()
+        {
+            var f = StableBloomFilter.ReadFrom(Fixture("stablebloomfilter-v2.bin"));
+
+            Assert.AreEqual(1000u, f.Cells());
+            Assert.AreEqual(3u, f.K());
+            Assert.AreEqual(35u, f.P());
+            AssertAllPresent(f.Test);
+        }
+
+        [TestMethod]
+        public void TestStoredCuckooBloomFilterAtVersionTwoStillReads()
+        {
+            var f = CuckooBloomFilter.ReadFrom(Fixture("cuckoobloomfilter-v2.bin"));
+
+            Assert.AreEqual(100u, f.Capacity());
+            AssertAllPresent(f.Test);
+        }
+
         [TestMethod]
         public void TestStoredInverseBloomFilterStillReads()
         {
@@ -250,6 +275,35 @@ namespace TestProbabilisticDataStructures
 
             AssertBytes("minhashsignature-v1.bin", MinHash.Signature(
                 new[] { "alpha", "beta", "gamma", "delta", "epsilon" }, 16).ToByteArray());
+
+            // Seeded, so the generator's stored position is fixed and the whole payload
+            // is reproducible. Neither of these could be pinned before 6.0.0: their
+            // generators were unseeded and nothing they did reached the payload.
+            var stable = new StableBloomFilter(1000, 2, 0.01, seed: 7);
+            foreach (var word in Words)
+            {
+                stable.Add(Key(word));
+            }
+
+            AssertBytes("stablebloomfilter-v2.bin", stable.ToByteArray());
+
+            // The words go in first so they are all findable, then a load heavy enough
+            // to make buckets collide and the relocation path run -- but short of
+            // saturating the filter, which would refuse inserts rather than relocate.
+            // The stored state is 22 draws along, so it pins a generator that moved
+            // rather than one still sitting at its seed.
+            var cuckoo = new CuckooBloomFilter(100, 0.01, seed: 7);
+            foreach (var word in Words)
+            {
+                cuckoo.Add(Key(word));
+            }
+
+            for (int i = 0; i < 100; i++)
+            {
+                cuckoo.Add(Key($"w{i}"));
+            }
+
+            AssertBytes("cuckoobloomfilter-v2.bin", cuckoo.ToByteArray());
         }
 
         /// <summary>
@@ -261,31 +315,42 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestStoredStructureIdsAreUnchanged()
         {
-            var expected = new (string Fixture, int Id)[]
+            var expected = new (string Fixture, int Id, int Version)[]
             {
-                ("bloomfilter-v1.bin", 1),
-                ("bloomfilter64-v1.bin", 2),
-                ("countingbloomfilter-v1.bin", 3),
-                ("deletablebloomfilter-v1.bin", 4),
-                ("partitionedbloomfilter-v1.bin", 5),
-                ("scalablebloomfilter-v1.bin", 6),
-                ("stablebloomfilter-v1.bin", 7),
-                ("inversebloomfilter-v1.bin", 8),
-                ("cuckoobloomfilter-v1.bin", 9),
-                ("countminsketch-v1.bin", 10),
-                ("hyperloglog-v1.bin", 11),
-                ("topk-v1.bin", 12),
-                ("minhashsignature-v1.bin", 13),
+                ("bloomfilter-v1.bin", 1, 1),
+                ("bloomfilter64-v1.bin", 2, 1),
+                ("countingbloomfilter-v1.bin", 3, 1),
+                ("deletablebloomfilter-v1.bin", 4, 1),
+                ("partitionedbloomfilter-v1.bin", 5, 1),
+                ("scalablebloomfilter-v1.bin", 6, 1),
+                ("stablebloomfilter-v1.bin", 7, 1),
+                ("inversebloomfilter-v1.bin", 8, 1),
+                ("cuckoobloomfilter-v1.bin", 9, 1),
+                ("countminsketch-v1.bin", 10, 1),
+                ("hyperloglog-v1.bin", 11, 1),
+                ("topk-v1.bin", 12, 1),
+                ("minhashsignature-v1.bin", 13, 1),
+                ("stablebloomfilter-v2.bin", 7, 2),
+                ("cuckoobloomfilter-v2.bin", 9, 2),
             };
 
-            foreach (var (fixture, id) in expected)
+            foreach (var (fixture, id, version) in expected)
             {
                 var bytes = ReadFixture(fixture);
                 Assert.AreEqual(id, bytes[6] | (bytes[7] << 8),
                     $"{fixture} no longer carries structure id {id}");
-                Assert.AreEqual(1, bytes[4] | (bytes[5] << 8),
-                    $"{fixture} is no longer format version 1");
+                Assert.AreEqual(version, bytes[4] | (bytes[5] << 8),
+                    $"{fixture} is no longer format version {version}");
             }
+
+            // The version travels per payload, so the eleven structures that did not
+            // change layout must still be writing version 1. Raising all of them
+            // together would have made every payload unreadable to 5.x to record a
+            // change that eleven of them did not have.
+            Assert.AreEqual(1, new BloomFilter(100, 0.01).ToByteArray()[4],
+                "an unchanged structure started writing a later format version");
+            Assert.AreEqual(2, new StableBloomFilter(100, 2, 0.01).ToByteArray()[4],
+                "the stable filter is not writing the version its layout needs");
         }
 
         private static void AssertAllPresent(Func<byte[], bool> test)
