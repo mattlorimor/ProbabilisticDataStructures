@@ -278,6 +278,11 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(0u, RoundTrip(new QuotientFilter(1000, 0.01)).Count());
             Assert.AreEqual(0ul, RoundTrip(new ThetaSketch(4096)).Count());
             Assert.AreEqual(0L, RoundTrip(new CountSketch(0.05, 0.01)).Count(Key("x")));
+            var emptyTable = RoundTrip(new InvertibleBloomLookupTable(10, 8));
+            Assert.AreEqual(15u, emptyTable.Cells());
+            Assert.AreEqual(8, emptyTable.KeySize());
+            Assert.IsTrue(emptyTable.TryDecode(out var nothing, out _));
+            Assert.HasCount(0, nothing);
 
             // A signature of an empty bag is the one case here that is not all zeroes:
             // every position holds the identity ulong.MaxValue, which a restore that
@@ -311,6 +316,8 @@ namespace TestProbabilisticDataStructures
                 Present.Select(Key), BinaryFuseWidth.Eight, custom);
             var countSketch = new CountSketch(0.05, 0.01); countSketch.SetHash(custom);
             countSketch.Add(Key("a"));
+            var iblt = new InvertibleBloomLookupTable(10, 8, custom);
+            iblt.Add(new byte[8]);
             var theta = new ThetaSketch(4096); theta.SetHash(custom);
             foreach (var w in Present) theta.Add(Key(w));
             var quotient = new QuotientFilter(1000, 0.01); quotient.SetHash(custom);
@@ -318,6 +325,7 @@ namespace TestProbabilisticDataStructures
             var hllPlus = new HyperLogLogPlus(14); hllPlus.SetHash(custom);
             foreach (var w in Present) hllPlus.Add(Key(w));
 
+            AssertRefusesThenAccepts(iblt.ToByteArray(), b => Persistence.FromByteArray<InvertibleBloomLookupTable>(b), b => Persistence.FromByteArray<InvertibleBloomLookupTable>(b, custom));
             AssertRefusesThenAccepts(countSketch.ToByteArray(), b => Persistence.FromByteArray<CountSketch>(b), b => Persistence.FromByteArray<CountSketch>(b, custom));
             AssertRefusesThenAccepts(theta.ToByteArray(), b => Persistence.FromByteArray<ThetaSketch>(b), b => Persistence.FromByteArray<ThetaSketch>(b, custom));
             AssertRefusesThenAccepts(quotient.ToByteArray(), b => Persistence.FromByteArray<QuotientFilter>(b), b => Persistence.FromByteArray<QuotientFilter>(b, custom));
@@ -376,6 +384,7 @@ namespace TestProbabilisticDataStructures
                 ("ThetaSketch", new ThetaSketch(4096).Add(Key("a")).ToByteArray()),
                 ("SimHashSignature", SimHash.Signature(new[] { "a" }).ToByteArray()),
                 ("CountSketch", new CountSketch(0.5, 0.5).Add(Key("a")).ToByteArray()),
+                ("InvertibleBloomLookupTable", new InvertibleBloomLookupTable(4, 8).Add(new byte[8]).ToByteArray()),
             };
 
             // Read every payload as a BloomFilter; only its own may succeed.
@@ -432,6 +441,7 @@ namespace TestProbabilisticDataStructures
                 ("SimHashSignature", b => Persistence.FromByteArray<SimHashSignature>(b),
                     SimHash.Signature(new[] { "a", "b", "c", "d" }).ToByteArray()),
                 ("CountSketch", b => Persistence.FromByteArray<CountSketch>(b), FilledCountSketch()),
+                ("InvertibleBloomLookupTable", b => Persistence.FromByteArray<InvertibleBloomLookupTable>(b), FilledIblt()),
             };
 
             foreach (var (name, read, clean) in payloads)
@@ -471,6 +481,19 @@ namespace TestProbabilisticDataStructures
 
         // Loaded past its retained size so the payload carries a lowered theta rather
         // than the exact-count case.
+        private static byte[] FilledIblt()
+        {
+            var table = new InvertibleBloomLookupTable(8, 8);
+            for (var i = 0; i < 6; i++)
+            {
+                var key = new byte[8];
+                key[0] = (byte)i;
+                table.Add(key);
+            }
+
+            return table.ToByteArray();
+        }
+
         private static byte[] FilledCountSketch()
         {
             var sketch = new CountSketch(0.5, 0.5);

@@ -79,6 +79,7 @@ checksum still matches.
 | 18 | `ThetaSketch` |
 | 19 | `SimHashSignature` |
 | 20 | `CountSketch` |
+| 21 | `InvertibleBloomLookupTable` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
@@ -490,6 +491,24 @@ than reinterpreted.
 
 A payload with no rows or no columns is refused, as is one whose cells do not come to
 `width * depth * 8` bytes.
+
+### `InvertibleBloomLookupTable` (id 21)
+
+```
+u32     the number of cells
+u32     the key size in bytes
+bytes   an i64 count per cell
+bytes   the xored keys, key size bytes per cell
+bytes   a u64 xored key hash per cell
+```
+
+The counts are **signed**. A subtracted table is mostly negative — that is how it records
+"they have this and I do not" — so reading them back unsigned would turn every one of
+those into an enormous positive and the table would decode to nothing.
+
+The three runs must come to `cells * 8`, `cells * keySize` and `cells * 8` bytes
+respectively, and a payload where they do not is refused. So is one with fewer cells than a
+single key occupies.
 
 ## The random generator's state
 
