@@ -172,6 +172,23 @@ namespace TestProbabilisticDataStructures
         /// is scaled wrongly.
         /// </summary>
         [TestMethod]
+        public void TestStoredBloomierFilterStillReads()
+        {
+            var filter = BloomierFilter.ReadFrom(Fixture("bloomierfilter-v1.bin"));
+
+            Assert.AreEqual(10u, filter.Count());
+            Assert.AreEqual(8, filter.ValueBits());
+
+            // Each word maps to its position, so a map that read back its cells but lost
+            // its seed would answer with the wrong values rather than with none.
+            for (var i = 0; i < Words.Length; i++)
+            {
+                Assert.IsTrue(filter.TryGetValue(Key(Words[i]), out var value), Words[i]);
+                Assert.AreEqual((ulong)i, value, $"{Words[i]} came back with the wrong value");
+            }
+        }
+
+        [TestMethod]
         public void TestStoredInvertibleBloomLookupTableStillReads()
         {
             var table = InvertibleBloomLookupTable.ReadFrom(Fixture("iblt-v1.bin"));
@@ -471,6 +488,10 @@ namespace TestProbabilisticDataStructures
 
             AssertBytes("iblt-v1.bin", iblt.ToByteArray());
 
+            AssertBytes("bloomierfilter-v1.bin", BloomierFilter.Build(
+                Words.Select((w, i) => new System.Collections.Generic.KeyValuePair<byte[], ulong>(Key(w), (ulong)i)),
+                8).ToByteArray());
+
             var denseHll = new HyperLogLogPlus(14);
             for (var i = 0; i < 50000; i++)
             {
@@ -533,6 +554,7 @@ namespace TestProbabilisticDataStructures
                 ("simhashsignature-v1.bin", 19, 1),
                 ("countsketch-v1.bin", 20, 1),
                 ("iblt-v1.bin", 21, 1),
+                ("bloomierfilter-v1.bin", 22, 1),
             };
 
             foreach (var (fixture, id, version) in expected)

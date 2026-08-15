@@ -1,6 +1,6 @@
 # Probabilistic Data Structures for C<span>#</span> [![CI](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml/badge.svg)](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml) [![NuGet](https://img.shields.io/nuget/v/MattLorimor.ProbabilisticDataStructures.svg)](https://www.nuget.org/packages/MattLorimor.ProbabilisticDataStructures/)
 
-Twenty-one structures that answer questions about data too large to keep, by keeping
+Twenty-two structures that answer questions about data too large to keep, by keeping
 something much smaller and being approximately right.
 
 Each one trades exactness for space. What makes them usable is that the trade is
@@ -29,6 +29,7 @@ eleven structures the Go library does not have.
 | Your question | Reach for | Section |
 | --- | --- | --- |
 | Have I seen this before? | `BloomFilter` | [Membership](#membership) |
+| What **value** goes with this key? | `BloomierFilter` | [Membership](#membership) |
 | …and I need to remove things | `CuckooBloomFilter` | [Membership](#membership) |
 | …and I need to remove things *and* combine filters | `QuotientFilter` | [Membership](#membership) |
 | …and the set never changes after I build it | `BinaryFuseFilter` | [Membership](#membership) |
@@ -427,6 +428,41 @@ capped. Builds are deterministic, so a filter can ship as a build artifact.
 
 From Graf and Lemire,
 [Binary Fuse Filters](https://arxiv.org/abs/2201.01174).
+
+### `BloomierFilter`
+
+An approximate **map**: it stores a value for each key without storing the keys.
+
+**Reach for it when** you are shipping a compiled lookup table — word classes, a routing
+table, a feature-flag map — where the keys are fixed and the values are small. It is
+smaller than a dictionary because it never stores a key.
+
+**Look elsewhere if** the set changes. Like `BinaryFuseFilter` it is built once and has no
+`Add`. And if you need the keys back, this cannot give them to you at all.
+
+```C#
+var map = BloomierFilter.Build(pairs, valueBits: 16);
+
+if (map.TryGetValue(key, out var value))
+{
+    // the value it was built with -- or, once in 256 lookups of a key it
+    // never saw, a value belonging to nothing
+}
+```
+
+**One deliberate departure from the paper.** A Bloomier filter as classically described
+returns an *arbitrary value* for a key it was not built from, with no way to tell that from
+a real answer — a wrong answer that looks right, which is a sharper edge than any other
+structure here has. This stores an 8-bit fingerprint beside each value so an absent key is
+rejected instead, at 2^-8 per lookup. It costs one byte per cell and turns the failure back
+into the bounded, quotable kind the rest of this library deals in.
+
+A key appearing twice with different values is refused: a map cannot hold both, and since
+the filter does not keep keys it could not tell you which one it dropped. A value too wide
+for `valueBits` is refused rather than truncated.
+
+From Chazelle, Kilian, Rubinfeld and Tal,
+[The Bloomier Filter](https://dl.acm.org/doi/10.5555/982792.982797).
 
 ### `ScalableBloomFilter`
 

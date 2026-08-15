@@ -80,6 +80,7 @@ checksum still matches.
 | 19 | `SimHashSignature` |
 | 20 | `CountSketch` |
 | 21 | `InvertibleBloomLookupTable` |
+| 22 | `BloomierFilter` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
@@ -509,6 +510,22 @@ those into an enormous positive and the table would decode to nothing.
 The three runs must come to `cells * 8`, `cells * keySize` and `cells * 8` bytes
 respectively, and a payload where they do not is refused. So is one with fewer cells than a
 single key occupies.
+
+### `BloomierFilter` (id 22)
+
+```
+u32     the number of distinct keys
+u32     segment length, a power of two
+u32     segment count
+u64     the seed the peel succeeded on
+u32     the value width in bits
+bytes   the cells, ceil((8 + value bits) / 8) bytes each
+```
+
+Each cell holds an 8-bit fingerprint above the value, and a key's three cells combine by
+exclusive-or to give both. The seed matters as much as the cells, as it does for a
+`BinaryFuseFilter`: every position is computed from it, and a map read back under a
+different one would answer with the wrong values rather than with none.
 
 ## The random generator's state
 

@@ -32,6 +32,7 @@ namespace ProbabilisticDataStructures
         SimHashSignature = 19,
         CountSketch = 20,
         InvertibleBloomLookupTable = 21,
+        BloomierFilter = 22,
     }
 
     /// <summary>

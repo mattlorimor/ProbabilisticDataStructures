@@ -278,6 +278,9 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(0u, RoundTrip(new QuotientFilter(1000, 0.01)).Count());
             Assert.AreEqual(0ul, RoundTrip(new ThetaSketch(4096)).Count());
             Assert.AreEqual(0L, RoundTrip(new CountSketch(0.05, 0.01)).Count(Key("x")));
+            Assert.AreEqual(0u, RoundTrip(BloomierFilter.Build(
+                Array.Empty<System.Collections.Generic.KeyValuePair<byte[], ulong>>(), 8)).Count());
+
             var emptyTable = RoundTrip(new InvertibleBloomLookupTable(10, 8));
             Assert.AreEqual(15u, emptyTable.Cells());
             Assert.AreEqual(8, emptyTable.KeySize());
@@ -318,6 +321,9 @@ namespace TestProbabilisticDataStructures
             countSketch.Add(Key("a"));
             var iblt = new InvertibleBloomLookupTable(10, 8, custom);
             iblt.Add(new byte[8]);
+            var bloomier = BloomierFilter.Build(
+                Present.Select(w => new System.Collections.Generic.KeyValuePair<byte[], ulong>(Key(w), 1UL)),
+                8, custom);
             var theta = new ThetaSketch(4096); theta.SetHash(custom);
             foreach (var w in Present) theta.Add(Key(w));
             var quotient = new QuotientFilter(1000, 0.01); quotient.SetHash(custom);
@@ -325,6 +331,7 @@ namespace TestProbabilisticDataStructures
             var hllPlus = new HyperLogLogPlus(14); hllPlus.SetHash(custom);
             foreach (var w in Present) hllPlus.Add(Key(w));
 
+            AssertRefusesThenAccepts(bloomier.ToByteArray(), b => Persistence.FromByteArray<BloomierFilter>(b), b => Persistence.FromByteArray<BloomierFilter>(b, custom));
             AssertRefusesThenAccepts(iblt.ToByteArray(), b => Persistence.FromByteArray<InvertibleBloomLookupTable>(b), b => Persistence.FromByteArray<InvertibleBloomLookupTable>(b, custom));
             AssertRefusesThenAccepts(countSketch.ToByteArray(), b => Persistence.FromByteArray<CountSketch>(b), b => Persistence.FromByteArray<CountSketch>(b, custom));
             AssertRefusesThenAccepts(theta.ToByteArray(), b => Persistence.FromByteArray<ThetaSketch>(b), b => Persistence.FromByteArray<ThetaSketch>(b, custom));
@@ -385,6 +392,7 @@ namespace TestProbabilisticDataStructures
                 ("SimHashSignature", SimHash.Signature(new[] { "a" }).ToByteArray()),
                 ("CountSketch", new CountSketch(0.5, 0.5).Add(Key("a")).ToByteArray()),
                 ("InvertibleBloomLookupTable", new InvertibleBloomLookupTable(4, 8).Add(new byte[8]).ToByteArray()),
+                ("BloomierFilter", FilledBloomier()),
             };
 
             // Read every payload as a BloomFilter; only its own may succeed.
@@ -442,6 +450,7 @@ namespace TestProbabilisticDataStructures
                     SimHash.Signature(new[] { "a", "b", "c", "d" }).ToByteArray()),
                 ("CountSketch", b => Persistence.FromByteArray<CountSketch>(b), FilledCountSketch()),
                 ("InvertibleBloomLookupTable", b => Persistence.FromByteArray<InvertibleBloomLookupTable>(b), FilledIblt()),
+                ("BloomierFilter", b => Persistence.FromByteArray<BloomierFilter>(b), FilledBloomier()),
             };
 
             foreach (var (name, read, clean) in payloads)
@@ -481,6 +490,14 @@ namespace TestProbabilisticDataStructures
 
         // Loaded past its retained size so the payload carries a lowered theta rather
         // than the exact-count case.
+        private static byte[] FilledBloomier()
+        {
+            return BloomierFilter.Build(
+                Enumerable.Range(0, 40).Select(i =>
+                    new System.Collections.Generic.KeyValuePair<byte[], ulong>(Key($"w{i}"), (ulong)i)),
+                8).ToByteArray();
+        }
+
         private static byte[] FilledIblt()
         {
             var table = new InvertibleBloomLookupTable(8, 8);
