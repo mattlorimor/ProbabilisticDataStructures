@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`BloomierFilter`**, an approximate key-to-value map, which is
+  [#78](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/78). Chazelle,
+  Kilian, Rubinfeld and Tal (2004), built on the peeling construction `BinaryFuseFilter`
+  uses. It stores a value per key without storing the keys, which is why it is smaller
+  than a dictionary and why the set is fixed at construction.
+
+  **One deliberate departure from the paper.** The classic form returns an arbitrary value
+  for a key it was not built from, with no way to tell that from a real answer -- a wrong
+  answer that looks right, which is a sharper edge than anything else here has. This stores
+  an 8-bit fingerprint beside each value so an absent key is rejected instead, at 2^-8 per
+  lookup. One byte per cell, and the failure becomes the bounded kind the rest of the
+  library deals in.
+
+  A key appearing twice with different values is refused, since a map cannot hold both and
+  this one could not tell you which it dropped. A value too wide for the declared width is
+  refused rather than truncated. Persistence takes structure id 22.
+
 - **`InvertibleBloomLookupTable`**, which recovers *which* keys two sets differ by, and is
   [#76](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/76). Goodrich and
   Mitzenmacher (2011). `ThetaSketch` can tell you two sets differ by about ten; this hands
