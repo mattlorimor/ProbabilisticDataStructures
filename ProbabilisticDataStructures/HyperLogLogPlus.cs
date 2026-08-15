@@ -298,6 +298,33 @@ namespace ProbabilisticDataStructures
         /// terms in the estimate rather than as cases to switch on, which is why it needs
         /// no correction at either extreme and has no band between them to be worst in.
         /// </para>
+        /// <para>
+        /// The two were measured against each other rather than assumed. Tables were
+        /// derived by the paper's own procedure, given a threshold chosen to minimise
+        /// their error, and evaluated on streams they were not trained on. Mean absolute
+        /// error across nineteen cardinalities from 0.125m to 20m:
+        /// </para>
+        /// <code>
+        ///   precision    Ertl     tables
+        ///          10   2.127%    2.158%
+        ///          12   1.095%    1.087%
+        ///          14   0.563%    0.569%
+        ///          16   0.262%    0.269%
+        /// </code>
+        /// <para>
+        /// A tie: the gaps are a percent or two of each other, well inside the noise of
+        /// sixty streams, and the sign changes with the precision. The worst point of
+        /// each agrees to three digits at every precision.
+        /// </para>
+        /// <para>
+        /// Since accuracy does not choose between them, everything else does. This is
+        /// forty lines and no data, works at any precision without being trained for it,
+        /// and has no threshold to place. The tables are six thousand measured numbers
+        /// plus a threshold per precision, all of which have to be right for the
+        /// estimator to be better in the band they exist for, and none of which announce
+        /// themselves when wrong. Re-run the comparison with
+        /// <c>dotnet run -c Release --project Benchmarks -- study hll-bias 14</c>.
+        /// </para>
         /// </remarks>
         private ulong EstimateDense()
         {
