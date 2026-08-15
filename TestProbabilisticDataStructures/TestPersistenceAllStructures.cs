@@ -275,6 +275,7 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(0u, RoundTrip(BinaryFuseFilter.Build(Array.Empty<byte[]>())).Count());
             Assert.AreEqual(0ul, RoundTrip(new DDSketch(0.01)).Count());
             Assert.AreEqual(0ul, RoundTrip(new HyperLogLogPlus(14)).Count());
+            Assert.AreEqual(0u, RoundTrip(new QuotientFilter(1000, 0.01)).Count());
 
             // A signature of an empty bag is the one case here that is not all zeroes:
             // every position holds the identity ulong.MaxValue, which a restore that
@@ -306,9 +307,12 @@ namespace TestProbabilisticDataStructures
             var scalable = new ScalableBloomFilter(100, 0.01, 0.8); scalable.SetHash(custom);
             var fuse = BinaryFuseFilter.Build(
                 Present.Select(Key), BinaryFuseWidth.Eight, custom);
+            var quotient = new QuotientFilter(1000, 0.01); quotient.SetHash(custom);
+            foreach (var w in Present) quotient.Add(Key(w));
             var hllPlus = new HyperLogLogPlus(14); hllPlus.SetHash(custom);
             foreach (var w in Present) hllPlus.Add(Key(w));
 
+            AssertRefusesThenAccepts(quotient.ToByteArray(), b => Persistence.FromByteArray<QuotientFilter>(b), b => Persistence.FromByteArray<QuotientFilter>(b, custom));
             AssertRefusesThenAccepts(hllPlus.ToByteArray(), b => Persistence.FromByteArray<HyperLogLogPlus>(b), b => Persistence.FromByteArray<HyperLogLogPlus>(b, custom));
             AssertRefusesThenAccepts(fuse.ToByteArray(), b => Persistence.FromByteArray<BinaryFuseFilter>(b), b => Persistence.FromByteArray<BinaryFuseFilter>(b, custom));
             AssertRefusesThenAccepts(bloom.ToByteArray(), b => Persistence.FromByteArray<BloomFilter>(b), b => Persistence.FromByteArray<BloomFilter>(b, custom));
@@ -360,6 +364,7 @@ namespace TestProbabilisticDataStructures
                 ("BinaryFuseFilter", BinaryFuseFilter.Build(new[] { Key("a") }).ToByteArray()),
                 ("DDSketch", FilledSketchOfNumbers()),
                 ("HyperLogLogPlus", new HyperLogLogPlus(14).Add(Key("a")).ToByteArray()),
+                ("QuotientFilter", new QuotientFilter(1000, 0.01).Add(Key("a")).ToByteArray()),
             };
 
             // Read every payload as a BloomFilter; only its own may succeed.
@@ -411,6 +416,7 @@ namespace TestProbabilisticDataStructures
                 // Both representations, which are different layouts behind one id.
                 ("HyperLogLogPlus sparse", b => Persistence.FromByteArray<HyperLogLogPlus>(b), FilledHllPlus(20)),
                 ("HyperLogLogPlus dense", b => Persistence.FromByteArray<HyperLogLogPlus>(b), FilledHllPlus(200)),
+                ("QuotientFilter", b => Persistence.FromByteArray<QuotientFilter>(b), FilledQuotient()),
             };
 
             foreach (var (name, read, clean) in payloads)
@@ -446,6 +452,18 @@ namespace TestProbabilisticDataStructures
             var h = new HyperLogLog(64);
             for (int i = 0; i < 40; i++) h.Add(Key($"w{i}"));
             return h.ToByteArray();
+        }
+
+        // Not an IFilter: its Add returns the filter but it has no TestAndAdd.
+        private static byte[] FilledQuotient()
+        {
+            var filter = new QuotientFilter(100, 0.01);
+            for (var i = 0; i < 40; i++)
+            {
+                filter.Add(Key($"w{i}"));
+            }
+
+            return filter.ToByteArray();
         }
 
         private static byte[] FilledHllPlus(int items)

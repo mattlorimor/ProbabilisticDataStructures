@@ -75,6 +75,7 @@ checksum still matches.
 | 14 | `BinaryFuseFilter` |
 | 15 | `DDSketch` |
 | 16 | `HyperLogLogPlus` |
+| 17 | `QuotientFilter` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
@@ -412,6 +413,27 @@ unordered run would report more distinct items than it holds.
 The register count is not stored: it is `2^precision`, and a payload whose registers do
 not come to that is refused. Registers above `64 - precision + 1` are refused too, since
 no hash could have produced them.
+
+### `QuotientFilter` (id 17)
+
+```
+u32     quotient bits
+u32     remainder bits
+u32     the number of entries
+bytes   the slot table
+```
+
+The slot count is `2^quotient bits`, each slot is `remainder bits + 3` wide, and the
+table is those slots packed end to end with one spare word so a slot straddling the end
+has somewhere to reach. All of that follows from the two widths, so none of it is
+written: a payload cannot then disagree with itself about the shape of its own table.
+
+The three bits per slot are `is_occupied`, `is_continuation` and `is_shifted`. Only the
+first belongs to the slot; the other two belong to whatever entry is sitting there, which
+is why an entry can be moved without its slot's occupied bit moving with it.
+
+A payload claiming more entries than there are slots is refused, as is one whose table is
+not the size its two widths call for.
 
 ## The random generator's state
 

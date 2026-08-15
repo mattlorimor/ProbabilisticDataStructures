@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`QuotientFilter`**, a membership filter that both deletes and merges, which is
+  [#59](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/59). Bender et
+  al. (2012). Nothing else here does both: the cuckoo filter deletes but cannot merge,
+  and the Bloom family merges but cannot delete.
+
+  Measured at n = 100,000, retained bytes:
+
+  | | bits/item | hit | miss | measured fp | delete | merge |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | `QuotientFilter` | 26.2 | 63.6 ns | 20.4 ns | 0.284% | yes | **yes** |
+  | `CuckooBloomFilter` | 23.6 | 34.6 ns | 40.2 ns | 0.012% | yes | no |
+  | `BloomFilter` | 9.6 | 58.9 ns | 21.4 ns | 1.000% | no | yes |
+
+  That comparison is the one [#59](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/59)
+  asked for and it only became answerable after 5.2.0, which fixed the cuckoo filter's
+  representation. The answer is that **merging is the whole of what it buys**: against a
+  cuckoo filter it is slightly larger, faster on misses, slower on hits, and worse at the
+  same nominal rate. The README says so plainly rather than leaving it to be discovered.
+
+  Memory per item is not a single number. The table is a power of two and is sized to
+  stay under 75% load, so a filter sized just past a power of two costs twice one sized
+  just under it: 13.4 bits per item at n = 98,000 against 26.2 at n = 100,000. The false
+  positive rate moves the other way, being roughly the load times `2^-remainder bits`.
+
+  Every addition is stored, including a repeat, so it takes as many removals to empty an
+  item out as it took additions to put it in. Persistence takes structure id 17.
+
 - **`HyperLogLogPlus`**, a better distinct-count estimator, which is
   [#58](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/58). It sits
   alongside `HyperLogLog` rather than replacing it: replacing it would change the number
