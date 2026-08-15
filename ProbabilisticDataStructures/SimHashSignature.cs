@@ -14,7 +14,16 @@ namespace ProbabilisticDataStructures
     /// </remarks>
     public sealed class SimHashSignature : IBinaryPersistable<SimHashSignature>
     {
-        internal SimHashSignature(ulong value)
+        /// <summary>
+        /// Wraps a fingerprint that has already been computed, or stored elsewhere.
+        /// </summary>
+        /// <param name="value">The fingerprint.</param>
+        /// <remarks>
+        /// A fingerprint is only comparable against one built the same way, so this is
+        /// for a value that came from <see cref="SimHash.Signature"/> -- here, or in
+        /// another process, or out of a column in a database.
+        /// </remarks>
+        public SimHashSignature(ulong value)
         {
             this.Value = value;
         }

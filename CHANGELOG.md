@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`MinHashIndex` and `SimHashIndex`**, so that the signatures this library produces can
+  be searched rather than only compared, which is
+  [#74](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/74). Without an
+  index, finding near-duplicates among a million documents is a trillion comparisons; #62
+  noted at the time that this was probably worth more than another fingerprint.
+
+  **They are the first structures here whose failure is a missing answer.** Everything else
+  errs towards saying yes. An index can fail to offer a pair that really is similar, and
+  checking the candidates afterwards does not recover it. `RecallAt` exposes how often that
+  happens rather than leaving it to be discovered.
+
+  `ForThreshold` errs towards returning too much for the same reason. Only the divisors of
+  the signature length are available, so the S-curve lands near the requested threshold
+  rather than on it -- and at 128 values and a threshold of 0.8, choosing the nearest
+  configuration regardless of side gives **20% recall at the threshold itself**. Choosing
+  the other side gives 95% and costs extra candidates the caller discards.
+
+  `SimHashIndex` carries a guarantee its sibling cannot: cutting 64 bits into *b* bands
+  means anything differing in fewer than *b* bits must share a band, so retrieval within
+  that distance is certain rather than probable.
+
+  Neither is persistable, deliberately -- an index is derived data, rebuildable from the
+  signatures already stored. `SimHashSignature`'s constructor is now public, so a
+  fingerprint held elsewhere can be wrapped and queried.
+
 - **`BloomierFilter`**, an approximate key-to-value map, which is
   [#78](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/78). Chazelle,
   Kilian, Rubinfeld and Tal (2004), built on the peeling construction `BinaryFuseFilter`

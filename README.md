@@ -1,6 +1,6 @@
 # Probabilistic Data Structures for C<span>#</span> [![CI](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml/badge.svg)](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml) [![NuGet](https://img.shields.io/nuget/v/MattLorimor.ProbabilisticDataStructures.svg)](https://www.nuget.org/packages/MattLorimor.ProbabilisticDataStructures/)
 
-Twenty-two structures that answer questions about data too large to keep, by keeping
+Twenty-four structures that answer questions about data too large to keep, by keeping
 something much smaller and being approximately right.
 
 Each one trades exactness for space. What makes them usable is that the trade is
@@ -44,6 +44,7 @@ eleven structures the Go library does not have.
 | What are the most common things? | `TopK` | [Frequency](#frequency) |
 | How alike are these two **sets**? | `MinHash` | [Similarity](#similarity) |
 | Are these two **documents** near-duplicates? | `SimHash` | [Similarity](#similarity) |
+| …across a corpus, without comparing every pair | `MinHashIndex`, `SimHashIndex` | [Similarity](#similarity) |
 | What does this distribution look like? p50, p99? | `DDSketch` | [Distributions](#distributions) |
 
 ### If you only read one thing
@@ -788,10 +789,47 @@ float similarity = SimHash.Similarity(a, b);
 From Charikar,
 [Similarity Estimation Techniques from Rounding Algorithms](https://dl.acm.org/doi/10.1145/509907.509965).
 
-> **Both are still O(n²) to search.** Neither ships an index, so finding near-duplicates
-> among a million documents is a trillion comparisons. That gap is tracked in
-> [#74](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/74) and is
-> probably the most useful thing left to add.
+### `MinHashIndex` and `SimHashIndex`
+
+Signatures answer "are these two alike". An index answers "which of these million are
+worth asking about", without comparing every pair.
+
+```C#
+var index = MinHashIndex.ForThreshold(0.8, signatureLength: 128);
+foreach (var (id, signature) in corpus) index.Add(id, signature);
+
+foreach (var candidate in index.Query(query))
+{
+    // now compare properly -- these are candidates, not answers
+}
+```
+
+**Reach for them when** you are searching a corpus rather than comparing a pair. That is
+the difference between a trillion comparisons and a few hundred.
+
+**Look elsewhere if** you have two things and want to know how alike they are. Use the
+signatures directly.
+
+> **These are the only structures here whose failure is a *missing* answer.** Everything
+> else errs towards saying yes; an index can fail to offer a pair that really is similar,
+> and no amount of checking candidates afterwards recovers it — it was never offered.
+> `MinHashIndex.RecallAt(resemblance)` tells you how often that happens, and is worth
+> reading before trusting a setting.
+
+`ForThreshold` deliberately errs towards **returning too much**. Only the divisors of the
+signature length are available, so the curve lands near the threshold rather than on it,
+and rounding the wrong way is expensive: at 128 values and a threshold of 0.8, picking the
+nearest configuration regardless of side gives **20% recall at the threshold itself**.
+Rounding the other way gives 95% and costs some extra candidates, which you discard.
+
+`SimHashIndex` has a guarantee its sibling cannot offer. Cutting a 64-bit fingerprint into
+*b* bands means two fingerprints differing in fewer than *b* bits **must** agree on at
+least one band — there are only *b*−1 differing bits to spread across *b* bands, so one
+band gets none. Within that distance retrieval is certain rather than probable. Eight bands
+guarantees everything within seven bits.
+
+Neither index is persistable, deliberately: an index is derived data, rebuildable from the
+signatures you already store, and storing it would mean keeping two things in step.
 
 ---
 
