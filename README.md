@@ -1,37 +1,94 @@
 # Probabilistic Data Structures for C<span>#</span> [![CI](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml/badge.svg)](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml) [![NuGet](https://img.shields.io/nuget/v/MattLorimor.ProbabilisticDataStructures.svg)](https://www.nuget.org/packages/MattLorimor.ProbabilisticDataStructures/)
 
-This is a C# port of [Tyler Treat's](https://github.com/tylertreat) work in the [BoomFilters](https://github.com/tylertreat/BoomFilters) golang project. His writing on probabilistic data structures and other computing-related activities can be found here: http://bravenewgeek.com/.
+Nineteen structures that answer questions about data too large to keep, by keeping
+something much smaller and being approximately right.
 
-If you're on this page, you probably already know a bit about probabilistic data structures and why you might want to use them. To keep this README smaller, I'll remove some of the exposition Tyler does and keep this closer to a "How to Use" document. I would refer you to [his project's README](https://github.com/tylertreat/BoomFilters/blob/master/README.md) if you are trying to get all the information you possibly can.
+Each one trades exactness for space. What makes them usable is that the trade is
+*specified*: a Bloom filter never says no about something it holds, a DDSketch is within
+1% of the true value, a binary fuse filter is wrong 0.39% of the time. This README tries
+to be equally specific about **when each one is the wrong choice**, because that is the
+part you usually find out later.
 
-The descriptions for each filter were lifted directly from the BoomFilters' README.
+Originally a C# port of [Tyler Treat's](https://github.com/tylertreat)
+[BoomFilters](https://github.com/tylertreat/BoomFilters), and still owing it the
+descriptions of the original eight structures. It has since diverged deliberately —
+different hashing, argument validation, a documented persistence format, merging, and
+eleven structures the Go library does not have.
 
 > **On compatibility with BoomFilters.** This is a port of the algorithms, not a
-> wire-compatible implementation. The two libraries hash with different functions by
-> default — MD5 here, FNV-1a in Go — so a filter built by one cannot be read by the
-> other, and their false positives will not agree. The byte-extraction arithmetic in
-> `Utils.HashKernel` does follow Go's convention, and a test pins it, but that is a
-> property of the arithmetic rather than of the filters.
+> wire-compatible implementation. The two libraries hash with different functions —
+> XxHash3 here since 3.0.0, FNV-1a in Go — so a filter built by one cannot be read by the
+> other, and their false positives will not agree.
 
-## Included Structures
-* [Binary fuse filter](https://github.com/mattlorimor/ProbabilisticDataStructures#static-sets)
-* [Count-Min Sketch](https://github.com/mattlorimor/ProbabilisticDataStructures#count-min-sketch)
-* [DDSketch (quantiles)](https://github.com/mattlorimor/ProbabilisticDataStructures#quantiles)
-* [Counting Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#counting-bloom-filter)
-* [Cuckoo filter](https://github.com/mattlorimor/ProbabilisticDataStructures#cuckoo-filter)
-* [Classic Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#classic-bloom-filter)
-* [Deletable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#deletable-bloom-filter)
-* [HyperLogLog](https://github.com/mattlorimor/ProbabilisticDataStructures#hyperloglog)
-* [HyperLogLog++](https://github.com/mattlorimor/ProbabilisticDataStructures#distinct-counts)
-* [Inverse Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#inverse-bloom-filter)
-* [MinHash](https://github.com/mattlorimor/ProbabilisticDataStructures#minhash)
-* [Partitioned Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#partitioned-bloom-filter)
-* [Quotient filter](https://github.com/mattlorimor/ProbabilisticDataStructures#deleting-and-merging)
-* [Scalable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#scalable-bloom-filter)
-* [SimHash](https://github.com/mattlorimor/ProbabilisticDataStructures#near-duplicate-detection)
-* [Stable Bloom filter](https://github.com/mattlorimor/ProbabilisticDataStructures#stable-bloom-filter)
-* [Theta sketch](https://github.com/mattlorimor/ProbabilisticDataStructures#set-operations-on-cardinality)
-* [TopK](https://github.com/mattlorimor/ProbabilisticDataStructures#top-k)
+---
+
+## Choosing a structure
+
+### What are you trying to do?
+
+| Your question | Reach for | Section |
+| --- | --- | --- |
+| Have I seen this before? | `BloomFilter` | [Membership](#membership) |
+| …and I need to remove things | `CuckooBloomFilter` | [Membership](#membership) |
+| …and I need to remove things *and* combine filters | `QuotientFilter` | [Membership](#membership) |
+| …and the set never changes after I build it | `BinaryFuseFilter` | [Membership](#membership) |
+| …and the stream never ends, on fixed memory | `StableBloomFilter` | [Membership](#membership) |
+| …and I have no idea how big the set is | `ScalableBloomFilter` | [Membership](#membership) |
+| …and a false positive would be expensive | `InverseBloomFilter` | [Membership](#membership) |
+| How many distinct things are there? | `HyperLogLogPlus` | [Cardinality](#cardinality) |
+| How many are in **both** of these sets? | `ThetaSketch` | [Cardinality](#cardinality) |
+| How often have I seen this particular thing? | `CountMinSketch` | [Frequency](#frequency) |
+| What are the most common things? | `TopK` | [Frequency](#frequency) |
+| How alike are these two **sets**? | `MinHash` | [Similarity](#similarity) |
+| Are these two **documents** near-duplicates? | `SimHash` | [Similarity](#similarity) |
+| What does this distribution look like? p50, p99? | `DDSketch` | [Distributions](#distributions) |
+
+### If you only read one thing
+
+**Start with `BloomFilter`.** It is the right answer surprisingly often, it is the
+smallest of the membership structures, and the others exist to fix one specific thing it
+cannot do. Move off it only when you hit that thing:
+
+```
+BloomFilter
+  ├── need to delete? ──────────── CuckooBloomFilter
+  │     └── and merge too? ─────── QuotientFilter
+  ├── set is fixed forever? ────── BinaryFuseFilter   (smaller and faster)
+  ├── don't know the size? ─────── ScalableBloomFilter
+  ├── stream never ends? ───────── StableBloomFilter  (forgets, allows false negatives)
+  └── more than ~500M items? ───── BloomFilter64
+```
+
+### What each one costs
+
+All four asked for the same thing — 100,000 items at a 1% false positive rate — and sized
+from each structure's own geometry rather than measured off the heap.
+
+| | bytes | bits/item | measured fp | delete | merge |
+| --- | --- | --- | --- | --- | --- |
+| `BinaryFuseFilter` | 118,784 | **9.5** | **0.392%** | no | no |
+| `BloomFilter` | 119,813 | 9.6 | 1.001% | no | yes |
+| `CuckooBloomFilter` | 278,528 | 22.3 | 0.009% | yes | no |
+| `QuotientFilter` | 327,680 | 26.2 | 0.295% | yes | **yes** |
+
+Two things to read out of that.
+
+**Deletion costs about 2.5× the memory.** Check whether you actually need it before paying
+for it — a filter you rebuild periodically is often cheaper than one you edit.
+
+**Three of the four beat the rate you asked for, by a lot.** Only the Bloom filter hits 1%
+on the nose; the others land where their fingerprint width or load factor puts them, which
+is better than requested but not free — you are paying for accuracy you did not ask for. If
+you want a specific rate rather than "at most this", `BloomFilter` is the one that gives it
+to you.
+
+Speed is deliberately not in that table. It moves by a factor of two between runs on the
+same machine, so the numbers would be worse than useless for choosing; see
+[Benchmarks](Benchmarks/README.md) for measured timings and why they are not gated on in
+CI. Broadly: `BinaryFuseFilter` is the fastest by a wide margin, and the rest are close
+enough that memory and capability should decide.
+
+---
 
 ## Installation
 
@@ -39,10 +96,10 @@ The descriptions for each filter were lifted directly from the BoomFilters' READ
 dotnet add package MattLorimor.ProbabilisticDataStructures
 ```
 
-Requires .NET 10 or later. See [CHANGELOG.md](CHANGELOG.md) for what changed in 2.0.0.
+Requires .NET 10 or later. See [CHANGELOG.md](CHANGELOG.md) for what changed in each
+release.
 
-The package ID carries a prefix, but the assembly and namespace do not — your code
-still uses `ProbabilisticDataStructures`:
+The package ID carries a prefix, but the assembly and namespace do not:
 
 ```C#
 using ProbabilisticDataStructures;
@@ -53,76 +110,16 @@ using ProbabilisticDataStructures;
 > unaffiliated with this repository, is not maintained here, and will not receive these
 > releases. Current releases ship under the `MattLorimor.` prefix above.
 
-## Releases
-
 Packages are published to
 [NuGet](https://www.nuget.org/packages/MattLorimor.ProbabilisticDataStructures/), and each
-release is also tagged on the
+release is tagged on the
 [releases page](https://github.com/mattlorimor/ProbabilisticDataStructures/releases).
 
-## Merging
+---
 
-Filters built separately can be combined, which is what makes it possible to build them
-across shards or machines and put them together at the end:
+## Things that apply to everything
 
-```C#
-var merged = shardA.Merge(shardB).Merge(shardC);
-```
-
-The result is exactly the filter that adding everything to one of them would have
-produced, so its false positive rate is that of a filter holding the union.
-
-Available on `BloomFilter`, `BloomFilter64`, `PartitionedBloomFilter`,
-`CountingBloomFilter`, `CountMinSketch`, `HyperLogLog` and `TopK`. Both structures must
-have the same dimensions **and the same hash function** — a merge of two that hash
-differently is refused, because the result would answer confidently about positions
-neither of them meant.
-
-Not available on `InverseBloomFilter` (a slot holds one element, so a merge would have to
-choose between them), `StableBloomFilter` (its contents are a function of the order things
-arrived in) or `CuckooBloomFilter` (fingerprints only combine when both filters happen to
-have placed them compatibly).
-
-A merged filter's `Count()` is the sum of its inputs', which overstates the union whenever
-they shared elements.
-
-## Persistence
-
-Every structure can be written to a stream and read back.
-
-```C#
-using var file = File.Create("filter.bin");
-filter.WriteTo(file);
-```
-
-```C#
-using var file = File.OpenRead("filter.bin");
-var filter = BloomFilter.ReadFrom(file);
-```
-
-`ToByteArray()` and `Persistence.FromByteArray<T>(bytes)` do the same without a stream.
-
-The layout is specified in [FORMAT.md](FORMAT.md) and is stable: a payload written by
-any version of this library is readable by every later one, or is refused with an
-explanation. A payload that has been corrupted, truncated, or read as the wrong
-structure throws `InvalidDataException` rather than producing a structure that answers
-incorrectly.
-
-### The hash function
-
-A structure's answers depend entirely on its hash function, and a delegate cannot be
-written to a file, so the payload records **which** hash was in use. Reading one written
-under the default needs nothing extra. Reading one written under a hash you set with
-`SetHash` requires you to supply the same function:
-
-```C#
-var filter = BloomFilter.ReadFrom(file, myHashFunction);
-```
-
-Without it the read fails. That is deliberate: a filter restored under the wrong hash
-does not look broken, it looks empty, and would answer no to everything it holds.
-
-## Choosing a hash function
+### Hashing
 
 Every constructor takes an optional hash function:
 
@@ -130,311 +127,118 @@ Every constructor takes an optional hash function:
 var filter = new BloomFilter(10000, 0.01, hash: myHashFunction);
 ```
 
-Omitting it uses the default, a 64-bit XxHash3. A scalable filter passes it to the
-filters it adds as it grows, and a top-k to the sketch it holds.
+Omitting it uses the default, a 64-bit XxHash3. A scalable filter passes it to the filters
+it adds as it grows, and a top-k to the sketch it holds.
 
 **The hash cannot be replaced once a structure holds anything.** `SetHash` throws in that
-case. Everything already stored was placed by the hash in use at the time, and replacing
-it moves none of it, so every lookup would go somewhere else — the structure would report
-items it can no longer find. It would not look broken, it would look empty.
+case. Everything already stored was placed by the hash in use at the time, and replacing it
+moves none of it — so the structure would report items it can no longer find. It would not
+look broken, it would look *empty*. `SetHash` stays available before anything is added,
+including after `Reset()`.
 
-`SetHash` remains available before anything has been added, including after `Reset()`.
+Three structures do not take one at all. `DDSketch` holds numbers rather than bytes and
+hashes nothing. `MinHash` and `SimHash` signatures fix their hash by convention, because a
+signature is only comparable against another built the same way.
 
-## Deleting and merging
+The default is not resistant to chosen-input attacks. If an adversary controls what you
+insert, they can provoke collisions and inflate your observed false positive rate; supply
+a keyed hash such as SipHash if that is your threat model.
 
-`QuotientFilter` is a membership filter you can delete from *and* merge, which no other
-structure here manages together.
+### Persistence
 
-```C#
-var filter = new QuotientFilter(10000, 0.01);
-filter.Add(item);
-filter.TestAndRemove(item);
-filter.Merge(other);
-```
-
-Measured at n = 100,000 against the two filters closest to it, retained bytes rather than
-total allocated:
-
-| | bits/item | hit | miss | measured fp | delete | merge |
-| --- | --- | --- | --- | --- | --- | --- |
-| `QuotientFilter` | 26.2 | 63.6 ns | 20.4 ns | 0.284% | yes | **yes** |
-| `CuckooBloomFilter` | 23.6 | 34.6 ns | 40.2 ns | 0.012% | yes | no |
-| `BloomFilter` | 9.6 | 58.9 ns | 21.4 ns | 1.000% | no | yes |
-
-**Be honest about what this buys.** Against a cuckoo filter it is slightly larger, faster
-on misses, slower on hits, and worse at the same nominal rate. The one thing it does that
-a cuckoo filter cannot is merge: a cuckoo fingerprint only means anything relative to the
-bucket it landed in, so two of them cannot be combined, while a quotient filter keeps each
-entry's quotient in its position and can hand every fingerprint back whole. **If you do
-not need merging, use the cuckoo filter.**
-
-Memory per item is not a single number, because the table is a power of two and the
-filter is sized to stay under 75% load. Where `n` falls decides the load, and the load
-decides both the memory and the false positive rate:
-
-| n | slots | load | bits/item |
-| --- | --- | --- | --- |
-| 98,000 | 131,072 | 75% | **13.4** |
-| 100,000 | 262,144 | 38% | 26.2 |
-| 196,000 | 262,144 | 75% | **13.4** |
-
-A filter sized just past a power of two costs twice one sized just under it. The false
-positive rate moves the other way — it is roughly the load times `2^-remainder bits`, so
-a lightly loaded table is also a more accurate one.
-
-Every addition is stored, including a repeat of something already held, so it takes as
-many removals to empty an item out as it took additions to put it in. Collapsing repeats
-would mean collapsing two different items whose fingerprints agree, and removing either
-would then make the filter answer no for the other.
-
-## Near-duplicate detection
-
-`SimHash` reduces a document to one 64-bit fingerprint whose Hamming distance tracks how
-alike two documents are.
+Every structure writes to a stream and reads back.
 
 ```C#
-var a = SimHash.Signature(termsOfDocumentA);
-var b = SimHash.Signature(termsOfDocumentB);
+using var file = File.Create("filter.bin");
+filter.WriteTo(file);
 
-int  differingBits = SimHash.HammingDistance(a, b);   // 0 means identical
-float similarity   = SimHash.Similarity(a, b);
+using var restored = File.OpenRead("filter.bin");
+var filter = BloomFilter.ReadFrom(restored);
 ```
 
-### Which one: SimHash or MinHash?
+`ToByteArray()` and `Persistence.FromByteArray<T>(bytes)` do the same without a stream.
 
-They answer different questions, and picking by whichever you found first will give you
-the wrong one.
+The layout is specified in [FORMAT.md](FORMAT.md) and is stable: a payload written by any
+version is readable by every later one, or is refused with an explanation. Corruption,
+truncation, or reading a payload as the wrong structure throws `InvalidDataException`
+rather than producing something that answers incorrectly. Every structure has a fixture
+checked in that pins its bytes, so a change that would break stored data fails in CI
+rather than in your storage.
 
-**`MinHash` answers about sets** — how much do these two *collections of things* overlap,
-by Jaccard resemblance. **`SimHash` answers about documents** — how alike are these two
-*weighted term vectors*, by cosine similarity, where a term repeated often counts for more.
-
-One input where they disagree completely: a document of 40 "apple" and 2 "banana" against
-one of 2 "apple" and 40 "banana". They hold the same *set*, so MinHash calls them
-identical — correctly, for its question. SimHash calls them unrelated — correctly, for
-its. Neither is wrong.
-
-The other difference is size. For one 500-term document:
-
-| | stored | comparison |
-| --- | --- | --- |
-| `SimHash` | **26 bytes** | 19.5 ns |
-| `MinHash` signature k=64 | 534 bytes | — |
-| `MinHash` signature k=128 | 1,046 bytes | 37.0 ns |
-
-Forty times smaller, which for the canonical use — deduplicating a crawl — is what decides
-whether the index fits.
-
-### Read the accuracy for what it is
-
-It is precise where near-duplicate detection needs it and loose in the middle. Measured on
-500-term documents:
-
-| shared terms | true cosine | estimated |
-| --- | --- | --- |
-| 100% | 1.00 | **1.00** |
-| 95% | 0.95 | **0.97** |
-| 90% | 0.90 | **0.90** |
-| 80% | 0.80 | 0.74 |
-| 50% | 0.50 | 0.67 |
-| 0% | 0.00 | −0.05 |
-
-Sixty-four bits is enough to tell a near-duplicate from a different document, which is the
-job. It is not enough to rank two moderately similar documents against each other. Use the
-Hamming distance as a threshold — a handful of differing bits means near-duplicate — rather
-than treating the similarity as a measurement.
-
-A slightly negative similarity means the documents are unrelated, not opposite: term
-vectors are non-negative, so a true cosine below zero is impossible and the value is noise
-around it.
-
-## Set operations on cardinality
-
-`ThetaSketch` estimates distinct counts like `HyperLogLogPlus`, and unlike it can
-**intersect**.
+A payload records **which** hash was in use. Reading one written under a hash you set with
+`SetHash` requires you to supply the same function:
 
 ```C#
-var a = new ThetaSketch(nominalEntries: 16384);
-var b = new ThetaSketch(nominalEntries: 16384);
-
-ulong both   = a.Intersect(b).Count();
-ulong either = a.Union(b).Count();
-ulong onlyA  = a.Difference(b).Count();
+var filter = BloomFilter.ReadFrom(file, myHashFunction);
 ```
 
-**Reach for `HyperLogLogPlus` unless you need that.** At comparable accuracy the theta
-sketch costs sixteen times the memory, measured over five streams of a million items:
+Without it the read fails, deliberately — see above for what a filter restored under the
+wrong hash looks like.
 
-| | bytes | error |
-| --- | --- | --- |
-| `HyperLogLogPlus` p=14 | **16,384** | 0.43% |
-| `ThetaSketch` k=16384 | 262,144 | 0.37% |
-| `ThetaSketch` k=4096 | 65,536 | 0.78% |
+### Merging
 
-What it buys is the question two cardinality estimators cannot answer. "How many were in
-both" can be forced out of them by inclusion-exclusion — `|A| + |B| - |A ∪ B|` — and the
-answer is worthless when the intersection is small, because each of those three terms
-carries an error proportional to sets far larger than the number being estimated, and the
-errors do not cancel.
-
-Two sets of 200,000 sharing 500, mean absolute error over five trials:
-
-| | error | true answer |
-| --- | --- | --- |
-| `ThetaSketch.Intersect` | **38** | 500 |
-| `HyperLogLogPlus` inclusion-exclusion | 1,947 | 500 |
-
-The direct estimate is off by 8%. The arithmetic is off by four times the answer.
-
-Read the error on an intersection carefully even so: it scales with the size of the sets
-rather than the size of the intersection, so a small enough intersection between large
-enough sets is still beyond reach. It is better arithmetic, not a different kind of
-answer.
-
-Counts are exact while the sketch is holding fewer values than it retains, as with the
-sparse form of `HyperLogLogPlus`.
-
-## Distinct counts
-
-`HyperLogLogPlus` estimates how many distinct items a stream held. It sits alongside
-`HyperLogLog` rather than replacing it — replacing it would change the number an existing
-estimator answers with, including one read back from a payload written years ago.
+Structures built separately can be combined, which is what lets you build them across
+shards or machines and put them together at the end:
 
 ```C#
-var estimator = new HyperLogLogPlus(precision: 14);   // 2^14 registers, ~0.81% error
-foreach (var item in stream) estimator.Add(item);
-
-ulong distinct = estimator.Count();
+var merged = shardA.Merge(shardB).Merge(shardC);
 ```
 
-Three things differ from `HyperLogLog`:
+Available on `BloomFilter`, `BloomFilter64`, `PartitionedBloomFilter`,
+`CountingBloomFilter`, `CountMinSketch`, `HyperLogLog`, `HyperLogLogPlus`, `DDSketch`,
+`QuotientFilter` and `TopK`. `ThetaSketch` combines through `Union`, `Intersect` and
+`Difference` instead, since union is only one of the three things it does.
 
-**The whole 64-bit hash is used.** The older estimator keeps only the low 32 bits, so
-items whose hashes agree there are one item as far as it can tell. That is not a tail
-risk: hashing consecutive integers finds a colliding pair within 67,297 of them, and at
-a hundred million items the resulting undercount is systematic and no number of registers
-fixes it.
+Both structures must have the same dimensions **and the same hash function**. A merge of
+two that hash differently is refused, because the result would answer confidently about
+positions neither of them meant.
 
-**Small counts are exact.** Below the point where registers would be cheaper, the
-estimator keeps the hashes themselves. Ten distinct items is `10`, not an estimate near
-it — and takes 107 bytes rather than 16 KB.
+Not available on `InverseBloomFilter` (a slot holds one element, so a merge would have to
+choose between them), `StableBloomFilter` (its contents are a function of the order things
+arrived in), `CuckooBloomFilter` (a fingerprint only means anything relative to the bucket
+it landed in — use `QuotientFilter` if you need this) or `BinaryFuseFilter` (its whole set
+is solved for at construction).
 
-**There is no bad band.** The older estimator switches from linear counting to the raw
-estimate at 2.5m, and is at its worst where it changes over. Mean absolute error over 20
-independent streams at 2^14 registers, against a nominal 0.81%:
+Two caveats worth knowing before you rely on it:
 
-| items | `HyperLogLog` | `HyperLogLogPlus` |
-| --- | --- | --- |
-| 2.00 m | 0.61% | 0.60% |
-| **2.50 m** | **2.44%** | **0.65%** |
-| 2.75 m | 1.53% | 0.69% |
-| 3.00 m | 1.04% | 0.70% |
-| 4.00 m | 0.62% | 0.65% |
+- For the Bloom family, a merged filter's `Count()` is the **sum** of its inputs', which
+  overstates the union whenever they shared elements. The bits are correct; the counter is
+  a count of additions, not of distinct items. `HyperLogLog`, `HyperLogLogPlus` and
+  `ThetaSketch` estimate the true union instead.
+- `TopK.Merge` is approximate in a way the others are not: two sketches can disagree about
+  what was frequent, and the merged top-k can miss an element that was genuinely in the
+  top-k of the union. See the notes on `TopK` below.
 
-The spike is a systematic overestimate rather than noise. It is what HyperLogLog++ was
-written to correct, and this corrects it without the paper's tables of measured bias —
-see [the class documentation](ProbabilisticDataStructures/HyperLogLogPlus.cs) for what
-it does instead.
+### Reproducibility
 
-## Quantiles
-
-`DDSketch` answers what a stream of numbers looks like — the median, the p99, the shape
-of the tail.
-
-```C#
-var sketch = new DDSketch(0.01);
-foreach (var latency in latencies) sketch.Add(latency);
-
-double p99 = sketch.Quantile(0.99);   // within 1% of the true p99
-```
-
-Its guarantee is on the **value**, not the rank: `Quantile(0.99)` comes back within 1% of
-the real 99th percentile. That is the guarantee latency measurement wants — "within 1% of
-the truth" rather than "within 1% of the right rank", which says nothing about how wrong
-the number is when the tail is steep.
-
-Nothing about it is probabilistic. The counts are exact and the buckets are exact ranges,
-so the only error is a bucket's width, and the accuracy is a hard bound rather than an
-expectation. `Merge` is exact too: merging two sketches gives the sketch that would have
-been built from both streams.
-
-Negative values and zero are fine. `Min()` and `Max()` are exact rather than bucketed.
-Memory grows with the *logarithm* of the dynamic range — a stream spanning 10^-120 to
-10^120 fits in well under a megabyte.
-
-It is the only structure here that takes numbers rather than bytes, and so the only one
-that never hashes: there is no `SetHash`, and its payload records that it uses no hash
-rather than naming one.
-
-## Static sets
-
-`BinaryFuseFilter` is the one filter here whose set is fixed when it is built. There is
-no `Add`, and there cannot be: constructing it solves a system of equations over the
-whole set at once.
-
-```C#
-var filter = BinaryFuseFilter.Build(items);          // 0.39%, one byte per entry
-var filter = BinaryFuseFilter.Build(items, 0.001);   // widened to meet the rate
-bool maybe = filter.Test(item);
-```
-
-What the constraint buys, measured over a million keys against a `BloomFilter` at the
-same false positive rate:
-
-| | binary fuse | Bloom |
-| --- | --- | --- |
-| bits per entry | **9.04** | 11.54 |
-| lookup | **5.4 ns** | 50.5 ns |
-| measured false positive rate | 0.384% | — |
-
-Three memory accesses and a single hash, against a loop over eight hash functions. Use
-it for a set you know in full — a blocklist, a shipped index, a compiled artifact — and
-one of the others for a set you are still adding to.
-
-The false positive rate is fixed by the fingerprint width rather than chosen freely:
-`BinaryFuseWidth.Eight` gives 2^-8 and `Sixteen` gives 2^-16. Passing a target rate
-picks the narrower width that meets it, so the rate delivered is never worse than the
-one asked for.
-
-Builds are deterministic: the same set gives the same bytes, so a filter can be shipped
-as a build artifact.
-
-## Reproducibility
-
-`StableBloomFilter` and `CuckooBloomFilter` make random choices as part of what they are:
-the first decrements randomly chosen cells to make room, the second evicts a randomly
-chosen entry when both of an item's buckets are full. Both accept a seed:
+`StableBloomFilter` and `CuckooBloomFilter` make random choices as part of what they are.
+Both accept a seed:
 
 ```C#
 var filter = new StableBloomFilter(10000, 2, 0.01, seed: 42);
 ```
 
-Omitting it seeds unpredictably. Every other structure here is already deterministic
-given its inputs.
+Omitting it seeds unpredictably. Every other structure is already deterministic given its
+inputs — including `BinaryFuseFilter`, whose construction retries with new seeds internally
+but from a fixed sequence, so the same set always builds the same filter and can be shipped
+as a build artifact.
 
 A seeded filter stays reproducible across serialization: both store their generator's
-position, so a filter read back resumes the sequence it was partway through rather than
-restarting it. That matters most for a filter checkpointed on a schedule, which would
-otherwise replay the same choices after every load. See
-[FORMAT.md](FORMAT.md#the-random-generators-state).
+position, so a filter read back resumes the sequence rather than restarting it. That
+matters most for a filter checkpointed on a schedule, which would otherwise replay the same
+choices after every load. The sequence a given seed produces changed in 6.0.0, when these
+filters moved off `System.Random` — which will not report its position and so cannot be
+stored.
 
-The sequence a given seed produces changed in 6.0.0, when these filters moved off
-`System.Random` — which will not report its position, and so cannot be stored. A seed is
-as reproducible as it ever was; it produces different numbers than it did in 4.x and 5.x.
+### Thread safety
 
-## Thread safety
+**None of these are thread-safe.** No operation is synchronized, including read-only ones.
+`Test` is not safe to call concurrently with `Add`: the structures mutate their arrays in
+place.
 
-**None of the filters in this library are thread-safe.** No operation is synchronized,
-including read-only ones.
-
-This is deliberate and matches the Go implementation this library is a port of. Adding
-locks would impose a cost on the single-threaded case, which is the common one, and the
-right granularity depends on the caller's access pattern rather than the filter's.
-
-`Test` is not safe to call concurrently with `Add` or `TestAndAdd`: the filters mutate
-their bucket arrays in place, without synchronization.
-
-If you need concurrent access, synchronize externally:
+This is deliberate. Locking would cost the single-threaded case, which is the common one,
+and the right granularity depends on your access pattern rather than the structure's.
+Synchronize externally:
 
 ```C#
 private readonly object _gate = new object();
@@ -442,593 +246,469 @@ private readonly BloomFilter _filter = new BloomFilter(100000, 0.01);
 
 public bool Contains(byte[] data)
 {
-    lock (_gate)
-    {
-        return _filter.Test(data);
-    }
+    lock (_gate) { return _filter.Test(data); }
 }
 ```
 
-Concurrent `Test` calls are safe against each other under the default hashing, which is
-a pure function over the input, so a reader-writer lock is enough if you supply no hash
-of your own. A hash function passed to `SetHash` is shared by every call, so one holding
-mutable state -- a reused `HashAlgorithm` instance, for example -- takes that away.
+Concurrent `Test` calls are safe against each other under the default hash, which is a pure
+function, so a reader-writer lock is enough. A hash passed to `SetHash` is shared by every
+call, so one holding mutable state — a reused `HashAlgorithm`, say — takes that away.
+
+---
+
+## Membership
+
+Eleven structures answer "have I seen this?". They differ in what they do besides.
+
+All of them may report a false positive. Only two — `StableBloomFilter` and
+`InverseBloomFilter` — can report a false **negative**, and both say so prominently below,
+because it inverts the guarantee everything else here makes.
+
+### `BloomFilter`
+
+The classic one, and the right default. A bit array and *k* hash functions.
+
+**Reach for it when** you know roughly how many items you'll hold, you need membership and
+nothing else, and you never remove anything. Deduplicating a batch, guarding an expensive
+lookup, checking a blocklist you rebuild rather than edit.
+
+**Look elsewhere if** you need to delete (`CuckooBloomFilter`), the set is fixed forever
+(`BinaryFuseFilter` is smaller *and* ten times faster), you don't know the size
+(`ScalableBloomFilter`), or the stream is unbounded (`StableBloomFilter`).
+
+```C#
+var filter = new BloomFilter(10000, 0.01);
+filter.Add(bytes);
+bool seen = filter.Test(bytes);
+bool wasAlreadyThere = filter.TestAndAdd(bytes);
+```
+
+### `BloomFilter64`
+
+The same structure with 64-bit sizing throughout.
+
+**Reach for it when** the filter needs more than about 4 billion bits — roughly 500 million
+items at 1%. `BloomFilter` sizes with 32-bit arithmetic and cannot address past that.
+
+**Look elsewhere otherwise.** Below that ceiling it is the same filter with wider
+arithmetic, so `BloomFilter` is the plainer choice.
+
+### `PartitionedBloomFilter`
+
+A classic Bloom filter that gives each hash function its own slice of the bit array rather
+than sharing one.
+
+**Reach for it when** you want each hash to touch a disjoint region — which makes the fill
+level per partition uniform and is useful if you are reasoning about or parallelising over
+the array directly.
+
+**Look elsewhere if** you just want a Bloom filter. At the same size and *k* it is very
+slightly worse on false positives than the unpartitioned form, and the difference in
+practice is small enough that `BloomFilter` is the simpler choice.
+
+### `CountingBloomFilter`
+
+A Bloom filter whose bits are small counters, so removal is possible.
+
+**Reach for it when** you need to remove things and want the removal to always work.
+
+**Look elsewhere if** you never remove — plain `BloomFilter` is four to eight times
+smaller for the same rate, since every bit becomes a counter. Or if you need removal *and*
+merging at lower memory, in which case `QuotientFilter`.
+
+A counter that saturates stops being decrementable, so an element added far more often than
+the counter width allows may not be fully removable.
+
+```C#
+var filter = new CountingBloomFilter(10000, 4, 0.01);
+filter.Add(bytes);
+bool removed = filter.TestAndRemove(bytes);
+```
+
+### `DeletableBloomFilter`
+
+Deletion without counters, by tracking which regions of the filter are collision-free and
+only clearing bits it knows are safe.
+
+**Reach for it when** you need *some* deletion at close to a plain Bloom filter's memory,
+and can tolerate that a particular deletion may be refused.
+
+**Look elsewhere if** every deletion has to succeed — `CountingBloomFilter` or
+`CuckooBloomFilter`.
+
+Described by Rothenberg, Macapuna, Verdi and Magalhaes in
+[The Deletable Bloom filter](https://arxiv.org/pdf/1005.0352.pdf).
+
+### `CuckooBloomFilter`
+
+Fingerprints in a table with two candidate buckets per item, relocating entries to make
+room.
+
+**Reach for it when** you need membership plus deletion and want the best space and speed
+for it. This is the default choice for a deletable filter.
+
+**Look elsewhere if** you need to merge two filters (`QuotientFilter` — a cuckoo
+fingerprint only means anything relative to its bucket, so two of them cannot be combined),
+or the set is static (`BinaryFuseFilter`).
+
+Inserts can fail when the filter is nearly full: relocation gives up after a bounded number
+of attempts, and `Add` returns `false`. That is an expected outcome rather than an error,
+and worth handling.
+
+Described by Fan, Andersen, Kaminsky and Mitzenmacher in
+[Cuckoo Filter: Practically Better Than Bloom](https://www.cs.cmu.edu/~dga/papers/cuckoo-conext2014.pdf).
+
+### `QuotientFilter`
+
+Fingerprints in a compact table with three metadata bits per slot, which is enough to
+recover each entry's full fingerprint.
+
+**Reach for it when** you need to delete **and** merge. That combination is the only reason
+to choose it.
+
+**Look elsewhere otherwise.** Against a cuckoo filter it is slightly larger, faster on
+misses, slower on hits, and worse at the same nominal rate. If you don't need merging, use
+`CuckooBloomFilter`.
+
+Memory per item is not a single number: the table is a power of two and is sized to stay
+under 75% load, so where `n` falls decides it. 13.4 bits/item at n = 98,000, and 26.2 at
+n = 100,000, for the sake of 2,000 items. Size accordingly if it matters.
+
+Every addition is stored, including a repeat, so it takes as many removals to empty an item
+out as it took additions to put it in. Collapsing repeats would mean collapsing two
+different items whose fingerprints agree, and removing either would then make the filter
+answer no for the other.
+
+Described by Bender et al. in
+[Don't Thrash: How to Cache Your Hash on Flash](https://www.vldb.org/pvldb/vol5/p1627_michaelabender_vldb2012.pdf).
+
+### `BinaryFuseFilter`
+
+A filter for a set known in full at construction. There is no `Add` and there cannot be —
+building it solves a system of equations over the whole set at once.
+
+**Reach for it when** the set is fixed: a blocklist, a shipped index, a compiled artifact.
+It is the smallest and by far the fastest membership structure here.
+
+**Look elsewhere if** anything gets added later. Nothing can.
+
+```C#
+var filter = BinaryFuseFilter.Build(items);          // 0.39%, one byte per entry
+var tighter = BinaryFuseFilter.Build(items, 0.001);  // widened to meet the rate
+bool maybe = filter.Test(item);
+```
+
+Measured against a `BloomFilter` sized for **the same 0.39% rate**, over a million keys:
+**9.04 bits/item against 11.54**, and **5.4 ns lookups against 50.5 ns** — three memory
+accesses and one hash, against a loop over eight hash functions.
+
+That is a different comparison from the table above, which sized every structure for a 1%
+*target*. Matched on target they are the same size and the fuse filter is simply more
+accurate; matched on delivered accuracy it is 22% smaller. Both are true and neither is the
+whole picture, which is why both are here.
+
+The rate comes from fingerprint width rather than being chosen freely:
+`BinaryFuseWidth.Eight` gives 2⁻⁸ and `Sixteen` gives 2⁻¹⁶. A target rate picks the
+narrower width that meets it; a rate no width can reach is refused rather than quietly
+capped. Builds are deterministic, so a filter can ship as a build artifact.
+
+From Graf and Lemire,
+[Binary Fuse Filters](https://arxiv.org/abs/2201.01174).
+
+### `ScalableBloomFilter`
+
+Adds new filters with geometrically tightening rates as it fills, so it grows to fit
+whatever arrives.
+
+**Reach for it when** you genuinely don't know how large the set will be and memory is not
+bounded.
+
+**Look elsewhere if** memory *is* bounded — `StableBloomFilter` or `InverseBloomFilter`
+hold a ceiling. Or if you do know the size, since a correctly sized `BloomFilter` is
+smaller than a scalable one that grew into the same capacity.
+
+Described by Almeida, Baquero, Preguiça and Hutchison in
+[Scalable Bloom Filters](https://haslab.uminho.pt/cbm/files/dbloom.pdf).
+
+### `StableBloomFilter`
+
+Continuously evicts old information to make room for new, so it holds a bounded amount of
+the *recent* past.
+
+**Reach for it when** the stream never ends, memory is fixed, and what matters is whether
+you saw something recently — deduplicating an unbounded event stream, for instance.
+
+**Look elsewhere if you cannot tolerate false negatives.** This is the important one: a
+stable filter forgets, so it will eventually say no about something it did see. In exchange
+its false positive rate converges to a fixed constant instead of climbing to 1 the way a
+saturated classic filter's does.
+
+```C#
+var filter = StableBloomFilter.NewDefaultStableBloomFilter(10000, 0.01);
+Console.WriteLine(filter.StablePoint());   // the rate it converges to
+```
+
+Described by Deng and Rafiei in
+[Approximately Detecting Duplicates for Streaming Data using Stable Bloom Filters](https://webdocs.cs.ualberta.ca/~drafiei/papers/DupDet06Sigmod.pdf).
+
+### `InverseBloomFilter`
+
+"The opposite of a Bloom filter": it may report a false **negative**, and never a false
+positive. A fixed-size hash map that does not handle conflicts.
+
+**Reach for it when** a false positive would be costly and duplicates in your stream tend
+to arrive close together. If it says it has seen something, it has.
+
+**Look elsewhere if** you need to remember things seen long ago — a later item hashing to
+the same slot simply overwrites the earlier one.
+
+[Originally described by Jeff Hodges](https://www.somethingsimilar.com/2012/05/21/the-opposite-of-a-bloom-filter/).
+Hodges' original swaps the stored value atomically; this implementation reads and writes in
+two steps, so concurrent use can lose or tear an entry. See
+[Thread safety](#thread-safety).
+
+---
+
+## Cardinality
+
+### `HyperLogLogPlus`
+
+How many distinct things a stream held. Use this one.
+
+**Reach for it when** you want a distinct count over anything large. It is the most
+accurate and most compact option here for that question.
+
+**Look elsewhere if** you need to intersect two of them (`ThetaSketch`), or you need the
+exact answer, which no sketch gives.
+
+```C#
+var estimator = new HyperLogLogPlus(precision: 14);   // 2^14 registers, ~0.81% error
+foreach (var item in stream) estimator.Add(item);
+ulong distinct = estimator.Count();
+```
+
+Three things differ from `HyperLogLog`:
+
+- **The whole 64-bit hash is used.** The older estimator keeps only the low 32 bits, so
+  items whose hashes agree there are one item as far as it can tell. Hashing consecutive
+  integers finds such a pair within 67,297 of them.
+- **Small counts are exact**, because it keeps the hashes themselves until registers would
+  be cheaper. Ten distinct items is `10`, in 107 bytes rather than 16 KB.
+- **There is no bad band.** The older estimator switches from linear counting to the raw
+  estimate at 2.5*m* and is at its worst where it changes over — 2.44% mean error there
+  against a nominal 0.81%, staying above nominal until about 4*m*. This holds 0.6–0.7%
+  straight through.
+
+It uses Ertl's estimator rather than HyperLogLog++'s tables of measured bias. The two were
+[measured against each other](Benchmarks/README.md#accuracy-studies) and tie, so the
+tie-breaker is that one is forty lines and the other is six thousand numbers.
+
+### `HyperLogLog`
+
+The original, kept because replacing it would change the number an existing estimator
+answers with — including one read back from a payload written years ago.
+
+**Reach for it when** you have stored `HyperLogLog` payloads to read, or need answers that
+match what earlier versions gave.
+
+**Look elsewhere for new work.** Use `HyperLogLogPlus`.
+
+Described by Flajolet, Fusy, Gandouet and Meunier in
+[HyperLogLog](http://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf).
+
+### `ThetaSketch`
+
+Distinct counts that support union, intersection and difference.
+
+**Reach for it when** you need to ask "how many were in **both**". That is a question two
+cardinality estimators cannot answer between them.
+
+**Look elsewhere for plain counting.** At comparable accuracy it costs sixteen times
+`HyperLogLogPlus`: 262,144 bytes at 0.37% against 16,384 at 0.43%, over a million items.
+It is a trade, not an upgrade.
+
+```C#
+ulong both   = a.Intersect(b).Count();
+ulong either = a.Union(b).Count();
+ulong onlyA  = a.Difference(b).Count();
+```
+
+Inclusion–exclusion on two cardinality estimators — `|A| + |B| − |A ∪ B|` — is the usual
+workaround and it is worthless when the intersection is small, because each term carries an
+error proportional to sets far larger than the number being estimated, and the errors do not
+cancel. Two sets of 200,000 sharing 500, mean absolute error over five trials:
+
+| | error | true answer |
+| --- | --- | --- |
+| `ThetaSketch.Intersect` | **38** | 500 |
+| inclusion–exclusion | 1,947 | 500 |
+
+Read the error on an intersection carefully even so: it scales with the size of the *sets*
+rather than the intersection, so a small enough intersection between large enough sets is
+still beyond reach. It is better arithmetic, not a different kind of answer.
+
+Counts are exact while the sketch holds fewer values than it retains.
+
+---
+
+## Frequency
+
+### `CountMinSketch`
+
+How often a particular thing has been seen.
+
+**Reach for it when** you want per-item frequencies over a stream too large to keep counts
+for, and you want a bound that **never undercounts**. That one-sided error is the point: if
+the count feeds a threshold nothing may slip under, this is the structure that guarantees it.
+
+**Look elsewhere if** you want an unbiased estimate rather than an upper bound, or need to
+subtract — Count-Min is biased high and cannot meaningfully decrement. (A Count Sketch would
+cover that; see [#77](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/77).)
+
+```C#
+var sketch = new CountMinSketch(epsilon: 0.001, delta: 0.01);
+sketch.Add(bytes);
+ulong count = sketch.Count(bytes);
+```
+
+Described by Cormode and Muthukrishnan in
+[An Improved Data Stream Summary](http://dimacs.rutgers.edu/~graham/pubs/papers/cm-full.pdf).
+
+### `TopK`
+
+The most frequent elements, kept as a running ranking.
+
+**Reach for it when** you want the heavy hitters themselves — top paths, top talkers, top
+search terms — rather than the frequency of something you already have in hand.
+
+**Look elsewhere if** you need the count of a *specific* item, which is `CountMinSketch`
+directly, or exact ranking, which this does not give.
+
+```C#
+var topK = new TopK(0.001, 0.99, k: 25);
+topK.Add(bytes);
+Element[] top = topK.Elements();
+```
+
+**Merging is approximate here in a way it is not elsewhere.** Two sketches can disagree
+about what was frequent, and an element genuinely in the top-k of the union can be missing
+from both inputs' top-k and therefore from the merge. Merging shards is still useful; it is
+not exact.
+
+---
+
+## Similarity
+
+Two structures, two different questions. Picking by whichever you found first will give you
+the wrong one.
+
+**`MinHash` answers about sets** — how much do these two collections overlap, by Jaccard
+resemblance. **`SimHash` answers about documents** — how alike are these two weighted term
+vectors, by cosine similarity, where a term repeated often counts for more.
+
+One input where they disagree completely: a document of 40 "apple" and 2 "banana" against
+one of 2 "apple" and 40 "banana". Same *set*, so MinHash calls them identical — correctly,
+for its question. SimHash calls them unrelated — correctly, for its.
+
+### `MinHash`
+
+**Reach for it when** the things you're comparing are genuinely sets and repetition should
+not count: tags, shingles, feature sets, permissions.
+
+**Look elsewhere if** frequency matters (`SimHash`), or you need to store many signatures —
+a k=128 signature is 1,046 bytes against SimHash's 26.
+
+```C#
+float resemblance = MinHash.Similarity(bagA, bagB);          // exact Jaccard
+MinHashSignature signature = MinHash.Signature(bag, k: 128); // storable, comparable
+float estimate = MinHash.Similarity(signatureA, signatureB);
+```
+
+`Similarity(string[], string[])` computes exact Jaccard on the two bags. The signature
+overload estimates it, with error falling as `k` rises — that is the one to use when
+comparing many documents or storing anything.
+
+### `SimHash`
+
+One 64-bit fingerprint per document, compared by Hamming distance.
+
+**Reach for it when** you're finding near-duplicate *documents* at scale and need the index
+to fit. 26 bytes stored, 19.5 ns to compare.
+
+**Look elsewhere if** you need to rank moderately similar documents against each other.
+Sixty-four bits distinguishes a near-duplicate from a different document — the job — and is
+loose in the middle:
+
+| shared terms | true cosine | estimated |
+| --- | --- | --- |
+| 95% | 0.95 | **0.97** |
+| 90% | 0.90 | **0.90** |
+| 80% | 0.80 | 0.74 |
+| 50% | 0.50 | 0.67 |
+
+Threshold on Hamming distance — a handful of differing bits means near-duplicate — rather
+than treating the similarity as a measurement. A slightly negative similarity means
+unrelated rather than opposite: term vectors are non-negative, so a true cosine below zero
+is impossible and the value is noise around it.
+
+```C#
+var a = SimHash.Signature(termsOfDocumentA);
+int differingBits = SimHash.HammingDistance(a, b);
+float similarity = SimHash.Similarity(a, b);
+```
+
+From Charikar,
+[Similarity Estimation Techniques from Rounding Algorithms](https://dl.acm.org/doi/10.1145/509907.509965).
+
+> **Both are still O(n²) to search.** Neither ships an index, so finding near-duplicates
+> among a million documents is a trillion comparisons. That gap is tracked in
+> [#74](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/74) and is
+> probably the most useful thing left to add.
+
+---
+
+## Distributions
+
+### `DDSketch`
+
+What a stream of numbers looks like: the median, the p99, the shape of the tail.
+
+**Reach for it when** you want quantiles over something too large to sort — latencies,
+sizes, durations.
+
+**Look elsewhere if** you want the exact quantile of something small enough to sort, in
+which case sort it.
+
+```C#
+var sketch = new DDSketch(relativeAccuracy: 0.01);
+foreach (var latency in latencies) sketch.Add(latency);
+
+double p99 = sketch.Quantile(0.99);   // within 1% of the true p99
+```
+
+Its guarantee is on the **value**, not the rank: `Quantile(0.99)` comes back within 1% of
+the real 99th percentile. That is what latency measurement wants — "within 1% of the truth"
+rather than "within 1% of the right rank", which says nothing about how wrong the number is
+when the tail is steep.
+
+Nothing about it is probabilistic. The counts are exact and the buckets are exact ranges, so
+the only error is a bucket's width and the accuracy is a hard bound rather than an
+expectation. `Merge` is exact for the same reason.
+
+Negative values and zero are fine, `Min()` and `Max()` are exact rather than bucketed, and
+memory grows with the *logarithm* of the dynamic range — a stream spanning 10⁻¹²⁰ to 10¹²⁰
+fits in well under a megabyte. It is the only structure here that takes numbers rather than
+bytes, and so the only one that never hashes.
+
+From Masson, Rim and Lee,
+[DDSketch](https://arxiv.org/abs/1908.10693).
+
+---
 
 ## Contributions
-Pull-requests are welcome, but submitting an issue is probably the best place to start if you have complex critiques or suggestions.
 
-## Stable Bloom Filter
+Pull requests are welcome, but opening an issue is probably the best place to start if you
+have a complex critique or suggestion.
 
-This is an implementation of Stable Bloom Filters as described by Deng and Rafiei in [Approximately Detecting Duplicates for Streaming Data using Stable Bloom Filters](http://webdocs.cs.ualberta.ca/~drafiei/papers/DupDet06Sigmod.pdf).
-
-A Stable Bloom Filter (SBF) continuously evicts stale information so that it has room for more recent elements. Like traditional Bloom filters, an SBF has a non-zero probability of false positives, which is controlled by several parameters. Unlike the classic Bloom filter, an SBF has a tight upper bound on the rate of false positives while introducing a non-zero rate of false negatives. The false-positive rate of a classic Bloom filter eventually reaches 1, after which all queries result in a false positive. The stable-point property of an SBF means the false-positive rate asymptotically approaches a configurable fixed constant. A classic Bloom filter is actually a special case of SBF where the eviction rate is zero and the cell size is one, so this provides support for them as well (in addition to bitset-based Bloom filters).
-
-Stable Bloom Filters are useful for cases where the size of the data set isn't known a priori and memory is bounded. For example, an SBF can be used to deduplicate events from an unbounded event stream with a specified upper bound on false positives and minimal false negatives.
-
-### Usage
-
-```C#
-using System;
-using System.Text;
-using ProbabilisticDataStructures;
-
-namespace FilterExample
-{
-    class Example
-    {
-        static void Main()
-        {
-            byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
-            byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
-
-            var sbf = StableBloomFilter.NewDefaultStableBloomFilter(10000, 0.01);
-            Console.WriteLine(string.Format("stable point: {0}", sbf.StablePoint()));
-
-            sbf.Add(A_BYTES);
-            if (sbf.Test(A_BYTES))
-            {
-                Console.WriteLine("contains a");
-            }
-
-            if (!sbf.TestAndAdd(B_BYTES))
-            {
-                Console.WriteLine("doesn't contain b");
-            }
-
-            if (sbf.Test(B_BYTES))
-            {
-                Console.WriteLine("now it contains b!");
-            }
-        }
-    }
-}
-```
-
-## Scalable Bloom Filter
-
-This is an implementation of a Scalable Bloom Filter as described by Almeida, Baquero, Preguica, and Hutchison in [Scalable Bloom Filters](http://gsd.di.uminho.pt/members/cbm/ps/dbloom.pdf).
-
-A Scalable Bloom Filter (SBF) dynamically adapts to the size of the data set while enforcing a tight upper bound on the rate of false positives and a false-negative probability of zero. This works by adding Bloom filters with geometrically decreasing false-positive rates as filters become full. A tightening ratio, r, controls the filter growth. The compounded probability over the whole series converges to a target value, even accounting for an infinite series.
-
-Scalable Bloom Filters are useful for cases where the size of the data set isn't known a priori and memory constraints aren't of particular concern. For situations where memory is bounded, consider using Inverse or Stable Bloom Filters.
-
-### Usage
-
-```C#
-using System;
-using System.Text;
-using ProbabilisticDataStructures;
-
-namespace FilterExample
-{
-    class Example
-    {
-        static void Main()
-        {
-            byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
-            byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
-
-            var sbf = ScalableBloomFilter.NewDefaultScalableBloomFilter(0.01);
-
-            sbf.Add(A_BYTES);
-            if (sbf.Test(A_BYTES))
-            {
-                Console.WriteLine("contains a");
-            }
-
-            if (!sbf.TestAndAdd(B_BYTES))
-            {
-                Console.WriteLine("doesn't contain b");
-            }
-
-            if (sbf.Test(B_BYTES))
-            {
-                Console.WriteLine("now it contains b!");
-            }
-        }
-    }
-}
-```
-
-## Inverse Bloom Filter
-
-An Inverse Bloom Filter, or "the opposite of a Bloom filter", is a probabilistic data structure used to test whether an item has been observed or not. It was [originally described and written by Jeff Hodges](http://www.somethingsimilar.com/2012/05/21/the-opposite-of-a-bloom-filter/).
-
-The Inverse Bloom Filter may report a false negative but can never report a false positive. That is, it may report that an item has not been seen when it actually has, but it will never report an item as seen which it hasn't come across. This behaves in a similar manner to a fixed-size hashmap which does not handle conflicts.
-
-This structure is particularly well-suited to streams in which duplicates are relatively close together.
-
-It is not thread-safe. Jeff Hodges' original swaps the stored value atomically; this implementation reads and writes the slot in two steps, so concurrent use can lose an entry or tear one. See [Thread safety](#thread-safety).
-
-### Usage
-
-```C#
-using System;
-using System.Text;
-using ProbabilisticDataStructures;
-
-namespace FilterExample
-{
-    class Example
-    {
-        static void Main()
-        {
-            byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
-            byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
-
-            var ibf = new InverseBloomFilter(10000);
-
-            ibf.Add(A_BYTES);
-            if (ibf.Test(A_BYTES))
-            {
-                Console.WriteLine("contains a");
-            }
-
-            if (!ibf.TestAndAdd(B_BYTES))
-            {
-                Console.WriteLine("doesn't contain b");
-            }
-
-            if (ibf.Test(B_BYTES))
-            {
-                Console.WriteLine("now it contains b!");
-            }
-        }
-    }
-}
-```
-
-## Counting Bloom Filter
-
-This is an implementation of a Counting Bloom Filter as described by Fan, Cao, Almeida, and Broder in [Summary Cache: A Scalable Wide-Area Web Cache Sharing Protocol](http://pages.cs.wisc.edu/~jussara/papers/00ton.pdf).
-
-A Counting Bloom Filter (CBF) provides a way to remove elements by using an array of n-bit buckets. When an element is added, the respective buckets are incremented. To remove an element, the respective buckets are decremented. A query checks that each of the respective buckets are non-zero. Because CBFs allow elements to be removed, they introduce a non-zero probability of false negatives in addition to the possibility of false positives.
-
-Counting Bloom Filters are useful for cases where elements are both added and removed from the data set. Since they use n-bit buckets, CBFs use roughly n-times more memory than traditional Bloom filters.
-
-See [Deletable Bloom Filter](https://github.com/mattlorimor/ProbabilisticDataStructures#deletable-bloom-filter) for an alternative which avoids false negatives.
-
-### Usage
-
-```C#
-using System;
-using System.Text;
-using ProbabilisticDataStructures;
-
-namespace FilterExample
-{
-    class Example
-    {
-        static void Main()
-        {
-            byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
-            byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
-
-            var cbf = CountingBloomFilter.NewDefaultCountingBloomFilter(1000, 0.01);
-
-            cbf.Add(A_BYTES);
-            if (cbf.Test(A_BYTES))
-            {
-                Console.WriteLine("contains a");
-            }
-
-            if (!cbf.TestAndAdd(B_BYTES))
-            {
-                Console.WriteLine("doesn't contain b");
-            }
-
-            if (cbf.TestAndRemove(B_BYTES))
-            {
-                Console.WriteLine("removed b");
-            }
-        }
-    }
-}
-```
-
-## Cuckoo Filter
-
-This is an implementation of a Cuckoo Filter as described by Andersen, Kaminsky, and Mitzenmacher in [Cuckoo Filter: Practically Better Than Bloom](http://www.pdl.cmu.edu/PDL-FTP/FS/cuckoo-conext2014.pdf). The Cuckoo Filter is similar to the Counting Bloom Filter in that it supports adding and removing elements, but it does so in a way that doesn't significantly degrade space and performance.
-
-It works by using a cuckoo hashing scheme for inserting items. Instead of storing the elements themselves, it stores their fingerprints which also allows for item removal without false negatives (if you don't attempt to remove an item not contained in the filter).
-
-For applications that store many items and target moderately low false-positive rates, cuckoo filters have lower space overhead than space-optimized Bloom filters.
-
-### Usage
-
-```C#
-using System;
-using System.Text;
-using ProbabilisticDataStructures;
-
-namespace FilterExample
-{
-    class Example
-    {
-        static void Main()
-        {
-            byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
-            byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
-
-            var cf = new CuckooBloomFilter(1000, 0.01);
-
-            cf.Add(A_BYTES);
-            if (cf.Test(A_BYTES))
-            {
-                Console.WriteLine("contains a");
-            }
-
-            if (!cf.TestAndAdd(B_BYTES).WasAlreadyAMember)
-            {
-                Console.WriteLine("doesn't contain b");
-            }
-
-            if (cf.TestAndRemove(B_BYTES))
-            {
-                Console.WriteLine("removed b");
-            }
-        }
-    }
-}
-```
-
-## Classic Bloom Filter
-
-A classic Bloom filter is a special case of a Stable Bloom Filter whose eviction rate is zero and cell size is one. We call this special case an Unstable Bloom Filter. Because cells require more memory overhead, this package also provides two bitset-based Bloom filter variations. The first variation is the traditional implementation consisting of a single bit array. The second implementation is a partitioned approach which uniformly distributes the probability of false positives across all elements.
-
-Bloom filters have a limited capacity, depending on the configured size. Once all bits are set, the probability of a false positive is 1. However, traditional Bloom filters cannot return a false negative.
-
-A Bloom filter is ideal for cases where the data set is known a priori because the false-positive rate can be configured by the size and number of hash functions.
-
-### Usage
-
-```C#
-using System;
-using System.Text;
-using ProbabilisticDataStructures;
-
-namespace FilterExample
-{
-    class Example
-    {
-        static void Main()
-        {
-            byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
-            byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
-
-            var bf = new BloomFilter(1000, 0.01);
-
-            bf.Add(A_BYTES);
-            if (bf.Test(A_BYTES))
-            {
-                Console.WriteLine("contains a");
-            }
-
-            if (!bf.TestAndAdd(B_BYTES))
-            {
-                Console.WriteLine("doesn't contain b");
-            }
-
-            if (bf.Test(B_BYTES))
-            {
-                Console.WriteLine("now it contains b!");
-            }
-        }
-    }
-}
-```
-
-## Deletable Bloom Filter
-
-This is an implementation of a Deletable Bloom Filter as described by Rothenberg, Macapuna, Verdi, and Magalhaes in [The Deletable Bloom filter - A new member of the Bloom family](http://arxiv.org/pdf/1005.0352.pdf).
-
-A Deletable Bloom Filter compactly stores information on collisions when inserting elements. This information is used to determine if elements are deletable. This design enables false-negative-free deletions at a fraction of the cost in memory consumption.
-
-Deletable Bloom Filters are useful for cases which require removing elements but cannot allow false negatives. This means they can be safely swapped in place of traditional Bloom filters.
-
-The `r` constructor parameter sets how many bits are used to store collision information, which controls how deletable elements are. Refer to the paper when selecting a value.
-
-### Usage
-
-```C#
-using System;
-using System.Text;
-using ProbabilisticDataStructures;
-
-namespace FilterExample
-{
-    class Example
-    {
-        static void Main()
-        {
-            byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
-            byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
-
-            var dbf = new DeletableBloomFilter(1000, 20, 0.01);
-
-            dbf.Add(A_BYTES);
-            if (dbf.Test(A_BYTES))
-            {
-                Console.WriteLine("contains a");
-            }
-
-            // TestAndRemove returns whether the element was a member before removal.
-            // Removal only happens when the element's bits are not in a colliding
-            // region, which is what keeps deletions free of false negatives.
-            if (dbf.TestAndRemove(A_BYTES))
-            {
-                Console.WriteLine("removed a");
-            }
-
-            if (!dbf.Test(B_BYTES))
-            {
-                Console.WriteLine("doesn't contain b");
-            }
-        }
-    }
-}
-```
-
-## Partitioned Bloom Filter
-
-This is an implementation of a partitioned Bloom filter, a variation of the classic Bloom filter described by Almeida, Baquero, Preguica, and Hutchison in [Scalable Bloom Filters](http://gsd.di.uminho.pt/members/cbm/ps/dbloom.pdf).
-
-This filter works by partitioning the M-sized bit array into k slices of size m = M/k bits. Each hash function produces an index over m for its respective slice. Thus, each element is described by exactly k bits, meaning the distribution of false positives is uniform across all elements.
-
-### Usage
-
-```C#
-using System;
-using System.Text;
-using ProbabilisticDataStructures;
-
-namespace FilterExample
-{
-    class Example
-    {
-        static void Main()
-        {
-            byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
-            byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
-
-            var pbf = new PartitionedBloomFilter(1000, 0.01);
-
-            pbf.Add(A_BYTES);
-            if (pbf.Test(A_BYTES))
-            {
-                Console.WriteLine("contains a");
-            }
-
-            if (!pbf.TestAndAdd(B_BYTES))
-            {
-                Console.WriteLine("doesn't contain b");
-            }
-
-            if (pbf.Test(B_BYTES))
-            {
-                Console.WriteLine("now contains b");
-            }
-        }
-    }
-}
-```
-
-## Count-Min Sketch
-
-This is an implementation of a Count-Min Sketch as described by Cormode and Muthukrishnan in [An Improved Data Stream Summary: The Count-Min Sketch and its Applications](http://dimacs.rutgers.edu/~graham/pubs/papers/cm-full.pdf).
-
-A Count-Min Sketch (CMS) is a probabilistic data structure which approximates the frequency of events in a data stream. Unlike a hash map, a CMS uses sub-linear space at the expense of a configurable error factor. Similar to Counting Bloom filters, items are hashed to a series of buckets, which increment a counter. The frequency of an item is estimated by taking the minimum of each of the item's respective counter values.
-
-Count-Min Sketches are useful for counting the frequency of events in massive data sets or unbounded streams online. In these situations, storing the entire data set or allocating counters for every event in memory is impractical. It may be possible for offline processing, but real-time processing requires fast, space-efficient solutions like the CMS. For approximating set cardinality, refer to the HyperLogLog.
-
-### Usage
-
-```C#
-using System;
-using System.Text;
-using ProbabilisticDataStructures;
-
-namespace FilterExample
-{
-    class Example
-    {
-        static void Main()
-        {
-            byte[] ALICE_BYTES = Encoding.ASCII.GetBytes("alice");
-            byte[] BOB_BYTES = Encoding.ASCII.GetBytes("bob");
-            byte[] FRANK_BYTES = Encoding.ASCII.GetBytes("frank");
-
-            var cms = new CountMinSketch(0.001, 0.99);
-
-            cms.Add(ALICE_BYTES).Add(BOB_BYTES).Add(BOB_BYTES).Add(FRANK_BYTES);
-            Console.WriteLine(string.Format("frequency of alice: {0}", cms.Count(ALICE_BYTES)));
-            Console.WriteLine(string.Format("frequency of bob: {0}", cms.Count(BOB_BYTES)));
-            Console.WriteLine(string.Format("frequency of frank: {0}", cms.Count(FRANK_BYTES)));
-        }
-    }
-}
-```
-
-## Top-K
-
-Top-K uses a Count-Min Sketch and min-heap to track the top-k most frequent elements in a stream.
-
-### Usage
-
-```C#
-using System;
-using System.Text;
-using ProbabilisticDataStructures;
-
-namespace FilterExample
-{
-    class Example
-    {
-        static void Main()
-        {
-            byte[] ALICE_BYTES = Encoding.ASCII.GetBytes("alice");
-            byte[] BOB_BYTES = Encoding.ASCII.GetBytes("bob");
-            byte[] FRANK_BYTES = Encoding.ASCII.GetBytes("frank");
-            byte[] TYLER_BYTES = Encoding.ASCII.GetBytes("tyler");
-            byte[] FRED_BYTES = Encoding.ASCII.GetBytes("fred");
-            byte[] JAMES_BYTES = Encoding.ASCII.GetBytes("james");
-            byte[] SARA_BYTES = Encoding.ASCII.GetBytes("sara");
-            byte[] BILL_BYTES = Encoding.ASCII.GetBytes("bill");
-
-            var topK = new TopK(0.001, 0.99, 5);
-
-            topK.Add(BOB_BYTES).Add(BOB_BYTES).Add(BOB_BYTES);
-            topK.Add(TYLER_BYTES).Add(TYLER_BYTES).Add(TYLER_BYTES).Add(TYLER_BYTES);
-            topK.Add(FRED_BYTES);
-            topK.Add(ALICE_BYTES).Add(ALICE_BYTES).Add(ALICE_BYTES).Add(ALICE_BYTES);
-            topK.Add(JAMES_BYTES);
-            topK.Add(FRED_BYTES);
-            topK.Add(SARA_BYTES).Add(SARA_BYTES);
-            topK.Add(BILL_BYTES);
-
-            foreach (var element in topK.Elements())
-            {
-                Console.WriteLine(string.Format("element: {0}, frequency: {1}", Encoding.ASCII.GetString(element.Data), element.Freq));
-            }
-        }
-    }
-}
-```
-
-## HyperLogLog
-
-This is an implementation of HyperLogLog as described by Flajolet, Fusy, Gandouet, and Meunier in [HyperLogLog: the analysis of a near-optimal cardinality estimation algorithm](http://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf).
-
-HyperLogLog is a probabilistic algorithm which approximates the number of distinct elements in a multiset. It works by hashing values and calculating the maximum number of leading zeros in the binary representation of each hash. If the maximum number of leading zeros is n, the estimated number of distinct elements in the set is 2^n. To minimize variance, the multiset is split into a configurable number of registers, the maximum number of leading zeros is calculated in the numbers in each register, and a harmonic mean is used to combine the estimates.
-
-For large or unbounded data sets, calculating the exact cardinality is impractical. HyperLogLog uses a fraction of the memory while providing an accurate approximation.
-
-This implementation was [originally written by Eric Lesh](https://github.com/eclesh/hyperloglog). Some small changes and additions have been made, including a way to construct a HyperLogLog optimized for a particular relative accuracy and adding FNV hashing. For counting element frequency, refer to the Count-Min Sketch.
-
-### Usage
-
-```C#
-using System;
-using System.Text;
-using ProbabilisticDataStructures;
-
-namespace FilterExample
-{
-    class Example
-    {
-        static void Main()
-        {
-            byte[] ALICE_BYTES = Encoding.ASCII.GetBytes("alice");
-            byte[] BOB_BYTES = Encoding.ASCII.GetBytes("bob");
-            byte[] FRANK_BYTES = Encoding.ASCII.GetBytes("frank");
-
-            var hll = HyperLogLog.NewDefaultHyperLogLog(0.1);
-
-            hll.Add(ALICE_BYTES).Add(BOB_BYTES).Add(BOB_BYTES).Add(FRANK_BYTES);
-            Console.WriteLine(string.Format("count: {0}", hll.Count()));
-        }
-    }
-}
-```
-
-## MinHash
-
-This is a variation of the technique for estimating similarity between two sets as presented by Broder in [On the resemblance and containment of documents](http://gatekeeper.dec.com/ftp/pub/dec/SRC/publications/broder/positano-final-wpnums.pdf).
-
-`Similarity` can be used to cluster or compare documents by splitting the corpus into a
-bag of words. It returns the resemblance of the two bags -- the number of distinct words
-in both over the number of distinct words in either, which is their Jaccard index.
-Repeated words count once, and two empty bags resemble each other exactly.
-
-The result is exact, not estimated. Broder's estimator earns its error when a set is too
-large to hold, or when a signature can be computed once and reused across many
-comparisons; neither applies to a call that is handed both bags in full and compares
-them once, where estimating would cost accuracy and time and buy nothing.
-
-Before 3.1.0 this returned the Sørensen–Dice coefficient instead, which is related as
-`D = 2J / (1 + J)` and so is consistently higher: bags of one third resemblance were
-reported at one half. See the [changelog](CHANGELOG.md) if you depended on those values.
-
-### Comparing many documents
-
-`Similarity` above is exact, and needs both bags. Comparing *n* documents pairwise that
-way is *n²* full comparisons. A signature reduces a bag once, and signatures compare in
-time proportional to their length rather than to the bags:
-
-```C#
-var a = MinHash.Signature(documentA, k: 128);
-var b = MinHash.Signature(documentB, k: 128);
-
-float resemblance = MinHash.Similarity(a, b);
-```
-
-This one is an estimate. The error is roughly `1/sqrt(k)` — about 9% at `k = 128`, about
-3% at `k = 1024` — traded against the signature's size.
-
-Signatures can be stored and compared later, including against signatures computed by a
-different process or a different version of this library. The `k` hash functions are a
-fixed convention rather than something chosen per call, so nothing about them has to be
-carried alongside:
-
-```C#
-File.WriteAllBytes("doc-a.sig", a.ToByteArray());
-```
-
-### Usage
-
-```C#
-using System;
-using System.Collections.Generic;
-using System.Text;
-using ProbabilisticDataStructures;
-
-namespace FilterExample
-{
-    class Example
-    {
-        static void Main()
-        {
-            var bag1 = new List<string>{
-                "bill",
-                "alice",
-                "frank",
-                "bob",
-                "sara",
-                "tyler",
-                "james"
-            };
-
-            var bag2 = new List<string>{
-                "bill",
-                "alice",
-                "frank",
-                "bob",
-                "sara"
-            };
-
-            // 5 words in both, 7 distinct across the two: 5 / 7 = 0.714...
-            Console.WriteLine(string.Format("similarity: {0}", MinHash.Similarity(bag1.ToArray(), bag2.ToArray())));
-        }
-    }
-}
-```
+[#18](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/18) tracks what is
+missing and, as importantly, what has been considered and deliberately left out.
