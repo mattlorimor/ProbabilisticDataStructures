@@ -117,12 +117,20 @@ closed form can.
 ## Mutation testing
 
 Manual, targeted mutation is part of every test commit (step 3 of the loop). Whole-file
-sweeps use Stryker.NET via `TestProbabilisticDataStructures/stryker-config.json`:
+sweeps use Stryker.NET. The config carries the settings; the scope belongs on the
+command line, per run:
 
 ```
 dotnet tool restore
-cd TestProbabilisticDataStructures && dotnet stryker
+cd TestProbabilisticDataStructures
+dotnet stryker --mutate "**/QuotientFilter.cs" --mutate "**/Buckets.cs"
 ```
+
+Scope every run. Stryker is not part of any build: with coverage analysis off -- see
+below for why it must be -- a four-file sweep takes about seventy minutes, the full
+library would generate five thousand mutants, and the output needs human adjudication
+anyway. It is a periodic audit for files whose tests have not been through the loop
+above, not a gate.
 
 Two hard-won caveats:
 
