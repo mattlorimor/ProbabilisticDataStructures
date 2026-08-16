@@ -127,9 +127,9 @@ dotnet stryker --mutate "**/QuotientFilter.cs" --mutate "**/Buckets.cs"
 ```
 
 Scope every run. Stryker is not part of any build: with coverage analysis off -- see
-below for why it must be -- a four-file sweep takes about seventy minutes, the full
-library would generate five thousand mutants, and the output needs human adjudication
-anyway. It is a periodic audit for files whose tests have not been through the loop
+below for why it must be -- a four-file sweep of 686 mutants took an hour and a half,
+the full library would generate five thousand mutants, and the output needs human
+adjudication anyway. It is a periodic audit for files whose tests have not been through the loop
 above, not a gate.
 
 Two hard-won caveats:
