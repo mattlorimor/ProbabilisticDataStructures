@@ -19,7 +19,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestCMSTotalCount()
         {
-            var cms = new CountMinSketch(0.001, 0.99);
+            var cms = new CountMinSketch(0.001, 0.01);
 
             for (int i = 0; i < 100; i++)
             {
@@ -36,7 +36,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestCMSAddAndCount()
         {
-            var cms = new CountMinSketch(0.001, 0.99);
+            var cms = new CountMinSketch(0.001, 0.01);
 
             var addedCms = cms.Add(A_BYTES);
             Assert.AreSame(cms, addedCms);
@@ -69,14 +69,14 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestCMSMerge()
         {
-            var cms = new CountMinSketch(0.001, 0.99);
+            var cms = new CountMinSketch(0.001, 0.01);
             cms.Add(B_BYTES);
             cms.Add(C_BYTES);
             cms.Add(B_BYTES);
             cms.Add(D_BYTES);
             cms.Add(A_BYTES).Add(A_BYTES);
 
-            var other = new CountMinSketch(0.001, 0.99);
+            var other = new CountMinSketch(0.001, 0.01);
             other.Add(B_BYTES);
             other.Add(C_BYTES);
             other.Add(B_BYTES);
@@ -106,7 +106,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestCMSReset()
         {
-            var cms = new CountMinSketch(0.001, 0.99);
+            var cms = new CountMinSketch(0.001, 0.01);
             cms.Add(B_BYTES);
             cms.Add(C_BYTES);
             cms.Add(B_BYTES);
@@ -132,7 +132,7 @@ namespace TestProbabilisticDataStructures
         public void BenchmarkCMSAdd()
         {
             var n = 100000;
-            var cms = new CountMinSketch(0.001, 0.99);
+            var cms = new CountMinSketch(0.001, 0.01);
             var data = new byte[n][];
             for (int i = 0; i < n; i++)
             {
@@ -149,7 +149,7 @@ namespace TestProbabilisticDataStructures
         public void BenchmarkCMSCount()
         {
             var n = 100000;
-            var cms = new CountMinSketch(0.001, 0.99);
+            var cms = new CountMinSketch(0.001, 0.01);
             var data = new byte[n][];
             for (int i = 0; i < n; i++)
             {

@@ -17,11 +17,12 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Creates a new TopK backed by a Count-Min sketch whose relative accuracy is
-        /// within a factor of epsilon with probability delta. It tracks the k-most
+        /// within a factor of epsilon with probability at least 1 - delta, where delta
+        /// is the probability of exceeding that bound. It tracks the k-most
         /// frequent elements.
         /// </summary>
         /// <param name="epsilon">Relative-accuracy factor</param>
-        /// <param name="delta">Relative-accuracy probability</param>
+        /// <param name="delta">Probability of exceeding that overestimate</param>
         /// <param name="k">Number of top elements to track</param>
         /// <returns></returns>
         /// <param name="hash">

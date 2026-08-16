@@ -48,7 +48,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private double epsilon { get; set; }
         /// <summary>
-        /// Relative-accuracy probability
+        /// Probability of exceeding the accuracy epsilon allows
         /// </summary>
         private double delta { get; set; }
         /// <summary>
@@ -63,12 +63,14 @@ namespace ProbabilisticDataStructures
         internal Func<ReadOnlySpan<byte>, ulong> HashFunction => this.Hash;
 
         /// <summary>
-        /// Creates a new Count-Min Sketch whose relative accuracy is within a factor of
-        /// epsilon with probability delta. Both of these parameters affect the space and
-        /// time complexity.
+        /// Creates a new Count-Min Sketch whose estimates exceed the true count by no
+        /// more than epsilon times the total count, with probability at least
+        /// 1 - delta. Delta is therefore a probability of failure: a smaller delta is a
+        /// deeper, more reliable sketch. Both parameters affect the space and time
+        /// complexity.
         /// </summary>
         /// <param name="epsilon">Relative-accuracy factor</param>
-        /// <param name="delta">Relative-accuracy probability</param>
+        /// <param name="delta">Probability of exceeding that overestimate</param>
         /// <param name="hash">
         /// The hash function to use, or null for the default. Passing it here is the
         /// only way to have one hash cover everything the structure will ever hold:
