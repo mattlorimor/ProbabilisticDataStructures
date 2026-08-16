@@ -1,0 +1,13 @@
+{
+  "stryker-config": {
+    "project": "ProbabilisticDataStructures.csproj",
+    "coverage-analysis": "off",
+    "mutate": [
+      "**/QuotientFilter.cs",
+      "**/InvertibleBloomLookupTable.cs",
+      "**/Buckets.cs",
+      "**/ElementHeap.cs"
+    ],
+    "reporters": ["json", "markdown"]
+  }
+}
