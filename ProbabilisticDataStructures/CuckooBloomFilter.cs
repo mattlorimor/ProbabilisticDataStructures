@@ -493,6 +493,11 @@ namespace ProbabilisticDataStructures
                     $"Filter claims {occupied} occupied entries in {m} buckets of {b}.");
             }
 
+            // One buffer for the whole loop: widening a stored fingerprint needs eight
+            // bytes of scratch, and allocating them per entry grows the stack by the
+            // number of entries a payload claims to hold.
+            Span<byte> widened = stackalloc byte[8];
+
             for (uint e = 0; e < occupied; e++)
             {
                 var bucket = reader.ReadUInt32();
@@ -531,7 +536,7 @@ namespace ProbabilisticDataStructures
                             $"own fingerprint size is {f}.");
                     }
 
-                    Span<byte> widened = stackalloc byte[8];
+                    widened.Clear();
                     stored.CopyTo(widened);
                     fingerprint = System.Buffers.Binary.BinaryPrimitives
                         .ReadUInt64LittleEndian(widened);
