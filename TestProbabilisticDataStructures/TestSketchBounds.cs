@@ -278,5 +278,75 @@ namespace TestProbabilisticDataStructures
                 "near a bucket edge, so an error this small means the bucketing is " +
                 "finer than the accuracy called for -- or that it is not geometric.");
         }
+
+        /// <summary>
+        /// A HyperLogLog's accuracy claim is not about any single count -- it is that
+        /// the estimate has relative standard error 1.04/sqrt(m) across independent
+        /// streams. One count landing close proves nothing, because the estimator is
+        /// unbiased and any single draw can land anywhere in the distribution. Only the
+        /// spread over many streams tests what m was chosen for.
+        /// <para>
+        /// The existing HyperLogLog tests each check a single count against a loose
+        /// tolerance, which a filter with a quarter of its registers would still pass
+        /// most of the time. This measures the distribution instead.
+        /// </para>
+        /// <para>
+        /// Nothing here is random: each trial's stream is keyed by its index, so the
+        /// measurement is identical on every run and a failure is reproducible rather
+        /// than a bad draw. The bounds are set from measured values -- the observed
+        /// ratios are 0.98, 1.05 and 1.03 -- and widened to about three and a half
+        /// standard errors of the spread estimator, which is sd/sqrt(2(T-1)).
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [DataRow(256u)]
+        [DataRow(1024u)]
+        [DataRow(4096u)]
+        public void TestHyperLogLogDeliversItsRelativeStandardError(uint m)
+        {
+            const int Trials = 60;
+            const int N = 50000;
+
+            var errors = new List<double>(Trials);
+            for (int t = 0; t < Trials; t++)
+            {
+                var hll = new HyperLogLog(m);
+                for (int i = 0; i < N; i++)
+                {
+                    hll.Add(Encoding.UTF8.GetBytes($"t{t}-item-{i}"));
+                }
+                errors.Add(((double)hll.Count() - N) / N);
+            }
+
+            var mean = errors.Average();
+            var spread = Math.Sqrt(errors.Sum(e => (e - mean) * (e - mean)) / (Trials - 1));
+            var predicted = 1.04 / Math.Sqrt(m);
+            var ratio = spread / predicted;
+
+            Console.WriteLine($"m={m} predicted={predicted:P3} observed={spread:P3} " +
+                $"ratio={ratio:F3} bias={mean:P3}");
+
+            Assert.IsGreaterThanOrEqualTo(0.75, ratio,
+                $"m={m}: the estimate's spread was {spread:P3} against a predicted " +
+                $"{predicted:P3}. Landing well inside the prediction means the " +
+                "registers are doing more work than m accounts for, which points at " +
+                "the estimator rather than at good luck.");
+
+            Assert.IsLessThanOrEqualTo(1.35, ratio,
+                $"m={m}: the estimate's spread was {spread:P3} against a predicted " +
+                $"{predicted:P3}. A HyperLogLog that misses its relative standard " +
+                "error is delivering the accuracy of a smaller register array than " +
+                "the caller paid for.");
+
+            // The estimator is unbiased, so the mean error should sit within a few
+            // standard errors of zero. A systematic offset is what a wrong alpha
+            // looks like, and it hides completely in the spread.
+            var standardError = spread / Math.Sqrt(Trials);
+            Assert.IsLessThanOrEqualTo(4 * standardError, Math.Abs(mean),
+                $"m={m}: the mean relative error was {mean:P3}, more than four " +
+                $"standard errors ({standardError:P3}) from zero. The estimator is " +
+                "meant to be unbiased; a consistent offset is a bias-correction " +
+                "constant that does not match the register count.");
+        }
     }
 }
