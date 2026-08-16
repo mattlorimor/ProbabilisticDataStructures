@@ -1,0 +1,7 @@
+{
+  "stryker-config": {
+    "project": "ProbabilisticDataStructures.csproj",
+    "coverage-analysis": "off",
+    "reporters": ["json", "markdown"]
+  }
+}

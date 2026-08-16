@@ -684,5 +684,56 @@ namespace TestProbabilisticDataStructures
 
             Assert.AreEqual(expected.Values.Aggregate(0UL, (x, y) => x + y), cms.TotalCount());
         }
+
+        /// <summary>
+        /// Merging two counting filters clamps each counter sum at the counter
+        /// maximum. Two layers make that true: the merge site clamps, and Set clamps
+        /// whatever it is handed. For four-bit counters the second layer alone
+        /// suffices, so removing the merge-site clamp is invisible there -- sums stay
+        /// under 255 and Set catches them. Eight-bit counters have no such backstop:
+        /// the sum is cast to byte before Set can see it, and 200 plus 200 arrives as
+        /// 144. A wrapped counter then decrements to zero while the elements it
+        /// stands for are still present -- a false negative, the one failure a
+        /// counting filter's deletion support exists to rule out.
+        /// <para>
+        /// Found by mutation testing, in two steps: removing the merge-site clamp
+        /// passed all 520 tests, and the first draft of this test -- written with the
+        /// default four-bit counters -- passed the mutant too, because Set's own
+        /// clamp covered it. Only full-width counters expose the cast.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestMergingCountingFiltersClampsCountersAtSaturation()
+        {
+            // Two hundred copies in each: comfortably below the eight-bit maximum of
+            // 255, so neither filter is saturated -- only their sum is.
+            var a = new CountingBloomFilter(100, 8, 0.01);
+            var b = new CountingBloomFilter(100, 8, 0.01);
+            for (int i = 0; i < 200; i++)
+            {
+                a.Add(Key("crowded"));
+                b.Add(Key("crowded"));
+            }
+
+            a.Merge(b);
+
+            // Four hundred copies stand behind these counters. A saturated counter is
+            // never decremented again, so however many removals arrive, the element
+            // must remain: the filter trades reclaimable space for never answering no
+            // while copies are outstanding. A counter whose sum wrapped to 144
+            // instead reaches zero mid-way through these removals.
+            for (int removal = 1; removal <= 150; removal++)
+            {
+                Assert.IsTrue(a.TestAndRemove(Key("crowded")),
+                    $"removal {removal}: four hundred copies were merged in, so the " +
+                    "element must still be a member here whatever the counters have " +
+                    "been through.");
+            }
+
+            Assert.IsTrue(a.Test(Key("crowded")),
+                "hundreds of the merged-in copies remain, and the filter answers " +
+                "no. A counter that wrapped at merge time has decremented to zero " +
+                "out from under them.");
+        }
     }
 }

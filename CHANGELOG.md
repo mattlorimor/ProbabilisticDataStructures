@@ -5,6 +5,33 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.1] - 2026-08-16
+
+### Fixed
+
+- `ThetaSketch` could write a payload its own reader refused. An `Add` whose
+  compaction trimmed the buffer checked the hash against theta before the trim
+  lowered it, so one value at or above theta could be stored -- a sample the
+  sampling rate was never applied to, and one the persistence reader rightly
+  rejects. Roughly half of the sketches that ever crossed their trim threshold
+  carried one. The hash is now re-checked after compaction, and the reader
+  accepts (and drops) exactly one trailing out-of-range value so that every
+  payload 6.0.0 wrote still loads.
+- `CountMinSketch` and `TopK` documented `delta` backwards -- as the probability the
+  estimate holds rather than the probability it fails. The sizing arithmetic was
+  always right; the XML docs now agree with it. A delta of 0.99 is a one-row sketch,
+  not a 99%-confident one.
+
+### Added
+
+- `TESTING.md`, documenting the testing methodology the 6.x hardening developed, and
+  a Stryker configuration for scoped mutation sweeps.
+- README: a table of contents, an introduction for each category of structure, and
+  the per-thread-plus-merge concurrency pattern with the exact-merge guarantee that
+  backs it.
+- Seventy-seven new tests: statistical-guarantee bounds, sizing-formula geometry,
+  byte-exact merge identities, model-based oracles, and numerical boundary cases.
+
 ## [6.0.0] - 2026-08-15
 
 ### Added

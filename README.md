@@ -20,6 +20,38 @@ eleven structures the Go library does not have.
 > XxHash3 here since 3.0.0, FNV-1a in Go — so a filter built by one cannot be read by the
 > other, and their false positives will not agree.
 
+## Contents
+
+- [Choosing a structure](#choosing-a-structure) —
+  [what are you trying to do?](#what-are-you-trying-to-do) ·
+  [if you only read one thing](#if-you-only-read-one-thing) ·
+  [what each one costs](#what-each-one-costs)
+- [Installation](#installation)
+- [Things that apply to everything](#things-that-apply-to-everything) —
+  [hashing](#hashing) · [persistence](#persistence) · [merging](#merging) ·
+  [reproducibility](#reproducibility) · [thread safety](#thread-safety)
+- [Membership](#membership) —
+  [`BloomFilter`](#bloomfilter) · [`BloomFilter64`](#bloomfilter64) ·
+  [`PartitionedBloomFilter`](#partitionedbloomfilter) ·
+  [`CountingBloomFilter`](#countingbloomfilter) ·
+  [`DeletableBloomFilter`](#deletablebloomfilter) ·
+  [`CuckooBloomFilter`](#cuckoobloomfilter) · [`QuotientFilter`](#quotientfilter) ·
+  [`BinaryFuseFilter`](#binaryfusefilter) · [`BloomierFilter`](#bloomierfilter) ·
+  [`ScalableBloomFilter`](#scalablebloomfilter) ·
+  [`StableBloomFilter`](#stablebloomfilter) · [`InverseBloomFilter`](#inversebloomfilter)
+- [Cardinality](#cardinality) —
+  [`HyperLogLogPlus`](#hyperloglogplus) · [`HyperLogLog`](#hyperloglog) ·
+  [`ThetaSketch`](#thetasketch) ·
+  [`InvertibleBloomLookupTable`](#invertiblebloomlookuptable)
+- [Frequency](#frequency) —
+  [`CountMinSketch`](#countminsketch) · [`CountSketch`](#countsketch) · [`TopK`](#topk)
+- [Similarity](#similarity) —
+  [`MinHash`](#minhash) · [`SimHash`](#simhash) ·
+  [`MinHashIndex` and `SimHashIndex`](#minhashindex-and-simhashindex)
+- [Distributions](#distributions) — [`DDSketch`](#ddsketch)
+- [Recent data](#recent-data)
+- [Contributions](#contributions)
+
 ---
 
 ## Choosing a structure
@@ -275,11 +307,50 @@ Concurrent `Test` calls are safe against each other under the default hash, whic
 function, so a reader-writer lock is enough. A hash passed to `SetHash` is shared by every
 call, so one holding mutable state — a reused `HashAlgorithm`, say — takes that away.
 
+**When the lock is the bottleneck, stop sharing.** Give each thread its own structure and
+merge when you need an answer:
+
+```C#
+private readonly ThreadLocal<CountMinSketch> _local =
+    new(() => new CountMinSketch(0.001, 0.01), trackAllValues: true);
+
+public void Record(byte[] item) => _local.Value!.Add(item);   // no lock, no contention
+
+public CountMinSketch Snapshot()
+{
+    var merged = new CountMinSketch(0.001, 0.01);
+    foreach (var sketch in _local.Values) { merged.Merge(sketch); }
+    return merged;
+}
+```
+
+This is not an approximation of the shared-structure result. For `BloomFilter`,
+`BloomFilter64`, `PartitionedBloomFilter`, `CountingBloomFilter`, `CountMinSketch`,
+`CountSketch`, `HyperLogLog`, `HyperLogLogPlus`, `DDSketch`, and `QuotientFilter`, merging
+the sketches of two streams produces the sketch
+of the combined stream byte for byte — the test suite holds every one of those merges to
+that identity — so the snapshot is exactly what one shared structure would have held, with
+no lock anywhere on the hot path. Only the snapshot needs coordination: `Merge` reads each
+thread's structure, so take the gate there or pause the writers for it.
+
+The pattern reaches further with weaker guarantees. `ThetaSketch.Union` gives a valid
+sketch of the union without promising identical bytes. `TopK.Merge` combines the counts
+exactly, but each side's heap remembered only its own leaders, so an item heavy only in
+combination can be missed. A merged `CountingBloomFilter` clamps counters at saturation,
+and a `QuotientFilter` merge must fit within the filter's slots — both say so in their
+own documentation.
+
 ---
 
 ## Membership
 
-Eleven structures answer "have I seen this?". They differ in what they do besides.
+Twelve structures answer **"have I seen this?"** — the question in front of a cache, a
+disk lookup, a crawl frontier, a duplicate check: is it worth going further, or do I
+already know? A hash set answers it exactly and costs the keys themselves; these answer
+it in a few bits per item by being allowed to say *yes* when the truth is no, at a rate
+you choose. The useful differences between them are rarely about that rate. They are
+about what each one can do besides: delete, grow, forget, stay static and smaller, or —
+`BloomierFilter`, stretching the category — map each key to a value.
 
 All of them may report a false positive. Only two — `StableBloomFilter` and
 `InverseBloomFilter` — can report a false **negative**, and both say so prominently below,
@@ -538,6 +609,20 @@ two steps, so concurrent use can lose or tear an entry. See
 
 ## Cardinality
 
+Four structures answer **"how many *distinct* things have I seen?"**. Counting events
+takes one integer. Counting distinct events exactly means remembering every one seen so
+far, because the next arrival might be a repeat — that is a set again, and at a billion
+items it is gigabytes. These answer within a few percent in kilobytes, which is why
+"distinct users today" can be a dashboard number instead of a nightly batch job.
+
+They differ in what they give up. `HyperLogLogPlus` is the default: smallest, exact
+until it has a few thousand items, mergeable. `HyperLogLog` is its 2007 predecessor,
+kept for compatibility and measurably worse at the high end. A `ThetaSketch` pays more
+memory for set algebra — intersect and difference, not just union. And the
+`InvertibleBloomLookupTable` is the deliberate odd member: not an estimator at all, but
+a set *difference* that decodes exactly when the difference is small, however large the
+sets.
+
 ### `HyperLogLogPlus`
 
 How many distinct things a stream held. Use this one.
@@ -658,6 +743,18 @@ From Goodrich and Mitzenmacher,
 
 ## Frequency
 
+Three structures answer **"how many times has *this one* appeared?"** — the question
+behind rate limiting, heavy-hitter detection, and every trending list. A dictionary of
+counters is exact and grows with the number of distinct keys, which for IPs, URLs, or
+search terms is unbounded. These are fixed-size, and wrong by a bounded amount whose
+direction you get to know in advance: `CountMinSketch` only ever *over*counts, because
+collisions can only add. `CountSketch` lets collisions cancel, so its errors fall on
+both sides and stay small even for rare items — at more memory for the same nominal
+accuracy, since its error scales with the stream's Euclidean norm rather than its total
+weight. `TopK` sits on
+a Count-Min and keeps the heavy hitters it finds, so the answer to "which ones are big?"
+survives without keeping every key that ever appeared.
+
 ### `CountMinSketch`
 
 How often a particular thing has been seen.
@@ -745,8 +842,15 @@ not exact.
 
 ## Similarity
 
-Two structures, two different questions. Picking by whichever you found first will give you
-the wrong one.
+These answer **"how alike are these two?"** without comparing them element by element.
+Each input is boiled down to a small fixed-size signature, and signatures are compared
+instead — so the comparison costs the same whether the inputs were tweets or terabytes,
+signatures can be stored and shipped where the originals cannot, and, through the two
+indexes at the end of this section, they can be *searched*: "find everything similar to
+this" stops being a pairwise scan over all history.
+
+Two estimators, two different questions. Picking by whichever you found first will give
+you the wrong one.
 
 **`MinHash` answers about sets** — how much do these two collections overlap, by Jaccard
 resemblance. **`SimHash` answers about documents** — how alike are these two weighted term
@@ -851,6 +955,14 @@ signatures you already store, and storing it would mean keeping two things in st
 ---
 
 ## Distributions
+
+One structure answers **"what does the *shape* of these values look like?"** — medians,
+p95s, p99s. A mean takes two numbers to maintain; a quantile, in general, takes the
+values themselves, sorted, which is the whole stream again. `DDSketch` answers any
+quantile within a chosen *relative* error in a few kilobytes, and merges exactly across
+machines — which is the actual requirement of latency monitoring, where the number that
+matters is the p99 of the fleet, not of one box, and where 1% of a 10ms median must not
+be the same absolute error as 1% of a 2s tail.
 
 ### `DDSketch`
 

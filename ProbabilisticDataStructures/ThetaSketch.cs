@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -80,6 +80,17 @@ namespace ProbabilisticDataStructures
             if (this.held == this.values.Length)
             {
                 this.Compact();
+
+                // Compacting to make room can trim, and trimming lowers theta. The
+                // hash was checked against the theta that stood before the trim, so
+                // it has to be checked again: stored past the new theta, it would be
+                // a sample the sampling rate never applied to -- and a value the
+                // persistence reader rightly refuses, leaving a sketch that cannot
+                // read its own bytes.
+                if (hash >= this.theta)
+                {
+                    return this;
+                }
             }
 
             this.values[this.held++] = hash;
@@ -400,6 +411,20 @@ namespace ProbabilisticDataStructures
 
                 if (value >= theta)
                 {
+                    // Versions through 6.0.0 could store exactly one value at or above
+                    // theta: Add checked the hash before compacting to make room, and
+                    // compacting can lower theta past it. Each trim discards any such
+                    // value a previous trim let in before possibly admitting its own,
+                    // so at most one survives, and the sort puts it last. It was never
+                    // a valid sample -- theta's fraction was not applied to it -- so
+                    // it is dropped rather than kept, and anything beyond that one
+                    // trailing value is not this library's output.
+                    if (i == held - 1)
+                    {
+                        previous = value;
+                        continue;
+                    }
+
                     throw new InvalidDataException(
                         $"Sketch holds the value {value} at or above its theta of " +
                         $"{theta}, which is the threshold it keeps values below.");

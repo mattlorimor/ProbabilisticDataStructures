@@ -468,7 +468,12 @@ namespace TestProbabilisticDataStructures
                 theta.Add(Key($"w{i}"));
             }
 
-            AssertBytes("thetasketch-v1.bin", theta.ToByteArray());
+            // v1b, not v1: fixing the trim-boundary defect (an Add whose compaction
+            // lowered theta past the pending hash still stored it) changed the state
+            // this stream produces -- transient out-of-range values altered when later
+            // compactions fired. Same format, second writer generation. The v1 fixture
+            // stays for the read-side test: bytes 6.0.0 wrote must load forever.
+            AssertBytes("thetasketch-v1b.bin", theta.ToByteArray());
 
             AssertBytes("simhashsignature-v1.bin", SimHash.Signature(Words).ToByteArray());
 
@@ -551,6 +556,7 @@ namespace TestProbabilisticDataStructures
                 ("hyperloglogplus-dense-v1.bin", 16, 1),
                 ("quotientfilter-v1.bin", 17, 1),
                 ("thetasketch-v1.bin", 18, 1),
+                ("thetasketch-v1b.bin", 18, 1),
                 ("simhashsignature-v1.bin", 19, 1),
                 ("countsketch-v1.bin", 20, 1),
                 ("iblt-v1.bin", 21, 1),

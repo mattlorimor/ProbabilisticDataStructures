@@ -480,3 +480,7 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Stryker mutation-testing output
+**/StrykerOutput/
+**/.stryker-tmp/
