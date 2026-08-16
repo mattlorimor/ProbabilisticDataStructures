@@ -20,6 +20,38 @@ eleven structures the Go library does not have.
 > XxHash3 here since 3.0.0, FNV-1a in Go — so a filter built by one cannot be read by the
 > other, and their false positives will not agree.
 
+## Contents
+
+- [Choosing a structure](#choosing-a-structure) —
+  [what are you trying to do?](#what-are-you-trying-to-do) ·
+  [if you only read one thing](#if-you-only-read-one-thing) ·
+  [what each one costs](#what-each-one-costs)
+- [Installation](#installation)
+- [Things that apply to everything](#things-that-apply-to-everything) —
+  [hashing](#hashing) · [persistence](#persistence) · [merging](#merging) ·
+  [reproducibility](#reproducibility) · [thread safety](#thread-safety)
+- [Membership](#membership) —
+  [`BloomFilter`](#bloomfilter) · [`BloomFilter64`](#bloomfilter64) ·
+  [`PartitionedBloomFilter`](#partitionedbloomfilter) ·
+  [`CountingBloomFilter`](#countingbloomfilter) ·
+  [`DeletableBloomFilter`](#deletablebloomfilter) ·
+  [`CuckooBloomFilter`](#cuckoobloomfilter) · [`QuotientFilter`](#quotientfilter) ·
+  [`BinaryFuseFilter`](#binaryfusefilter) · [`BloomierFilter`](#bloomierfilter) ·
+  [`ScalableBloomFilter`](#scalablebloomfilter) ·
+  [`StableBloomFilter`](#stablebloomfilter) · [`InverseBloomFilter`](#inversebloomfilter)
+- [Cardinality](#cardinality) —
+  [`HyperLogLogPlus`](#hyperloglogplus) · [`HyperLogLog`](#hyperloglog) ·
+  [`ThetaSketch`](#thetasketch) ·
+  [`InvertibleBloomLookupTable`](#invertiblebloomlookuptable)
+- [Frequency](#frequency) —
+  [`CountMinSketch`](#countminsketch) · [`CountSketch`](#countsketch) · [`TopK`](#topk)
+- [Similarity](#similarity) —
+  [`MinHash`](#minhash) · [`SimHash`](#simhash) ·
+  [`MinHashIndex` and `SimHashIndex`](#minhashindex-and-simhashindex)
+- [Distributions](#distributions) — [`DDSketch`](#ddsketch)
+- [Recent data](#recent-data)
+- [Contributions](#contributions)
+
 ---
 
 ## Choosing a structure
