@@ -1,120 +1,86 @@
-﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
+using System;
+using System.IO;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 
 namespace TestProbabilisticDataStructures
 {
+    /// <summary>
+    /// Direct tests for the bucket array every counting structure sits on. Most of
+    /// its behavior is covered many times over through the filters, but two guards
+    /// and one formula are reachable only from inside the library, so no test
+    /// through a public structure can exercise them: every structure's persistence
+    /// reader validates lengths before Restore runs, and none constructs zero-bit
+    /// buckets. The mutation sweep reported all three as untested and, for once
+    /// among its reports, was right.
+    /// </summary>
     [TestClass]
     public class TestBuckets
     {
         /// <summary>
-        /// Ensures that Max returns the correct maximum based on the bucket
-        /// size.
+        /// The backing array must be ceil(count * bucketSize / 8) bytes. The suite
+        /// kills sizing mutations today only as a side effect -- an inflated array
+        /// changes persisted payloads and the golden fixtures notice -- which ties
+        /// the formula's coverage to the persistence tests' survival. This states it
+        /// directly.
         /// </summary>
         [TestMethod]
-        public void TestMaxBucketValue()
+        [DataRow(9585u, (byte)1)]
+        [DataRow(100u, (byte)4)]
+        [DataRow(64u, (byte)8)]
+        [DataRow(3u, (byte)3)]
+        [DataRow(1u, (byte)1)]
+        public void TestBackingArrayIsSizedToTheBitCount(uint count, byte bucketSize)
         {
-            var b = new Buckets(10, 2);
+            var buckets = new Buckets(count, bucketSize);
 
-            var max = b.MaxBucketValue();
-            Assert.AreEqual(3, max);
+            Assert.AreEqual((count * bucketSize + 7) / 8, (uint)buckets.RawData.Length,
+                $"{count} buckets of {bucketSize} bit(s) are {count * bucketSize} " +
+                "bits, and the array must hold exactly that many, rounded up to " +
+                "whole bytes -- smaller loses the top buckets, larger is memory the " +
+                "structure claims it does not use.");
         }
 
         /// <summary>
-        /// Ensures that Count returns the number of buckets.
+        /// A bucket's maximum is all-ones at its width. Wrong in either direction is
+        /// quietly catastrophic for a counting filter: too high and Set stops
+        /// clamping, so a saturating write wraps through the physical bit mask; too
+        /// low and counters saturate early, pinning cells that removal will then
+        /// never reclaim.
         /// </summary>
         [TestMethod]
-        public void TestBucketsCount()
+        [DataRow((byte)1, (byte)1)]
+        [DataRow((byte)4, (byte)15)]
+        [DataRow((byte)8, (byte)255)]
+        public void TestTheMaximumIsAllOnesAtTheBucketWidth(byte bucketSize, byte expected)
         {
-            var b = new Buckets(10, 2);
-
-            var count = b.count;
-            Assert.AreEqual(10u, count);
+            Assert.AreEqual(expected, new Buckets(8, bucketSize).MaxBucketValue());
         }
 
         /// <summary>
-        /// Ensures that Increment increments the bucket value by the correct delta and
-        /// clamps to zero and the maximum, Get returns the correct bucket value, and Set
-        /// sets the bucket value correctly.
+        /// Reachable only from inside the library: every structure's reader checks
+        /// its payload lengths before handing the bytes here, so this guard exists
+        /// for the caller that forgets. It must actually be there when that
+        /// happens.
         /// </summary>
         [TestMethod]
-        public void TestBucketsIncrementAndGetAndSet()
+        public void TestRestoreRefusesAMismatchedDataLength()
         {
-            var b = new Buckets(5, 2);
-
-            var incrementedB = b.Increment(0, 1);
-            Assert.AreSame(b, incrementedB, "Returned Buckets should be the same instance");
-
-            var v = b.Get(0);
-            Assert.AreEqual(1u, v);
-
-            b.Increment(1u, -1);
-
-            v = b.Get(1);
-            Assert.AreEqual(0u, v);
-
-            var setB = b.Set(2u, 100);
-            Assert.AreSame(b, setB, "Returned Buckets should be the same instance");
-
-            v = b.Get(2);
-            Assert.AreEqual(3u, v);
-
-            b.Increment(3, 2);
-
-            v = b.Get(3);
-            Assert.AreEqual(2u, v);
+            Assert.ThrowsExactly<InvalidDataException>(() =>
+                Buckets.Restore(100, 4, new byte[7]),
+                "100 four-bit buckets need 50 bytes; 7 must be refused, not " +
+                "silently indexed out of.");
         }
 
         /// <summary>
-        /// Ensures that Reset restores the Buckets to the original state.
+        /// Zero-bit buckets can hold nothing and divide nothing; the guard must
+        /// refuse them before the sizing arithmetic does something quieter.
         /// </summary>
         [TestMethod]
-        public void TestBucketsReset()
+        public void TestZeroBitBucketsAreRefused()
         {
-            var b = new Buckets(5, 2);
-
-            for (uint i = 0; i < 5; i++)
-            {
-                b.Increment(i, 1);
-            }
-
-            var resetB = b.Reset();
-            Assert.AreSame(b, resetB, "Returned Buckets should be the same instance");
-
-            for (uint i = 0; i < 5; i++)
-            {
-                var c = b.Get(i);
-                Assert.AreEqual(0u, c);
-            }
-        }
-
-        [TestMethod]
-        public void BenchmarkBucketsIncrement()
-        {
-            var buckets = new Buckets(10000, 8);
-            for (uint i = 0; i < buckets.count; i++)
-            {
-                buckets.Increment(i % 10000, 1);
-            }
-        }
-
-        [TestMethod]
-        public void BenchmarkBucketsSet()
-        {
-            var buckets = new Buckets(10000, 8);
-            for (uint i = 0; i < buckets.count; i++)
-            {
-                buckets.Set(i % 10000, 1);
-            }
-        }
-
-        [TestMethod]
-        public void BenchmarkBucketsGet()
-        {
-            var buckets = new Buckets(10000, 8);
-            for (uint i = 0; i < buckets.count; i++)
-            {
-                buckets.Get(i % 10000);
-            }
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+                new Buckets(100, 0));
         }
     }
 }

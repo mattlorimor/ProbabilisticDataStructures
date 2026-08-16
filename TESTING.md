@@ -136,14 +136,17 @@ Two hard-won caveats:
 
 - **`coverage-analysis` must stay `off`.** With it on, Stryker's per-test coverage
   attribution misfires on this MSTest/.NET setup and reports mutants as "survived"
-  that the suite demonstrably kills — a hand-verified survivor list showed mutants
-  failing 8 pre-existing tests while marked green. Off is slower (every mutant runs
-  tests until first failure) and truthful.
-- **Survivors are leads, not verdicts.** Hand-apply each interesting survivor and run
-  the suite before believing it. Expected, acceptable survivors: mutations to
-  exception-message strings (tests assert exception types, deliberately not wording)
-  and equivalent mutants (document the equivalence argument in the commit rather
-  than contorting a test to kill them).
+  that the suite demonstrably kills. Measured on the same four files against the
+  same suite: coverage on scored 40.52% with 376 "survivors"; coverage off scored
+  97.96% with 14. Hand-verification showed the first number was noise (one
+  "survivor" failed 8 pre-existing tests) — and the second still overstated: of its
+  11 logic survivors, 9 also died by hand, one of them failing 197 tests.
+- **Survivors are leads, not verdicts — in either mode.** Hand-apply each survivor
+  and run the suite before believing it. Of that run's 14, the true residue was two
+  internal guards reachable by no public path (closed with direct internal tests in
+  `TestBuckets.cs`) and three exception-message strings, which are accepted:
+  tests assert exception types, deliberately not wording. Document equivalent
+  mutants rather than contorting a test to kill them.
 
 ## Persistence
 
