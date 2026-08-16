@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.0] - 2026-08-16
+
+### Added
+
+- Every method that takes a `byte[]` now has a `ReadOnlySpan<byte>` overload beside it
+  -- 49 of them. Callers with data already in a buffer can query without copying into
+  a fresh array first; pure queries such as `Test` and `Count` allocate nothing at all.
+  `InverseBloomFilter` and `TopK` still copy where they retain what they are given, and
+  say so in their documentation. (#87)
+
+### Changed
+
+- `CuckooBloomFilter` packs its fingerprints at the exact width the false-positive rate
+  requires instead of rounding each up to a whole byte, cutting fingerprint memory by
+  around a third at typical rates -- 262 KB to 164 KB for 100,000 items at 1%. The rate
+  the filter delivers moves closer to the rate requested as a result (7.8e-3 against a
+  requested 1e-2, where byte alignment delivered 1.2e-4): this is the accuracy that was
+  asked for, not a regression, and the overshoot can no longer exceed 2x. Payloads
+  written by earlier versions still load, restoring at eight bits per stored byte,
+  which is the same filter they always were. A cuckoo payload written by 6.1.0 uses a
+  new format version, so an earlier release cannot read it -- the compatibility this
+  library promises runs backwards, not forwards. (#88)
+
 ## [6.0.1] - 2026-08-16
 
 ### Fixed

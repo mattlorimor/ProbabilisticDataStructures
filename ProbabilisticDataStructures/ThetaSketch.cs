@@ -70,6 +70,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Add(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Add(byte[])"/>
+        public ThetaSketch Add(ReadOnlySpan<byte> data)
+        {
             var hash = this.Hash(data);
 
             if (hash >= this.theta)

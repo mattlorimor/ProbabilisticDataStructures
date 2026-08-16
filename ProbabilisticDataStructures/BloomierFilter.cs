@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 
@@ -374,6 +374,13 @@ namespace ProbabilisticDataStructures
         public bool TryGetValue(byte[] key, out ulong value)
         {
             ArgumentNullException.ThrowIfNull(key);
+
+            return this.TryGetValue(key.AsSpan(), out value);
+        }
+
+        /// <inheritdoc cref="TryGetValue(byte[], out ulong)"/>
+        public bool TryGetValue(ReadOnlySpan<byte> key, out ulong value)
+        {
             value = 0;
 
             if (this.size == 0)

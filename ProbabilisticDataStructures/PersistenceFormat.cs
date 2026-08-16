@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers.Binary;
 using System.IO;
 using System.IO.Hashing;
@@ -108,7 +108,7 @@ namespace ProbabilisticDataStructures
         /// The highest format version this library can read. Readers refuse anything
         /// above it, since a later version may mean the payload differently.
         /// </summary>
-        internal const ushort MaxSupportedVersion = 2;
+        internal const ushort MaxSupportedVersion = 3;
 
         /// <summary>
         /// The version a payload is written at unless its structure asks for another.
@@ -130,6 +130,14 @@ namespace ProbabilisticDataStructures
         /// so that a restored filter resumes its draw sequence rather than restarting it.
         /// </summary>
         internal const ushort RandomStateVersion = 2;
+
+        /// <summary>
+        /// The version at which a cuckoo filter packs its fingerprints at their exact
+        /// bit width rather than rounding each up to whole bytes. Version 2 payloads
+        /// record a width in bytes and restore at eight times that many bits, which is
+        /// the same filter they always were.
+        /// </summary>
+        internal const ushort CuckooPackedVersion = 3;
 
         private const int MagicLength = 4;
         private const int HeaderLength = 14;

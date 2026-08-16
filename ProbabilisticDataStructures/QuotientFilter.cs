@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
@@ -91,6 +91,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Add(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Add(byte[])"/>
+        public QuotientFilter Add(ReadOnlySpan<byte> data)
+        {
             if (this.count == this.slots)
             {
                 throw new InvalidOperationException(
@@ -265,6 +271,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.TestAndRemove(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="TestAndRemove(byte[])"/>
+        public bool TestAndRemove(ReadOnlySpan<byte> data)
+        {
             var (quotient, remainder) = this.Fingerprint(data);
 
             if (!this.Remove(quotient, remainder))
@@ -542,6 +554,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Test(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Test(byte[])"/>
+        public bool Test(ReadOnlySpan<byte> data)
+        {
             var (quotient, remainder) = this.Fingerprint(data);
 
             if (!this.IsOccupied(quotient))
@@ -726,7 +744,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// The quotient that picks a slot and the remainder stored in it.
         /// </summary>
-        private (uint Quotient, ulong Remainder) Fingerprint(byte[] data)
+        private (uint Quotient, ulong Remainder) Fingerprint(ReadOnlySpan<byte> data)
         {
             var hash = this.Hash(data);
             var fingerprint = hash >> (64 - (int)(this.quotientBits + this.remainderBits));

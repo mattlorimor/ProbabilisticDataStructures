@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers.Binary;
 using System.IO;
 
@@ -67,6 +67,12 @@ namespace ProbabilisticDataStructures
             return this.Add(data, 1);
         }
 
+        /// <inheritdoc cref="Add(byte[])"/>
+        public CountSketch Add(ReadOnlySpan<byte> data)
+        {
+            return this.Add(data, 1);
+        }
+
         /// <summary>
         /// Records the data as having been seen a given number of times, which may be
         /// negative.
@@ -78,6 +84,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Add(data.AsSpan(), count);
+        }
+
+        /// <inheritdoc cref="Add(byte[], long)"/>
+        public CountSketch Add(ReadOnlySpan<byte> data, long count)
+        {
             var hash = this.Hash(data);
 
             for (var row = 0u; row < this.depth; row++)
@@ -100,6 +112,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Count(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Count(byte[])"/>
+        public long Count(ReadOnlySpan<byte> data)
+        {
             var hash = this.Hash(data);
             var estimates = new long[this.depth];
 

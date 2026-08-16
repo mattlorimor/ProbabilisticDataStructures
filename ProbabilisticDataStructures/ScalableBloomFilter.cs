@@ -165,6 +165,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Test(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Test(byte[])"/>
+        public bool Test(ReadOnlySpan<byte> data)
+        {
             // Querying is made by testing for the presence in each filter.
             foreach (var filter in this.Filters)
             {
@@ -187,6 +193,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Add(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Add(byte[])"/>
+        public IFilter Add(ReadOnlySpan<byte> data)
+        {
             var idx = this.Filters.Count() - 1;
 
             // If the last filter has reached its fill ratio, add a new one.
@@ -210,6 +222,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.TestAndAdd(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="TestAndAdd(byte[])"/>
+        public bool TestAndAdd(ReadOnlySpan<byte> data)
+        {
             var member = this.Test(data);
             this.Add(data);
             return member;

@@ -147,6 +147,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Add(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Add(byte[])"/>
+        public HyperLogLog Add(ReadOnlySpan<byte> data)
+        {
             var hash = CalculateHash(data);
             var k = 32 - this.B;
             var r = CalculateRho(hash << (int)this.B, k);
@@ -334,7 +340,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="data">Data</param>
         /// <returns>32-bit hash value</returns>
-        private uint CalculateHash(byte[] data)
+        private uint CalculateHash(ReadOnlySpan<byte> data)
         {
             return (uint)(this.Hash(data) & 0xffffffff);
         }

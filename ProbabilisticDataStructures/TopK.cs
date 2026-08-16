@@ -50,6 +50,17 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Add(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Add(byte[])"/>
+        /// <remarks>
+        /// Copies only when the item reaches the heap. Counting is allocation-free,
+        /// and an array is materialized just for the elements that make the top-k --
+        /// which the heap must keep, since <see cref="Elements"/> hands them back.
+        /// </remarks>
+        public TopK Add(ReadOnlySpan<byte> data)
+        {
             this.Cms.Add(data);
             this.N++;
 

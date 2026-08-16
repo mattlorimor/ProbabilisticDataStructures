@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
@@ -570,6 +570,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Test(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Test(byte[])"/>
+        public bool Test(ReadOnlySpan<byte> data)
+        {
             // A filter over no keys holds nothing, and says so. Left to the arithmetic
             // it would answer yes at its nominal false positive rate, which is allowed
             // but useless: every slot is zero, so a probe whose own fingerprint is zero
