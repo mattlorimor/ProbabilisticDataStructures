@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `ThetaSketch` could write a payload its own reader refused. An `Add` whose
+  compaction trimmed the buffer checked the hash against theta before the trim
+  lowered it, so one value at or above theta could be stored -- a sample the
+  sampling rate was never applied to, and one the persistence reader rightly
+  rejects. Roughly half of the sketches that ever crossed their trim threshold
+  carried one. The hash is now re-checked after compaction, and the reader
+  accepts (and drops) exactly one trailing out-of-range value so that every
+  payload 6.0.0 wrote still loads.
+
 ## [6.0.0] - 2026-08-15
 
 ### Added

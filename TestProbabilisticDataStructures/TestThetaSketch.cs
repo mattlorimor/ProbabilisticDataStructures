@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.IO;
+using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 
@@ -287,6 +288,113 @@ namespace TestProbabilisticDataStructures
         /// A restored sketch has to answer identically and keep combining, since the
         /// whole point of one is being combined with sketches from elsewhere.
         /// </summary>
+        /// <summary>
+        /// A sketch that has crossed its trim threshold must still round-trip. It did
+        /// not: Add checked the hash against theta, then compacted to make room, and
+        /// compacting can lower theta -- so the pending hash was stored unchecked, at
+        /// or above the new theta. The persistence reader rightly refuses such a
+        /// value, which left the sketch writing bytes it could not read back. Every
+        /// round-trip test used streams below the trim threshold, so the first
+        /// sketch to see real volume was the first to hit it.
+        /// </summary>
+        [TestMethod]
+        public void TestASketchThatHasTrimmedStillRoundTrips()
+        {
+            var sketch = new ThetaSketch(256);
+            for (int i = 0; i < 700; i++)
+            {
+                sketch.Add(Encoding.UTF8.GetBytes($"a-{i}"));
+            }
+
+            var bytes = sketch.ToByteArray();
+            var restored = Persistence.FromByteArray<ThetaSketch>(bytes);
+
+            Assert.AreEqual(sketch.Count(), restored.Count(),
+                "the restored sketch must estimate what the original does");
+            CollectionAssert.AreEqual(bytes, restored.ToByteArray(),
+                "writing the restored sketch must reproduce the bytes it was read from");
+        }
+
+        /// <summary>
+        /// Payloads written before the trim-boundary fix can carry exactly one value
+        /// at or above theta -- the pending hash of the Add whose compaction lowered
+        /// theta past it. Each trim discarded any such value a previous trim let in
+        /// before possibly admitting its own, so at most one survives, and the sort
+        /// puts it last. Roughly half of the sketches that ever trimmed carry one,
+        /// so the reader must accept those bytes; but the value was never a valid
+        /// sample, so it is dropped, and writing the restored sketch produces the
+        /// corrected payload.
+        /// </summary>
+        [TestMethod]
+        public void TestAStoredValueAtThetaIsDroppedNotFatal()
+        {
+            var clean = new ThetaSketch(256);
+            for (int i = 0; i < 700; i++)
+            {
+                clean.Add(Encoding.UTF8.GetBytes($"a-{i}"));
+            }
+            var cleanBytes = clean.ToByteArray();
+
+            var restored = Persistence.FromByteArray<ThetaSketch>(
+                WithTrailingValues(cleanBytes, 1));
+
+            Assert.AreEqual(clean.Count(), restored.Count(),
+                "dropping the out-of-range value must leave the estimate the " +
+                "corrected sketch gives");
+            CollectionAssert.AreEqual(cleanBytes, restored.ToByteArray(),
+                "writing the restored sketch must produce the corrected payload");
+        }
+
+        /// <summary>
+        /// The tolerance is exactly one trailing value, because that is all the old
+        /// writer could produce. Two is not a payload this library ever wrote.
+        /// </summary>
+        [TestMethod]
+        public void TestTwoStoredValuesAtThetaAreRefused()
+        {
+            var clean = new ThetaSketch(256);
+            for (int i = 0; i < 700; i++)
+            {
+                clean.Add(Encoding.UTF8.GetBytes($"a-{i}"));
+            }
+
+            Assert.ThrowsExactly<InvalidDataException>(() =>
+                Persistence.FromByteArray<ThetaSketch>(
+                    WithTrailingValues(clean.ToByteArray(), 2)));
+        }
+
+        /// <summary>
+        /// Rebuilds a frame with extra values at or above theta appended, sorted last,
+        /// the way the pre-fix writer would have laid its one such value out.
+        /// </summary>
+        private static byte[] WithTrailingValues(byte[] frame, int extras)
+        {
+            const int Header = 14;
+            var p = frame.AsSpan(Header);
+            var nominal = BinaryPrimitives.ReadUInt32LittleEndian(p);
+            var theta = BinaryPrimitives.ReadUInt64LittleEndian(p[4..]);
+            var held = BinaryPrimitives.ReadUInt32LittleEndian(p[12..]);
+
+            var payload = new PayloadWriter();
+            payload.WriteUInt32(nominal);
+            payload.WriteUInt64(theta);
+            payload.WriteUInt32(held + (uint)extras);
+            for (int i = 0; i < held; i++)
+            {
+                payload.WriteUInt64(
+                    BinaryPrimitives.ReadUInt64LittleEndian(p[(16 + 8 * i)..]));
+            }
+            for (int i = 0; i < extras; i++)
+            {
+                payload.WriteUInt64(theta + (ulong)i);
+            }
+
+            using var stream = new MemoryStream();
+            PersistenceFormat.Write(
+                stream, StructureId.ThetaSketch, HashId.XxHash3_64, payload.WrittenSpan);
+            return stream.ToArray();
+        }
+
         [TestMethod]
         public void TestRoundTripsThroughPersistence()
         {
