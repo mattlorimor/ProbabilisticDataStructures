@@ -22,6 +22,14 @@ changing (see "Straddle every rounding"). The commit history doubles as the reco
 which defects each test was proven against — including the mutations that *survived*
 and why that was acceptable.
 
+**Commit before step 3.** The loop asks you to break the implementation on purpose and
+put it back, and the obvious way to put it back — `git checkout -- <dir>` — discards
+everything uncommitted in that directory, not only the deliberate break. Work that has
+not been committed yet is exactly what you are most likely to be mutating, because you
+just wrote it. This was learned twice in one session, both times losing a nearly
+finished change to its own verification step. Commit the work, then mutate, and revert
+the single file you touched rather than the tree.
+
 ## Principles
 
 ### Pair every bound with a vacuity guard
@@ -174,13 +182,31 @@ Two hard-won caveats:
 - **Chasing a mutation-score number**: message-string and equivalent-mutant survivors
   are fine. A suite that pins error-message wording is worse than one that doesn't.
 
-## Running
+## Verifying
 
 ```
 dotnet test                              # full suite
 dotnet test -c Release                   # what CI runs, -warnaserror
 dotnet run -c Release --project Benchmarks -- study <name> <args>   # accuracy studies
 ```
+
+**A clean build is the only build that verifies.** Analyzers do not run on a project
+MSBuild considers up to date, so a `-warnaserror` build after a small edit can report
+zero errors on code that does not compile from scratch. A CA2014 — a `stackalloc`
+inside a loop, growing the stack with the number of entries a payload claimed to hold
+— survived several such checks in a row, each reporting success, and appeared the
+moment the outputs were removed. Before believing a green build:
+
+```
+dotnet clean -c Release && dotnet build -c Release -warnaserror; echo "exit: $?"
+```
+
+**And read the exit code, not the summary.** `grep` against the "0 Error(s)" line is
+how that same failure was missed a second time: the pattern matches whether the number
+is 0 or 1, and the eye supplies the rest. The exit code cannot be misread.
+
+CI builds clean on three platforms and would catch both, but finding it there costs a
+push and several minutes; finding it locally costs one command.
 
 Accuracy studies (estimator comparisons, bias-table derivations) live in
 `Benchmarks/` and are dispatched by name so their results are reproducible; see
