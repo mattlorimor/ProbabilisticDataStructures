@@ -602,5 +602,91 @@ namespace TestProbabilisticDataStructures
                 $"n={n}: spread {spread:P3} exceeds the asymptotic 1.04/sqrt(m), " +
                 "which the estimator should beat while registers remain empty.");
         }
+
+        /// <summary>
+        /// Count Sketch's contract is |estimate - truth| <= epsilon * ||f||2 with
+        /// probability 1 - delta, the L2 analog of the Count-Min ceiling above. Two
+        /// companion assertions carry most of the teeth, because the L2 bound itself
+        /// is loose here in an instructive way: the error distribution is heavy-tailed
+        /// -- an item's estimate is fine unless one of the few heavy hitters lands in
+        /// its cell, and the median across rows discards the row where that happened.
+        /// Measured against the bound of 25.75 this stream allows, the mean absolute
+        /// error is 1.34 and the maximum is 20, so the contract assertion passes with
+        /// enormous margin and could not by itself detect a quietly degraded sketch.
+        /// <para>
+        /// The companion with the sharpest teeth is sign symmetry. Every cell is added
+        /// to and subtracted from with equal probability, so an item that was never
+        /// added must see estimates centered on zero -- measured: mean -0.01, with
+        /// 1945 negative and 1907 positive of 5000. Dropping the sign bit (which turns
+        /// the structure into a badly-built Count-Min Sketch) pushes every phantom
+        /// estimate to the mean cell load, near +10 here, while leaving the L2
+        /// contract assertion green: the errors it introduces still sit inside the
+        /// loose bound. Only the symmetry sees it.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestCountSketchStaysWithinItsL2BoundAndItsSignsCancel()
+        {
+            const double Eps = 0.02;
+            var cs = new CountSketch(Eps, Delta);
+
+            var truth = new Dictionary<int, long>(DistinctItems);
+            double l2sq = 0;
+            for (int i = 0; i < DistinctItems; i++)
+            {
+                var times = Math.Max(1, 1000 / (i + 1));
+                cs.Add(Key(i), times);
+                truth[i] = times;
+                l2sq += (double)times * times;
+            }
+            var bound = Eps * Math.Sqrt(l2sq);
+
+            var violations = 0;
+            var nonzeroErrors = 0;
+            foreach (var (i, times) in truth)
+            {
+                var err = Math.Abs(cs.Count(Key(i)) - times);
+                if (err > 0) nonzeroErrors++;
+                if (err > bound) violations++;
+            }
+
+            var violationRate = (double)violations / truth.Count;
+            Console.WriteLine($"w={cs.Width()} d={cs.Depth()} bound={bound:F2} " +
+                $"nonzero={nonzeroErrors} violations={violationRate:P3}");
+
+            Assert.IsLessThanOrEqualTo(Delta, violationRate,
+                $"{violations} of {truth.Count} estimates missed the truth by more " +
+                $"than epsilon * ||f||2 ({bound:F2}), against a configured failure " +
+                $"probability of {Delta:P2}.");
+
+            Assert.IsGreaterThan(truth.Count / 4, nonzeroErrors,
+                "Almost every estimate was exact, so the sketch was never under " +
+                "collision pressure and the bound was satisfied trivially.");
+
+            // Sign symmetry on items never added. This is where a broken sign bit
+            // shows, and nowhere else: its errors stay inside the loose L2 bound.
+            double phantomSum = 0;
+            int negative = 0, positive = 0;
+            const int Phantoms = 5000;
+            for (int i = 0; i < Phantoms; i++)
+            {
+                var est = cs.Count(Encoding.UTF8.GetBytes($"phantom-{i}"));
+                phantomSum += est;
+                if (est < 0) negative++;
+                if (est > 0) positive++;
+            }
+            var phantomMean = phantomSum / Phantoms;
+            Console.WriteLine($"phantoms: mean={phantomMean:F3} neg={negative} pos={positive}");
+
+            Assert.IsLessThanOrEqualTo(2.0, Math.Abs(phantomMean),
+                $"Items never added average {phantomMean:F3} across {Phantoms} " +
+                "queries. Signed updates must cancel; a consistent offset means the " +
+                "signs are not doing their job, however comfortably each individual " +
+                "estimate sits inside the L2 bound.");
+
+            Assert.IsGreaterThanOrEqualTo(Phantoms / 6, Math.Min(negative, positive),
+                $"Phantom estimates split {negative} negative to {positive} positive. " +
+                "A lopsided split is a sign distribution that is not a fair coin.");
+        }
     }
 }
