@@ -757,5 +757,51 @@ namespace TestProbabilisticDataStructures
                 "SimHash index computes from this fingerprint is built on them being " +
                 "exactly that.");
         }
+
+        /// <summary>
+        /// DDSketch at its bucket boundaries, which is where its guarantee is
+        /// weakest and where floating point decides which side of a bucket edge a
+        /// value falls on. A value at exactly gamma^i saturates the bound: it sits at
+        /// the far edge of its bucket, so the reported midpoint misses it by exactly
+        /// the promised accuracy -- and the floating-point logarithm can push the
+        /// error a few ulps past alpha. Measured: 57 of 400 boundary values land at
+        /// alpha * (1 + 2e-14).
+        /// <para>
+        /// That is rounding, not misbucketing, and the assertion says so: the
+        /// tolerance is one part in a billion over alpha, ten orders of magnitude
+        /// tighter than the roughly 2*alpha a genuine off-by-one-bucket defect
+        /// produces, and comfortably above anything floating point contributes. A
+        /// strict assertion here would be asserting that doubles are reals.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestDDSketchHoldsItsBoundAtBucketBoundariesUpToRounding()
+        {
+            const double Accuracy = 0.01;
+            var gamma = (1 + Accuracy) / (1 - Accuracy);
+            var allowed = Accuracy * (1 + 1e-9);
+
+            var saturated = 0;
+            for (int i = -600; i <= 600; i += 3)
+            {
+                var v = Math.Pow(gamma, i);
+                if (v <= 0 || double.IsInfinity(v)) continue;
+
+                var sketch = new DDSketch(Accuracy);
+                sketch.Add(v);
+                var got = sketch.Quantile(0.5);
+                var relative = Math.Abs(got - v) / v;
+
+                if (relative > Accuracy * 0.999) saturated++;
+                Assert.IsLessThanOrEqualTo(allowed, relative,
+                    $"gamma^{i} = {v:E3}: relative error {relative:R} exceeds alpha " +
+                    "by more than rounding can explain, which means the value was " +
+                    "placed in the wrong bucket, not at the edge of the right one.");
+            }
+
+            Assert.IsGreaterThan(100, saturated,
+                "Almost no boundary value saturated the bound, so these inputs are " +
+                "not landing on bucket edges and the test is exercising nothing.");
+        }
     }
 }
