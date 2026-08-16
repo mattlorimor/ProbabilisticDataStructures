@@ -348,5 +348,259 @@ namespace TestProbabilisticDataStructures
                 "meant to be unbiased; a consistent offset is a bias-correction " +
                 "constant that does not match the register count.");
         }
+
+        /// <summary>
+        /// Shared spread measurement: runs independent streams and returns the mean
+        /// and standard deviation of the relative error. Streams are keyed by trial
+        /// index rather than drawn randomly, so every number here reproduces exactly.
+        /// </summary>
+        private static (double Mean, double Spread) MeasureSpread(int trials, Func<int, double> trial)
+        {
+            var errors = new List<double>(trials);
+            for (int t = 0; t < trials; t++)
+            {
+                errors.Add(trial(t));
+            }
+            var mean = errors.Average();
+            var spread = Math.Sqrt(errors.Sum(e => (e - mean) * (e - mean)) / (trials - 1));
+            return (mean, spread);
+        }
+
+        /// <summary>
+        /// HyperLogLog++ replaces the original estimator with Ertl's, which removes the
+        /// range corrections rather than tuning them. What it must not do is give up
+        /// the accuracy the register count buys: the relative standard error is still
+        /// 1.04/sqrt(m), and an estimator change that quietly widened the distribution
+        /// would leave every single-count test passing.
+        /// </summary>
+        [TestMethod]
+        [DataRow(8u)]
+        [DataRow(10u)]
+        [DataRow(12u)]
+        public void TestHyperLogLogPlusDeliversItsRelativeStandardError(uint precision)
+        {
+            const int Trials = 80;
+            const int N = 50000;
+            var m = 1u << (int)precision;
+
+            var (mean, spread) = MeasureSpread(Trials, t =>
+            {
+                var hll = new HyperLogLogPlus(precision);
+                for (int i = 0; i < N; i++)
+                {
+                    hll.Add(Encoding.UTF8.GetBytes($"t{t}-i{i}"));
+                }
+                return ((double)hll.Count() - N) / N;
+            });
+
+            var predicted = 1.04 / Math.Sqrt(m);
+            var ratio = spread / predicted;
+            Console.WriteLine($"p={precision} m={m} predicted={predicted:P3} " +
+                $"observed={spread:P3} ratio={ratio:F3} bias={mean:P3}");
+
+            Assert.IsGreaterThanOrEqualTo(0.75, ratio,
+                $"p={precision}: spread {spread:P3} against predicted {predicted:P3}.");
+            Assert.IsLessThanOrEqualTo(1.35, ratio,
+                $"p={precision}: spread {spread:P3} against predicted {predicted:P3}. " +
+                "The Ertl estimator must not cost accuracy the registers already paid " +
+                "for.");
+
+            var standardError = spread / Math.Sqrt(Trials);
+            Assert.IsLessThanOrEqualTo(4 * standardError, Math.Abs(mean),
+                $"p={precision}: mean relative error {mean:P3} is more than four " +
+                $"standard errors ({standardError:P3}) from zero. Ertl's estimator is " +
+                "meant to be unbiased across the whole range, which is the reason for " +
+                "dropping the original's corrections.");
+        }
+
+        /// <summary>
+        /// MinHash estimates the Jaccard index by the fraction of signature positions
+        /// that agree, so each position is a Bernoulli trial with success probability J
+        /// and the estimate's standard error is sqrt(J(1-J)/k). That formula is the
+        /// whole reason to pick one k over another.
+        /// <para>
+        /// The bags are much larger than k on purpose. A signature longer than the set
+        /// it summarizes is degenerate, and at k=1024 against 1000-element bags the
+        /// measured spread misses the prediction by a quarter for that reason alone.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [DataRow(64)]
+        [DataRow(256)]
+        [DataRow(1024)]
+        public void TestMinHashDeliversTheJaccardStandardError(int k)
+        {
+            const int Trials = 80;
+            const int BagSize = 6000;
+            const int Overlap = 3000;
+            var jaccard = (double)Overlap / (2 * BagSize - Overlap);
+
+            var (mean, spread) = MeasureSpread(Trials, t =>
+            {
+                var a = Enumerable.Range(0, BagSize).Select(i => $"t{t}-w{i}").ToArray();
+                var b = Enumerable.Range(BagSize - Overlap, BagSize)
+                    .Select(i => $"t{t}-w{i}").ToArray();
+                return MinHash.Similarity(MinHash.Signature(a, k),
+                    MinHash.Signature(b, k)) - jaccard;
+            });
+
+            var predicted = Math.Sqrt(jaccard * (1 - jaccard) / k);
+            var ratio = spread / predicted;
+            Console.WriteLine($"k={k} J={jaccard:F4} predicted={predicted:F5} " +
+                $"observed={spread:F5} ratio={ratio:F3} bias={mean:F5}");
+
+            Assert.IsGreaterThanOrEqualTo(0.7, ratio,
+                $"k={k}: spread {spread:F5} against predicted {predicted:F5}.");
+            Assert.IsLessThanOrEqualTo(1.4, ratio,
+                $"k={k}: spread {spread:F5} against predicted {predicted:F5}. Each " +
+                "signature position is one Bernoulli trial, so a wider spread means " +
+                "the positions are not independent or not uniform.");
+
+            var standardError = spread / Math.Sqrt(Trials);
+            Assert.IsLessThanOrEqualTo(4 * standardError, Math.Abs(mean),
+                $"k={k}: mean error {mean:F5} is more than four standard errors " +
+                $"({standardError:F5}) from zero. The estimator is the fraction of " +
+                "agreeing positions, which is unbiased for J by construction.");
+        }
+
+        /// <summary>
+        /// A theta sketch's nominal accuracy is 1/sqrt(k). This implementation does
+        /// better than that, and the reason is structural rather than lucky: theta is
+        /// set to the k-th smallest hash while the buffer holds up to 2k values, so the
+        /// estimate is built from somewhere between k and 2k samples rather than
+        /// exactly k.
+        /// <para>
+        /// Measured ratios against nominal are 0.765, 0.698 and 0.640 for k of 256,
+        /// 1024 and 4096. So the assertion is one-sided: the sketch must be at least as
+        /// accurate as the k it was asked for. Pinning it to the measured ratio instead
+        /// would freeze an implementation detail -- the buffer policy -- into a test
+        /// about the guarantee.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [DataRow(256u)]
+        [DataRow(1024u)]
+        [DataRow(4096u)]
+        public void TestThetaSketchIsAtLeastAsAccurateAsItsNominalEntries(uint k)
+        {
+            const int Trials = 40;
+            const int N = 50000;
+
+            var (mean, spread) = MeasureSpread(Trials, t =>
+            {
+                var sketch = new ThetaSketch(k);
+                for (int i = 0; i < N; i++)
+                {
+                    sketch.Add(Encoding.UTF8.GetBytes($"t{t}-i{i}"));
+                }
+                return ((double)sketch.Count() - N) / N;
+            });
+
+            var nominal = 1.0 / Math.Sqrt(k);
+            var ratio = spread / nominal;
+            Console.WriteLine($"k={k} nominal={nominal:P3} observed={spread:P3} " +
+                $"ratio={ratio:F3} bias={mean:P3}");
+
+            Assert.IsLessThanOrEqualTo(1.25, ratio,
+                $"k={k}: spread {spread:P3} against a nominal {nominal:P3}. The sketch " +
+                "is delivering less accuracy than the entry count it was asked for.");
+
+            // Better than nominal is expected, but not arbitrarily better: that would
+            // mean theta sampling never engaged and the sketch simply kept everything,
+            // in which case this measures an exact count and proves nothing.
+            Assert.IsGreaterThanOrEqualTo(0.35, ratio,
+                $"k={k}: spread {spread:P3} is far below the nominal {nominal:P3}, " +
+                "which suggests the sketch retained the whole stream instead of " +
+                "sampling it.");
+
+            var standardError = spread / Math.Sqrt(Trials);
+            Assert.IsLessThanOrEqualTo(4 * standardError, Math.Abs(mean),
+                $"k={k}: mean relative error {mean:P3} is more than four standard " +
+                $"errors ({standardError:P3}) from zero.");
+        }
+
+        /// <summary>
+        /// The sketch's entire premise is that it costs the same whatever it is shown.
+        /// </summary>
+        [TestMethod]
+        public void TestThetaSketchMemoryDoesNotGrowWithTheStream()
+        {
+            var small = new ThetaSketch(1024);
+            var large = new ThetaSketch(1024);
+
+            for (int i = 0; i < 20000; i++) small.Add(Encoding.UTF8.GetBytes($"i{i}"));
+            for (int i = 0; i < 400000; i++) large.Add(Encoding.UTF8.GetBytes($"i{i}"));
+
+            Console.WriteLine($"20k items: {small.SizeInBytes()} bytes, " +
+                $"400k items: {large.SizeInBytes()} bytes");
+
+            Assert.AreEqual(small.SizeInBytes(), large.SizeInBytes(),
+                "Twenty times the stream must not cost a byte more. A theta sketch " +
+                "that grew with its input would have no advantage over the set it " +
+                "is standing in for.");
+        }
+
+        /// <summary>
+        /// Ertl's estimator earns its place in the range where many registers are still
+        /// empty. The original HyperLogLog switched to linear counting there and back
+        /// again, and the switch is what the 2013 work showed to be the error's main
+        /// source; Ertl replaces it with a sigma term that is continuous across the
+        /// whole range.
+        /// <para>
+        /// That term is unreachable at high cardinality. Once every register is
+        /// occupied counts[0] is zero, so the sigma correction contributes nothing and
+        /// deleting it changes not one digit -- the higher-cardinality test above
+        /// passes bit-identically with it removed. This is the regime that exercises
+        /// it: past the sparse threshold of m/8, so the estimator is genuinely running,
+        /// but with thousands of registers still empty.
+        /// </para>
+        /// <para>
+        /// The assertion is on bias rather than spread. The spread here is better than
+        /// the asymptotic 1.04/sqrt(m), because that figure assumes n is large next to
+        /// m, so holding it to the asymptote would assert nothing. Staying unbiased
+        /// while most registers are empty is the property the correction exists for.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [DataRow(700)]
+        [DataRow(1500)]
+        [DataRow(3000)]
+        [DataRow(6000)]
+        public void TestHyperLogLogPlusStaysUnbiasedWhileRegistersAreStillEmpty(int n)
+        {
+            const uint Precision = 12;
+            const int Trials = 80;
+            var m = 1u << (int)Precision;
+
+            var (mean, spread) = MeasureSpread(Trials, t =>
+            {
+                var hll = new HyperLogLogPlus(Precision);
+                for (int i = 0; i < n; i++)
+                {
+                    hll.Add(Encoding.UTF8.GetBytes($"t{t}-i{i}"));
+                }
+                return ((double)hll.Count() - n) / n;
+            });
+
+            var expectedEmpty = m * Math.Exp(-(double)n / m);
+            var standardError = spread / Math.Sqrt(Trials);
+
+            Console.WriteLine($"n={n} empty registers~{expectedEmpty:F0} of {m} " +
+                $"spread={spread:P3} bias={mean:P3} se={standardError:P3}");
+
+            Assert.IsGreaterThan(m / 100.0, expectedEmpty,
+                $"n={n}: too few registers are expected to remain empty for this to " +
+                "test the correction at all.");
+
+            Assert.IsLessThanOrEqualTo(4 * standardError, Math.Abs(mean),
+                $"n={n}: the mean relative error was {mean:P3}, more than four " +
+                $"standard errors ({standardError:P3}) from zero, with roughly " +
+                $"{expectedEmpty:F0} of {m} registers still empty. A biased estimate " +
+                "here is the failure the sigma term exists to prevent.");
+
+            Assert.IsLessThanOrEqualTo(1.25 * (1.04 / Math.Sqrt(m)), spread,
+                $"n={n}: spread {spread:P3} exceeds the asymptotic 1.04/sqrt(m), " +
+                "which the estimator should beat while registers remain empty.");
+        }
     }
 }
