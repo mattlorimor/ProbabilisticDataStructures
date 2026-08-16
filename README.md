@@ -293,8 +293,9 @@ public CountMinSketch Snapshot()
 ```
 
 This is not an approximation of the shared-structure result. For `BloomFilter`,
-`CountingBloomFilter`, `CountMinSketch`, `CountSketch`, `HyperLogLog`, `HyperLogLogPlus`,
-`DDSketch`, and `QuotientFilter`, merging the sketches of two streams produces the sketch
+`BloomFilter64`, `PartitionedBloomFilter`, `CountingBloomFilter`, `CountMinSketch`,
+`CountSketch`, `HyperLogLog`, `HyperLogLogPlus`, `DDSketch`, and `QuotientFilter`, merging
+the sketches of two streams produces the sketch
 of the combined stream byte for byte — the test suite holds every one of those merges to
 that identity — so the snapshot is exactly what one shared structure would have held, with
 no lock anywhere on the hot path. Only the snapshot needs coordination: `Merge` reads each

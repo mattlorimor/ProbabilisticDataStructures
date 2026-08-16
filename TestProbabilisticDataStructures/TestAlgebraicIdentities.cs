@@ -90,6 +90,31 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The 64-bit and partitioned variants merge through the same OR mechanics as
+        /// the classic filter, but through their own code paths -- Buckets64 for one,
+        /// a partition loop for the other -- so each is held to the identity
+        /// separately. The README's byte-for-byte claim extends exactly as far as the
+        /// structures listed in this file.
+        /// </summary>
+        [TestMethod]
+        public void TestBloomVariantMergesAreTheFilterOfTheCombinedStream()
+        {
+            var A = StreamA(); var B = StreamB();
+
+            var sa64 = new BloomFilter64(2000, 0.01); foreach (var s in A) sa64.Add(K(s));
+            var sb64 = new BloomFilter64(2000, 0.01); foreach (var s in B) sb64.Add(K(s));
+            var c64 = new BloomFilter64(2000, 0.01); foreach (var s in A.Concat(B)) c64.Add(K(s));
+            sa64.Merge(sb64);
+            AssertSameBytes("BloomFilter64 merge", c64.ToByteArray(), sa64.ToByteArray());
+
+            var sap = new PartitionedBloomFilter(2000, 0.01); foreach (var s in A) sap.Add(K(s));
+            var sbp = new PartitionedBloomFilter(2000, 0.01); foreach (var s in B) sbp.Add(K(s));
+            var cp = new PartitionedBloomFilter(2000, 0.01); foreach (var s in A.Concat(B)) cp.Add(K(s));
+            sap.Merge(sbp);
+            AssertSameBytes("PartitionedBloomFilter merge", cp.ToByteArray(), sap.ToByteArray());
+        }
+
+        /// <summary>
         /// Counter addition commutes with stream concatenation -- while no counter
         /// saturates. At the width used here nothing gets near the cap; the merge
         /// method documents its own behavior at saturation.
