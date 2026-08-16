@@ -13,11 +13,21 @@ namespace TestProbabilisticDataStructures
     /// identities use), and that the pure queries allocate nothing, which is the
     /// entire reason the overloads exist.
     /// <para>
-    /// The equivalence tests feed spans that are <em>slices of a larger buffer</em>
-    /// rather than whole arrays. A span overload that quietly did `span.ToArray()`
-    /// and forwarded would pass a whole-array test while defeating the purpose; more
-    /// importantly, an implementation that ignored the slice's bounds and hashed the
-    /// backing array would too. Slicing is how the overload will actually be called.
+    /// What the equivalence tests can and cannot see is worth stating, because the
+    /// array overloads forward into the span bodies. Two paths sharing a body cannot
+    /// disagree about content, so a defect in that shared body -- truncating the
+    /// input, say -- moves both paths together and shows up here as agreement.
+    /// Mutation confirms it: truncating a span implementation passes these tests and
+    /// fails seven others in the suite, which is the right division of labour. Every
+    /// pre-existing test drives the shared bodies through the array API.
+    /// </para>
+    /// <para>
+    /// What these tests own is the seam: that each array overload forwards to its
+    /// span counterpart faithfully, and that the two never drift apart if someone
+    /// later gives them separate bodies. Forwarding with a wrong offset, or an array
+    /// path that does the work twice, both fail here and nowhere else. The spans fed
+    /// are slices of a packed buffer rather than whole arrays so that memory
+    /// provenance differs between the two runs as well as the call shape.
     /// </para>
     /// </summary>
     [TestClass]
