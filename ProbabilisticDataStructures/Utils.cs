@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -89,6 +89,18 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Returns the upper and lower base hash values from which the k hashes are
+        /// derived, for data that is not held in an array.
+        /// </summary>
+        /// <param name="data">The data to hash.</param>
+        /// <param name="hash">The hash function to use.</param>
+        /// <returns>A HashKernel</returns>
+        public static HashKernelReturnValue HashKernel(ReadOnlySpan<byte> data, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            return HashKernelFromSum(hash(data));
+        }
+
+        /// <summary>
         /// Splits a 64-bit hash into the lower and upper base values.
         /// </summary>
         /// <param name="sum">The 64-bit hash value.</param>
@@ -113,6 +125,23 @@ namespace ProbabilisticDataStructures
         /// <param name="hash">The hash function to use.</param>
         /// <returns>A HashKernel128</returns>
         public static HashKernel128ReturnValue HashKernel128(byte[] data, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            ulong lower = hash(data);
+
+            Span<byte> lowerBytes = stackalloc byte[8];
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(lowerBytes, lower);
+            ulong upper = hash(lowerBytes);
+
+            return HashKernel128ReturnValue.Create(lower, upper);
+        }
+
+        /// <summary>
+        /// The 128-bit kernel, for data that is not held in an array.
+        /// </summary>
+        /// <param name="data">The data to hash.</param>
+        /// <param name="hash">The hash function to use.</param>
+        /// <returns>A 128-bit HashKernel</returns>
+        public static HashKernel128ReturnValue HashKernel128(ReadOnlySpan<byte> data, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             ulong lower = hash(data);
 

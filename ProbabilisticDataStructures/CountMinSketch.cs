@@ -133,6 +133,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Add(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Add(byte[])"/>
+        public CountMinSketch Add(ReadOnlySpan<byte> data)
+        {
             var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
@@ -157,6 +163,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Count(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Count(byte[])"/>
+        public UInt64 Count(ReadOnlySpan<byte> data)
+        {
             var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;

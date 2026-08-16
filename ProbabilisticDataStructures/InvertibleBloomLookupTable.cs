@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
@@ -92,6 +92,14 @@ namespace ProbabilisticDataStructures
         /// <returns>The table, to allow chaining.</returns>
         public InvertibleBloomLookupTable Add(byte[] key)
         {
+            ArgumentNullException.ThrowIfNull(key);
+
+            return this.Add(key.AsSpan());
+        }
+
+        /// <inheritdoc cref="Add(byte[])"/>
+        public InvertibleBloomLookupTable Add(ReadOnlySpan<byte> key)
+        {
             this.Apply(key, 1);
             return this;
         }
@@ -103,6 +111,14 @@ namespace ProbabilisticDataStructures
         /// <returns>The table, to allow chaining.</returns>
         public InvertibleBloomLookupTable Remove(byte[] key)
         {
+            ArgumentNullException.ThrowIfNull(key);
+
+            return this.Remove(key.AsSpan());
+        }
+
+        /// <inheritdoc cref="Remove(byte[])"/>
+        public InvertibleBloomLookupTable Remove(ReadOnlySpan<byte> key)
+        {
             this.Apply(key, -1);
             return this;
         }
@@ -111,10 +127,8 @@ namespace ProbabilisticDataStructures
         /// Adds or removes a key, which are the same operation with opposite signs --
         /// which is what makes a table subtractable.
         /// </summary>
-        private void Apply(byte[] key, long delta)
+        private void Apply(ReadOnlySpan<byte> key, long delta)
         {
-            ArgumentNullException.ThrowIfNull(key);
-
             if (key.Length != this.keySize)
             {
                 throw new ArgumentException(

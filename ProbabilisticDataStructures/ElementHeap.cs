@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -134,9 +134,10 @@ namespace ProbabilisticDataStructures
                 .ToArray();
         }
 
-        internal void insert(byte[] data, UInt64 freq, uint k)
+        internal void insert(ReadOnlySpan<byte> data, UInt64 freq, uint k)
         {
-            if (this.positions.TryGetValue(data, out var index))
+            if (this.positions.GetAlternateLookup<ReadOnlySpan<byte>>()
+                    .TryGetValue(data, out var index))
             {
                 // Element already in top-k. Raising its frequency in place leaves it
                 // possibly greater than a child's, so the ordering has to be restored
@@ -162,7 +163,7 @@ namespace ProbabilisticDataStructures
             // and every key in the index along with them.
             this.Push(new Element
             {
-                Data = (byte[])data.Clone(),
+                Data = data.ToArray(),
                 Freq = freq,
             });
         }
@@ -181,7 +182,9 @@ namespace ProbabilisticDataStructures
         /// underlying arrays by reference instead would hold the same element twice for
         /// a caller who does not add it from the same buffer each time.
         /// </summary>
-        private sealed class ByteContentComparer : IEqualityComparer<ReadOnlyMemory<byte>>
+        private sealed class ByteContentComparer
+            : IEqualityComparer<ReadOnlyMemory<byte>>,
+              IAlternateEqualityComparer<ReadOnlySpan<byte>, ReadOnlyMemory<byte>>
         {
             internal static readonly ByteContentComparer Instance = new ByteContentComparer();
 
@@ -195,6 +198,28 @@ namespace ProbabilisticDataStructures
                 var hash = new HashCode();
                 hash.AddBytes(obj.Span);
                 return hash.ToHashCode();
+            }
+
+            // The alternate half: lets the index be searched with a span, so an item
+            // already in the heap can have its frequency raised without an array being
+            // made just to ask the question. Create is called only when the dictionary
+            // genuinely needs to store a key, which is the one place a copy is
+            // unavoidable -- Elements() hands these arrays back to callers.
+            public bool Equals(ReadOnlySpan<byte> alternate, ReadOnlyMemory<byte> other)
+            {
+                return alternate.SequenceEqual(other.Span);
+            }
+
+            public int GetHashCode(ReadOnlySpan<byte> alternate)
+            {
+                var hash = new HashCode();
+                hash.AddBytes(alternate);
+                return hash.ToHashCode();
+            }
+
+            public ReadOnlyMemory<byte> Create(ReadOnlySpan<byte> alternate)
+            {
+                return alternate.ToArray();
             }
         }
     }

@@ -206,6 +206,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Test(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Test(byte[])"/>
+        public bool Test(ReadOnlySpan<byte> data)
+        {
             var components = this.GetComponents(data);
             var i1 = components.Hash1;
             var i2 = components.Hash2;
@@ -229,6 +235,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Add(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Add(byte[])"/>
+        public bool Add(ReadOnlySpan<byte> data)
+        {
             var components = this.GetComponents(data);
             var i1 = components.Hash1;
             var i2 = components.Hash2;
@@ -250,6 +262,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.TestAndAdd(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="TestAndAdd(byte[])"/>
+        public TestAndAddReturnValue TestAndAdd(ReadOnlySpan<byte> data)
+        {
             var components = this.GetComponents(data);
             var i1 = components.Hash1;
             var i2 = components.Hash2;
@@ -274,6 +292,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.TestAndRemove(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="TestAndRemove(byte[])"/>
+        public bool TestAndRemove(ReadOnlySpan<byte> data)
+        {
             var components = this.GetComponents(data);
             var i1 = components.Hash1;
             var i2 = components.Hash2;
@@ -683,7 +707,7 @@ namespace ProbabilisticDataStructures
         /// <param name="data">Data</param>
         /// <returns>The two hash values used to index into the buckets and the
         /// fingerprint for the given data</returns>
-        private Components GetComponents(byte[] data)
+        private Components GetComponents(ReadOnlySpan<byte> data)
         {
             // The hash supplies 64 bits. The fingerprint is taken from its bytes,
             // as it was previously taken from the leading bytes of a digest.

@@ -160,6 +160,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Test(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Test(byte[])"/>
+        public bool Test(ReadOnlySpan<byte> data)
+        {
             var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
@@ -186,6 +192,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Add(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Add(byte[])"/>
+        public IFilter Add(ReadOnlySpan<byte> data)
+        {
             var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;
@@ -212,6 +224,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.TestAndAdd(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="TestAndAdd(byte[])"/>
+        public bool TestAndAdd(ReadOnlySpan<byte> data)
+        {
             var hashKernel = Utils.HashKernel(data, this.Hash);
             var lower = hashKernel.LowerBaseHash;
             var upper = hashKernel.UpperBaseHash;

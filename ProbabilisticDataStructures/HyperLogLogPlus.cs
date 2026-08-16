@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 
 namespace ProbabilisticDataStructures
@@ -147,6 +147,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Add(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Add(byte[])"/>
+        public HyperLogLogPlus Add(ReadOnlySpan<byte> data)
+        {
             this.Observe(this.Hash(data));
             return this;
         }

@@ -54,7 +54,7 @@ namespace ProbabilisticDataStructures
     /// data. Ideally, duplicate events are relatively close together.
     ///
     /// This filter stores the data itself rather than only its hash, and takes its
-    /// own copy on <see cref="Add"/> so that a caller reusing their buffer cannot
+    /// own copy on <see cref="Add(byte[])"/> so that a caller reusing their buffer cannot
     /// change what it holds. It is not thread-safe: the original swaps the stored
     /// value atomically, and this reads and writes the slot in two steps.
     /// </summary>
@@ -117,13 +117,23 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Test(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Test(byte[])"/>
+        /// <remarks>
+        /// Allocation-free: the query is hashed and then compared against the stored
+        /// bytes in place. Only <see cref="Add(ReadOnlySpan{byte})"/> must copy.
+        /// </remarks>
+        public bool Test(ReadOnlySpan<byte> data)
+        {
             var index = this.Index(data);
             var val = this.Array[index];
             if (val == null)
             {
                 return false;
             }
-            return Enumerable.SequenceEqual(val, data);
+            return data.SequenceEqual(val);
         }
 
         /// <summary>
@@ -135,6 +145,17 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.Add(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="Add(byte[])"/>
+        /// <remarks>
+        /// Copies. This filter answers by comparing stored bytes rather than by
+        /// hashing alone, so it must keep what it is given, and a span promises
+        /// nothing about how long its memory stays valid or unchanged.
+        /// </remarks>
+        public IFilter Add(ReadOnlySpan<byte> data)
+        {
             var index = this.Index(data);
             this.GetAndSet(index, data);
             return this;
@@ -150,13 +171,20 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(data);
 
+            return this.TestAndAdd(data.AsSpan());
+        }
+
+        /// <inheritdoc cref="TestAndAdd(byte[])"/>
+        /// <remarks>Copies, for the reason given on <see cref="Add(ReadOnlySpan{byte})"/>.</remarks>
+        public bool TestAndAdd(ReadOnlySpan<byte> data)
+        {
             var index = this.Index(data);
             var oldId = this.GetAndSet(index, data);
             if (oldId == null)
             {
                 return false;
             }
-            return Enumerable.SequenceEqual(oldId, data);
+            return data.SequenceEqual(oldId);
         }
 
         /// <summary>
@@ -177,7 +205,7 @@ namespace ProbabilisticDataStructures
         /// <returns>
         /// The data that was in the array at the index before setting it
         /// </returns>
-        private byte[] GetAndSet(uint index, byte[] data)
+        private byte[] GetAndSet(uint index, ReadOnlySpan<byte> data)
         {
             var oldData = this.Array[index];
 
@@ -194,7 +222,7 @@ namespace ProbabilisticDataStructures
             // in, and the filter reports it present: measured at 38.8% against a
             // structure whose defining property is that it never reports a false
             // positive at all.
-            this.Array[index] = (byte[])data.Clone();
+            this.Array[index] = data.ToArray();
 
             return oldData;
         }
@@ -204,7 +232,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="data">The data to find the index for</param>
         /// <returns>The array index for the given data</returns>
-        private uint Index(byte[] data)
+        private uint Index(ReadOnlySpan<byte> data)
         {
             var index = this.ComputeHashSum32(data) % this.capacity;
             return index;
@@ -215,7 +243,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="data">Data</param>
         /// <returns>32-bit hash value</returns>
-        private uint ComputeHashSum32(byte[] data)
+        private uint ComputeHashSum32(ReadOnlySpan<byte> data)
         {
             return (uint)(this.Hash(data) & 0xffffffff);
         }
