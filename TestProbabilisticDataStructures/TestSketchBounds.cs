@@ -206,5 +206,77 @@ namespace TestProbabilisticDataStructures
             CollectionAssert.AreEqual(freqs.OrderBy(x => x).ToArray(), freqs,
                 "Elements() must be ascending by frequency.");
         }
+
+        /// <summary>
+        /// DDSketch's relative-error bound is deterministic, not probabilistic: there
+        /// is no delta, and every quantile it returns must sit within the requested
+        /// relative accuracy of the true one. A single violation is a defect, not an
+        /// unlucky draw, so this asserts on every quantile rather than on a rate.
+        /// <para>
+        /// Spanning six orders of magnitude is the point. The guarantee is relative,
+        /// which is what separates this from a sketch with an absolute bound -- the
+        /// error at 1e6 is allowed to be a million times the error at 1, and the
+        /// bucket boundaries are geometric to match. A structure that quietly fell
+        /// back to linear bucketing would still look correct on a narrow range.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [DataRow(0.01)]
+        [DataRow(0.02)]
+        [DataRow(0.05)]
+        public void TestDDSketchHoldsItsRelativeErrorOnEveryQuantile(double accuracy)
+        {
+            var sketch = new DDSketch(accuracy);
+
+            // Log-uniform over [1, 1e6]: the range where a relative guarantee differs
+            // most from an absolute one.
+            var values = new List<double>();
+            var rand = new Random(23);
+            for (int i = 0; i < 20000; i++)
+            {
+                var v = Math.Pow(10, rand.NextDouble() * 6);
+                values.Add(v);
+                sketch.Add(v);
+            }
+            values.Sort();
+
+            Assert.AreEqual((ulong)values.Count, sketch.Count());
+
+            var worst = 0.0;
+            var worstAt = 0.0;
+
+            foreach (var q in new[] { 0.0, 0.01, 0.05, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1.0 })
+            {
+                // Lower-index convention, matching what the sketch reports.
+                var idx = (int)Math.Floor(q * (values.Count - 1));
+                var truth = values[idx];
+                var got = sketch.Quantile(q);
+
+                var relative = Math.Abs(got - truth) / truth;
+                if (relative > worst) { worst = relative; worstAt = q; }
+
+                Assert.IsLessThanOrEqualTo(accuracy, relative,
+                    $"q={q}: the sketch reported {got:G6} against a true value of " +
+                    $"{truth:G6}, a relative error of {relative:P3} where {accuracy:P2} " +
+                    "was requested. DDSketch's bound is deterministic -- this is not " +
+                    "a tail event.");
+            }
+
+            Console.WriteLine($"accuracy={accuracy} worst relative error={worst:P4} at q={worstAt}");
+
+            // The bound is not just respected, it is nearly saturated, and that is
+            // predictable rather than incidental. A value at the top of bucket
+            // (gamma^(i-1), gamma^i] is reported as the midpoint 2*gamma^i/(gamma+1),
+            // a relative error of (gamma-1)/(gamma+1), and substituting
+            // gamma = (1+a)/(1-a) leaves exactly a. So the worst error over a range
+            // this wide should come close to the accuracy requested -- landing far
+            // below it would mean the buckets are finer than asked for, which is a
+            // sizing defect even though it looks like accuracy.
+            Assert.IsGreaterThan(accuracy * 0.5, worst,
+                $"The worst relative error was {worst:P4} against a requested " +
+                $"{accuracy:P2}. Over six orders of magnitude some value should land " +
+                "near a bucket edge, so an error this small means the bucketing is " +
+                "finer than the accuracy called for -- or that it is not geometric.");
+        }
     }
 }
