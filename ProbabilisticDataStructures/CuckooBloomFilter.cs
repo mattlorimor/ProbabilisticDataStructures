@@ -46,7 +46,7 @@ namespace ProbabilisticDataStructures
         /// holding nothing and 11.5 MB holding them, against 256 KB of actual
         /// fingerprints.
         /// </remarks>
-        internal byte[] Fingerprints { get; set; }
+        internal ulong[] Fingerprints { get; set; }
 
         /// <summary>
         /// One bit per entry, saying whether it holds a fingerprint.
@@ -73,9 +73,25 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal uint B { get; set; }
         /// <summary>
-        /// Length of fingerprints (in bytes)
+        /// Width of fingerprints, in bits. A lookup compares against 2b stored
+        /// fingerprints, so an accidental match happens at 2b/2^bits -- which is what
+        /// makes this the filter's false-positive rate.
         /// </summary>
-        internal uint F { get; set; }
+        internal uint FingerprintBits { get; set; }
+
+        /// <summary>
+        /// The bytes a fingerprint occupies when it is hashed, which is the width
+        /// rounded up. Entries are stored packed at the bit width; this is only the
+        /// shape handed to the hash function when computing an entry's partner bucket.
+        /// </summary>
+        private int HashWidth => (int)((this.FingerprintBits + 7) / 8);
+
+        /// <summary>All ones at the fingerprint's width.</summary>
+        private ulong FingerprintMask =>
+            this.FingerprintBits >= 64 ? ulong.MaxValue : (1UL << (int)this.FingerprintBits) - 1;
+
+        /// <summary>The bytes the packed fingerprint array occupies.</summary>
+        internal ulong FingerprintBytes() => (ulong)this.Fingerprints.LongLength * sizeof(ulong);
         /// <summary>
         /// Number of items in the filter
         /// </summary>
@@ -110,7 +126,7 @@ namespace ProbabilisticDataStructures
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
 
             var b = (uint)4;
-            var f = CalculateF(b, fpRate);
+            var bits = CalculateFingerprintBits(b, fpRate);
 
             // Buckets needed to hold n items at b entries each, with room to spare so
             // that inserts still find a home near capacity: a cuckoo filter's load
@@ -126,14 +142,15 @@ namespace ProbabilisticDataStructures
             // for a Bloom filter of the same capacity and rate.
             var m = Power2((uint)Math.Ceiling(n / (b * LoadFactor)));
             var entries = (ulong)m * b;
-            if (entries * f > int.MaxValue)
+            var words = WordsFor(entries, bits);
+            if (words > int.MaxValue)
             {
                 throw new ArgumentOutOfRangeException(nameof(n), n,
-                    $"A filter for {n} items at this rate needs {entries * f} bytes of " +
-                    "fingerprints, which cannot be held in a single array.");
+                    $"A filter for {n} items at this rate needs {entries * bits} bits " +
+                    "of fingerprints, which cannot be held in a single array.");
             }
 
-            this.Fingerprints = new byte[entries * f];
+            this.Fingerprints = new ulong[words];
             this.Occupied = new Buckets((uint)entries, 1);
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.random = seed is null
@@ -141,7 +158,7 @@ namespace ProbabilisticDataStructures
                 : new SeededRandom((ulong)seed.Value);
             this.M = m;
             this.B = b;
-            this.F = f;
+            this.FingerprintBits = bits;
             this.N = n;
         }
 
@@ -183,7 +200,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The number of bytes the filter occupies.</returns>
         public ulong SizeInBytes()
         {
-            return (ulong)this.Fingerprints.LongLength + (ulong)this.Occupied.RawData.Length;
+            return this.FingerprintBytes() + (ulong)this.Occupied.RawData.Length;
         }
 
         /// <summary>
@@ -345,7 +362,7 @@ namespace ProbabilisticDataStructures
             var payload = new PayloadWriter();
             payload.WriteUInt32(this.M);
             payload.WriteUInt32(this.B);
-            payload.WriteUInt32(this.F);
+            payload.WriteUInt32(this.FingerprintBits);
             payload.WriteUInt32(this.count);
             payload.WriteUInt32(this.N);
 
@@ -372,7 +389,13 @@ namespace ProbabilisticDataStructures
                     {
                         payload.WriteUInt32(i);
                         payload.WriteUInt32(j);
-                        payload.WriteBytes(EntryAt(i, j));
+                        // Only the bytes the width needs. Writing a full 64-bit value
+                        // would undo on disk what packing just bought in memory.
+                        var stored = EntryAt(i, j);
+                        for (var shift = 0; shift < this.HashWidth; shift++)
+                        {
+                            payload.WriteByte((byte)(stored >> (shift * 8)));
+                        }
                     }
                 }
             }
@@ -384,7 +407,7 @@ namespace ProbabilisticDataStructures
                 StructureId.CuckooBloomFilter,
                 PersistenceFormat.Identify(this.Hash),
                 payload.WrittenSpan,
-                PersistenceFormat.RandomStateVersion);
+                PersistenceFormat.CuckooPackedVersion);
         }
 
         /// <summary>
@@ -437,15 +460,30 @@ namespace ProbabilisticDataStructures
                     $"Filter claims {m} buckets, beyond anything this library builds.");
             }
 
-            var entries = (ulong)m * b;
-            if (entries * f > int.MaxValue)
+            // Version 2 and earlier recorded a width in bytes; version 3 records it in
+            // bits. A filter written before packing restores at eight bits per stored
+            // byte, which reproduces exactly the fingerprints it held: the value is
+            // the same low bits of the same digest, and hashing it to find its partner
+            // bucket sees the same bytes it always did.
+            var bits = version >= PersistenceFormat.CuckooPackedVersion ? f : f * 8;
+
+            if (bits == 0 || bits > 64)
             {
                 throw new InvalidDataException(
-                    $"Filter claims {m} buckets of {b} entries at {f} bytes, which " +
+                    $"Filter claims a fingerprint width of {bits} bits, and one is " +
+                    "between 1 and 64 -- the bits a hash supplies.");
+            }
+
+            var entries = (ulong)m * b;
+            var words = WordsFor(entries, bits);
+            if (words > int.MaxValue)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {m} buckets of {b} entries at {bits} bits, which " +
                     "cannot be held in a single array.");
             }
 
-            var fingerprints = new byte[entries * f];
+            var fingerprints = new ulong[words];
             var occupancy = new Buckets((uint)entries, 1);
 
             var occupied = reader.ReadUInt32();
@@ -467,15 +505,49 @@ namespace ProbabilisticDataStructures
                         $"its {m} buckets of {b}.");
                 }
 
-                var fingerprint = reader.ReadBytes();
-                if (fingerprint.Length != f)
+                ulong fingerprint;
+                if (version >= PersistenceFormat.CuckooPackedVersion)
                 {
-                    throw new InvalidDataException(
-                        $"Filter holds a {fingerprint.Length}-byte fingerprint where its " +
-                        $"own fingerprint size is {f}.");
+                    fingerprint = 0;
+                    for (var shift = 0; shift < (bits + 7) / 8; shift++)
+                    {
+                        fingerprint |= (ulong)reader.ReadByte() << (shift * 8);
+                    }
+
+                    if (bits < 64 && fingerprint >= (1UL << (int)bits))
+                    {
+                        throw new InvalidDataException(
+                            $"Filter holds the fingerprint {fingerprint}, which does " +
+                            $"not fit the {bits} bits its own width allows.");
+                    }
+                }
+                else
+                {
+                    var stored = reader.ReadBytes();
+                    if (stored.Length != f)
+                    {
+                        throw new InvalidDataException(
+                            $"Filter holds a {stored.Length}-byte fingerprint where its " +
+                            $"own fingerprint size is {f}.");
+                    }
+
+                    Span<byte> widened = stackalloc byte[8];
+                    stored.CopyTo(widened);
+                    fingerprint = System.Buffers.Binary.BinaryPrimitives
+                        .ReadUInt64LittleEndian(widened);
                 }
 
-                fingerprint.CopyTo(fingerprints.AsSpan((int)((bucket * b + entry) * f)));
+                var cell = (ulong)(bucket * b + entry) * bits;
+                var word = (int)(cell >> 6);
+                var offset = (int)(cell & 63);
+                var mask = bits >= 64 ? ulong.MaxValue : (1UL << (int)bits) - 1;
+                fingerprints[word] |= (fingerprint & mask) << offset;
+                var taken = 64 - offset;
+                if (taken < bits)
+                {
+                    fingerprints[word + 1] |= fingerprint >> taken;
+                }
+
                 occupancy.Set(bucket * b + entry, 1);
             }
 
@@ -494,7 +566,7 @@ namespace ProbabilisticDataStructures
                 Occupied = occupancy,
                 M = m,
                 B = b,
-                F = f,
+                FingerprintBits = bits,
                 count = count,
                 N = n,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
@@ -533,9 +605,59 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// The bytes of one entry, addressed directly in the packed array.
         /// </summary>
-        private Span<byte> EntryAt(uint bucket, uint entry)
+        private ulong EntryAt(uint bucket, uint entry)
         {
-            return this.Fingerprints.AsSpan((int)((bucket * this.B + entry) * this.F), (int)this.F);
+            var bit = (ulong)(bucket * this.B + entry) * this.FingerprintBits;
+            var word = (int)(bit >> 6);
+            var offset = (int)(bit & 63);
+
+            var value = this.Fingerprints[word] >> offset;
+            var taken = 64 - offset;
+
+            if (taken < this.FingerprintBits)
+            {
+                value |= this.Fingerprints[word + 1] << taken;
+            }
+
+            return value & this.FingerprintMask;
+        }
+
+        /// <summary>
+        /// Writes one entry into the packed array, leaving its neighbours in the same
+        /// words untouched.
+        /// </summary>
+        private void WriteEntryAt(uint bucket, uint entry, ulong fingerprint)
+        {
+            fingerprint &= this.FingerprintMask;
+
+            var bit = (ulong)(bucket * this.B + entry) * this.FingerprintBits;
+            var word = (int)(bit >> 6);
+            var offset = (int)(bit & 63);
+
+            this.Fingerprints[word] =
+                (this.Fingerprints[word] & ~(this.FingerprintMask << offset))
+                | (fingerprint << offset);
+
+            var taken = 64 - offset;
+            if (taken < this.FingerprintBits)
+            {
+                var mask = (1UL << ((int)this.FingerprintBits - taken)) - 1;
+                this.Fingerprints[word + 1] =
+                    (this.Fingerprints[word + 1] & ~mask) | (fingerprint >> taken);
+            }
+        }
+
+        /// <summary>
+        /// A fingerprint as the bytes the hash sees. Its partner bucket is derived by
+        /// hashing it, so this shape is part of the filter's behavior, not a detail:
+        /// at a width of 8n bits it is the same n bytes the byte-aligned filter hashed,
+        /// which is what lets a payload written before packing restore unchanged.
+        /// </summary>
+        private uint HashOfFingerprint(ulong fingerprint)
+        {
+            Span<byte> bytes = stackalloc byte[8];
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes, fingerprint);
+            return this.ComputeHashSum32(bytes[..this.HashWidth]);
         }
 
         /// <summary>
@@ -554,7 +676,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Whether a bucket holds this fingerprint.
         /// </summary>
-        private bool Contains(uint bucket, ReadOnlySpan<byte> f)
+        private bool Contains(uint bucket, ulong f)
         {
             return IndexOf(bucket, f) != -1;
         }
@@ -568,11 +690,11 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Where this fingerprint sits in a bucket, or -1.
         /// </summary>
-        private int IndexOf(uint bucket, ReadOnlySpan<byte> f)
+        private int IndexOf(uint bucket, ulong f)
         {
             for (uint entry = 0; entry < this.B; entry++)
             {
-                if (IsOccupied(bucket, entry) && EntryAt(bucket, entry).SequenceEqual(f))
+                if (IsOccupied(bucket, entry) && EntryAt(bucket, entry) == f)
                 {
                     return (int)entry;
                 }
@@ -612,7 +734,7 @@ namespace ProbabilisticDataStructures
         /// <returns>
         /// True if the insert was successful. False if the filter is full
         /// </returns>
-        private bool Insert(uint i1, uint i2, byte[] f)
+        private bool Insert(uint i1, uint i2, ulong f)
         {
             // Try to insert into bucket[i1], then bucket[i2].
             foreach (var bucket in stackalloc[] { i1 % this.M, i2 % this.M })
@@ -637,13 +759,12 @@ namespace ProbabilisticDataStructures
             Span<uint> trailBucket = stackalloc uint[MAX_NUM_KICKS];
             Span<uint> trailEntry = stackalloc uint[MAX_NUM_KICKS];
 
-            // The fingerprint in hand and the one just displaced, both on the stack.
-            // Copying between them rather than allocating a fresh array per kick: the
-            // loop runs up to MAX_NUM_KICKS times and again to unwind, so an allocation
-            // here is a thousand of them on a filter that is refusing the insert anyway.
-            Span<byte> current = stackalloc byte[(int)this.F];
-            Span<byte> displaced = stackalloc byte[(int)this.F];
-            f.CopyTo(current);
+            // The fingerprint in hand and the one just displaced. Values now, not
+            // buffers: packing made a fingerprint a number, so the relocation loop
+            // carries it in a register instead of copying bytes between two stack
+            // spans on every kick.
+            var current = f;
+            var displaced = 0UL;
 
             var i = i1;
             var depth = 0;
@@ -655,15 +776,15 @@ namespace ProbabilisticDataStructures
 
                 // The loop only relocates out of a bucket with no free entry, so every
                 // entry in it is occupied and what comes out is a real fingerprint.
-                EntryAt(bucketIdx, entryIdx).CopyTo(displaced);
+                displaced = EntryAt(bucketIdx, entryIdx);
                 Place(bucketIdx, entryIdx, current);
 
                 trailBucket[depth] = bucketIdx;
                 trailEntry[depth] = entryIdx;
                 depth++;
 
-                displaced.CopyTo(current);
-                i = i ^ ComputeHashSum32(current);
+                current = displaced;
+                i = i ^ HashOfFingerprint(current);
 
                 var alternate = i % this.M;
                 var free = GetEmptyEntry(alternate);
@@ -683,9 +804,9 @@ namespace ProbabilisticDataStructures
                 var bucket = trailBucket[n];
                 var entry = trailEntry[n];
 
-                EntryAt(bucket, entry).CopyTo(displaced);
+                displaced = EntryAt(bucket, entry);
                 Place(bucket, entry, current);
-                displaced.CopyTo(current);
+                current = displaced;
             }
 
             return false;
@@ -694,9 +815,9 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Writes a fingerprint into an entry and marks it occupied.
         /// </summary>
-        private void Place(uint bucket, uint entry, ReadOnlySpan<byte> f)
+        private void Place(uint bucket, uint entry, ulong f)
         {
-            f.CopyTo(EntryAt(bucket, entry));
+            WriteEntryAt(bucket, entry, f);
             SetOccupied(bucket, entry, true);
         }
 
@@ -714,7 +835,10 @@ namespace ProbabilisticDataStructures
             Span<byte> digest = stackalloc byte[8];
             System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(digest, this.Hash(data));
 
-            byte[] f = digest.Slice(0, Math.Min((int)this.F, digest.Length)).ToArray();
+            // The low bits of the digest, which at a width of 8n bits are exactly the
+            // n leading digest bytes the byte-aligned filter used.
+            var f = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(digest)
+                & this.FingerprintMask;
 
             var i1 = this.ComputeHashSum32(digest);
 
@@ -722,7 +846,7 @@ namespace ProbabilisticDataStructures
             // fingerprint hash, so either index recovers the other. The relocation
             // loop in Insert depends on it, computing an element's alternate bucket
             // as i ^ ComputeHashSum32(f).
-            var i2 = i1 ^ this.ComputeHashSum32(f);
+            var i2 = i1 ^ this.HashOfFingerprint(f);
 
             return Components.Create(f, i1, i2);
         }
@@ -782,15 +906,24 @@ namespace ProbabilisticDataStructures
         /// for, since the last partial byte is rounded up rather than away.
         /// </para>
         /// </remarks>
-        private static uint CalculateF(uint b, double epsilon)
+        private static uint CalculateFingerprintBits(uint b, double epsilon)
         {
-            var bits = Math.Ceiling(Math.Log2(2 * b / epsilon));
-            var bytes = (uint)Math.Ceiling(bits / 8);
+            var bits = (uint)Math.Ceiling(Math.Log2(2 * b / epsilon));
 
-            // The hash supplies 64 bits, so a fingerprint cannot be wider than eight
-            // bytes however small a rate is asked for. Anything past that would be
-            // storage reserved for bits that never arrive.
-            return Math.Clamp(bytes, 1u, 8u);
+            // The hash supplies 64 bits, so a fingerprint cannot be wider than that
+            // however small a rate is asked for. Anything past it would be storage
+            // reserved for bits that never arrive.
+            return Math.Clamp(bits, 1u, 64u);
+        }
+
+        /// <summary>
+        /// The 64-bit words needed to pack the given number of entries at the given
+        /// width. One spare, so that an entry ending exactly at a word boundary can
+        /// still be read by the two-word path without a bounds check on every access.
+        /// </summary>
+        private static ulong WordsFor(ulong entries, uint bits)
+        {
+            return ((entries * bits + 63) / 64) + 1;
         }
 
         /// <summary>
@@ -819,11 +952,11 @@ namespace ProbabilisticDataStructures
 
         private struct Components
         {
-            internal byte[] Fingerprint;
+            internal ulong Fingerprint;
             internal uint Hash1;
             internal uint Hash2;
 
-            internal static Components Create(byte[] fingerprint, uint hash1, uint hash2)
+            internal static Components Create(ulong fingerprint, uint hash1, uint hash2)
             {
                 return new Components
                 {

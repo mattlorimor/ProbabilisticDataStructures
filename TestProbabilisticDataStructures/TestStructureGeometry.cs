@@ -150,28 +150,21 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A cuckoo filter's fingerprint must be at least log2(2b/epsilon) bits, where
-        /// b is the bucket size: a lookup compares against 2b stored fingerprints, so
-        /// the chance one of them matches by accident is 2b/2^f.
+        /// A cuckoo filter's fingerprint must be log2(2b/epsilon) bits, where b is the
+        /// bucket size: a lookup compares against 2b stored fingerprints, so the chance
+        /// one matches by accident is 2b/2^bits. Through 6.0.1 this was rounded up to
+        /// whole bytes, which delivered a rate far better than asked for and charged
+        /// memory for it -- 82 times better at 60% more fingerprint memory for
+        /// epsilon=0.01. The filter now stores exactly the bits the formula needs, so
+        /// the delivered rate should sit just under the requested one rather than far
+        /// beneath it.
         /// <para>
-        /// This implementation rounds that up to whole bytes, which is a storage
-        /// decision rather than an accuracy one, and it overshoots substantially. At
-        /// epsilon=0.01 the formula asks for 10 bits and the filter stores 16, so the
-        /// rate it actually delivers is around 80 times better than requested and the
-        /// fingerprint array is 60% larger than the math requires. That is a defensible
-        /// trade, but it should be a visible one -- the test prints the overshoot, and
-        /// pins the direction so byte rounding can never land the filter on the wrong
-        /// side of the rate it promised.
+        /// Both rounding steps in this filter's sizing swallow errors at most inputs,
+        /// so the rows straddle them deliberately. Dropping the 0.95 load factor is
+        /// invisible at n=10000 and n=100000, where headroom and no headroom both round
+        /// to the same power of two; n=16000 is 8192 buckets against 4096.
         /// </para>
         /// </summary>
-        /// <para>
-        /// Both rounding steps swallow errors at most inputs, so the rows are chosen to
-        /// straddle them. Byte rounding hides a missing factor of 2 in the fingerprint
-        /// everywhere except p=0.0001, where it is 3 bytes against 2. Rounding the
-        /// bucket count to a power of two hides the 0.95 load factor everywhere except
-        /// n=16000, where it is 8192 buckets against 4096 -- at 10000 and 100000 both
-        /// the headroom and no headroom give the same answer.
-        /// </para>
         [TestMethod]
         [DataRow(10000u, 0.01)]
         [DataRow(10000u, 0.001)]
@@ -183,15 +176,13 @@ namespace TestProbabilisticDataStructures
             var f = new CuckooBloomFilter(n, fpRate);
             var b = f.B;
 
-            var neededBits = Math.Ceiling(Math.Log2(2.0 * b / fpRate));
-            var expectedF = (uint)Math.Clamp(Math.Ceiling(neededBits / 8), 1, 8);
+            var expectedBits = (uint)Math.Clamp(
+                Math.Ceiling(Math.Log2(2.0 * b / fpRate)), 1, 64);
 
-            Assert.AreEqual(expectedF, f.F,
-                $"n={n} p={fpRate}: the fingerprint must cover log2(2b/eps) = " +
-                $"{neededBits} bits, which is {expectedF} byte(s).");
+            Assert.AreEqual(expectedBits, f.FingerprintBits,
+                $"n={n} p={fpRate}: the fingerprint must be exactly " +
+                $"ceil(log2(2b/eps)) = {expectedBits} bits.");
 
-            // Buckets: enough for n items at b per bucket, with headroom, rounded up to
-            // a power of two because the index arithmetic requires it.
             var needed = Math.Ceiling(n / (b * 0.95));
             var expectedM = (uint)Math.Pow(2, Math.Ceiling(Math.Log2(needed)));
 
@@ -201,14 +192,56 @@ namespace TestProbabilisticDataStructures
                 "width instead of the item count is what once made a 100,000-item " +
                 "filter allocate 122 MB.");
 
-            var delivered = 2.0 * b / Math.Pow(2, 8 * f.F);
-            Console.WriteLine($"n={n} p={fpRate}: f={f.F} byte(s), m={f.M}, " +
+            var delivered = 2.0 * b / Math.Pow(2, f.FingerprintBits);
+            Console.WriteLine($"n={n} p={fpRate}: {f.FingerprintBits} bits, m={f.M}, " +
                 $"delivered rate={delivered:E2}, overshoot={fpRate / delivered:F1}x");
 
             Assert.IsLessThanOrEqualTo(fpRate, delivered,
-                $"n={n} p={fpRate}: the filter's nominal rate 2b/2^f is {delivered:E2}, " +
-                "which is worse than the rate it was asked for. Rounding the " +
-                "fingerprint to whole bytes may only ever help.");
+                $"n={n} p={fpRate}: the filter's nominal rate 2b/2^bits is " +
+                $"{delivered:E2}, which is worse than the rate it was asked for.");
+
+            // And no longer wasteful about it: ceil of a log2 can overshoot by at most
+            // one bit, which is a factor of two, so anything beyond that would mean the
+            // width is not being taken from the formula at all.
+            Assert.IsLessThanOrEqualTo(2.0, fpRate / delivered,
+                $"n={n} p={fpRate}: delivering {delivered:E2} is more than twice as " +
+                "good as requested, which is memory spent on accuracy nobody asked " +
+                "for -- rounding a bit width up can never cost more than one bit.");
+        }
+
+
+        /// <summary>
+        /// The memory the packing was for. A byte-aligned filter stored the next whole
+        /// byte above the width the formula asks for; at epsilon=0.01 that is 16 bits
+        /// where 10 will do, so the fingerprint array was 60% larger than the math
+        /// requires. Packed, the array is the bits themselves.
+        /// </summary>
+        [TestMethod]
+        [DataRow(10000u, 0.01, 10u)]
+        [DataRow(10000u, 0.001, 13u)]
+        [DataRow(100000u, 0.01, 10u)]
+        public void TestCuckooFingerprintStorageIsTheBitsAndNotTheBytes(
+            uint n, double fpRate, uint expectedBits)
+        {
+            var f = new CuckooBloomFilter(n, fpRate);
+            var entries = (ulong)f.M * f.B;
+
+            var needed = (entries * expectedBits + 7) / 8;
+            var byteAligned = entries * ((expectedBits + 7) / 8);
+
+            Console.WriteLine($"n={n} p={fpRate}: {entries} entries x {expectedBits} bits " +
+                $"= {needed} bytes; byte-aligned would be {byteAligned}; " +
+                $"actual {f.FingerprintBytes()}");
+
+            // One spare word, so that an entry ending at a word boundary can be read
+            // by the two-word path without a bounds check on every access.
+            Assert.IsLessThanOrEqualTo(needed + 8, f.FingerprintBytes(),
+                $"n={n} p={fpRate}: {entries} entries of {expectedBits} bits need " +
+                $"{needed} bytes and the filter is using {f.FingerprintBytes()}.");
+
+            Assert.IsGreaterThan(f.FingerprintBytes(), byteAligned,
+                $"n={n} p={fpRate}: packing must actually save something against the " +
+                $"byte-aligned {byteAligned} bytes, or there is nothing to justify it.");
         }
     }
 }

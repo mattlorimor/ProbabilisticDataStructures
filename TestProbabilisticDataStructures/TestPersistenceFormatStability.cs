@@ -128,13 +128,39 @@ namespace TestProbabilisticDataStructures
             AssertAllPresent(f.Test);
         }
 
+        /// <summary>
+        /// A filter written before the fingerprints were packed. It restores at eight
+        /// bits per stored byte, which is not a compatibility mode but the same filter
+        /// it always was: the fingerprint value is the same low bits of the same
+        /// digest, and hashing it to find its partner bucket sees the same bytes.
+        /// <para>
+        /// Membership alone would not prove that. A filter that lost its width and
+        /// answered true to everything would pass an all-present check, so this also
+        /// pins the reconstructed width and requires the filter to still reject.
+        /// </para>
+        /// </summary>
         [TestMethod]
         public void TestStoredCuckooBloomFilterAtVersionTwoStillReads()
         {
             var f = CuckooBloomFilter.ReadFrom(Fixture("cuckoobloomfilter-v2.bin"));
 
             Assert.AreEqual(100u, f.Capacity());
+            Assert.AreEqual(16u, f.FingerprintBits,
+                "the stored filter recorded two bytes, so it must come back as a " +
+                "sixteen-bit filter -- a narrower one would compute different " +
+                "fingerprints for the same items and find none of them");
             AssertAllPresent(f.Test);
+
+            var absent = 0;
+            for (var i = 0; i < 500; i++)
+            {
+                if (!f.Test(Key($"never-added-{i}"))) absent++;
+            }
+
+            Assert.IsGreaterThan(400, absent,
+                $"only {absent} of 500 unseen items were rejected. A restored filter " +
+                "that says yes to everything would pass a membership check while " +
+                "holding nothing.");
         }
 
         [TestMethod]
@@ -521,7 +547,12 @@ namespace TestProbabilisticDataStructures
                 cuckoo.Add(Key($"w{i}"));
             }
 
-            AssertBytes("cuckoobloomfilter-v2.bin", cuckoo.ToByteArray());
+            // v3, not v2: packing the fingerprints at their exact bit width changed
+            // both the width recorded and the bytes each entry occupies. The v2
+            // fixture stays for the read-side test -- bytes 6.0.1 wrote must load
+            // forever, and they restore at eight bits per stored byte, which is the
+            // same filter they always were.
+            AssertBytes("cuckoobloomfilter-v3.bin", cuckoo.ToByteArray());
         }
 
         /// <summary>
@@ -550,6 +581,7 @@ namespace TestProbabilisticDataStructures
                 ("minhashsignature-v1.bin", 13, 1),
                 ("stablebloomfilter-v2.bin", 7, 2),
                 ("cuckoobloomfilter-v2.bin", 9, 2),
+                ("cuckoobloomfilter-v3.bin", 9, 3),
                 ("binaryfusefilter-v1.bin", 14, 1),
                 ("ddsketch-v1.bin", 15, 1),
                 ("hyperloglogplus-sparse-v1.bin", 16, 1),

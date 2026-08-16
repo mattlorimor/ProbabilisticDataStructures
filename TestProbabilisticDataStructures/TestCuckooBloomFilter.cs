@@ -315,7 +315,8 @@ namespace TestProbabilisticDataStructures
 
             // One packed fingerprint per entry, plus one occupancy bit per entry.
             var entries = (ulong)f.M * f.B;
-            Assert.AreEqual(entries * f.F + ((entries + 7) / 8), f.SizeInBytes());
+            var packed = (((ulong)entries * f.FingerprintBits + 63) / 64 + 1) * 8;
+            Assert.AreEqual(packed + ((entries + 7) / 8), f.SizeInBytes());
 
             // And it does not change as the filter fills, since 5.2.0 packed the
             // fingerprints into one array allocated up front.
