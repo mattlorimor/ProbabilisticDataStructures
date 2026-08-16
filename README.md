@@ -275,6 +275,38 @@ Concurrent `Test` calls are safe against each other under the default hash, whic
 function, so a reader-writer lock is enough. A hash passed to `SetHash` is shared by every
 call, so one holding mutable state — a reused `HashAlgorithm`, say — takes that away.
 
+**When the lock is the bottleneck, stop sharing.** Give each thread its own structure and
+merge when you need an answer:
+
+```C#
+private readonly ThreadLocal<CountMinSketch> _local =
+    new(() => new CountMinSketch(0.001, 0.01), trackAllValues: true);
+
+public void Record(byte[] item) => _local.Value!.Add(item);   // no lock, no contention
+
+public CountMinSketch Snapshot()
+{
+    var merged = new CountMinSketch(0.001, 0.01);
+    foreach (var sketch in _local.Values) { merged.Merge(sketch); }
+    return merged;
+}
+```
+
+This is not an approximation of the shared-structure result. For `BloomFilter`,
+`CountingBloomFilter`, `CountMinSketch`, `CountSketch`, `HyperLogLog`, `HyperLogLogPlus`,
+`DDSketch`, and `QuotientFilter`, merging the sketches of two streams produces the sketch
+of the combined stream byte for byte — the test suite holds every one of those merges to
+that identity — so the snapshot is exactly what one shared structure would have held, with
+no lock anywhere on the hot path. Only the snapshot needs coordination: `Merge` reads each
+thread's structure, so take the gate there or pause the writers for it.
+
+The pattern reaches further with weaker guarantees. `ThetaSketch.Union` gives a valid
+sketch of the union without promising identical bytes. `TopK.Merge` combines the counts
+exactly, but each side's heap remembered only its own leaders, so an item heavy only in
+combination can be missed. A merged `CountingBloomFilter` clamps counters at saturation,
+and a `QuotientFilter` merge must fit within the filter's slots — both say so in their
+own documentation.
+
 ---
 
 ## Membership
