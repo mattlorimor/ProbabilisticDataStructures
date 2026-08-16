@@ -688,5 +688,74 @@ namespace TestProbabilisticDataStructures
                 $"Phantom estimates split {negative} negative to {positive} positive. " +
                 "A lopsided split is a sign distribution that is not a fair coin.");
         }
+
+        /// <summary>
+        /// SimHash's quantitative promise, which none of its behavioral tests state:
+        /// each fingerprint bit is an independent random hyperplane, so two documents
+        /// at angle theta disagree on each bit with probability theta/pi, and the
+        /// Hamming distance is binomial -- mean 64*theta/pi, variance
+        /// 64*(theta/pi)*(1-theta/pi). For unit-weight bags the angle comes straight
+        /// from the overlap: cos(theta) is shared over bag size.
+        /// <para>
+        /// Both moments are asserted. The mean is what the existing monotonicity
+        /// tests gesture at; the variance is what they cannot see at all -- it is the
+        /// independence claim. Hyperplanes that share information (a hash reused
+        /// across bit positions, say) can leave every mean intact while the spread
+        /// blows past binomial, and a spread wider than binomial is exactly what
+        /// makes a SimHash index's collision probabilities wrong.
+        /// </para>
+        /// <para>
+        /// Measured against prediction: means 12.70/21.41/28.27 vs 13.11/21.33/27.90;
+        /// spreads 3.18/4.10/4.37 vs binomial 3.23/3.77/3.97. Deterministic streams,
+        /// keyed by trial.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [DataRow(0.8)]
+        [DataRow(0.5)]
+        [DataRow(0.2)]
+        public void TestSimHashHammingDistanceTracksTheAngle(double overlap)
+        {
+            const int BagSize = 400;
+            const int Trials = 80;
+            var shared = (int)(BagSize * overlap);
+
+            var distances = new List<int>(Trials);
+            for (int t = 0; t < Trials; t++)
+            {
+                var a = Enumerable.Range(0, BagSize).Select(i => $"t{t}-w{i}").ToArray();
+                var b = Enumerable.Range(BagSize - shared, BagSize)
+                    .Select(i => $"t{t}-w{i}").ToArray();
+                distances.Add(SimHash.HammingDistance(SimHash.Signature(a), SimHash.Signature(b)));
+            }
+
+            var mean = distances.Average();
+            var sd = Math.Sqrt(distances.Sum(h => (h - mean) * (h - mean)) / (Trials - 1));
+
+            var p = Math.Acos((double)shared / BagSize) / Math.PI;
+            var predictedMean = 64.0 * p;
+            var binomialSd = Math.Sqrt(64.0 * p * (1 - p));
+            var meanError = Math.Abs(mean - predictedMean);
+            var standardError = sd / Math.Sqrt(Trials);
+
+            Console.WriteLine($"overlap={overlap} predicted={predictedMean:F2} " +
+                $"mean={mean:F2} sd={sd:F2} binomialSd={binomialSd:F2}");
+
+            Assert.IsLessThanOrEqualTo(4 * standardError, meanError,
+                $"overlap={overlap}: mean Hamming distance {mean:F2} sits " +
+                $"{meanError:F2} from the predicted 64*theta/pi = {predictedMean:F2}, " +
+                $"more than four standard errors ({standardError:F2}). The angle " +
+                "relation is the entire content of a SimHash fingerprint.");
+
+            var ratio = sd / binomialSd;
+            Assert.IsGreaterThanOrEqualTo(0.7, ratio,
+                $"overlap={overlap}: spread {sd:F2} against binomial {binomialSd:F2}.");
+            Assert.IsLessThanOrEqualTo(1.4, ratio,
+                $"overlap={overlap}: spread {sd:F2} against a binomial prediction of " +
+                $"{binomialSd:F2}. A spread past binomial means the bits are not " +
+                "independent hyperplanes, and every collision probability the " +
+                "SimHash index computes from this fingerprint is built on them being " +
+                "exactly that.");
+        }
     }
 }
