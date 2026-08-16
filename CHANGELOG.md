@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [6.1.0] - 2026-08-16
 
 ### Added
 
@@ -24,7 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requested 1e-2, where byte alignment delivered 1.2e-4): this is the accuracy that was
   asked for, not a regression, and the overshoot can no longer exceed 2x. Payloads
   written by earlier versions still load, restoring at eight bits per stored byte,
-  which is the same filter they always were. (#88)
+  which is the same filter they always were. A cuckoo payload written by 6.1.0 uses a
+  new format version, so an earlier release cannot read it -- the compatibility this
+  library promises runs backwards, not forwards. (#88)
 
 ## [6.0.1] - 2026-08-16
 
