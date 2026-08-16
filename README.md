@@ -56,7 +56,11 @@ eleven structures the Go library does not have.
 
 ## Choosing a structure
 
+<sup>[↑ Contents](#contents)</sup>
+
 ### What are you trying to do?
+
+<sup>[↑ Contents](#contents)</sup>
 
 | Your question | Reach for | Section |
 | --- | --- | --- |
@@ -82,6 +86,8 @@ eleven structures the Go library does not have.
 
 ### If you only read one thing
 
+<sup>[↑ Contents](#contents)</sup>
+
 **Start with `BloomFilter`.** It is the right answer surprisingly often, it is the
 smallest of the membership structures, and the others exist to fix one specific thing it
 cannot do. Move off it only when you hit that thing:
@@ -97,6 +103,8 @@ BloomFilter
 ```
 
 ### What each one costs
+
+<sup>[↑ Contents](#contents)</sup>
 
 The four you would realistically choose between for plain membership, all asked for the
 same thing — 100,000 items at a 1% false positive rate — and sized from each structure's own
@@ -132,6 +140,8 @@ enough that memory and capability should decide.
 
 ## Installation
 
+<sup>[↑ Contents](#contents)</sup>
+
 ```
 dotnet add package MattLorimor.ProbabilisticDataStructures
 ```
@@ -159,7 +169,11 @@ release is tagged on the
 
 ## Things that apply to everything
 
+<sup>[↑ Contents](#contents)</sup>
+
 ### Hashing
+
+<sup>[↑ Contents](#contents)</sup>
 
 Every constructor takes an optional hash function:
 
@@ -185,6 +199,8 @@ insert, they can provoke collisions and inflate your observed false positive rat
 a keyed hash such as SipHash if that is your threat model.
 
 ### Persistence
+
+<sup>[↑ Contents](#contents)</sup>
 
 Every structure that holds data writes to a stream and reads back.
 
@@ -223,6 +239,8 @@ Without it the read fails, deliberately — see above for what a filter restored
 wrong hash looks like.
 
 ### Merging
+
+<sup>[↑ Contents](#contents)</sup>
 
 Structures built separately can be combined, which is what lets you build them across
 shards or machines and put them together at the end:
@@ -264,6 +282,8 @@ Two caveats worth knowing before you rely on it:
 
 ### Reproducibility
 
+<sup>[↑ Contents](#contents)</sup>
+
 `StableBloomFilter` and `CuckooBloomFilter` make random choices as part of what they are.
 Both accept a seed:
 
@@ -284,6 +304,8 @@ filters moved off `System.Random` — which will not report its position and so 
 stored.
 
 ### Thread safety
+
+<sup>[↑ Contents](#contents)</sup>
 
 **None of these are thread-safe.** No operation is synchronized, including read-only ones.
 `Test` is not safe to call concurrently with `Add`: the structures mutate their arrays in
@@ -344,6 +366,8 @@ own documentation.
 
 ## Membership
 
+<sup>[↑ Contents](#contents)</sup>
+
 Twelve structures answer **"have I seen this?"** — the question in front of a cache, a
 disk lookup, a crawl frontier, a duplicate check: is it worth going further, or do I
 already know? A hash set answers it exactly and costs the keys themselves; these answer
@@ -357,6 +381,8 @@ All of them may report a false positive. Only two — `StableBloomFilter` and
 because it inverts the guarantee everything else here makes.
 
 ### `BloomFilter`
+
+<sup>[↑ Contents](#contents)</sup>
 
 The classic one, and the right default. A bit array and *k* hash functions.
 
@@ -376,6 +402,8 @@ bool wasAlreadyThere = filter.TestAndAdd(bytes);
 ```
 
 ### `BloomFilter64`
+
+<sup>[↑ Contents](#contents)</sup>
 
 The same structure with 64-bit sizing throughout.
 
@@ -398,6 +426,8 @@ counters are already 64-bit.
 
 ### `PartitionedBloomFilter`
 
+<sup>[↑ Contents](#contents)</sup>
+
 A classic Bloom filter that gives each hash function its own slice of the bit array rather
 than sharing one.
 
@@ -410,6 +440,8 @@ slightly worse on false positives than the unpartitioned form, and the differenc
 practice is small enough that `BloomFilter` is the simpler choice.
 
 ### `CountingBloomFilter`
+
+<sup>[↑ Contents](#contents)</sup>
 
 A Bloom filter whose bits are small counters, so removal is possible.
 
@@ -430,6 +462,8 @@ bool removed = filter.TestAndRemove(bytes);
 
 ### `DeletableBloomFilter`
 
+<sup>[↑ Contents](#contents)</sup>
+
 Deletion without counters, by tracking which regions of the filter are collision-free and
 only clearing bits it knows are safe.
 
@@ -443,6 +477,8 @@ Described by Rothenberg, Macapuna, Verdi and Magalhaes in
 [The Deletable Bloom filter](https://arxiv.org/pdf/1005.0352.pdf).
 
 ### `CuckooBloomFilter`
+
+<sup>[↑ Contents](#contents)</sup>
 
 Fingerprints in a table with two candidate buckets per item, relocating entries to make
 room.
@@ -462,6 +498,8 @@ Described by Fan, Andersen, Kaminsky and Mitzenmacher in
 [Cuckoo Filter: Practically Better Than Bloom](https://www.cs.cmu.edu/~dga/papers/cuckoo-conext2014.pdf).
 
 ### `QuotientFilter`
+
+<sup>[↑ Contents](#contents)</sup>
 
 Fingerprints in a compact table with three metadata bits per slot, which is enough to
 recover each entry's full fingerprint.
@@ -486,6 +524,8 @@ Described by Bender et al. in
 [Don't Thrash: How to Cache Your Hash on Flash](https://www.vldb.org/pvldb/vol5/p1627_michaelabender_vldb2012.pdf).
 
 ### `BinaryFuseFilter`
+
+<sup>[↑ Contents](#contents)</sup>
 
 A filter for a set known in full at construction. There is no `Add` and there cannot be —
 building it solves a system of equations over the whole set at once.
@@ -519,6 +559,8 @@ From Graf and Lemire,
 [Binary Fuse Filters](https://arxiv.org/abs/2201.01174).
 
 ### `BloomierFilter`
+
+<sup>[↑ Contents](#contents)</sup>
 
 An approximate **map**: it stores a value for each key without storing the keys.
 
@@ -555,6 +597,8 @@ From Chazelle, Kilian, Rubinfeld and Tal,
 
 ### `ScalableBloomFilter`
 
+<sup>[↑ Contents](#contents)</sup>
+
 Adds new filters with geometrically tightening rates as it fills, so it grows to fit
 whatever arrives.
 
@@ -569,6 +613,8 @@ Described by Almeida, Baquero, Preguiça and Hutchison in
 [Scalable Bloom Filters](https://haslab.uminho.pt/cbm/files/dbloom.pdf).
 
 ### `StableBloomFilter`
+
+<sup>[↑ Contents](#contents)</sup>
 
 Continuously evicts old information to make room for new, so it holds a bounded amount of
 the *recent* past.
@@ -591,6 +637,8 @@ Described by Deng and Rafiei in
 
 ### `InverseBloomFilter`
 
+<sup>[↑ Contents](#contents)</sup>
+
 "The opposite of a Bloom filter": it may report a false **negative**, and never a false
 positive. A fixed-size hash map that does not handle conflicts.
 
@@ -609,6 +657,8 @@ two steps, so concurrent use can lose or tear an entry. See
 
 ## Cardinality
 
+<sup>[↑ Contents](#contents)</sup>
+
 Four structures answer **"how many *distinct* things have I seen?"**. Counting events
 takes one integer. Counting distinct events exactly means remembering every one seen so
 far, because the next arrival might be a repeat — that is a set again, and at a billion
@@ -624,6 +674,8 @@ a set *difference* that decodes exactly when the difference is small, however la
 sets.
 
 ### `HyperLogLogPlus`
+
+<sup>[↑ Contents](#contents)</sup>
 
 How many distinct things a stream held. Use this one.
 
@@ -657,6 +709,8 @@ tie-breaker is that one is forty lines and the other is six thousand numbers.
 
 ### `HyperLogLog`
 
+<sup>[↑ Contents](#contents)</sup>
+
 The original, kept because replacing it would change the number an existing estimator
 answers with — including one read back from a payload written years ago.
 
@@ -669,6 +723,8 @@ Described by Flajolet, Fusy, Gandouet and Meunier in
 [HyperLogLog](http://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf).
 
 ### `ThetaSketch`
+
+<sup>[↑ Contents](#contents)</sup>
 
 Distinct counts that support union, intersection and difference.
 
@@ -702,6 +758,8 @@ still beyond reach. It is better arithmetic, not a different kind of answer.
 Counts are exact while the sketch holds fewer values than it retains.
 
 ### `InvertibleBloomLookupTable`
+
+<sup>[↑ Contents](#contents)</sup>
 
 Recovers **which** keys two sets differ by, where `ThetaSketch` tells you only how many.
 
@@ -743,6 +801,8 @@ From Goodrich and Mitzenmacher,
 
 ## Frequency
 
+<sup>[↑ Contents](#contents)</sup>
+
 Three structures answer **"how many times has *this one* appeared?"** — the question
 behind rate limiting, heavy-hitter detection, and every trending list. A dictionary of
 counters is exact and grows with the number of distinct keys, which for IPs, URLs, or
@@ -756,6 +816,8 @@ a Count-Min and keeps the heavy hitters it finds, so the answer to "which ones a
 survives without keeping every key that ever appeared.
 
 ### `CountMinSketch`
+
+<sup>[↑ Contents](#contents)</sup>
 
 How often a particular thing has been seen.
 
@@ -776,6 +838,8 @@ Described by Cormode and Muthukrishnan in
 [An Improved Data Stream Summary](http://dimacs.rutgers.edu/~graham/pubs/papers/cm-full.pdf).
 
 ### `CountSketch`
+
+<sup>[↑ Contents](#contents)</sup>
 
 The same question as `CountMinSketch`, answered without the one-sided bias.
 
@@ -819,6 +883,8 @@ From Charikar, Chen and Farach-Colton,
 
 ### `TopK`
 
+<sup>[↑ Contents](#contents)</sup>
+
 The most frequent elements, kept as a running ranking.
 
 **Reach for it when** you want the heavy hitters themselves — top paths, top talkers, top
@@ -842,6 +908,8 @@ not exact.
 
 ## Similarity
 
+<sup>[↑ Contents](#contents)</sup>
+
 These answer **"how alike are these two?"** without comparing them element by element.
 Each input is boiled down to a small fixed-size signature, and signatures are compared
 instead — so the comparison costs the same whether the inputs were tweets or terabytes,
@@ -862,6 +930,8 @@ for its question. SimHash calls them unrelated — correctly, for its.
 
 ### `MinHash`
 
+<sup>[↑ Contents](#contents)</sup>
+
 **Reach for it when** the things you're comparing are genuinely sets and repetition should
 not count: tags, shingles, feature sets, permissions.
 
@@ -879,6 +949,8 @@ overload estimates it, with error falling as `k` rises — that is the one to us
 comparing many documents or storing anything.
 
 ### `SimHash`
+
+<sup>[↑ Contents](#contents)</sup>
 
 One 64-bit fingerprint per document, compared by Hamming distance.
 
@@ -911,6 +983,8 @@ From Charikar,
 [Similarity Estimation Techniques from Rounding Algorithms](https://dl.acm.org/doi/10.1145/509907.509965).
 
 ### `MinHashIndex` and `SimHashIndex`
+
+<sup>[↑ Contents](#contents)</sup>
 
 Signatures answer "are these two alike". An index answers "which of these million are
 worth asking about", without comparing every pair.
@@ -956,6 +1030,8 @@ signatures you already store, and storing it would mean keeping two things in st
 
 ## Distributions
 
+<sup>[↑ Contents](#contents)</sup>
+
 One structure answers **"what does the *shape* of these values look like?"** — medians,
 p95s, p99s. A mean takes two numbers to maintain; a quantile, in general, takes the
 values themselves, sorted, which is the whole stream again. `DDSketch` answers any
@@ -965,6 +1041,8 @@ matters is the p99 of the fleet, not of one box, and where 1% of a 10ms median m
 be the same absolute error as 1% of a 2s tail.
 
 ### `DDSketch`
+
+<sup>[↑ Contents](#contents)</sup>
 
 What a stream of numbers looks like: the median, the p99, the shape of the tail.
 
@@ -1002,6 +1080,8 @@ From Masson, Rim and Lee,
 
 ## Recent data
 
+<sup>[↑ Contents](#contents)</sup>
+
 Every structure above answers about the whole stream since it was created. `SlidingWindow<T>`
 answers about the recent past instead, which is how most of these questions are actually
 asked: distinct users today, the p99 of the last five minutes, top paths this hour.
@@ -1038,6 +1118,8 @@ Pass a clock to the constructor to test a window's behaviour without waiting for
 ---
 
 ## Contributions
+
+<sup>[↑ Contents](#contents)</sup>
 
 Pull requests are welcome, but opening an issue is probably the best place to start if you
 have a complex critique or suggestion.
