@@ -563,6 +563,63 @@ namespace TestProbabilisticDataStructures
             Assert.Contains(incumbent, reported);
         }
 
+        /// <summary>
+        /// The estimate is the largest count among a flow's buckets, not the
+        /// smallest: the paper chooses the maximum precisely because a flow's
+        /// buckets erode unevenly -- whichever bucket suffered least contested
+        /// competition is the closest to the truth. The staging arranges exactly
+        /// that: a flow whose array-0 bucket is contested by a collider while its
+        /// array-1 bucket is untouched, so only the maximum recovers the true count.
+        /// </summary>
+        [TestMethod]
+        public void TestTheEstimateComesFromTheHealthiestBucket()
+        {
+            var hk = new HeavyKeeper(4, 64, depth: 2, seed: 13);
+
+            // Find a collider sharing the flow's array-0 bucket -- with a different
+            // fingerprint, so its arrivals decay rather than match -- while landing
+            // elsewhere in array 1.
+            var flow = "the-flow";
+            var flowMap = hk.MappingOf(Key(flow)).ToArray();
+            string? collider = null;
+            for (var i = 0; i < 20000 && collider is null; i++)
+            {
+                var m = hk.MappingOf(Key($"candidate-{i}")).ToArray();
+                if (m[0].Bucket == flowMap[0].Bucket
+                    && m[0].Fingerprint != flowMap[0].Fingerprint
+                    && m[1].Bucket != flowMap[1].Bucket)
+                {
+                    collider = $"candidate-{i}";
+                }
+            }
+            Assert.IsNotNull(collider, "No one-sided collider within 20,000 keys.");
+
+            for (var i = 0; i < 10; i++)
+            {
+                hk.Add(Key(flow));
+            }
+            for (var i = 0; i < 10; i++)
+            {
+                hk.Add(Key(collider!));
+            }
+
+            // Premise guards, through the internals: the contested bucket must have
+            // actually eroded while still holding the flow's fingerprint, and the
+            // clean bucket must be untouched -- otherwise both estimators would
+            // agree and the test would discriminate nothing.
+            var eroded = hk.Counters[0][flowMap[0].Bucket];
+            Assert.AreEqual(flowMap[0].Fingerprint, hk.Fingerprints[0][flowMap[0].Bucket],
+                "The collider took the bucket outright; the staging wants erosion, " +
+                "not eviction -- adjust the arrival counts.");
+            Assert.IsLessThan(10UL, eroded,
+                "The contested bucket never eroded; nothing distinguishes max from min.");
+            Assert.AreEqual(10UL, hk.Counters[1][flowMap[1].Bucket],
+                "The clean bucket was touched; the premise is void.");
+
+            Assert.AreEqual(10UL, hk.Count(Key(flow)),
+                "The estimate should come from the untouched bucket.");
+        }
+
         // ------------------------------------------------------------------
         // Helpers
         // ------------------------------------------------------------------

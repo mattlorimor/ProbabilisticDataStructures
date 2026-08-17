@@ -81,6 +81,7 @@ checksum still matches.
 | 20 | `CountSketch` |
 | 21 | `InvertibleBloomLookupTable` |
 | 22 | `BloomierFilter` |
+| 23 | `HeavyKeeper` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
@@ -526,6 +527,27 @@ Each cell holds an 8-bit fingerprint above the value, and a key's three cells co
 exclusive-or to give both. The seed matters as much as the cells, as it does for a
 `BinaryFuseFilter`: every position is computed from it, and a map read back under a
 different one would answer with the wrong values rather than with none.
+
+### `HeavyKeeper` (id 23)
+
+```
+u32     k, the number of elements tracked
+u32     width, buckets per array
+u32     depth, the number of arrays
+f64     the decay base b
+u64     the decay generator's state
+u64     n, the number of items added
+u16     the fingerprint fields, depth * width of them, array-major
+u64     the counter fields, depth * width of them, array-major
+u32     element count
+        per element:
+bytes     the element's data
+u64       its recorded frequency
+```
+
+The tracked elements are re-heaped on read rather than being trusted to arrive in heap
+order, for the same reason `TopK`'s are. The generator's state is stored so a reloaded
+structure resumes its decay sequence rather than replaying it; see below.
 
 ## The random generator's state
 
