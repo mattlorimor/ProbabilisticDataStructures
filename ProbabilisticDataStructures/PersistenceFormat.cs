@@ -34,6 +34,7 @@ namespace ProbabilisticDataStructures
         InvertibleBloomLookupTable = 21,
         BloomierFilter = 22,
         HeavyKeeper = 23,
+        VarOpt = 24,
     }
 
     /// <summary>

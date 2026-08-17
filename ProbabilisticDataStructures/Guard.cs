@@ -186,6 +186,23 @@ namespace ProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// Rejects an item weight that is not a positive finite number. A weight of
+        /// zero would be an item that cannot be sampled and cannot affect an estimate,
+        /// a negative weight would make inclusion probabilities negative, and NaN or
+        /// infinity would poison every threshold computed after it.
+        /// </summary>
+        internal static void ValidWeight(double weight, string paramName)
+        {
+            if (double.IsNaN(weight) || double.IsInfinity(weight) || weight <= 0.0)
+            {
+                throw new ArgumentOutOfRangeException(paramName, weight,
+                    "An item's weight must be a positive finite number; sampling " +
+                    "probabilities are proportional to weight, and any other value " +
+                    "describes an item that cannot be drawn.");
+            }
+        }
+
         internal static void ValidTighteningRatio(double r, string paramName)
         {
             if (double.IsNaN(r) || r <= 0.0 || r >= 1.0)
