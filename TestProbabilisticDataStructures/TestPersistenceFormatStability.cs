@@ -264,6 +264,33 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestStoredVarOptStillReads()
+        {
+            var sample = VarOpt.ReadFrom(Fixture("varopt-v1.bin"));
+
+            Assert.AreEqual(202UL, sample.N);
+            Assert.AreEqual(6u, sample.SampleCount);
+
+            // The whole point of the structure is that this number is exact, so a
+            // reader that rounded it, or that lost the threshold region's total,
+            // would show up here rather than in a tolerance.
+            Assert.AreEqual(1350.0, sample.TotalWeight, 0.0);
+
+            // Two items outweighed the threshold and are held as themselves; the
+            // other four share it. A reader that mixed the regions would report the
+            // threshold for the whale, or 500 for a light item.
+            var byName = sample.Samples().ToDictionary(
+                e => Encoding.ASCII.GetString(e.Data.Span), e => e.Weight);
+
+            Assert.AreEqual(500.0, byName["whale"], 0.0);
+            Assert.AreEqual(250.0, byName["kraken"], 0.0);
+            Assert.AreEqual(150.0, byName["flow-4"], 0.0);
+            Assert.AreEqual(150.0, byName["flow-5"], 0.0);
+            Assert.AreEqual(150.0, byName["flow-6"], 0.0);
+            Assert.AreEqual(150.0, byName["flow-10"], 0.0);
+        }
+
+        [TestMethod]
         public void TestStoredSimHashSignatureStillReads()
         {
             var signature = SimHashSignature.ReadFrom(Fixture("simhashsignature-v1.bin"));
@@ -536,6 +563,16 @@ namespace TestProbabilisticDataStructures
             }
             AssertBytes("heavykeeper-v1.bin", keeper.ToByteArray());
 
+            var varopt = new VarOpt(6, seed: 99);
+            for (var i = 0; i < 200; i++)
+            {
+                varopt.Add(Key($"flow-{i % 12}"), 1.0 + (i % 5));
+            }
+            varopt.Add(Key("whale"), 500.0);
+            varopt.Add(Key("kraken"), 250.0);
+
+            AssertBytes("varopt-v1.bin", varopt.ToByteArray());
+
             var iblt = new InvertibleBloomLookupTable(10, 8);
             for (var i = 0; i < 6; i++)
             {
@@ -621,6 +658,7 @@ namespace TestProbabilisticDataStructures
                 ("iblt-v1.bin", 21, 1),
                 ("bloomierfilter-v1.bin", 22, 1),
                 ("heavykeeper-v1.bin", 23, 1),
+                ("varopt-v1.bin", 24, 1),
             };
 
             foreach (var (fixture, id, version) in expected)
