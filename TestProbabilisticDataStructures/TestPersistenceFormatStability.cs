@@ -264,6 +264,35 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestStoredGrafiteStillReads()
+        {
+            var filter = Grafite.ReadFrom(Fixture("grafite-v1.bin"));
+
+            Assert.AreEqual(500UL, filter.Count());
+
+            // Keys spaced 1009 apart, so the stored keys and the gaps between them
+            // are both known exactly. A reader that lost the hash parameters, the
+            // reduced universe or a word of the encoding would move these answers.
+            Assert.IsTrue(filter.Test(0));
+            Assert.IsTrue(filter.Test(1009));
+            Assert.IsFalse(filter.Test(504500), "past the last key");
+            Assert.IsFalse(filter.Test(1, 100), "a gap between two keys");
+            Assert.IsTrue(filter.Test(2000, 2100), "a range holding the third key");
+
+            // Not one of the 1008 non-keys below the second key reads as present, so
+            // the filter's answers here are the keys themselves rather than noise.
+            var positives = 0;
+            for (ulong candidate = 1; candidate < 1009; candidate++)
+            {
+                if (filter.Test(candidate))
+                {
+                    positives++;
+                }
+            }
+            Assert.AreEqual(0, positives);
+        }
+
+        [TestMethod]
         public void TestStoredUltraLogLogStillReads()
         {
             var sketch = UltraLogLog.ReadFrom(Fixture("ultraloglog-v1.bin"));
@@ -579,6 +608,10 @@ namespace TestProbabilisticDataStructures
             }
             AssertBytes("heavykeeper-v1.bin", keeper.ToByteArray());
 
+            AssertBytes("grafite-v1.bin", Grafite.Build(
+                Enumerable.Range(0, 500).Select(i => (ulong)(i * 1009)),
+                0.02, 32, seed: 2024).ToByteArray());
+
             var ultra = new UltraLogLog(8);
             for (var i = 0; i < 10000; i++)
             {
@@ -684,6 +717,7 @@ namespace TestProbabilisticDataStructures
                 ("heavykeeper-v1.bin", 23, 1),
                 ("varopt-v1.bin", 24, 1),
                 ("ultraloglog-v1.bin", 25, 1),
+                ("grafite-v1.bin", 26, 1),
             };
 
             foreach (var (fixture, id, version) in expected)

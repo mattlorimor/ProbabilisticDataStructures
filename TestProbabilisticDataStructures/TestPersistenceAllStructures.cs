@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -219,6 +220,33 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestGrafiteRoundTrips()
+        {
+            var rand = new Random(19);
+            var keys = new SortedSet<ulong>();
+            while (keys.Count < 20000) keys.Add((ulong)rand.NextInt64(0, 1_000_000_000));
+
+            var filter = Grafite.Build(keys, 0.01, 64, seed: 23);
+            var restored = RoundTrip(filter);
+
+            Assert.AreEqual(filter.Count(), restored.Count());
+
+            // Answers, not fields: a restored filter has to agree everywhere,
+            // including where the answer is a false positive.
+            foreach (var key in keys)
+            {
+                Assert.IsTrue(restored.Test(key), "restored filter lost a key");
+            }
+            for (int i = 0; i < 20000; i++)
+            {
+                ulong low = (ulong)rand.NextInt64(0, 1_000_000_000);
+                ulong high = low + (ulong)rand.Next(0, 64);
+                Assert.AreEqual(filter.Test(low, high), restored.Test(low, high),
+                    $"restored filter disagreed about [{low}, {high}]");
+            }
+        }
+
+        [TestMethod]
         public void TestUltraLogLogRoundTrips()
         {
             var sketch = new UltraLogLog(12);
@@ -347,6 +375,7 @@ namespace TestProbabilisticDataStructures
             Assert.HasCount(0, RoundTrip(new HeavyKeeper(10, 64, seed: 1)).Elements());
             Assert.AreEqual(0u, RoundTrip(new VarOpt(10, seed: 1)).SampleCount);
             Assert.AreEqual(0ul, RoundTrip(new UltraLogLog(10)).Count());
+            Assert.AreEqual(0ul, RoundTrip(Grafite.Build(Array.Empty<ulong>(), 0.01, 16)).Count());
 
             Assert.AreEqual(0ul, RoundTrip(new CountMinSketch(0.01, 0.01)).TotalCount());
             Assert.AreEqual(0u, RoundTrip(BinaryFuseFilter.Build(Array.Empty<byte[]>())).Count());
@@ -473,6 +502,7 @@ namespace TestProbabilisticDataStructures
                 ("HeavyKeeper", new HeavyKeeper(10, 64, seed: 1).Add(Key("a")).ToByteArray()),
                 ("VarOpt", new VarOpt(10, seed: 1).Add(Key("a")).ToByteArray()),
                 ("UltraLogLog", new UltraLogLog(10).Add(Key("a")).ToByteArray()),
+                ("Grafite", Grafite.Build(new ulong[] { 1, 2, 3 }, 0.01, 16, seed: 1).ToByteArray()),
             };
 
             // Read every payload as a BloomFilter; only its own may succeed.
@@ -534,6 +564,7 @@ namespace TestProbabilisticDataStructures
                 ("HeavyKeeper", b => Persistence.FromByteArray<HeavyKeeper>(b), FilledHeavyKeeper()),
                 ("VarOpt", b => Persistence.FromByteArray<VarOpt>(b), FilledVarOpt()),
                 ("UltraLogLog", b => Persistence.FromByteArray<UltraLogLog>(b), FilledUltraLogLog()),
+                ("Grafite", b => Persistence.FromByteArray<Grafite>(b), FilledGrafite()),
             };
 
             foreach (var (name, read, clean) in payloads)
@@ -547,6 +578,12 @@ namespace TestProbabilisticDataStructures
                         $"{name}: a flipped bit at offset {i} was not caught");
                 }
             }
+        }
+
+        private static byte[] FilledGrafite()
+        {
+            var keys = Enumerable.Range(0, 60).Select(i => (ulong)(i * 37));
+            return Grafite.Build(keys, 0.05, 8, seed: 11).ToByteArray();
         }
 
         private static byte[] FilledUltraLogLog()

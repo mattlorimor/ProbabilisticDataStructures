@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Buffers.Binary;
 using System.IO;
 using System.IO.Hashing;
@@ -217,6 +218,60 @@ namespace TestProbabilisticDataStructures
             AssertRefused(
                 () => Persistence.FromByteArray<MinHashSignature>(PokeUInt32(bytes, 0, 0)),
                 "not a signature this library builds");
+        }
+
+        /// <summary>
+        /// A Grafite payload for the tests below to corrupt. Its scalar prefix is
+        /// fixed, so field offsets are too: the reduced universe at 0, the hash
+        /// multiplier at 8, its addend at 16, the key count at 24, the largest
+        /// promised range at 32, and the low-bit split at 40.
+        /// </summary>
+        private static byte[] GrafitePayload()
+        {
+            var keys = Enumerable.Range(0, 60).Select(i => (ulong)(i * 37));
+            return Grafite.Build(keys, 0.05, 8, seed: 11).ToByteArray();
+        }
+
+        /// <summary>
+        /// A multiplier of zero collapses the hash's block term, so every block is
+        /// shifted the same way and a query one reduced universe from a key collides
+        /// with it every time. That is the attack the filter exists to survive.
+        /// </summary>
+        [TestMethod]
+        public void TestGrafiteWithADegenerateMultiplierIsRefused()
+        {
+            var bytes = PokeUInt64(GrafitePayload(), 8, 0);
+            AssertRefused(
+                () => Persistence.FromByteArray<Grafite>(bytes),
+                "hash parameters this library never draws");
+        }
+
+        /// <summary>
+        /// A filter holding a hash code outside its own reduced universe describes a
+        /// state hashing cannot produce, and would put the encoding's high parts past
+        /// the end of the bitvector that indexes them.
+        /// </summary>
+        [TestMethod]
+        public void TestGrafiteWithACodeOutsideItsUniverseIsRefused()
+        {
+            // The reduced universe, shrunk below the codes already stored in it.
+            var bytes = PokeUInt64(GrafitePayload(), 0, 2);
+            AssertRefused(
+                () => Persistence.FromByteArray<Grafite>(bytes),
+                "outside its own");
+        }
+
+        /// <summary>
+        /// A split wider than a hash code is not a split at all, and the mask it
+        /// implies would read low bits that were never written.
+        /// </summary>
+        [TestMethod]
+        public void TestGrafiteWithAnImpossibleSplitIsRefused()
+        {
+            var bytes = PokeUInt32(GrafitePayload(), 40, 65);
+            AssertRefused(
+                () => Persistence.FromByteArray<Grafite>(bytes),
+                "sixty-four bits wide");
         }
 
         /// <summary>
