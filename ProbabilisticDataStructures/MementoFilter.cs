@@ -162,10 +162,48 @@ namespace ProbabilisticDataStructures
             }
 
             var hash = HashPrefix(PrefixOf(key));
-            var (quotient, fingerprint) = this.Active.Split(hash);
-            this.Active.Insert(quotient, 0, fingerprint, MementoOf(key));
+            PlaceMemento(this.Active, hash, 0, MementoOf(key));
             this.Added++;
             return this;
+        }
+
+        /// <summary>
+        /// Adds one memento to the block a hash names, joining the box already there
+        /// if the fingerprint matches and starting one otherwise.
+        /// </summary>
+        /// <remarks>
+        /// Keys of one block share a fingerprint between them, which is where the
+        /// space saving comes from, so an insertion is an edit of an existing box far
+        /// more often than it is a new one.
+        /// </remarks>
+        private static void PlaceMemento(
+            MementoSegment segment, ulong hash, int age, ulong memento)
+        {
+            var (quotient, fingerprint) = segment.Split(hash);
+            var fluid = segment.FluidFingerprint(age, fingerprint);
+
+            var codec = segment.Codec;
+            var boxes = codec.Decode(segment.ReadRun(quotient));
+
+            var index = boxes.FindIndex(b => b.Fingerprint == fluid);
+            if (index < 0)
+            {
+                var box = new KeepsakeBox { Fingerprint = fluid };
+                box.Mementos.Add(memento);
+
+                // Boxes are kept in increasing order of fingerprint so that a lookup
+                // can stop once it has passed the one it wants.
+                var at = boxes.FindIndex(b => b.Fingerprint > fluid);
+                boxes.Insert(at < 0 ? boxes.Count : at, box);
+            }
+            else
+            {
+                var mementos = boxes[index].Mementos;
+                var position = mementos.FindIndex(m => m > memento);
+                mementos.Insert(position < 0 ? mementos.Count : position, memento);
+            }
+
+            segment.RewriteRun(quotient, codec.Encode(boxes));
         }
 
         /// <summary>
@@ -258,8 +296,30 @@ namespace ProbabilisticDataStructures
 
             foreach (var segment in this.Segments)
             {
-                if (segment.Remove(hash, memento))
+                var (quotient, _) = segment.Split(hash);
+                var codec = segment.Codec;
+                var boxes = codec.Decode(segment.ReadRun(quotient));
+
+                for (var i = 0; i < boxes.Count; i++)
                 {
+                    if (!segment.FingerprintMatches(boxes[i].Fingerprint, hash))
+                    {
+                        continue;
+                    }
+
+                    var at = boxes[i].Mementos.IndexOf(memento);
+                    if (at < 0)
+                    {
+                        continue;
+                    }
+
+                    boxes[i].Mementos.RemoveAt(at);
+                    if (boxes[i].Mementos.Count == 0)
+                    {
+                        boxes.RemoveAt(i);
+                    }
+
+                    segment.RewriteRun(quotient, codec.Encode(boxes));
                     this.Added--;
                     return true;
                 }
@@ -298,20 +358,30 @@ namespace ProbabilisticDataStructures
                 old.QuotientBits + 1, old.FingerprintBits, old.MementoBits);
             var voided = new List<(uint Address, ulong Memento)>();
 
-            foreach (var (quotient, field) in old.Entries())
+            for (uint quotient = 0; quotient < old.Slots; quotient++)
             {
-                var age = old.AgeOf(field);
-                var memento = old.MementoOf(field);
-
-                if (age >= old.FingerprintBits)
+                foreach (var box in old.Codec.Decode(old.ReadRun(quotient)))
                 {
-                    voided.Add((quotient, memento));
-                    continue;
-                }
+                    var age = old.AgeOfFluid(box.Fingerprint);
+                    var fingerprint = old.FingerprintOfFluid(box.Fingerprint, age);
 
-                var fingerprint = old.FingerprintOf(field, age);
-                var moved = quotient + ((fingerprint & 1) == 1 ? old.Slots : 0u);
-                grown.Insert(moved, age + 1, fingerprint >> 1, memento);
+                    if (age >= old.FingerprintBits)
+                    {
+                        foreach (var memento in box.Mementos)
+                        {
+                            voided.Add((quotient, memento));
+                        }
+                        continue;
+                    }
+
+                    // The address bit comes from the fingerprint. Every key of the box
+                    // shares that fingerprint, so the whole box moves together.
+                    var moved = quotient + ((fingerprint & 1) == 1 ? old.Slots : 0u);
+                    foreach (var memento in box.Mementos)
+                    {
+                        grown.InsertMemento(moved, age + 1, fingerprint >> 1, memento);
+                    }
+                }
             }
 
             this.Segments[index] = grown;
@@ -352,7 +422,7 @@ namespace ProbabilisticDataStructures
                 var carried = (ulong)address >> target.QuotientBits;
                 var spare = addressBits - target.QuotientBits;
                 var age = Math.Clamp(fingerprintBits - spare, 0, fingerprintBits);
-                target.Insert(quotient, age, carried, memento);
+                target.InsertMemento(quotient, age, carried, memento);
             }
         }
 

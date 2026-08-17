@@ -79,6 +79,7 @@ namespace ProbabilisticDataStructures
             this.bitsPerSlot = this.fieldBits + MetadataBits;
             this.slotMask = (1UL << this.bitsPerSlot) - 1;
             this.Data = new ulong[(((long)this.Slots * this.bitsPerSlot) >> 6) + 2];
+            this.Codec = new KeepsakeCodec(fingerprintBits, mementoBits);
         }
 
         /// <summary>
@@ -162,6 +163,92 @@ namespace ProbabilisticDataStructures
         internal bool IsVoid(ulong field) => AgeOf(field) >= this.FingerprintBits;
 
         /// <summary>
+        /// The codec that packs this table's runs.
+        /// </summary>
+        internal KeepsakeCodec Codec { get; private set; } = null!;
+
+        /// <summary>
+        /// The fluid fingerprint an entry of this age and fingerprint carries: the
+        /// age counter and the fingerprint together, without a memento beneath them.
+        /// </summary>
+        internal ulong FluidFingerprint(int age, ulong fingerprint)
+        {
+            var remaining = this.FingerprintBits - age;
+            return (1UL << remaining) | (fingerprint & ((1UL << remaining) - 1));
+        }
+
+        /// <summary>
+        /// How many expansions ago an entry with this fluid fingerprint was inserted.
+        /// </summary>
+        internal int AgeOfFluid(ulong fluid)
+        {
+            var age = 0;
+            for (var bit = this.FingerprintBits; bit >= 0; bit--)
+            {
+                if ((fluid & (1UL << bit)) != 0)
+                {
+                    break;
+                }
+                age++;
+            }
+            return age;
+        }
+
+        /// <summary>
+        /// The fingerprint left inside a fluid fingerprint of this age.
+        /// </summary>
+        internal ulong FingerprintOfFluid(ulong fluid, int age)
+        {
+            var remaining = this.FingerprintBits - age;
+            return remaining <= 0 ? 0 : fluid & ((1UL << remaining) - 1);
+        }
+
+        /// <summary>
+        /// Whether a box's fluid fingerprint could stand for this hash. An older box
+        /// matches on fewer bits, which is the price of having expanded.
+        /// </summary>
+        internal bool FingerprintMatches(ulong fluid, ulong hash)
+        {
+            var age = AgeOfFluid(fluid);
+            var remaining = this.FingerprintBits - age;
+            if (remaining <= 0)
+            {
+                return true;
+            }
+
+            var expected = (hash >> this.QuotientBits) & ((1UL << remaining) - 1);
+            return FingerprintOfFluid(fluid, age) == expected;
+        }
+
+        /// <summary>
+        /// Places one memento into the block a quotient names, joining the box already
+        /// there when the fluid fingerprint matches.
+        /// </summary>
+        internal void InsertMemento(
+            uint quotient, int age, ulong fingerprint, ulong memento)
+        {
+            var fluid = FluidFingerprint(age, fingerprint);
+            var boxes = this.Codec.Decode(ReadRun(quotient));
+
+            var index = boxes.FindIndex(b => b.Fingerprint == fluid);
+            if (index < 0)
+            {
+                var box = new KeepsakeBox { Fingerprint = fluid };
+                box.Mementos.Add(memento);
+                var at = boxes.FindIndex(b => b.Fingerprint > fluid);
+                boxes.Insert(at < 0 ? boxes.Count : at, box);
+            }
+            else
+            {
+                var mementos = boxes[index].Mementos;
+                var position = mementos.FindIndex(m => m > memento);
+                mementos.Insert(position < 0 ? mementos.Count : position, memento);
+            }
+
+            RewriteRun(quotient, this.Codec.Encode(boxes));
+        }
+
+        /// <summary>
         /// The quotient and fingerprint a hash yields in this segment.
         /// </summary>
         /// <remarks>
@@ -197,43 +284,31 @@ namespace ProbabilisticDataStructures
                 return false;
             }
 
-            var slot = FindRunStart(quotient);
-            do
+            foreach (var box in this.Codec.Decode(ReadRun(quotient)))
             {
-                var field = ReadField(slot);
-                if (Matches(field, hash))
+                if (!FingerprintMatches(box.Fingerprint, hash))
                 {
-                    var memento = MementoOf(field);
+                    continue;
+                }
+
+                // The box holds its keys in order, so the ends rule most ranges out
+                // before any of the middle is looked at.
+                var mementos = box.Mementos;
+                if (mementos[^1] < low || mementos[0] > high)
+                {
+                    continue;
+                }
+
+                foreach (var memento in mementos)
+                {
                     if (memento >= low && memento <= high)
                     {
                         return true;
                     }
                 }
-                slot = Next(slot);
             }
-            while (IsContinuation(slot));
 
             return false;
-        }
-
-        /// <summary>
-        /// Whether a stored entry could stand for this hash. An entry matches on as
-        /// many fingerprint bits as it has left, so an older entry matches more
-        /// readily -- that is the price of having expanded.
-        /// </summary>
-        private bool Matches(ulong field, ulong hash)
-        {
-            var age = AgeOf(field);
-            var remaining = this.FingerprintBits - age;
-            if (remaining <= 0)
-            {
-                // A void entry has no fingerprint at all, so anything landing in its
-                // run matches it.
-                return true;
-            }
-
-            var expected = (hash >> this.QuotientBits) & ((1UL << remaining) - 1);
-            return FingerprintOf(field, age) == expected;
         }
 
         /// <summary>
@@ -265,23 +340,18 @@ namespace ProbabilisticDataStructures
 
             if (hadRun)
             {
-                // Runs are kept ordered by field so that a scan can stop early, and so
-                // that a delete looking for the longest fingerprint has somewhere
-                // predictable to look.
+                // The run's order is the encoding's order, not a sort. A keepsake box
+                // spills across several slots whose values fall as well as rise -- the
+                // zero marker is a fall by design -- so anything that reordered them
+                // would take a run apart. New slots go on the end.
                 while (true)
                 {
-                    if (ReadField(at) >= field)
-                    {
-                        break;
-                    }
-
                     var next = Next(at);
                     if (!IsContinuation(next))
                     {
                         at = next;
                         break;
                     }
-
                     at = next;
                 }
             }
@@ -331,68 +401,73 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Removes one entry matching the hash, choosing the one with the longest
-        /// fingerprint.
+        /// Every entry the segment holds, paired with the quotient that owns it.
         /// </summary>
-        /// <remarks>
-        /// Which match is removed is not a detail. A short fingerprint stands for more
-        /// keys than a long one, so removing a short match could take away the only
-        /// record of a key that was never deleted -- a false negative, which this
-        /// structure may not produce. Removing the longest match leaves the shorter
-        /// ones behind, and they go on answering for whatever else they stood for.
-        /// </remarks>
-        internal bool Remove(ulong hash, ulong memento)
+        internal List<(uint Quotient, ulong Field)> Entries()
         {
-            var (quotient, _) = Split(hash);
-            if (!IsOccupied(quotient))
+            var entries = new List<(uint Quotient, ulong Field)>((int)this.Count);
+
+            for (var quotient = 0u; quotient < this.Slots; quotient++)
             {
-                return false;
+                if (!IsOccupied(quotient))
+                {
+                    continue;
+                }
+
+                var at = FindRunStart(quotient);
+
+                while (true)
+                {
+                    entries.Add((quotient, ReadField(at)));
+
+                    var next = Next(at);
+                    if (!IsContinuation(next))
+                    {
+                        break;
+                    }
+
+                    at = next;
+                }
             }
 
-            var runStart = FindRunStart(quotient);
-            var slot = runStart;
-            var found = false;
-            var bestSlot = 0u;
-            var bestAge = int.MaxValue;
+            return entries;
+        }
 
+        /// <summary>
+        /// The slot values of the run belonging to a quotient, in order.
+        /// </summary>
+        internal List<ulong> ReadRun(uint quotient)
+        {
+            var fields = new List<ulong>();
+            if (!IsOccupied(quotient))
+            {
+                return fields;
+            }
+
+            var slot = FindRunStart(quotient);
             do
             {
-                var field = ReadField(slot);
-                if (Matches(field, hash) && MementoOf(field) == memento)
-                {
-                    var age = AgeOf(field);
-                    if (age < bestAge)
-                    {
-                        bestAge = age;
-                        bestSlot = slot;
-                        found = true;
-                    }
-                }
+                fields.Add(ReadField(slot));
                 slot = Next(slot);
             }
             while (IsContinuation(slot));
 
-            if (!found)
-            {
-                return false;
-            }
-
-            RebuildClusterWithout(quotient, ReadField(bestSlot));
-            this.Count--;
-            return true;
+            return fields;
         }
 
         /// <summary>
-        /// Takes a cluster apart, drops one entry, and puts the rest back.
+        /// Replaces a quotient's run with the given slot values, which may be more or
+        /// fewer than it held before.
         /// </summary>
         /// <remarks>
-        /// Shifting entries back one at a time is faster and much easier to get
-        /// subtly wrong: the shifted and continuation bits of every entry after the
-        /// hole have to be recomputed against runs that may have moved or emptied.
-        /// Reinserting the survivors lets the insert path work that out, which is code
-        /// that is exercised on every addition rather than only on deletes.
+        /// Editing a keepsake box changes how many slots it needs, so a run has to be
+        /// able to grow and shrink. Rather than shifting neighbours around a hole of
+        /// changing size -- where every shifted and continuation bit after it has to be
+        /// recomputed -- the whole cluster is taken apart and put back through the
+        /// ordinary insert path, which is exercised on every addition rather than only
+        /// here.
         /// </remarks>
-        private void RebuildClusterWithout(uint quotient, ulong field)
+        internal void RewriteRun(uint quotient, IReadOnlyList<ulong> fields)
         {
             var start = quotient;
             while (IsShifted(start))
@@ -400,21 +475,22 @@ namespace ProbabilisticDataStructures
                 start = Prev(start);
             }
 
-            var length = 1u;
-            var slot = start;
-            while (true)
+            var length = IsSlotEmpty(start) && !IsOccupied(start) ? 0u : 1u;
+            if (length > 0)
             {
-                var next = Next(slot);
-                if (IsSlotEmpty(next) || !IsShifted(next))
+                var slot = start;
+                while (true)
                 {
-                    break;
+                    var next = Next(slot);
+                    if (IsSlotEmpty(next) || !IsShifted(next))
+                    {
+                        break;
+                    }
+                    slot = next;
+                    length++;
                 }
-                slot = next;
-                length++;
             }
 
-            // Pair each entry in the cluster with the quotient that owns it, which is
-            // possible only because runs appear in the order their quotients do.
             var entries = new List<(uint Quotient, ulong Field)>((int)length);
             var owner = start;
             var cursor = start;
@@ -446,51 +522,39 @@ namespace ProbabilisticDataStructures
                 WriteSlot(wipe, 0);
                 wipe = Next(wipe);
             }
+            this.Count -= length;
 
-            var dropped = false;
+            // The replaced run's slots go back in the position its quotient dictates,
+            // and every other run returns unchanged.
+            var placed = false;
             foreach (var (owningQuotient, held) in entries)
             {
-                if (!dropped && owningQuotient == quotient && held == field)
+                if (owningQuotient == quotient)
                 {
-                    dropped = true;
+                    if (!placed)
+                    {
+                        placed = true;
+                        foreach (var replacement in fields)
+                        {
+                            InsertField(quotient, replacement);
+                            this.Count++;
+                        }
+                    }
                     continue;
                 }
 
                 InsertField(owningQuotient, held);
+                this.Count++;
             }
-        }
 
-        /// <summary>
-        /// Every entry the segment holds, paired with the quotient that owns it.
-        /// </summary>
-        internal List<(uint Quotient, ulong Field)> Entries()
-        {
-            var entries = new List<(uint Quotient, ulong Field)>((int)this.Count);
-
-            for (var quotient = 0u; quotient < this.Slots; quotient++)
+            if (!placed)
             {
-                if (!IsOccupied(quotient))
+                foreach (var replacement in fields)
                 {
-                    continue;
-                }
-
-                var at = FindRunStart(quotient);
-
-                while (true)
-                {
-                    entries.Add((quotient, ReadField(at)));
-
-                    var next = Next(at);
-                    if (!IsContinuation(next))
-                    {
-                        break;
-                    }
-
-                    at = next;
+                    InsertField(quotient, replacement);
+                    this.Count++;
                 }
             }
-
-            return entries;
         }
 
         private uint Next(uint slot) => (slot + 1) & this.slotMaskIndex;
