@@ -264,6 +264,30 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestStoredInfiniFilterStillReads()
+        {
+            var filter = InfiniFilter.ReadFrom(Fixture("infinifilter-v1.bin"));
+
+            Assert.AreEqual(2000UL, filter.Count());
+            Assert.AreEqual(7u, filter.ExpansionCount());
+
+            // Two tables: four-bit fingerprints send the oldest entries down the
+            // chain, so this fixture pins the multi-table layout rather than only the
+            // simple case.
+            Assert.AreEqual(2, filter.ChainLength());
+            Assert.AreEqual(4224UL, filter.Capacity());
+
+            // Every item still answers, including those that were moved between
+            // tables -- a reader that lost the second table would fail here rather
+            // than merely reading something.
+            for (var i = 0; i < 2000; i++)
+            {
+                Assert.IsTrue(filter.Test(Key($"item-{i}")),
+                    $"stored filter no longer holds item-{i}");
+            }
+        }
+
+        [TestMethod]
         public void TestStoredGrafiteStillReads()
         {
             var filter = Grafite.ReadFrom(Fixture("grafite-v1.bin"));
@@ -608,6 +632,14 @@ namespace TestProbabilisticDataStructures
             }
             AssertBytes("heavykeeper-v1.bin", keeper.ToByteArray());
 
+            var infini = new InfiniFilter(initialCapacity: 16, fingerprintBits: 4);
+            for (var i = 0; i < 2000; i++)
+            {
+                infini.Add(Key($"item-{i}"));
+            }
+
+            AssertBytes("infinifilter-v1.bin", infini.ToByteArray());
+
             AssertBytes("grafite-v1.bin", Grafite.Build(
                 Enumerable.Range(0, 500).Select(i => (ulong)(i * 1009)),
                 0.02, 32, seed: 2024).ToByteArray());
@@ -718,6 +750,7 @@ namespace TestProbabilisticDataStructures
                 ("varopt-v1.bin", 24, 1),
                 ("ultraloglog-v1.bin", 25, 1),
                 ("grafite-v1.bin", 26, 1),
+                ("infinifilter-v1.bin", 27, 1),
             };
 
             foreach (var (fixture, id, version) in expected)
