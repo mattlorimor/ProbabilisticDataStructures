@@ -45,6 +45,20 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Overwrites a u64 at an offset within the payload and repairs the checksum --
+        /// the eight-byte sibling of <see cref="PokeUInt32"/>, for doubles poked by
+        /// their bit pattern.
+        /// </summary>
+        private static byte[] PokeUInt64(byte[] original, int payloadOffset, ulong value)
+        {
+            var bytes = (byte[])original.Clone();
+            BinaryPrimitives.WriteUInt64LittleEndian(
+                bytes.AsSpan(PayloadStart + payloadOffset), value);
+            RepairChecksum(bytes);
+            return bytes;
+        }
+
+        /// <summary>
         /// Recomputes the trailing CRC over bytes 4 through 14 + n, as a writer would.
         /// </summary>
         private static void RepairChecksum(byte[] bytes)
@@ -203,6 +217,73 @@ namespace TestProbabilisticDataStructures
             AssertRefused(
                 () => Persistence.FromByteArray<MinHashSignature>(PokeUInt32(bytes, 0, 0)),
                 "not a signature this library builds");
+        }
+
+        /// <summary>
+        /// A HeavyKeeper payload for the tests below to corrupt: k = 5, two arrays of
+        /// sixteen buckets. Its payload layout is fixed, so field offsets are too:
+        /// k at 0, width at 4, depth at 8, decay at 12, and -- after the 36-byte
+        /// scalar prefix, 64 bytes of fingerprints and 256 of counters -- the tracked
+        /// element count at 356.
+        /// </summary>
+        private static byte[] HeavyKeeperPayload()
+        {
+            var hk = new HeavyKeeper(5, 16, seed: 7);
+            for (var i = 0; i < 60; i++)
+            {
+                hk.Add(Key($"item-{i % 8}"));
+            }
+            return hk.ToByteArray();
+        }
+
+        /// <summary>
+        /// A HeavyKeeper that tracks no elements indexes its empty heap on the first
+        /// add, so the reader refuses to build one.
+        /// </summary>
+        [TestMethod]
+        public void TestHeavyKeeperTrackingNothingIsRefused()
+        {
+            var bytes = PokeUInt32(HeavyKeeperPayload(), 0, 0);
+            AssertRefused(
+                () => Persistence.FromByteArray<HeavyKeeper>(bytes), "tracks no");
+        }
+
+        /// <summary>
+        /// A HeavyKeeper claiming more tracked elements than it has room for is
+        /// refused before the reader loads a single one of them.
+        /// </summary>
+        [TestMethod]
+        public void TestHeavyKeeperHoldingMoreThanItsRoomIsRefused()
+        {
+            var bytes = PokeUInt32(HeavyKeeperPayload(), 356, 200);
+            AssertRefused(
+                () => Persistence.FromByteArray<HeavyKeeper>(bytes), "with room for");
+        }
+
+        /// <summary>
+        /// A decay base of one decays every bucket on every mismatch, so no bucket
+        /// could hold anything; this library never writes such a structure, and the
+        /// reader refuses to believe it did.
+        /// </summary>
+        [TestMethod]
+        public void TestHeavyKeeperWithFlatDecayIsRefused()
+        {
+            var bytes = PokeUInt64(HeavyKeeperPayload(), 12,
+                BitConverter.DoubleToUInt64Bits(1.0));
+            AssertRefused(
+                () => Persistence.FromByteArray<HeavyKeeper>(bytes), "decay base");
+        }
+
+        /// <summary>
+        /// A width whose product with depth is beyond anything this library builds is
+        /// refused before a single array is allocated for it.
+        /// </summary>
+        [TestMethod]
+        public void TestHeavyKeeperClaimingAbsurdWidthIsRefused()
+        {
+            var bytes = PokeUInt32(HeavyKeeperPayload(), 4, 1 << 30);
+            AssertRefused(
+                () => Persistence.FromByteArray<HeavyKeeper>(bytes), "buckets, beyond");
         }
     }
 }
