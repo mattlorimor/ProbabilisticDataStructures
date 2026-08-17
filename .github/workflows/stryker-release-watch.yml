@@ -1,0 +1,57 @@
+name: Stryker release watch
+
+# dotnet-tools.json is not an ecosystem Dependabot can watch, so nothing notices
+# when a new dotnet-stryker ships. TESTING.md carries a retirement plan for the
+# MSTest-parallelism workarounds that begins "when the next Stryker release
+# ships" (stryker-net#3757 / #3760); this checks weekly and opens one issue when
+# that day comes. Delete this workflow when it fires and the plan is executed.
+on:
+  schedule:
+    - cron: '43 14 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Compare the pinned tool against NuGet
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          pinned=$(python3 -c "import json; print(json.load(open('dotnet-tools.json'))['tools']['dotnet-stryker']['version'])")
+          latest=$(curl -sf https://api.nuget.org/v3-flatcontainer/dotnet-stryker/index.json \
+            | python3 -c "import sys, json; vs=[v for v in json.load(sys.stdin)['versions'] if '-' not in v]; print(vs[-1])")
+          echo "pinned: $pinned, latest stable: $latest"
+          if [ "$pinned" = "$latest" ]; then
+            echo "Up to date; nothing to do."
+            exit 0
+          fi
+          # One issue regardless of how many releases pass before it is acted on:
+          # the search phrase is version-free and matches the open issue if any.
+          if [ "$(gh issue list --state open --search 'retire the Stryker parallelism workarounds in:title' --json number --jq length)" != "0" ]; then
+            echo "Issue already open; nothing to do."
+            exit 0
+          fi
+          gh issue create \
+            --title "Stryker $latest is out: retire the Stryker parallelism workarounds" \
+            --body "$(printf '%s\n' \
+              "dotnet-stryker $latest is on NuGet; the tool manifest pins $pinned. If the release contains stryker-mutator/stryker-net#3760 (merged 2026-08-14, fixes #3757), the retirement plan in TESTING.md applies:" \
+              "" \
+              "- [ ] Bump \`dotnet-tools.json\` to $latest" \
+              "- [ ] Drop the \`concurrency\` pin from \`TestProbabilisticDataStructures/stryker-config.json\` and let \`coverage-analysis\` return to its default" \
+              "- [ ] Delete the Workers guidance from TESTING.md and the pointer comment in \`AssemblyAttributes.cs\`" \
+              "- [ ] Verify with a Buckets.cs sweep: expect the survivor set from the frozen-tree adjudication (strings + unreachable guards + equivalents), not 66% or 100%" \
+              "- [ ] Delete \`.github/workflows/stryker-release-watch.yml\` — it has served its purpose" \
+              "" \
+              "Filed automatically by that workflow.")"
