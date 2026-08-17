@@ -35,6 +35,7 @@ namespace ProbabilisticDataStructures
         BloomierFilter = 22,
         HeavyKeeper = 23,
         VarOpt = 24,
+        UltraLogLog = 25,
     }
 
     /// <summary>

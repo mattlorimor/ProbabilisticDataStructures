@@ -264,6 +264,22 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestStoredUltraLogLogStillReads()
+        {
+            var sketch = UltraLogLog.ReadFrom(Fixture("ultraloglog-v1.bin"));
+
+            Assert.AreEqual(8u, sketch.Precision());
+            Assert.AreEqual(256u, sketch.M());
+
+            // 10,000 distinct elements, estimated at this precision as 10,988. The
+            // exact number is what matters here rather than its accuracy: it is a
+            // function of every register in the payload, so a reader that dropped a
+            // register, shifted the encoding, or mixed up the two low bits would
+            // land somewhere else.
+            Assert.AreEqual(10988UL, sketch.Count());
+        }
+
+        [TestMethod]
         public void TestStoredVarOptStillReads()
         {
             var sample = VarOpt.ReadFrom(Fixture("varopt-v1.bin"));
@@ -563,6 +579,14 @@ namespace TestProbabilisticDataStructures
             }
             AssertBytes("heavykeeper-v1.bin", keeper.ToByteArray());
 
+            var ultra = new UltraLogLog(8);
+            for (var i = 0; i < 10000; i++)
+            {
+                ultra.Add(Key($"element-{i}"));
+            }
+
+            AssertBytes("ultraloglog-v1.bin", ultra.ToByteArray());
+
             var varopt = new VarOpt(6, seed: 99);
             for (var i = 0; i < 200; i++)
             {
@@ -659,6 +683,7 @@ namespace TestProbabilisticDataStructures
                 ("bloomierfilter-v1.bin", 22, 1),
                 ("heavykeeper-v1.bin", 23, 1),
                 ("varopt-v1.bin", 24, 1),
+                ("ultraloglog-v1.bin", 25, 1),
             };
 
             foreach (var (fixture, id, version) in expected)

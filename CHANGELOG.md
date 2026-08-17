@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`UltraLogLog`**, distinct counting that keeps what HyperLogLog discards (Ertl,
+  VLDB 2024). A HyperLogLog register remembers only the largest update value that
+  landed on it; this one also keeps two bits saying whether the positions just below it
+  were reached, which is worth 43% of the memory at equal accuracy against this
+  library's `HyperLogLog` — 24% against one that packs its registers into six bits.
+  Registers store an absolute bit position rather than a run length, so a sketch built
+  at a fine precision and merged into a coarser one is byte for byte the sketch that
+  precision would have built: sketches gathered at different precisions combine without
+  prior agreement, and a sketch can be shrunk after the fact. The estimator is Ertl's
+  FGRA, whose coefficients are computed from the one parameter they derive from rather
+  than transcribed. The martingale estimator is deliberately omitted: it does not
+  survive a merge. (#98)
+
 - **`VarOpt`**, a weighted sample of a stream that answers questions written after the
   stream is gone (Cohen, Duffield, Kaplan, Lund and Thorup, SODA 2009). Every other
   structure here fixes its question at ingest; this one keeps k items with adjusted
