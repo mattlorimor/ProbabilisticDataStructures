@@ -49,7 +49,7 @@ eleven structures the Go library does not have.
   [`MinHash`](#minhash) · [`SimHash`](#simhash) ·
   [`MinHashIndex` and `SimHashIndex`](#minhashindex-and-simhashindex)
 - [Distributions](#distributions) — [`DDSketch`](#ddsketch)
-- [Ranges](#ranges) — [`Grafite`](#grafite)
+- [Ranges](#ranges) — [`Grafite`](#grafite) · [`MementoFilter`](#mementofilter)
 - [Sampling](#sampling) — [`VarOpt`](#varopt)
 - [Recent data](#recent-data)
 - [Contributions](#contributions)
@@ -88,6 +88,7 @@ eleven structures the Go library does not have.
 | …across a corpus, without comparing every pair | `MinHashIndex`, `SimHashIndex` | [Similarity](#similarity) |
 | What does this distribution look like? p50, p99? | `DDSketch` | [Distributions](#distributions) |
 | Is there **anything** between a and b? | `Grafite` | [Ranges](#ranges) |
+| …and the set keeps changing | `MementoFilter` | [Ranges](#ranges) |
 | What is the total weight of *(question not yet asked)*? | `VarOpt` | [Sampling](#sampling) |
 | …but only about the **last hour** | `SlidingWindow<T>` | [Recent data](#recent-data) |
 
@@ -1309,6 +1310,60 @@ which costs one extra lookup and makes the guarantee exact.
 
 Described by Costa, Ferragina and Vinciguerra in
 [Grafite: Taming Adversarial Queries with Optimal Range Filters](https://arxiv.org/abs/2311.15380).
+
+---
+
+### `MementoFilter`
+
+<sup>[↑ Contents](#contents)</sup>
+
+The same question as `Grafite`, for a set that **keeps changing**.
+
+`Grafite` is built once from a known set and never updated. Memento inserts, deletes
+and grows, and gives up nothing on robustness to do it — which is what makes a range
+filter usable behind a B-tree rather than only behind a write-once index.
+
+Each key is cut in two. The low bits — the **memento** — are as many as the widest
+range you mean to ask about; everything above is the prefix. Prefixes partition the
+universe into blocks of that width, and the filter stores, per occupied block, a
+fingerprint together with the mementos of the keys inside it: the exact positions those
+keys hold within their block. A range no wider than a block touches at most two of
+them, so a query is two lookups rather than a search.
+
+The mementos are what keep it honest. A filter storing only prefixes would answer
+"possibly" for any range brushing an occupied block, however far its keys are from what
+was asked. Here the gaps between keys in a block are known to be empty:
+
+| Workload | False positive rate |
+| --- | --- |
+| Random empty ranges | 0.265% |
+| Ranges placed immediately **after each key** | 0.213% |
+
+Those two agreeing is the result. The second workload is what collapses heuristic range
+filters; it does nothing here, because a memento is a piece of the key rather than a
+hash of it, so aiming queries at the data buys nothing.
+
+**Reach for it when** the set changes and you need range emptiness — the case `Grafite`
+cannot serve at all.
+
+**Look elsewhere if** the set is static: `Grafite` is smaller for the same accuracy and
+its bound is a theorem about its hash rather than resting on the keys' own bits.
+
+```C#
+var filter = new MementoFilter(maxRangeSize: 256, fingerprintBits: 8);
+filter.Add(90210);
+
+bool maybe = filter.TestRange(90000, 90500);   // false means certainly empty
+bool gone = filter.TestAndRemove(90210);       // deletes, which Grafite cannot
+```
+
+Keys sharing a block share one stored fingerprint between them, so dense data costs far
+less than sparse: the same 256,000 keys take 41.0 bits each spread one to a block and
+20.5 packed sixty-four to a block. Sparse data gets no such saving — every block holding
+one key costs a slot, as it would anywhere.
+
+Described by Eslami and Dayan in
+[Memento Filter: A Fast, Dynamic, and Robust Range Filter](https://doi.org/10.1145/3698820).
 
 ---
 
