@@ -1061,7 +1061,17 @@ This release modernizes the entire build. The library had not been touched since
 - Initial release: a C# port of [Tyler Treat's](https://github.com/tylertreat)
   [BoomFilters](https://github.com/tylertreat/BoomFilters) Go project.
 
-[3.1.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v3.0.1...HEAD
+[Unreleased]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v6.1.0...HEAD
+[6.1.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v6.0.1...v6.1.0
+[6.0.1]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v6.0.0...v6.0.1
+[6.0.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v5.2.0...v6.0.0
+[5.2.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v5.1.0...v5.2.0
+[5.1.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v5.0.0...v5.1.0
+[5.0.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v4.0.1...v5.0.0
+[4.0.1]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v4.0.0...v4.0.1
+[4.0.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v3.2.0...v4.0.0
+[3.2.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v3.1.0...v3.2.0
+[3.1.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v3.0.1...v3.1.0
 [3.0.1]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v2.0.1...v3.0.0
 [2.0.1]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v2.0.0...v2.0.1
