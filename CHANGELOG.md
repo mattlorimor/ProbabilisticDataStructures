@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`InfiniFilter`**, a filter that grows with the data instead of being sized for it
+  (Dayan, Bercea, Reviriego and Pagh, SIGMOD 2023). Where `ScalableBloomFilter` handles
+  growth by stacking filters whose error rates add up, and `QuotientFilter` refuses once
+  full, this doubles one table in place: each entry pays for the extra address bit by
+  giving up one of its own fingerprint bits, so nothing is rehashed and the original keys
+  are never needed. A per-slot age counter means only the entries present for an
+  expansion pay for it, which keeps the false positive rate growing with the logarithm of
+  the item count rather than with the count — measured at 0.32%, 0.78% and 1.29% across a
+  hundredfold increase. Entries that run out of fingerprint move to a smaller table that
+  expands and sheds in turn, so the filter can keep growing indefinitely. Supports
+  deletes, which `ScalableBloomFilter` does not. (#100)
+
 - **`Grafite`**, a static range filter that answers "is anything in [a, b]?" (Costa,
   Ferragina and Vinciguerra, SIGMOD 2024). Nothing here answered that before, and the
   range filters that do bound their false positive rate empirically, on workloads that

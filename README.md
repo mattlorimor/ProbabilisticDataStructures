@@ -37,7 +37,7 @@ eleven structures the Go library does not have.
   [`DeletableBloomFilter`](#deletablebloomfilter) ·
   [`CuckooBloomFilter`](#cuckoobloomfilter) · [`QuotientFilter`](#quotientfilter) ·
   [`BinaryFuseFilter`](#binaryfusefilter) · [`BloomierFilter`](#bloomierfilter) ·
-  [`ScalableBloomFilter`](#scalablebloomfilter) ·
+  [`ScalableBloomFilter`](#scalablebloomfilter) · [`InfiniFilter`](#infinifilter) ·
   [`StableBloomFilter`](#stablebloomfilter) · [`InverseBloomFilter`](#inversebloomfilter)
 - [Cardinality](#cardinality) —
   [`UltraLogLog`](#ultraloglog) · [`HyperLogLogPlus`](#hyperloglogplus) · [`HyperLogLog`](#hyperloglog) ·
@@ -73,6 +73,7 @@ eleven structures the Go library does not have.
 | …and the set never changes after I build it | `BinaryFuseFilter` | [Membership](#membership) |
 | …and the stream never ends, on fixed memory | `StableBloomFilter` | [Membership](#membership) |
 | …and I have no idea how big the set is | `ScalableBloomFilter` | [Membership](#membership) |
+| …and I have no idea how big it is *and* want deletes | `InfiniFilter` | [Membership](#membership) |
 | …and a false positive would be expensive | `InverseBloomFilter` | [Membership](#membership) |
 | How many distinct things are there? | `UltraLogLog` | [Cardinality](#cardinality) |
 | …and I want the sparse representation for small sets | `HyperLogLogPlus` | [Cardinality](#cardinality) |
@@ -617,6 +618,69 @@ smaller than a scalable one that grew into the same capacity.
 
 Described by Almeida, Baquero, Preguiça and Hutchison in
 [Scalable Bloom Filters](https://haslab.uminho.pt/cbm/files/dbloom.pdf).
+
+### `InfiniFilter`
+
+<sup>[↑ Contents](#contents)</sup>
+
+The other answer to "I don't know how big the set is" — one table that **doubles**,
+rather than a stack of filters that grows.
+
+`ScalableBloomFilter` handles growth by adding a new filter beside the old ones, so a
+query has to ask every filter in the stack and the error rates add up. InfiniFilter
+grows one quotient filter in place: when it fills, it doubles, and each entry pays for
+the extra address bit by giving up one bit of its own fingerprint. Nothing is rehashed
+and the original keys are never needed, because an entry's address is a *prefix* of its
+hash — a bigger table just uses one more bit of the same hash.
+
+Spending fingerprint bits costs accuracy, and the trick is in who pays. Each slot
+carries a small counter recording how many expansions it has lived through, so only the
+entries actually present for an expansion are shortened. Since every expansion doubles
+the capacity, most entries at any moment are new and carry a full fingerprint. The
+result is a false positive rate that grows with the **logarithm** of the item count
+rather than with the count:
+
+Measured, starting at 1024 items with 8-bit fingerprints:
+
+| Items | Expansions | Measured false positive rate |
+| --- | --- | --- |
+| 2,000 | 1 | 0.32% |
+| 20,000 | 4 | 0.78% |
+| 200,000 | 8 | 1.29% |
+
+A hundredfold more data costs four times the error, tracking the number of doublings
+rather than the item count. Sacrificing a bit from every entry at every expansion — the
+obvious way to do this — would have multiplied it by a hundred.
+
+**Reach for it when** the set grows without a known bound and you want one structure
+rather than a growing stack, and especially when you need **deletes**, which
+`ScalableBloomFilter` cannot offer at all.
+
+**Look elsewhere if** you know the size in advance: `BloomFilter` or `QuotientFilter`
+sized correctly is smaller and simpler. Doubling also means the table is half empty
+right after it grows, so memory arrives in steps rather than smoothly.
+
+```C#
+var filter = new InfiniFilter(initialCapacity: 1024, fingerprintBits: 8);
+filter.Add(bytes);              // grows itself; never refuses
+
+bool maybe = filter.Test(bytes);
+bool wasThere = filter.TestAndRemove(bytes);
+
+ulong slots = filter.Capacity();     // grown far past where it started
+uint doublings = filter.ExpansionCount();
+```
+
+Entries eventually run out of fingerprint altogether. Those move into a second, smaller
+table keyed by what remains of them, which expands and sheds in turn — so the structure
+is a short chain rather than one table, and a query asks each. The chain grows
+logarithmically, which is what lets the filter keep expanding indefinitely instead of
+stopping after `fingerprintBits` doublings.
+
+Described by Dayan, Bercea, Reviriego and Pagh in
+[InfiniFilter: Expanding Filters to Infinity and Beyond](https://doi.org/10.1145/3589285).
+
+---
 
 ### `StableBloomFilter`
 

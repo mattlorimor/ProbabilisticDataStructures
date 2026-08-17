@@ -37,6 +37,7 @@ namespace ProbabilisticDataStructures
         VarOpt = 24,
         UltraLogLog = 25,
         Grafite = 26,
+        InfiniFilter = 27,
     }
 
     /// <summary>

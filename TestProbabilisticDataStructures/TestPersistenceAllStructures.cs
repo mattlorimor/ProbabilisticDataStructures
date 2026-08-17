@@ -220,6 +220,25 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestInfiniFilterRoundTrips()
+        {
+            var f = new InfiniFilter(initialCapacity: 64, fingerprintBits: 8);
+            foreach (var w in Present) f.Add(Key(w));
+
+            var r = RoundTrip(f);
+
+            Assert.AreEqual(f.Count(), r.Count());
+            Assert.AreEqual(f.ChainLength(), r.ChainLength());
+            AssertAgreesEverywhere("InfiniFilter", f.Test, r.Test);
+
+            // And keeps growing, which is the thing this filter does that the others
+            // do not: a restored one has to expand the way the original would.
+            foreach (var w in Absent) { f.Add(Key(w)); r.Add(Key(w)); }
+            CollectionAssert.AreEqual(f.ToByteArray(), r.ToByteArray(),
+                "restored filter diverged once both were grown further");
+        }
+
+        [TestMethod]
         public void TestGrafiteRoundTrips()
         {
             var rand = new Random(19);
@@ -376,6 +395,7 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(0u, RoundTrip(new VarOpt(10, seed: 1)).SampleCount);
             Assert.AreEqual(0ul, RoundTrip(new UltraLogLog(10)).Count());
             Assert.AreEqual(0ul, RoundTrip(Grafite.Build(Array.Empty<ulong>(), 0.01, 16)).Count());
+            Assert.IsFalse(RoundTrip(new InfiniFilter(64, 8)).Test(Key("x")));
 
             Assert.AreEqual(0ul, RoundTrip(new CountMinSketch(0.01, 0.01)).TotalCount());
             Assert.AreEqual(0u, RoundTrip(BinaryFuseFilter.Build(Array.Empty<byte[]>())).Count());
@@ -503,6 +523,7 @@ namespace TestProbabilisticDataStructures
                 ("VarOpt", new VarOpt(10, seed: 1).Add(Key("a")).ToByteArray()),
                 ("UltraLogLog", new UltraLogLog(10).Add(Key("a")).ToByteArray()),
                 ("Grafite", Grafite.Build(new ulong[] { 1, 2, 3 }, 0.01, 16, seed: 1).ToByteArray()),
+                ("InfiniFilter", new InfiniFilter(64, 8).Add(Key("a")).ToByteArray()),
             };
 
             // Read every payload as a BloomFilter; only its own may succeed.
@@ -565,6 +586,7 @@ namespace TestProbabilisticDataStructures
                 ("VarOpt", b => Persistence.FromByteArray<VarOpt>(b), FilledVarOpt()),
                 ("UltraLogLog", b => Persistence.FromByteArray<UltraLogLog>(b), FilledUltraLogLog()),
                 ("Grafite", b => Persistence.FromByteArray<Grafite>(b), FilledGrafite()),
+                ("InfiniFilter", b => Persistence.FromByteArray<InfiniFilter>(b), FilledInfiniFilter()),
             };
 
             foreach (var (name, read, clean) in payloads)
@@ -578,6 +600,13 @@ namespace TestProbabilisticDataStructures
                         $"{name}: a flipped bit at offset {i} was not caught");
                 }
             }
+        }
+
+        private static byte[] FilledInfiniFilter()
+        {
+            var f = new InfiniFilter(initialCapacity: 8, fingerprintBits: 6);
+            for (int i = 0; i < 120; i++) f.Add(Key($"item-{i}"));
+            return f.ToByteArray();
         }
 
         private static byte[] FilledGrafite()

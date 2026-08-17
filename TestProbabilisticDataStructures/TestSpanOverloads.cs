@@ -146,6 +146,9 @@ namespace TestProbabilisticDataStructures
             AssertSpanPathMatches("UltraLogLog", () => new UltraLogLog(10),
                 (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));
 
+            AssertSpanPathMatches("InfiniFilter", () => new InfiniFilter(64, 8),
+                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));
+
             AssertSpanPathMatches("StableBloomFilter",
                 () => new StableBloomFilter(1000, 4, 0.01, seed: 5),
                 (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));

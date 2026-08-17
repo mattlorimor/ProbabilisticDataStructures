@@ -221,6 +221,76 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// An InfiniFilter payload for the tests below to corrupt. Its prefix is
+        /// fixed, so field offsets are too: the item count at 0, the expansion count
+        /// at 8, the number of tables at 12, and then per table its address bits,
+        /// fingerprint bits, entry count and word count from 16.
+        /// </summary>
+        private static byte[] InfiniFilterPayload()
+        {
+            var filter = new InfiniFilter(initialCapacity: 8, fingerprintBits: 6);
+            for (var i = 0; i < 120; i++)
+            {
+                filter.Add(Key($"item-{i}"));
+            }
+            return filter.ToByteArray();
+        }
+
+        /// <summary>
+        /// A filter with no tables has nothing to ask, and every query begins by
+        /// asking the first one.
+        /// </summary>
+        [TestMethod]
+        public void TestInfiniFilterWithNoTablesIsRefused()
+        {
+            var bytes = PokeUInt32(InfiniFilterPayload(), 12, 0);
+            AssertRefused(
+                () => Persistence.FromByteArray<InfiniFilter>(bytes),
+                "no tables at all");
+        }
+
+        /// <summary>
+        /// A chain longer than a 64-bit hash could ever justify would allocate a
+        /// table per claimed link before anything checked whether they exist.
+        /// </summary>
+        [TestMethod]
+        public void TestInfiniFilterWithAnAbsurdChainIsRefused()
+        {
+            var bytes = PokeUInt32(InfiniFilterPayload(), 12, 900_000);
+            AssertRefused(
+                () => Persistence.FromByteArray<InfiniFilter>(bytes),
+                "longer than a 64-bit hash");
+        }
+
+        /// <summary>
+        /// A table claiming more entries than it has slots describes a quotient
+        /// filter that cannot exist: it stores one entry per slot.
+        /// </summary>
+        [TestMethod]
+        public void TestInfiniFilterHoldingMoreThanItsSlotsIsRefused()
+        {
+            // The first table's entry count sits at offset 24, after the two
+            // eight-byte and two four-byte fields that precede it.
+            var bytes = PokeUInt32(InfiniFilterPayload(), 24, 900_000);
+            AssertRefused(
+                () => Persistence.FromByteArray<InfiniFilter>(bytes),
+                "one entry per slot");
+        }
+
+        /// <summary>
+        /// A table whose address and fingerprint together outrun the hash could not
+        /// have been built by any insertion.
+        /// </summary>
+        [TestMethod]
+        public void TestInfiniFilterWithMoreBitsThanTheHashIsRefused()
+        {
+            var bytes = PokeUInt32(InfiniFilterPayload(), 16, 39);
+            AssertRefused(
+                () => Persistence.FromByteArray<InfiniFilter>(bytes),
+                "carries");
+        }
+
+        /// <summary>
         /// A Grafite payload for the tests below to corrupt. Its scalar prefix is
         /// fixed, so field offsets are too: the reduced universe at 0, the hash
         /// multiplier at 8, its addend at 16, the key count at 24, the largest
