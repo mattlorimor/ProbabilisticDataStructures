@@ -264,6 +264,29 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestStoredMementoFilterStillReads()
+        {
+            var filter = MementoFilter.ReadFrom(Fixture("mementofilter-v1.bin"));
+
+            Assert.AreEqual(800UL, filter.Count());
+            Assert.AreEqual(64UL, filter.MaxRangeSize);
+            Assert.AreEqual(1024UL, filter.Capacity());
+
+            // Keys nine apart, so both the keys and the gaps between them are known.
+            for (ulong i = 0; i < 800; i++)
+            {
+                Assert.IsTrue(filter.Test(i * 9),
+                    $"stored filter no longer holds {i * 9}");
+            }
+
+            // The eight positions between the first two keys are empty, and the
+            // mementos are exact, so the filter says so rather than guessing.
+            Assert.IsFalse(filter.TestRange(1, 8),
+                "The gap between the first two keys reads as occupied, which means " +
+                "the mementos did not survive the round trip.");
+        }
+
+        [TestMethod]
         public void TestStoredInfiniFilterStillReads()
         {
             var filter = InfiniFilter.ReadFrom(Fixture("infinifilter-v1.bin"));
@@ -632,6 +655,15 @@ namespace TestProbabilisticDataStructures
             }
             AssertBytes("heavykeeper-v1.bin", keeper.ToByteArray());
 
+            var memento = new MementoFilter(
+                maxRangeSize: 64, fingerprintBits: 8, initialCapacity: 16);
+            for (ulong i = 0; i < 800; i++)
+            {
+                memento.Add(i * 9);
+            }
+
+            AssertBytes("mementofilter-v1.bin", memento.ToByteArray());
+
             var infini = new InfiniFilter(initialCapacity: 16, fingerprintBits: 4);
             for (var i = 0; i < 2000; i++)
             {
@@ -751,6 +783,7 @@ namespace TestProbabilisticDataStructures
                 ("ultraloglog-v1.bin", 25, 1),
                 ("grafite-v1.bin", 26, 1),
                 ("infinifilter-v1.bin", 27, 1),
+                ("mementofilter-v1.bin", 28, 1),
             };
 
             foreach (var (fixture, id, version) in expected)

@@ -38,6 +38,7 @@ namespace ProbabilisticDataStructures
         UltraLogLog = 25,
         Grafite = 26,
         InfiniFilter = 27,
+        MementoFilter = 28,
     }
 
     /// <summary>

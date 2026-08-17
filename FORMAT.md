@@ -86,6 +86,7 @@ checksum still matches.
 | 25 | `UltraLogLog` |
 | 26 | `Grafite` |
 | 27 | `InfiniFilter` |
+| 28 | `MementoFilter` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
@@ -679,6 +680,40 @@ a table holding more entries than it has slots, a table whose address and finger
 together exceed the hash, and a word count that disagrees with the shape claimed. The
 tables are stored newest first, and the count of entries per table is stored rather than
 recomputed, because a table's occupancy cannot be derived from its bits alone.
+
+### `MementoFilter` (id 28)
+
+```
+u64     the number of keys held
+u32     how many times the active table has doubled
+u32     the memento width, in bits
+u32     the number of tables in the chain
+        per table:
+u32       address bits, so the table has 2^this slots
+u32       fingerprint bits given to a fresh block
+u32       how many slots the table uses
+u32       the number of 64-bit words that follow
+u64       each word of the table
+```
+
+Each slot is three metadata bits and then a field of *fingerprint bits + 1 + memento
+bits*: a fluid fingerprint, exactly as `InfiniFilter` encodes one, with the key's own
+low bits beneath it. The memento sits below the fingerprint rather than above it because
+an expansion takes the fingerprint's low bit for the address, and taking a memento bit
+would move key data into an address and answer about a key nobody stored.
+
+A run holds *keepsake boxes*: the keys of one block, sharing a fingerprint. Boxes carry
+no recorded boundaries. One key sits beside its fingerprint; two repeat the fingerprint;
+more than two store the smallest and largest at the front, the second behind a **zero**
+fingerprint, and the rest as a bit-packed count and list running across the following
+slots without regard for slot boundaries. Zero cannot be a real fingerprint because every
+age counter ends in a set bit, which is the property `InfiniFilter`'s encoding reserves.
+
+The count is written in memento-sized pieces, an all-ones piece meaning "add this and
+read another", so a small count costs as much as one memento and a large one still fits.
+
+A reader rejects an impossible memento width, a chain of no tables or absurdly many, a
+table with more entries than slots, and a word count disagreeing with the shape claimed.
 
 ## The random generator's state
 

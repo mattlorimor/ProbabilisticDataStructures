@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`MementoFilter`**, range emptiness for a set that keeps changing (Eslami and Dayan,
+  SIGMOD 2025). `Grafite` answers the same question but is built once and never updated;
+  this one inserts, deletes and grows, which is what makes a range filter usable behind a
+  B-tree. Each key is split into a prefix, which names a block, and a memento, the key's
+  own low bits giving its position inside that block. Storing the positions rather than
+  only the blocks is what lets it answer "empty" for a range that merely brushes occupied
+  data. Measured at 0.265% false positives on random empty ranges and 0.213% on ranges
+  placed immediately after each key -- the correlated workload that collapses heuristic
+  range filters does nothing here, because a memento cannot be gamed by choosing keys.
+  Keys sharing a block share a stored fingerprint, so the same 256,000 keys cost 41.0
+  bits each spread out and 20.5 packed. (#101)
+
 - **`InfiniFilter`**, a filter that grows with the data instead of being sized for it
   (Dayan, Bercea, Reviriego and Pagh, SIGMOD 2023). Where `ScalableBloomFilter` handles
   growth by stacking filters whose error rates add up, and `QuotientFilter` refuses once
