@@ -262,6 +262,99 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Keys arriving in any order must all be found, including when they land in
+        /// one block back to front.
+        /// </summary>
+        /// <remarks>
+        /// A box keeps its keys in order because the encoding stores the smallest and
+        /// largest at the front and uses them to rule a box out before reading the
+        /// rest. Insert them unsorted and those two stop being the extremes, so a
+        /// query is excluded from a box that does hold its answer -- a false negative.
+        /// <para>
+        /// Every other test here happened to add keys ascending, which kept boxes
+        /// ordered whether the code sorted them or not. This one does not.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestKeysArrivingOutOfOrderAreStillFound()
+        {
+            var filter = new MementoFilter(maxRangeSize: 256, fingerprintBits: 12);
+
+            // One block, filled back to front, then shuffled arrivals in another.
+            var descending = new ulong[] { 250, 200, 150, 100, 50, 10, 1 };
+            foreach (var key in descending)
+            {
+                filter.Add(key);
+            }
+
+            var shuffled = new ulong[] { 700, 500, 900, 300, 800, 400, 600 };
+            foreach (var key in shuffled)
+            {
+                filter.Add(key);
+            }
+
+            foreach (var key in descending)
+            {
+                Assert.IsTrue(filter.Test(key),
+                    $"Key {key} was added and then reported absent. Its block was " +
+                    "filled back to front.");
+            }
+            foreach (var key in shuffled)
+            {
+                Assert.IsTrue(filter.Test(key), $"Key {key} was lost.");
+            }
+
+            // Ranges covering only part of a block must still find what is inside
+            // them, which is what the ordering of a box is for.
+            Assert.IsTrue(filter.TestRange(240, 255), "The range holds 250.");
+            Assert.IsTrue(filter.TestRange(0, 20), "The range holds 1 and 10.");
+            Assert.IsFalse(filter.TestRange(251, 255), "Nothing sits above 250.");
+            Assert.IsFalse(filter.TestRange(201, 249), "Nothing sits between 200 and 250.");
+        }
+
+        /// <summary>
+        /// Keys sharing a block cost less than keys that do not, which is the entire
+        /// point of packing them into one box.
+        /// </summary>
+        /// <remarks>
+        /// This also watches the accounting. The table doubles when its slots are
+        /// three quarters used, so a filter that miscounted how many it had freed
+        /// would expand on a schedule of its own and this comparison would flatten
+        /// out.
+        /// </remarks>
+        [TestMethod]
+        public void TestSharingABlockCostsLessThanNotSharing()
+        {
+            ulong TableSizeFor(int keysPerBlock)
+            {
+                const int keys = 128000;
+                var filter = new MementoFilter(256, 8, initialCapacity: 1024);
+                var blocks = keys / keysPerBlock;
+                for (var block = 0; block < blocks; block++)
+                {
+                    for (var j = 0; j < keysPerBlock; j++)
+                    {
+                        filter.Add(((ulong)block * 256) + (ulong)(j * 251 % 256));
+                    }
+                }
+                return filter.SizeInBytes();
+            }
+
+            var spread = TableSizeFor(1);
+            var shared = TableSizeFor(64);
+
+            // Measured at almost exactly half: 655,376 bytes against 327,696. The
+            // slack is for the spare word each table carries past its slots, which
+            // is what stops the ratio being a clean two.
+            Assert.IsTrue(shared <= spread * 0.55,
+                $"The same keys took {spread} bytes spread one to a block and " +
+                $"{shared} bytes packed sixty-four to a block, a ratio of " +
+                $"{(double)spread / shared:F2}. Sharing a fingerprint across a " +
+                "block's keys is what this encoding is for; if it costs the same " +
+                "either way it is not happening.");
+        }
+
+        /// <summary>
         /// A filter written and read back is the same filter, and goes on growing the
         /// way the original would have.
         /// </summary>

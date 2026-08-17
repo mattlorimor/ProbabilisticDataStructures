@@ -168,42 +168,16 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Adds one memento to the block a hash names, joining the box already there
-        /// if the fingerprint matches and starting one otherwise.
+        /// Adds one memento to the block a hash names. The table does the work; this
+        /// only turns a hash into the quotient and fingerprint it names, so that
+        /// there is one implementation of editing a box rather than two that have to
+        /// be kept in step.
         /// </summary>
-        /// <remarks>
-        /// Keys of one block share a fingerprint between them, which is where the
-        /// space saving comes from, so an insertion is an edit of an existing box far
-        /// more often than it is a new one.
-        /// </remarks>
         private static void PlaceMemento(
             MementoSegment segment, ulong hash, int age, ulong memento)
         {
             var (quotient, fingerprint) = segment.Split(hash);
-            var fluid = segment.FluidFingerprint(age, fingerprint);
-
-            var codec = segment.Codec;
-            var boxes = codec.Decode(segment.ReadRun(quotient));
-
-            var index = boxes.FindIndex(b => b.Fingerprint == fluid);
-            if (index < 0)
-            {
-                var box = new KeepsakeBox { Fingerprint = fluid };
-                box.Mementos.Add(memento);
-
-                // Boxes are kept in increasing order of fingerprint so that a lookup
-                // can stop once it has passed the one it wants.
-                var at = boxes.FindIndex(b => b.Fingerprint > fluid);
-                boxes.Insert(at < 0 ? boxes.Count : at, box);
-            }
-            else
-            {
-                var mementos = boxes[index].Mementos;
-                var position = mementos.FindIndex(m => m > memento);
-                mementos.Insert(position < 0 ? mementos.Count : position, memento);
-            }
-
-            segment.RewriteRun(quotient, codec.Encode(boxes));
+            segment.InsertMemento(quotient, age, fingerprint, memento);
         }
 
         /// <summary>
