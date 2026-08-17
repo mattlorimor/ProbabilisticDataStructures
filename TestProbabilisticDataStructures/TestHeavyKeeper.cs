@@ -111,9 +111,10 @@ namespace TestProbabilisticDataStructures
         {
             var hk = new HeavyKeeper(64, 4096, seed: 2);
 
-            // 40 flows with distinguishable counts. Interleaved rather than one flow
+            // 40 flows with counts 10 through 49, interleaved rather than one flow
             // at a time, so the heap's minimum moves while counting is in progress.
-            for (var round = 0; round < 40; round++)
+            // 50 rounds, because the largest flow needs 49 of them.
+            for (var round = 0; round < 50; round++)
             {
                 for (var f = 0; f < 40; f++)
                 {

@@ -33,6 +33,7 @@ namespace ProbabilisticDataStructures
         CountSketch = 20,
         InvertibleBloomLookupTable = 21,
         BloomierFilter = 22,
+        HeavyKeeper = 23,
     }
 
     /// <summary>

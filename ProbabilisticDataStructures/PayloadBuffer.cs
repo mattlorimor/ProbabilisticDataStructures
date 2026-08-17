@@ -25,6 +25,11 @@ namespace ProbabilisticDataStructures
             Reserve(1)[0] = value;
         }
 
+        internal void WriteUInt16(ushort value)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(Reserve(2), value);
+        }
+
         internal void WriteUInt32(uint value)
         {
             BinaryPrimitives.WriteUInt32LittleEndian(Reserve(4), value);
@@ -88,6 +93,11 @@ namespace ProbabilisticDataStructures
         internal byte ReadByte()
         {
             return Take(1)[0];
+        }
+
+        internal ushort ReadUInt16()
+        {
+            return BinaryPrimitives.ReadUInt16LittleEndian(Take(2));
         }
 
         internal uint ReadUInt32()

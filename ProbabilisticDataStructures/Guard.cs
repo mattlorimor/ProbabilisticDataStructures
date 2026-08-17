@@ -168,6 +168,24 @@ namespace ProbabilisticDataStructures
         /// looser than the last. Either way the filter still works and simply stops
         /// honoring the rate that was asked for, which is worse than refusing.
         /// </remarks>
+        /// <summary>
+        /// Rejects a HeavyKeeper decay base at or below one. The decay probability is
+        /// b^-C: at b = 1 every mismatch decays with certainty regardless of the
+        /// counter, so no bucket could hold anything against competition, and below
+        /// one a bucket decays more readily the larger its count grows, which inverts
+        /// the structure's premise.
+        /// </summary>
+        internal static void ValidDecayBase(double b, string paramName)
+        {
+            if (double.IsNaN(b) || double.IsInfinity(b) || b <= 1.0)
+            {
+                throw new ArgumentOutOfRangeException(paramName, b,
+                    "The decay base must be a finite number greater than one; the " +
+                    "decay probability is base^-count, and any other base decays " +
+                    "every bucket or none.");
+            }
+        }
+
         internal static void ValidTighteningRatio(double r, string paramName)
         {
             if (double.IsNaN(r) || r <= 0.0 || r >= 1.0)
