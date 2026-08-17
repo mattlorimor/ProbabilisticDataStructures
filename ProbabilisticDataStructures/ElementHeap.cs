@@ -168,6 +168,23 @@ namespace ProbabilisticDataStructures
             });
         }
 
+        /// <summary>
+        /// Whether the element is currently tracked, and at what frequency. Reads
+        /// through the same index every reordering keeps in step with the heap.
+        /// </summary>
+        internal bool TryGetFrequency(ReadOnlySpan<byte> data, out UInt64 freq)
+        {
+            if (this.positions.GetAlternateLookup<ReadOnlySpan<byte>>()
+                    .TryGetValue(data, out var index))
+            {
+                freq = this.Heap[index].Freq;
+                return true;
+            }
+
+            freq = 0;
+            return false;
+        }
+
         internal bool isTop(UInt64 freq, uint k)
         {
             if (this.Len() < k)

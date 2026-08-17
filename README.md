@@ -44,7 +44,7 @@ eleven structures the Go library does not have.
   [`ThetaSketch`](#thetasketch) ·
   [`InvertibleBloomLookupTable`](#invertiblebloomlookuptable)
 - [Frequency](#frequency) —
-  [`CountMinSketch`](#countminsketch) · [`CountSketch`](#countsketch) · [`TopK`](#topk)
+  [`CountMinSketch`](#countminsketch) · [`CountSketch`](#countsketch) · [`TopK`](#topk) · [`HeavyKeeper`](#heavykeeper)
 - [Similarity](#similarity) —
   [`MinHash`](#minhash) · [`SimHash`](#simhash) ·
   [`MinHashIndex` and `SimHashIndex`](#minhashindex-and-simhashindex)
@@ -78,6 +78,7 @@ eleven structures the Go library does not have.
 | How often have I seen this particular thing? | `CountMinSketch` | [Frequency](#frequency) |
 | …and it is rare, or I need to subtract | `CountSketch` | [Frequency](#frequency) |
 | What are the most common things? | `TopK` | [Frequency](#frequency) |
+| …and accuracy matters more than mergeability | `HeavyKeeper` | [Frequency](#frequency) |
 | How alike are these two **sets**? | `MinHash` | [Similarity](#similarity) |
 | Are these two **documents** near-duplicates? | `SimHash` | [Similarity](#similarity) |
 | …across a corpus, without comparing every pair | `MinHashIndex`, `SimHashIndex` | [Similarity](#similarity) |
@@ -803,7 +804,7 @@ From Goodrich and Mitzenmacher,
 
 <sup>[↑ Contents](#contents)</sup>
 
-Three structures answer **"how many times has *this one* appeared?"** — the question
+Four structures answer **"how many times has *this one* appeared?"** — the question
 behind rate limiting, heavy-hitter detection, and every trending list. A dictionary of
 counters is exact and grows with the number of distinct keys, which for IPs, URLs, or
 search terms is unbounded. These are fixed-size, and wrong by a bounded amount whose
@@ -813,7 +814,10 @@ both sides and stay small even for rare items — at more memory for the same no
 accuracy, since its error scales with the stream's Euclidean norm rather than its total
 weight. `TopK` sits on
 a Count-Min and keeps the heavy hitters it finds, so the answer to "which ones are big?"
-survives without keeping every key that ever appeared.
+survives without keeping every key that ever appeared. `HeavyKeeper` answers the same
+top-k question by a different bargain — candidates fight for buckets, and the rare
+lose — trading `TopK`'s mergeability for estimates that err only *down*ward, and only
+a little.
 
 ### `CountMinSketch`
 
@@ -903,6 +907,42 @@ Element[] top = topK.Elements();
 about what was frequent, and an element genuinely in the top-k of the union can be missing
 from both inputs' top-k and therefore from the merge. Merging shards is still useful; it is
 not exact.
+
+### `HeavyKeeper`
+
+<sup>[↑ Contents](#contents)</sup>
+
+The same question as `TopK`, answered by contest rather than by accounting.
+
+Each bucket holds one element's fingerprint and count. An arrival that finds someone
+else's fingerprint decays the incumbent with probability b⁻ᶜ — easy while the count is
+small, nearly impossible once it is large — so frequent elements entrench and rare ones
+pass through without leaving a mark. The error this buys is one-sided in the *opposite*
+direction from Count-Min's: absent fingerprint collisions an estimate never exceeds the
+truth, and the estimates of the tracked heavy hitters are very close to exact.
+
+**Reach for it when** the ranking is the product and accuracy is the point: a single
+stream whose top-k should be right, with counts you can take nearly at face value.
+
+**Look elsewhere if** you need a count for arbitrary items — an element that lost its
+buckets reports **zero**, not small, where `CountMinSketch` reports at least the truth
+for everything — or if you shard: this structure does not merge at all, which is the
+price of the contest, and an approximate merge is still worth more than none. That is
+`TopK`.
+
+```C#
+var keeper = new HeavyKeeper(k: 25, width: 4096, seed: 42);
+keeper.Add(bytes);
+Element[] top = keeper.Elements();
+ulong count = keeper.Count(bytes);   // at most the truth; zero for the evicted
+```
+
+The decay draws come from a seeded generator whose state persists, so a structure
+written out and read back continues the sequence it was partway through rather than
+replaying it.
+
+Described by Gong, Yang et al. in
+[HeavyKeeper: An Accurate Algorithm for Finding Top-k Elephant Flows](https://www.usenix.org/conference/atc18/presentation/gong).
 
 ---
 

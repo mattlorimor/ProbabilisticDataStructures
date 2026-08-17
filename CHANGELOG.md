@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`HeavyKeeper`**, the top-k of a stream found by contest rather than accounting
+  (Gong, Yang et al., USENIX ATC 2018): buckets hold one element's fingerprint and
+  count, mismatched arrivals decay the incumbent with probability b^-C, and the rare
+  lose. Errors are one-sided in the opposite direction from Count-Min's — absent
+  fingerprint collisions an estimate never exceeds the truth — and tracked heavy
+  hitters are counted nearly exactly. It does not merge; that is the price of the
+  contest, and `TopK` remains the structure for shards. Implements the authors'
+  reference inequality where Algorithm 1 as printed deadlocks admission, a
+  discrepancy recorded in the class documentation. (#96)
+
 ## [6.1.0] - 2026-08-16
 
 ### Added

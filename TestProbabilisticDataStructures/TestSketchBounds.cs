@@ -803,5 +803,88 @@ namespace TestProbabilisticDataStructures
                 "Almost no boundary value saturated the bound, so these inputs are " +
                 "not landing on bucket edges and the test is exercising nothing.");
         }
+
+        /// <summary>
+        /// HeavyKeeper's Theorem 3: an elephant flow's under-estimate exceeds
+        /// ceil(eps * N) with probability at most 1 / (eps * w * n * (b - 1)). The
+        /// bound is restated from the paper, not read back from the code: with
+        /// w = 256, n = 500, b = 1.08 and eps = 0.01 it comes to 1/1024 per flow,
+        /// so 320 flow observations should see about a third of a violation -- the
+        /// assertion allows eight, three binomial sigma above that. The bound is
+        /// Markov-loose, so the vacuity guards below carry the real weight: the
+        /// workload must actually contest buckets, and mice must actually lose.
+        /// </summary>
+        [TestMethod]
+        public void TestHeavyKeeperHoldsItsCountingBound()
+        {
+            const int Trials = 40;
+            const ulong ElephantSize = 500;
+            const double Epsilon = 0.01;
+            const uint W = 256;
+            const double B = 1.08;
+
+            var violations = 0;
+            var underCounted = 0;
+            var invisibleMice = 0;
+            var totalMice = 0;
+
+            for (ulong t = 0; t < Trials; t++)
+            {
+                var hk = new HeavyKeeper(8, W, depth: 2, decay: B, seed: t);
+
+                // Eight elephants of 500 arrivals through 256 buckets, with two mice
+                // arriving between elephant rounds: 5,000 arrivals in all, so
+                // ceil(eps * N) = 50.
+                var mouse = 0;
+                for (var i = 0; i < (int)ElephantSize; i++)
+                {
+                    for (var e = 0; e < 8; e++)
+                    {
+                        hk.Add(Encoding.UTF8.GetBytes($"t{t}-elephant-{e}"));
+                    }
+                    hk.Add(Encoding.UTF8.GetBytes($"t{t}-mouse-{mouse++}"));
+                    hk.Add(Encoding.UTF8.GetBytes($"t{t}-mouse-{mouse++}"));
+                }
+
+                var n = (ulong)(8 * (int)ElephantSize + mouse);
+                var threshold = (ulong)Math.Ceiling(Epsilon * n);
+
+                for (var e = 0; e < 8; e++)
+                {
+                    var reported = hk.Count(Encoding.UTF8.GetBytes($"t{t}-elephant-{e}"));
+                    if (reported < ElephantSize)
+                    {
+                        underCounted++;
+                        if (ElephantSize - reported > threshold)
+                        {
+                            violations++;
+                        }
+                    }
+                }
+
+                totalMice += mouse;
+                for (var m = 0; m < mouse; m++)
+                {
+                    if (hk.Count(Encoding.UTF8.GetBytes($"t{t}-mouse-{m}")) == 0)
+                    {
+                        invisibleMice++;
+                    }
+                }
+            }
+
+            // 320 observations at 1/1024 expect 0.3 violations; eight is three
+            // binomial sigma of headroom on top of the bound itself.
+            Assert.IsLessThanOrEqualTo(8, violations,
+                $"{violations}/320 elephants under-counted by more than eps*N; the " +
+                "paper's bound predicts well under one percent.");
+
+            // Vacuity guards: a workload that never under-counts never contested a
+            // bucket, and mice that survive were never fought for.
+            Assert.IsGreaterThan(0, underCounted,
+                "No elephant was ever under-counted; decay never engaged.");
+            Assert.IsGreaterThan(totalMice / 2, invisibleMice,
+                $"Only {invisibleMice}/{totalMice} mice report zero; the contest " +
+                "this structure is built on did not happen.");
+        }
     }
 }

@@ -137,6 +137,9 @@ namespace TestProbabilisticDataStructures
             AssertSpanPathMatches("TopK", () => new TopK(0.001, 0.01, 20),
                 (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l)));
 
+            AssertSpanPathMatches("HeavyKeeper", () => new HeavyKeeper(20, 512, seed: 3),
+                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l)));
+
             AssertSpanPathMatches("StableBloomFilter",
                 () => new StableBloomFilter(1000, 4, 0.01, seed: 5),
                 (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));

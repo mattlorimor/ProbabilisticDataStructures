@@ -244,6 +244,26 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestStoredHeavyKeeperStillReads()
+        {
+            var keeper = HeavyKeeper.ReadFrom(Fixture("heavykeeper-v1.bin"));
+
+            Assert.AreEqual(200UL, keeper.N);
+            Assert.HasCount(5, keeper.Elements());
+
+            // Twelve flows through thirty-two buckets: the ones that held on read
+            // back at or near their true counts, and flow-4 -- evicted from every
+            // bucket by the contest -- reads back as zero, which is this structure's
+            // honest answer for the evicted. A reader that lost the fingerprints
+            // would zero everyone; one that lost the counters would zero no one.
+            Assert.AreEqual(17UL, keeper.Count(Key("flow-0")));
+            Assert.AreEqual(17UL, keeper.Count(Key("flow-7")));
+            Assert.AreEqual(16UL, keeper.Count(Key("flow-11")));
+            Assert.AreEqual(0UL, keeper.Count(Key("flow-4")));
+            Assert.AreEqual(1UL, keeper.Count(Key("flow-5")));
+        }
+
+        [TestMethod]
         public void TestStoredSimHashSignatureStillReads()
         {
             var signature = SimHashSignature.ReadFrom(Fixture("simhashsignature-v1.bin"));
@@ -509,6 +529,13 @@ namespace TestProbabilisticDataStructures
 
             AssertBytes("countsketch-v1.bin", countSketch.ToByteArray());
 
+            var keeper = new HeavyKeeper(5, 32, depth: 2, decay: 1.08, seed: 99);
+            for (var i = 0; i < 200; i++)
+            {
+                keeper.Add(Key($"flow-{i % 12}"));
+            }
+            AssertBytes("heavykeeper-v1.bin", keeper.ToByteArray());
+
             var iblt = new InvertibleBloomLookupTable(10, 8);
             for (var i = 0; i < 6; i++)
             {
@@ -593,6 +620,7 @@ namespace TestProbabilisticDataStructures
                 ("countsketch-v1.bin", 20, 1),
                 ("iblt-v1.bin", 21, 1),
                 ("bloomierfilter-v1.bin", 22, 1),
+                ("heavykeeper-v1.bin", 23, 1),
             };
 
             foreach (var (fixture, id, version) in expected)
