@@ -657,10 +657,17 @@ u64       each word of the table
 
 Each slot is three metadata bits — the quotient filter's occupied, shifted and
 continuation flags — followed by one field of *fingerprint bits + 1*. That field holds a
-unary age counter, being as many ones as expansions the entry has lived through followed
-by a single zero, and then whatever fingerprint bits remain. The counter is
+unary age counter, being as many zeros as expansions the entry has lived through
+followed by a single one, and then whatever fingerprint bits remain. The counter is
 self-delimiting, which is what lets a reader recover a fingerprint whose length was
 never written down.
+
+The counter terminates in a one rather than a zero so that every field has a set bit,
+and therefore **no entry is ever encoded as zero**. Nothing in this filter needs that;
+the Memento range filter, which builds on the same tables, needs a value that cannot be
+a real entry in order to delimit a variable-length group of keys sharing a fingerprint.
+Zero is that value. It is recorded here because it is invisible from the outside and
+free only until payloads in this format exist.
 
 The address is the **low** bits of the hash and the fingerprint the bits above it, which
 is the opposite of the usual quotient filter arrangement. It has to be: an expansion

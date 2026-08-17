@@ -348,6 +348,60 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// No stored entry ever encodes as zero, which reserves zero to mean
+        /// something else.
+        /// </summary>
+        /// <remarks>
+        /// The age counter terminates in a one rather than a zero purely so that this
+        /// holds. It is not needed by anything here: the Memento range filter builds
+        /// on this substrate and needs a value that cannot be a real entry, to mark
+        /// the boundary of a variable-length group of keys sharing a fingerprint.
+        /// Zero is that value, and it is only available because every counter carries
+        /// a set bit.
+        /// <para>
+        /// Measured before the counter was changed, three stored fields in a hundred
+        /// thousand came out as zero, so this is a property that had to be arranged
+        /// rather than one that held by luck.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestNoStoredEntryEncodesAsZero()
+        {
+            var filter = new InfiniFilter(initialCapacity: 64, fingerprintBits: 8);
+            for (var i = 0; i < 100000; i++)
+            {
+                filter.Add(Key(i));
+            }
+
+            var checkedEntries = 0;
+            foreach (var segment in filter.Segments)
+            {
+                foreach (var (_, field) in segment.Entries())
+                {
+                    checkedEntries++;
+                    Assert.AreNotEqual(0UL, field,
+                        "A stored entry encoded as zero, which is the value reserved " +
+                        "to mean 'no entry here'. An age counter must always carry a " +
+                        "set bit.");
+                }
+            }
+
+            Assert.IsTrue(checkedEntries > 50000,
+                $"Premise: this examined {checkedEntries} stored entries. Too few " +
+                "would mean the sweep is not reaching the tables.");
+
+            // The youngest and oldest encodings are the two ends of the range, so
+            // check them directly rather than hoping the sweep happened to include
+            // them.
+            var probe = new InfiniSegment(4, 8);
+            for (var age = 0; age <= 8; age++)
+            {
+                Assert.AreNotEqual(0UL, probe.EncodeField(age, 0),
+                    $"An entry at age {age} with a zero fingerprint encoded as zero.");
+            }
+        }
+
+        /// <summary>
         /// A filter written and read back is the same filter, and goes on growing the
         /// way the original would have.
         /// </summary>

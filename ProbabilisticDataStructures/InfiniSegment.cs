@@ -13,7 +13,10 @@ namespace ProbabilisticDataStructures
     /// fixed-width remainder, the slot holds a unary age counter followed by whatever
     /// fingerprint bits remain. The counter says how many expansions ago the entry was
     /// inserted, and it is self-delimiting, so an entry can be read without knowing in
-    /// advance how long its fingerprint is.
+    /// advance how long its fingerprint is. The counter terminates in a one rather
+    /// than a zero, so that no entry is ever encoded as zero and that value stays
+    /// free to mean "no entry here" -- which the Memento range filter needs of this
+    /// substrate.
     /// <para>
     /// The point of that arrangement is expansion. Doubling a quotient filter needs one
     /// more bit of address per entry, and the only place to find it without going back
@@ -97,11 +100,17 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal ulong EncodeField(int age, ulong fingerprint)
         {
-            // A counter of age a is a ones followed by a zero, occupying a + 1 bits,
+            // A counter of age a is a zeros followed by a one, occupying a + 1 bits,
             // which is what makes it parsable without a length being stored.
-            var counter = ((1UL << age) - 1) << 1;
+            //
+            // The terminator is a one rather than a zero so that every field has a set
+            // bit somewhere, and therefore no entry is ever encoded as zero. That
+            // leaves zero free to mean something else -- which is what the Memento
+            // range filter needs of this substrate, where a vacant zero field marks
+            // the boundary of a variable-length group. Costs nothing here, and cannot
+            // be changed once payloads written in this format exist.
             var remaining = this.FingerprintBits - age;
-            return (counter << remaining) | (fingerprint & ((1UL << remaining) - 1));
+            return (1UL << remaining) | (fingerprint & ((1UL << remaining) - 1));
         }
 
         /// <summary>
@@ -113,7 +122,7 @@ namespace ProbabilisticDataStructures
             var age = 0;
             for (var bit = this.fieldBits - 1; bit >= 0; bit--)
             {
-                if ((field & (1UL << bit)) == 0)
+                if ((field & (1UL << bit)) != 0)
                 {
                     break;
                 }
