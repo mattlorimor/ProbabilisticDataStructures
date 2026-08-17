@@ -36,6 +36,7 @@ namespace ProbabilisticDataStructures
         HeavyKeeper = 23,
         VarOpt = 24,
         UltraLogLog = 25,
+        Grafite = 26,
     }
 
     /// <summary>

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Grafite`**, a static range filter that answers "is anything in [a, b]?" (Costa,
+  Ferragina and Vinciguerra, SIGMOD 2024). Nothing here answered that before, and the
+  range filters that do bound their false positive rate empirically, on workloads that
+  do not resemble the keys; point the queries near the data, as real ones are, and those
+  rates collapse. Grafite's bound is a theorem about its hash and holds for any query
+  sequence, including one chosen by someone who has seen the keys but not the seed. Keys
+  are numbers rather than bytes, and the filter is built once from a known set like
+  `BinaryFuseFilter`. Stored in Elias–Fano at 14.6 bits per key for a 1% rate over
+  64-key ranges. Diverges from the authors' reference implementation by splitting a
+  query at block boundaries: the reference tests a straddling range as one interval,
+  which can report an occupied range empty about once in r such queries. (#99)
+
 - **`UltraLogLog`**, distinct counting that keeps what HyperLogLog discards (Ertl,
   VLDB 2024). A HyperLogLog register remembers only the largest update value that
   landed on it; this one also keeps two bits saying whether the positions just below it
