@@ -31,13 +31,18 @@ namespace ProbabilisticDataStructures
     /// as Algorithm 1, the same one Apache DataSketches ships.
     /// </para>
     /// <para>
-    /// Two samples built with the same k merge by feeding one sample's items, at
-    /// their adjusted weights, through the other's ordinary insertion path -- the
-    /// paper's own recurrence for distributed sampling, valid precisely because the
-    /// k's are equal. DataSketches instead lets k float between inputs, at the cost
-    /// of machinery (marked items, a gadget that is not itself a VarOpt sample, a
-    /// k-reduction pass) that exists only to repair the cases floating k creates.
-    /// This implementation refuses unequal k's and needs none of it.
+    /// Samples merge by feeding one sample's items, at their adjusted weights,
+    /// through the other's ordinary insertion path -- the paper's own recurrence
+    /// for distributed sampling. The recurrence holds when every input's k is at
+    /// least the k of the result, so a sample may be merged into one that keeps
+    /// the same number of items or fewer, and a sample that has not yet begun
+    /// sampling is plain data that merges into anything. What it forbids is a
+    /// result that keeps more items than an input that has sampled: the result
+    /// would hold items already chosen by chance as though they were exact.
+    /// DataSketches instead lets k float and resolves it afterwards, which is
+    /// what its marked items, its gadget -- not itself a VarOpt sample -- and its
+    /// k-reduction pass exist to do. Refusing the invalid direction needs none of
+    /// that.
     /// </para>
     /// </remarks>
     public class VarOpt : IBinaryPersistable<VarOpt>
@@ -271,24 +276,40 @@ namespace ProbabilisticDataStructures
         /// This is the paper's recurrence for distributed sampling: each of the
         /// other sample's items is fed through the ordinary insertion path at its
         /// adjusted weight, exactly as if the adjusted weights were original ones.
-        /// The recurrence requires the two k's to be equal -- with equal k's a
-        /// sample that has started sampling contributes exactly k items, so the
-        /// union always has more than k and the threshold does its job; with
-        /// unequal k's the union can stay under k while pretending sampled items
-        /// are exact, which is the case DataSketches builds its marked-item
-        /// machinery to repair.
+        /// The recurrence's condition is that every input's k is at least the k of
+        /// the result, so the other sample may keep as many items as this one or
+        /// more. A sample that has not begun sampling holds nothing but original
+        /// weights and so imposes no condition at all, whatever its k -- the
+        /// paper's Lemma 5 makes that case trivial by giving such an input a
+        /// threshold of zero.
+        /// <para>
+        /// The refused direction is a sample that has begun sampling being merged
+        /// into one that keeps more items. Its items were chosen by chance and
+        /// carry a threshold's worth of weight rather than their own; a result
+        /// with room to hold them all would report them as exact, which is a claim
+        /// no one measured.
+        /// </para>
         /// </remarks>
         /// <param name="other">The sample to merge into this one.</param>
+        /// <exception cref="ArgumentException">
+        /// The other sample has begun sampling and keeps fewer items than this one.
+        /// </exception>
         public VarOpt Merge(VarOpt other)
         {
             ArgumentNullException.ThrowIfNull(other);
-            if (other.k != this.k)
+            // An input that has not begun sampling is holding original weights, so
+            // it is data rather than a sample and merges into anything. One that
+            // has begun sampling may only be merged into a result that keeps no
+            // more items than it does.
+            if (other.LightCount > 0 && other.k < this.k)
             {
                 throw new ArgumentException(
                     $"Cannot merge a sample keeping {other.k} items into one " +
-                    $"keeping {this.k}. The merge feeds one sample through the " +
-                    "other's insertion path, which is only a valid VarOpt sample " +
-                    "of the combined stream when the k's are equal.",
+                    $"keeping {this.k}. The smaller sample has begun sampling, so " +
+                    "its items stand in for the ones it dropped; a result with " +
+                    "room for all of them would report them as exact. Merge the " +
+                    "other way round, or into a sample keeping " +
+                    $"{other.k} or fewer.",
                     nameof(other));
             }
 

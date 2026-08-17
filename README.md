@@ -1170,10 +1170,13 @@ double exact = sample.TotalWeight;            // not an estimate
 WeightedElement[] kept = sample.Samples();
 ```
 
-Two samples built with the same **k** merge, which is how a sample of a stream split
-across shards is assembled: `left.Merge(right)`. Equal k is required rather than
-encouraged — the paper's recurrence is what makes merging valid, and it holds when
-the k's agree.
+Samples merge, which is how a sample of a stream split across shards is assembled:
+`left.Merge(right)`. The k's need not match. The paper's recurrence holds when every
+input keeps at least as many items as the result, so a sample merges into one keeping
+the same number or fewer, and a sample that never filled up is plain data that merges
+into anything. The one refused direction is a sample that *has* begun sampling going
+into a result that keeps more items than it does: its items stand in for the ones it
+dropped, and a result with room for all of them would report them as exact.
 
 The eviction draws come from a seeded generator whose state persists, so a sample
 written out and read back continues its sequence rather than replaying it.

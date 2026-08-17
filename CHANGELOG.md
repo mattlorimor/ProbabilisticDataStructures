@@ -16,8 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   weight without bias and at the minimum variance any k-item sample can achieve. The
   total is not estimated at all: evictions hand the evicted weight to the survivors, so
   the sampled weights sum to exactly the weight that went in. Merging follows the
-  paper's recurrence and requires equal k, which is the condition that makes it valid,
-  rather than the floating-k machinery Apache DataSketches carries. (#97)
+  paper's recurrence, which asks that every input keep at least as many items as the
+  result rather than that the k's match: a larger sample merges into a smaller one, an
+  unfilled sample merges into anything, and only the direction that would report
+  sampled items as exact is refused. (#97)
 
 - **`HeavyKeeper`**, the top-k of a stream found by contest rather than accounting
   (Gong, Yang et al., USENIX ATC 2018): buckets hold one element's fingerprint and

@@ -489,23 +489,164 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Merging samples of different k is refused. The recurrence holds because
-        /// equal k's guarantee the union exceeds k whenever both inputs sampled; with
-        /// unequal k's the result can keep sampled items at exact weights, which is
-        /// not a VarOpt sample of anything and reports no error while being wrong.
+        /// A sample that has begun sampling cannot be merged into one that keeps
+        /// more items. Its items stand in for the ones it dropped, and a result
+        /// with room for all of them would hold them as though they were exact --
+        /// a claim nobody measured, reported without any sign of error.
         /// </summary>
         [TestMethod]
-        public void TestMergingDifferentKIsRefused()
+        public void TestMergingASampledSmallerSampleIsRefused()
         {
-            var left = new VarOpt(10, seed: 37);
-            var right = new VarOpt(20, seed: 41);
+            var large = new VarOpt(20, seed: 37);
+            var small = new VarOpt(10, seed: 41);
             for (var i = 0; i < 50; i++)
             {
-                left.Add(Key($"l-{i}"), 1.0);
-                right.Add(Key($"r-{i}"), 1.0);
+                large.Add(Key($"l-{i}"), 1.0);
+                small.Add(Key($"s-{i}"), 1.0);
             }
 
-            Assert.ThrowsExactly<ArgumentException>(() => left.Merge(right));
+            Assert.IsTrue(small.SampleCount == 10 && small.Tau > 0.0,
+                "Premise: the smaller sample has begun sampling. If it were still " +
+                "exact the merge would be allowed and this test would assert the " +
+                "opposite of what it means to.");
+
+            Assert.ThrowsExactly<ArgumentException>(() => large.Merge(small));
+        }
+
+        /// <summary>
+        /// The condition is on k, not on equality: the recurrence holds when every
+        /// input keeps at least as many items as the result, so a larger sample
+        /// merges into a smaller one. Refusing this would refuse a merge the paper
+        /// permits.
+        /// </summary>
+        [TestMethod]
+        public void TestMergingALargerSampleIsAllowed()
+        {
+            var small = new VarOpt(10, seed: 37);
+            var large = new VarOpt(40, seed: 41);
+            var total = 0.0;
+            for (var i = 0; i < 300; i++)
+            {
+                var weight = 1.0 + (i % 7);
+                total += weight;
+                (i % 2 == 0 ? small : large).Add(Key($"m-{i}"), weight);
+            }
+
+            Assert.IsTrue(large.Tau > 0.0 && small.Tau > 0.0,
+                "Premise: both inputs have begun sampling, so this exercises the " +
+                "condition rather than the trivial case below.");
+
+            var merged = small.Merge(large);
+
+            Assert.AreEqual(10u, merged.SampleCount,
+                "The result keeps its own k, not the larger input's.");
+            Assert.AreEqual(300UL, merged.N);
+            Assert.AreEqual(total, merged.TotalWeight, total * 1e-12,
+                "The union's adjusted weights still sum to the true total.");
+        }
+
+        /// <summary>
+        /// Boundary: equal k is allowed and one short of it is not. Both sides of
+        /// the condition are checked here, because a comparison written the wrong
+        /// way round still passes each of the tests above on its own.
+        /// </summary>
+        [TestMethod]
+        public void TestTheRefusalBoundaryIsExactlyAtEqualK()
+        {
+            static VarOpt Sampled(uint k, ulong seed)
+            {
+                var sample = new VarOpt(k, seed);
+                for (var i = 0; i < 200; i++)
+                {
+                    sample.Add(Key($"b-{i}"), 1.0 + (i % 5));
+                }
+                return sample;
+            }
+
+            Sampled(16, 43).Merge(Sampled(16, 47));
+
+            Assert.ThrowsExactly<ArgumentException>(
+                () => Sampled(16, 43).Merge(Sampled(15, 47)),
+                "One item short of this sample's k is still short: the input's " +
+                "items would be reported as exact by a result with room to spare.");
+        }
+
+        /// <summary>
+        /// A sample that has not begun sampling is holding nothing but the weights
+        /// it was given, so it is data rather than a sample and merges into
+        /// anything whatever its k. The paper's Lemma 5 says as much: such an input
+        /// has a threshold of zero and imposes no condition.
+        /// </summary>
+        [TestMethod]
+        public void TestMergingAnUnsampledSampleOfAnyKIsAllowed()
+        {
+            var large = new VarOpt(20, seed: 53);
+            for (var i = 0; i < 100; i++)
+            {
+                large.Add(Key($"l-{i}"), 2.0);
+            }
+
+            // k = 3 and three items: full to the brim, but nothing was ever
+            // dropped, so every weight it holds is a weight it was handed.
+            var tiny = new VarOpt(3, seed: 59);
+            tiny.Add(Key("kept-a"), 5.0);
+            tiny.Add(Key("kept-b"), 6.0);
+            tiny.Add(Key("kept-c"), 7.0);
+
+            Assert.AreEqual(0.0, tiny.Tau, 0.0,
+                "Premise: the small sample never began sampling.");
+
+            var merged = large.Merge(tiny);
+
+            Assert.AreEqual(20u, merged.SampleCount);
+            Assert.AreEqual(103UL, merged.N);
+            Assert.AreEqual(218.0, merged.TotalWeight, 1e-9,
+                "100 items at 2.0 plus 5, 6 and 7 is 218, and the total is exact.");
+        }
+
+        /// <summary>
+        /// The relaxation has to preserve the property the merge exists to
+        /// preserve. Estimates taken from a merge of samples with different k are
+        /// unbiased for the union, exactly as the equal-k case is.
+        /// </summary>
+        [TestMethod]
+        public void TestMergedEstimatesStayUnbiasedAcrossMismatchedK()
+        {
+            const int trials = 1500;
+            var weights = new double[600];
+            var random = new Random(31);
+            for (var i = 0; i < weights.Length; i++)
+            {
+                weights[i] = (random.NextDouble() * 4.0) + 0.05;
+            }
+            var truth = weights.Where((_, i) => i % 3 == 0).Sum();
+
+            var estimates = new double[trials];
+            for (var t = 0; t < trials; t++)
+            {
+                var small = new VarOpt(10, seed: (ulong)(590000 + (2 * t)));
+                var large = new VarOpt(60, seed: (ulong)(590001 + (2 * t)));
+                for (var i = 0; i < weights.Length; i++)
+                {
+                    (i < 300 ? small : large).Add(Key($"s-{i}"), weights[i]);
+                }
+                estimates[t] = small.Merge(large).EstimateSubset(
+                    d => int.Parse(Name(d)[2..]) % 3 == 0);
+            }
+
+            var mean = estimates.Average();
+            var variance = estimates.Sum(e => (e - mean) * (e - mean)) / (trials - 1);
+            var standardError = Math.Sqrt(variance / trials);
+
+            Assert.IsTrue(standardError > 0.0, "Premise: the estimates vary.");
+            Assert.IsTrue(estimates.Any(e => e < truth) && estimates.Any(e => e > truth),
+                "Premise: estimates fall on both sides of the truth.");
+
+            var deviation = Math.Abs(mean - truth) / standardError;
+            Assert.IsTrue(deviation < 4.0,
+                $"The mean of {trials} estimates from merges of a k=10 and a k=60 " +
+                $"sample was {mean:F3} against a true {truth:F3}, {deviation:F2} " +
+                "standard errors away. Merging across k must not cost unbiasedness.");
         }
 
         /// <summary>
