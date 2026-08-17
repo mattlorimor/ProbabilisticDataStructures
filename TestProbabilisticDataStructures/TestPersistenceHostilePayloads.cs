@@ -221,6 +221,73 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A Memento payload for the tests below to corrupt. Its prefix is fixed, so
+        /// field offsets are too: the key count at 0, the expansion count at 8, the
+        /// memento width at 12, the number of tables at 16, and the first table's
+        /// address bits at 20, fingerprint bits at 24 and entry count at 28.
+        /// </summary>
+        private static byte[] MementoPayload()
+        {
+            var filter = new MementoFilter(64, 6, initialCapacity: 8);
+            for (ulong i = 0; i < 150; i++)
+            {
+                filter.Add(i * 5);
+            }
+            return filter.ToByteArray();
+        }
+
+        /// <summary>
+        /// A memento wider than a key's low bits could ever be describes a split this
+        /// library never makes.
+        /// </summary>
+        [TestMethod]
+        public void TestMementoFilterWithAnAbsurdMementoWidthIsRefused()
+        {
+            AssertRefused(
+                () => Persistence.FromByteArray<MementoFilter>(
+                    PokeUInt32(MementoPayload(), 12, 40)),
+                "memento bits");
+        }
+
+        /// <summary>
+        /// A filter with no tables has nothing to ask.
+        /// </summary>
+        [TestMethod]
+        public void TestMementoFilterWithNoTablesIsRefused()
+        {
+            AssertRefused(
+                () => Persistence.FromByteArray<MementoFilter>(
+                    PokeUInt32(MementoPayload(), 16, 0)),
+                "no tables at all");
+        }
+
+        /// <summary>
+        /// A table claiming more entries than slots describes a table that cannot
+        /// exist: it stores one slot per entry.
+        /// </summary>
+        [TestMethod]
+        public void TestMementoFilterHoldingMoreThanItsSlotsIsRefused()
+        {
+            AssertRefused(
+                () => Persistence.FromByteArray<MementoFilter>(
+                    PokeUInt32(MementoPayload(), 28, 900_000)),
+                "one entry per slot");
+        }
+
+        /// <summary>
+        /// A table whose shape disagrees with the words it carries would read past
+        /// what the payload holds.
+        /// </summary>
+        [TestMethod]
+        public void TestMementoFilterWithAMismatchedShapeIsRefused()
+        {
+            AssertRefused(
+                () => Persistence.FromByteArray<MementoFilter>(
+                    PokeUInt32(MementoPayload(), 20, 12)),
+                "carries");
+        }
+
+        /// <summary>
         /// An InfiniFilter payload for the tests below to corrupt. Its prefix is
         /// fixed, so field offsets are too: the item count at 0, the expansion count
         /// at 8, the number of tables at 12, and then per table its address bits,

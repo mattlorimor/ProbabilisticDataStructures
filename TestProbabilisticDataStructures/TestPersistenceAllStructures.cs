@@ -220,6 +220,28 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestMementoFilterRoundTrips()
+        {
+            var f = new MementoFilter(256, 8, 1024);
+            for (ulong i = 0; i < 30000; i++) f.Add(i * 13);
+
+            var r = RoundTrip(f);
+
+            Assert.AreEqual(f.Count(), r.Count());
+            Assert.AreEqual(f.MaxRangeSize, r.MaxRangeSize);
+            for (ulong i = 0; i < 30000; i++)
+            {
+                Assert.IsTrue(r.Test(i * 13), $"restored filter lost {i * 13}");
+            }
+            for (ulong i = 0; i < 20000; i++)
+            {
+                Assert.AreEqual(f.TestRange(i * 7, (i * 7) + 40),
+                    r.TestRange(i * 7, (i * 7) + 40),
+                    $"restored filter disagreed about a range near {i * 7}");
+            }
+        }
+
+        [TestMethod]
         public void TestInfiniFilterRoundTrips()
         {
             var f = new InfiniFilter(initialCapacity: 64, fingerprintBits: 8);
@@ -396,6 +418,7 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(0ul, RoundTrip(new UltraLogLog(10)).Count());
             Assert.AreEqual(0ul, RoundTrip(Grafite.Build(Array.Empty<ulong>(), 0.01, 16)).Count());
             Assert.IsFalse(RoundTrip(new InfiniFilter(64, 8)).Test(Key("x")));
+            Assert.IsFalse(RoundTrip(new MementoFilter(256, 8)).Test(7));
 
             Assert.AreEqual(0ul, RoundTrip(new CountMinSketch(0.01, 0.01)).TotalCount());
             Assert.AreEqual(0u, RoundTrip(BinaryFuseFilter.Build(Array.Empty<byte[]>())).Count());
@@ -524,6 +547,7 @@ namespace TestProbabilisticDataStructures
                 ("UltraLogLog", new UltraLogLog(10).Add(Key("a")).ToByteArray()),
                 ("Grafite", Grafite.Build(new ulong[] { 1, 2, 3 }, 0.01, 16, seed: 1).ToByteArray()),
                 ("InfiniFilter", new InfiniFilter(64, 8).Add(Key("a")).ToByteArray()),
+                ("MementoFilter", new MementoFilter(256, 8).Add(5).ToByteArray()),
             };
 
             // Read every payload as a BloomFilter; only its own may succeed.
@@ -587,6 +611,7 @@ namespace TestProbabilisticDataStructures
                 ("UltraLogLog", b => Persistence.FromByteArray<UltraLogLog>(b), FilledUltraLogLog()),
                 ("Grafite", b => Persistence.FromByteArray<Grafite>(b), FilledGrafite()),
                 ("InfiniFilter", b => Persistence.FromByteArray<InfiniFilter>(b), FilledInfiniFilter()),
+                ("MementoFilter", b => Persistence.FromByteArray<MementoFilter>(b), FilledMementoFilter()),
             };
 
             foreach (var (name, read, clean) in payloads)
@@ -600,6 +625,13 @@ namespace TestProbabilisticDataStructures
                         $"{name}: a flipped bit at offset {i} was not caught");
                 }
             }
+        }
+
+        private static byte[] FilledMementoFilter()
+        {
+            var f = new MementoFilter(64, 6, initialCapacity: 8);
+            for (ulong i = 0; i < 150; i++) f.Add(i * 5);
+            return f.ToByteArray();
         }
 
         private static byte[] FilledInfiniFilter()
