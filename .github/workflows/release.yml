@@ -45,15 +45,38 @@ jobs:
             exit 1
           fi
 
+      # The changelog section for this version becomes the GitHub release body
+      # and the package's release notes. No section means the changelog was not
+      # updated for this release, which is worth failing over.
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="${version}" '
+            index($0, "## [" ver "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found && /^\[[^]]*\]: / { exit }
+            found { print }
+          ' CHANGELOG.md | sed -e '/./,$!d' > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for ${version}. Add '## [${version}]' with the release's changes, then retag."
+            exit 1
+          fi
+          printf '\nFull history: https://github.com/%s/blob/%s/CHANGELOG.md\n' \
+            "${GITHUB_REPOSITORY}" "${GITHUB_REF_NAME}" >> release-notes.md
+
       - name: Build
         run: dotnet build --configuration Release -warnaserror
 
       - name: Test
         run: dotnet test --configuration Release --no-build
 
+      # The notes travel by file, not by -p:PackageReleaseNotes=..., because
+      # MSBuild's command line splits property values on semicolons and commas.
       - name: Pack
         run: dotnet pack ProbabilisticDataStructures/ProbabilisticDataStructures.csproj
           --configuration Release --no-build --output artifacts
+          -p:PackageReleaseNotesFile="${PWD}/release-notes.md"
 
       - name: Upload packages as build artifacts
         uses: actions/upload-artifact@v7
@@ -96,5 +119,5 @@ jobs:
           gh release create "${GITHUB_REF_NAME}"
           --repo "${GITHUB_REPOSITORY}"
           --title "${GITHUB_REF_NAME}"
-          --notes "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/CHANGELOG.md)."
+          --notes-file release-notes.md
           artifacts/*
