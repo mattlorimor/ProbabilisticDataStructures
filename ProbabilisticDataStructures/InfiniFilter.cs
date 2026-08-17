@@ -224,56 +224,14 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Doubles the active table, ageing every entry by one expansion and moving
-        /// aside those that have nothing left to spend.
+        /// Doubles the active table. The chain's tables expand by the same path, so
+        /// there is one description of what an expansion means rather than two that
+        /// have to be kept in step.
         /// </summary>
         private void Expand()
         {
-            var old = this.Active;
-            var newQuotientBits = old.QuotientBits + 1;
-
-            if (newQuotientBits + old.FingerprintBits > 64)
-            {
-                throw new InvalidOperationException(
-                    $"The filter cannot expand past {old.Slots} slots with " +
-                    $"{old.FingerprintBits}-bit fingerprints: the address and the " +
-                    "fingerprint together would need more bits than the hash has. " +
-                    "This is around a quintillion items; a filter that reaches it " +
-                    "has outgrown the assumption that a 64-bit hash separates its " +
-                    "keys at all.");
-            }
-
-            var grown = new InfiniSegment(newQuotientBits, old.FingerprintBits);
-            var voided = new List<uint>();
-
-            foreach (var (quotient, field) in old.Entries())
-            {
-                var age = old.AgeOf(field);
-
-                if (age >= old.FingerprintBits)
-                {
-                    // Nothing left to sacrifice. All that is known about this entry is
-                    // the address it occupied, which is a prefix of its hash, so that
-                    // is what moves down the chain.
-                    voided.Add(quotient);
-                    continue;
-                }
-
-                // The bit the larger table needs is the bottom of the fingerprint, and
-                // it becomes the top bit of the new address -- which is the same thing
-                // as saying the address is one bit more of the hash than it was.
-                var fingerprint = old.FingerprintOf(field, age);
-                var moved = quotient + ((fingerprint & 1) == 1 ? old.Slots : 0u);
-                grown.Insert(moved, age + 1, fingerprint >> 1);
-            }
-
-            this.Segments[0] = grown;
+            ExpandTable(0);
             this.Expansions++;
-
-            if (voided.Count > 0)
-            {
-                ShedInto(1, voided, old.QuotientBits, old.FingerprintBits);
-            }
         }
 
         /// <summary>
@@ -309,7 +267,7 @@ namespace ProbabilisticDataStructures
             {
                 if (this.Segments[index].Load >= ExpansionThreshold)
                 {
-                    ExpandChained(index);
+                    ExpandTable(index);
                 }
 
                 var target = this.Segments[index];
@@ -317,8 +275,18 @@ namespace ProbabilisticDataStructures
                 var carried = (ulong)address >> target.QuotientBits;
 
                 // What is left of the address after the target's own addressing is the
-                // fingerprint. A shorter one means the entry arrives already aged by
-                // the difference, so it keeps matching on exactly the bits it has.
+                // fingerprint. A shorter one would mean the entry arrives already aged
+                // by the difference, so that it keeps matching on exactly the bits it
+                // has rather than on bits nobody stored.
+                //
+                // That branch is not currently reachable: a chain table is created
+                // with room for a full fingerprint, and it doubles more slowly than
+                // the table feeding it, so the spare only ever grows. A sweep over
+                // fingerprints of 2 to 12 bits and starting sizes of 1 to 1024, at
+                // 300,000 items each, never took it. It is kept because the
+                // alternative -- assuming a full fingerprint -- would store bits that
+                // were never there and lose the entry, and the sizing it depends on is
+                // exactly the sort of thing a later change would adjust.
                 var spare = addressBits - target.QuotientBits;
                 var age = Math.Clamp(fingerprintBits - spare, 0, fingerprintBits);
                 target.Insert(quotient, age, carried);
@@ -326,10 +294,10 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Doubles a table in the chain, ageing its entries and shedding its own void
-        /// entries into the table after it.
+        /// Doubles one table, ageing every entry that lived through it by one and
+        /// moving aside those with nothing left to spend.
         /// </summary>
-        private void ExpandChained(int index)
+        private void ExpandTable(int index)
         {
             var old = this.Segments[index];
 
