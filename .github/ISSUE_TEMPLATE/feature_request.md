@@ -1,17 +1,30 @@
 ---
 name: Feature request
-about: Suggest an idea for this project
-
+about: A structure, or a capability of one, that the library is missing
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+**What question do you need answered that nothing here answers?**
+<!-- The library is organised around questions -- membership, cardinality, frequency,
+     quantiles, ranges, sampling -- rather than around algorithms, so the most useful
+     framing is the question you are stuck on. If an existing structure nearly does it,
+     say which and where it falls short. -->
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+**If you have a specific structure in mind**
+<!-- A link to the paper, and to a reference implementation if one exists. The
+     reference matters more than it might seem: papers and their own implementations
+     disagree surprisingly often, and where they do, the implementation is usually the
+     one consistent with the published constants. A structure with no reference is
+     still worth proposing -- it just costs a great deal more to get right, and it is
+     fair to say so up front. -->
 
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
+**When should someone *not* use it?**
+<!-- Every structure documented here says what it is bad at, because the honest answer
+     is usually "use the dedicated thing instead". A proposal that cannot name its own
+     weakness is usually one that has not been compared to what already exists. -->
 
-**Additional context**
-Add any other context or screenshots about the feature request here.
+**What does it cost, and what does it buy?**
+<!-- Bits per key, error rate, whether it merges, whether it can be updated after it is
+     built. Rough numbers are fine. "Smaller than X at the same accuracy" is the
+     comparison that tends to decide these. -->
+
+**Anything else**
