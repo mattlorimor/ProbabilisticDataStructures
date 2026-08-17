@@ -134,27 +134,66 @@ cd TestProbabilisticDataStructures
 dotnet stryker --mutate "**/QuotientFilter.cs" --mutate "**/Buckets.cs"
 ```
 
-Scope every run. Stryker is not part of any build: with coverage analysis off -- see
-below for why it must be -- a four-file sweep of 686 mutants took an hour and a half,
-the full library would generate five thousand mutants, and the output needs human
-adjudication anyway. It is a periodic audit for files whose tests have not been through the loop
-above, not a gate.
+Scope every run. Stryker is not part of any build: a single-file sweep takes twenty
+minutes to an hour and a half depending on configuration (below), the full library
+would generate five thousand mutants, and the output needs human adjudication anyway.
+It is a periodic audit for files whose tests have not been through the loop above,
+not a gate.
 
-Two hard-won caveats:
+**Stryker and this suite's parallelism do not mix unmanaged.** The test assembly
+declares `[assembly: Parallelize(Scope = ExecutionScope.MethodLevel)]`, and Stryker
+assumes it controls all parallelism — it serializes VsTest at the *container* level,
+which in-assembly workers ignore. That breaks both of its modes, silently and in
+opposite directions. Four runs on one frozen tree (Buckets.cs scope, 531 tests),
+whose true score with every verdict hand-adjudicated is 74.80%:
 
-- **`coverage-analysis` must stay `off`.** With it on, Stryker's per-test coverage
-  attribution misfires on this MSTest/.NET setup and reports mutants as "survived"
-  that the suite demonstrably kills. Measured on the same four files against the
-  same suite: coverage on scored 40.52% with 376 "survivors"; coverage off scored
-  97.96% with 14. Hand-verification showed the first number was noise (one
-  "survivor" failed 8 pre-existing tests) — and the second still overstated: of its
-  11 logic survivors, 9 also died by hand, one of them failing 197 tests.
-- **Survivors are leads, not verdicts — in either mode.** Hand-apply each survivor
-  and run the suite before believing it. Of that run's 14, the true residue was two
-  internal guards reachable by no public path (closed with direct internal tests in
-  `TestBuckets.cs`) and three exception-message strings, which are accepted:
-  tests assert exception types, deliberately not wording. Document equivalent
-  mutants rather than contorting a test to kill them.
+| coverage-analysis | MSTest workers × Stryker concurrency | reported |
+|---|---|---|
+| perTest | 10 × 5 | 66.14% — 16 false survivors; hot-path mutants misclassified `static` |
+| off     | 10 × 5 | 100.00% — 41 wall-clock timeouts counted as kills, 32 on undetectable mutants |
+| perTest | 1 × 5  | 78.74% — zero verdict errors |
+| off     | 10 × 1 | 74.80% — exact |
+
+The false survivors are not attribution noise: for every one hand-checked, running
+exactly the tests Stryker itself listed under `coveredBy` kills the mutant — a
+deleted guard `throw` "survived" the two tests that assert that throw. And a Timeout
+is a detection only when the mutant hangs the code; at five concurrent full-suite
+sessions times ten workers on ten cores, it mostly measures the machine. (The
+40.52% / 97.96% comparison an earlier revision of this section drew came from runs
+whose suite grew between them and which carried both defects — superseded by the
+table above.)
+
+Root cause, found independently upstream as
+[stryker-net#3757](https://github.com/stryker-mutator/stryker-net/issues/3757):
+Stryker always intended to emit `<DisableParallelization>` for MSTest, but
+`DetectTestFrameworks` cleared the MSTest flag instead of setting it (`&= ~` where
+`|=` was meant), so the countermeasure was dead code. Fixed in PR #3760 (merged
+2026-08-14, unreleased as of 4.16.0). The emission is unconditional per framework,
+so the fix serializes every session — both failure modes above die with it. **When
+the next Stryker release ships: bump `dotnet-tools.json`, drop the `concurrency`
+pin from `stryker-config.json`, let `coverage-analysis` return to its default, and
+delete the Workers guidance below.** Until then, both workarounds stand.
+
+Two sound configurations:
+
+- **Default, enforced by `stryker-config.json`: `coverage-analysis: off` with
+  `concurrency: 1`.** What `dotnet stryker` does in this repo with no extra steps.
+  Exact and slow — the Buckets.cs sweep took 1h40, because every surviving mutant
+  runs the full suite serially.
+- **Fast path for larger sweeps: serialize the workers instead.** Set `Workers = 1`
+  on the `Parallelize` attribute in `AssemblyAttributes.cs` for the duration of the
+  run and revert after; then per-test coverage is sound and the same sweep took
+  19:40. The edit cannot live in the Stryker config — MSTest reads parallelism from
+  the assembly, not from anything Stryker controls.
+
+**Survivors are leads, not verdicts — and so are Timeouts.** Hand-apply each and run
+the suite before believing either. The residue that survives adjudication here is
+real and accepted: exception-message strings (tests assert exception types,
+deliberately not wording — the one asserted fragment, "at most 8 bits", is the
+exception that proves it), internal guards reachable by no public path (closed with
+direct internal tests in `TestBuckets.cs`), and equivalent mutants (`>`→`>=` where
+both arms write the same value, `>>`→`>>>` on an unsigned operand). Document these
+rather than contorting a test to kill them.
 
 ## Persistence
 
