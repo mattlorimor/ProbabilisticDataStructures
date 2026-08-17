@@ -49,6 +49,7 @@ eleven structures the Go library does not have.
   [`MinHash`](#minhash) · [`SimHash`](#simhash) ·
   [`MinHashIndex` and `SimHashIndex`](#minhashindex-and-simhashindex)
 - [Distributions](#distributions) — [`DDSketch`](#ddsketch)
+- [Ranges](#ranges) — [`Grafite`](#grafite)
 - [Sampling](#sampling) — [`VarOpt`](#varopt)
 - [Recent data](#recent-data)
 - [Contributions](#contributions)
@@ -85,6 +86,7 @@ eleven structures the Go library does not have.
 | Are these two **documents** near-duplicates? | `SimHash` | [Similarity](#similarity) |
 | …across a corpus, without comparing every pair | `MinHashIndex`, `SimHashIndex` | [Similarity](#similarity) |
 | What does this distribution look like? p50, p99? | `DDSketch` | [Distributions](#distributions) |
+| Is there **anything** between a and b? | `Grafite` | [Ranges](#ranges) |
 | What is the total weight of *(question not yet asked)*? | `VarOpt` | [Sampling](#sampling) |
 | …but only about the **last hour** | `SlidingWindow<T>` | [Recent data](#recent-data) |
 
@@ -1178,6 +1180,71 @@ bytes, and so the only one that never hashes.
 
 From Masson, Rim and Lee,
 [DDSketch](https://arxiv.org/abs/1908.10693).
+
+---
+
+## Ranges
+
+<sup>[↑ Contents](#contents)</sup>
+
+Every filter above answers about one key at a time. Asking "is there anything between
+a and b?" with one of them means asking about every key in the range, which stops being
+possible the moment the range is wider than a handful.
+
+### `Grafite`
+
+<sup>[↑ Contents](#contents)</sup>
+
+Answers **"does any stored key fall in [a, b]?"** — the question an index asks before
+deciding whether a block is worth reading from disk.
+
+Range filters are not new; what is new here is where the false positive rate comes
+from. SuRF, Rosetta and their relatives bound theirs empirically, measured on query
+workloads that look nothing like the keys. Point the queries *near* the data — which is
+what real workloads do, since people look for records next to the records they have —
+and those rates collapse by orders of magnitude. Grafite's bound is a theorem about its
+choice of hash function. It holds for **any** sequence of queries, including one chosen
+by someone who has read your keys, as long as they have not read your seed.
+
+The construction is simpler than what it replaces. Keys are hashed into a small
+universe by a function that preserves locality, so a range of keys becomes a range of
+hash codes and the question becomes whether any stored code lands in an interval. The
+codes are then stored in Elias–Fano, within a couple of bits per key of the minimum any
+structure answering this question could use.
+
+**Reach for it when** you have a static, known set of ordered keys and you need to skip
+work for ranges that hold nothing — LSM-tree block skipping is the motivating case.
+
+**Look elsewhere if** you only ask about single keys, where an ordinary filter is
+smaller for the same rate, or if the set changes: this one is built once and never
+updated, like `BinaryFuseFilter`.
+
+```C#
+var filter = Grafite.Build(
+    keys: new ulong[] { 10, 25, 400, 9001 },
+    falsePositiveRate: 0.01,
+    maxRangeSize: 64);            // the rate is promised for ranges this wide
+
+bool maybe = filter.Test(26, 60); // false means certainly empty
+bool point = filter.Test(400);    // a point query is a range of one
+```
+
+Shorter ranges do proportionally better: a range of length ℓ is wrong with probability
+at most ℓ/`maxRangeSize` of the headline rate. Longer ones still answer correctly —
+there are never false negatives — but their rate grows in proportion.
+
+Keys are numbers rather than byte arrays, because a range is a question about order and
+bytes have none a caller would agree with.
+
+One departure from the authors' reference implementation is worth knowing about. The
+hash shifts each block of keys by its own amount, so it preserves locality only *within*
+a block; the reference tests a range as one interval, which for a range straddling a
+block boundary can report an occupied range empty — a false negative, measured here at
+about one in *r* such queries. This implementation splits the query at the boundary,
+which costs one extra lookup and makes the guarantee exact.
+
+Described by Costa, Ferragina and Vinciguerra in
+[Grafite: Taming Adversarial Queries with Optimal Range Filters](https://arxiv.org/abs/2311.15380).
 
 ---
 

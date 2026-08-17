@@ -84,6 +84,7 @@ checksum still matches.
 | 23 | `HeavyKeeper` |
 | 24 | `VarOpt` |
 | 25 | `UltraLogLog` |
+| 26 | `Grafite` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
@@ -605,6 +606,39 @@ and would make folding lossy.
 A reader rejects any register recording a position below the precision's index bits,
 since no insertion at that precision can produce one, and it would take the estimator
 outside the range its corrections cover.
+
+### `Grafite` (id 26)
+
+```
+u64     r, the size of the reduced universe
+u64     the hash multiplier
+u64     the hash addend
+u64     the number of keys the filter was built from
+u64     the largest range size the rate was promised for
+u32     how many low bits of each code are stored verbatim
+u32     the number of stored hash codes
+u32     how many bits of the high bitvector are in use
+u64     the smallest stored code
+u64     the largest stored code
+u32     the number of words of low bits
+u64       each word
+u32     the number of words of high bits
+u64       each word
+```
+
+The hash parameters are stored rather than a seed, because they *are* the filter: the
+codes were placed by them and mean nothing without them. A reader rejects a multiplier
+of zero, which would collapse the block term and make a query one reduced universe away
+from a key collide with it every time — the attack the filter exists to survive.
+
+The codes are held in Elias–Fano: the low bits of each code packed end to end, and the
+high bits as a bitvector in which the ith code sets the bit at (high part + i), so the
+high parts are recovered by counting rather than stored. The index over that bitvector
+is rebuilt on read rather than written down, since it is a function of the bits it
+indexes.
+
+A reader also rejects a code at or above the reduced universe, a split wider than a
+code, and more codes than keys — none of which hashing can produce.
 
 ## The random generator's state
 
