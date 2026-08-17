@@ -293,6 +293,89 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Property (i) itself, measured. The paper defines the scheme by one
+        /// equation: item i is in the sample with probability min(1, w_i/tau),
+        /// where tau is the unique solution of sum_i min(1, w_i/tau) = k. For a
+        /// fixed short stream both sides are computable, so this compares the
+        /// implementation against the definition rather than against itself.
+        /// </summary>
+        /// <remarks>
+        /// This is the sharpest test in the file. A mutation that miscounts the
+        /// survivors of a contest -- one character, and every other test here still
+        /// passes -- puts an item's inclusion frequency roughly fifty standard
+        /// deviations from where the definition says it belongs.
+        /// </remarks>
+        [TestMethod]
+        public void TestInclusionProbabilitiesMatchTheThresholdRule()
+        {
+            const int trials = 20000;
+            const uint k = 3;
+            var weights = new[] { 10.0, 5.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+
+            // The threshold is the unique tau covering exactly k items, found by
+            // bisection on a function that decreases in tau.
+            double Coverage(double t) => weights.Sum(w => Math.Min(1.0, w / t));
+            var low = 1e-12;
+            var high = 1e12;
+            for (var i = 0; i < 300; i++)
+            {
+                var middle = (low + high) / 2.0;
+                if (Coverage(middle) > k)
+                {
+                    low = middle;
+                }
+                else
+                {
+                    high = middle;
+                }
+            }
+            var tau = (low + high) / 2.0;
+
+            Assert.AreEqual(5.5, tau, 1e-9,
+                "Premise: for these weights the threshold is 5.5, where the two " +
+                "heavy items cover 1 + 10/11 and the six light ones 12/11. If the " +
+                "solve is wrong every expectation below is wrong with it.");
+
+            var counts = new int[weights.Length];
+            for (var t = 0; t < trials; t++)
+            {
+                var sample = new VarOpt(k, seed: (ulong)t);
+                for (var i = 0; i < weights.Length; i++)
+                {
+                    sample.Add(Key($"i{i}"), weights[i]);
+                }
+                foreach (var element in sample.Samples())
+                {
+                    counts[int.Parse(Name(element.Data)[1..])]++;
+                }
+            }
+
+            Assert.AreEqual(trials, counts[0],
+                "The heaviest item's share of the weight entitles it to inclusion " +
+                "with certainty: min(1, 10/5.5) is 1, and certainty means every " +
+                "single trial.");
+
+            for (var i = 0; i < weights.Length; i++)
+            {
+                var expected = Math.Min(1.0, weights[i] / tau);
+                if (expected >= 1.0)
+                {
+                    continue;
+                }
+
+                var observed = (double)counts[i] / trials;
+                var deviations = Math.Abs(observed - expected) /
+                    Math.Sqrt(expected * (1.0 - expected) / trials);
+
+                Assert.IsTrue(deviations < 4.0,
+                    $"Item {i}, weight {weights[i]}, appeared in {observed:P3} of " +
+                    $"{trials} samples where the threshold rule entitles it to " +
+                    $"{expected:P3} -- {deviations:F1} standard deviations away. " +
+                    "Inclusion probability is the definition of the scheme.");
+            }
+        }
+
+        /// <summary>
         /// Equal weights make VarOpt the textbook uniform reservoir: every item ever
         /// seen is equally likely to be in the sample. The paper makes this claim
         /// explicitly -- VarOpt reduces to the standard scheme on unit weights.
