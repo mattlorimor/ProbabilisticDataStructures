@@ -219,6 +219,31 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestUltraLogLogRoundTrips()
+        {
+            var sketch = new UltraLogLog(12);
+            for (int i = 0; i < 50000; i++)
+            {
+                sketch.Add(Key($"item-{i}"));
+            }
+
+            var restored = RoundTrip(sketch);
+
+            Assert.AreEqual(sketch.Count(), restored.Count(),
+                "restored estimator gave a different count");
+            Assert.AreEqual(sketch.Precision(), restored.Precision());
+
+            // And keeps estimating, rather than merely reporting the stored number.
+            for (int i = 50000; i < 60000; i++)
+            {
+                sketch.Add(Key($"item-{i}"));
+                restored.Add(Key($"item-{i}"));
+            }
+            Assert.AreEqual(sketch.Count(), restored.Count(),
+                "restored estimator diverged after more adds");
+        }
+
+        [TestMethod]
         public void TestVarOptRoundTrips()
         {
             var sample = new VarOpt(24, seed: 6);
@@ -321,6 +346,7 @@ namespace TestProbabilisticDataStructures
             Assert.HasCount(0, RoundTrip(new TopK(0.001, 0.01, 10)).Elements());
             Assert.HasCount(0, RoundTrip(new HeavyKeeper(10, 64, seed: 1)).Elements());
             Assert.AreEqual(0u, RoundTrip(new VarOpt(10, seed: 1)).SampleCount);
+            Assert.AreEqual(0ul, RoundTrip(new UltraLogLog(10)).Count());
 
             Assert.AreEqual(0ul, RoundTrip(new CountMinSketch(0.01, 0.01)).TotalCount());
             Assert.AreEqual(0u, RoundTrip(BinaryFuseFilter.Build(Array.Empty<byte[]>())).Count());
@@ -446,6 +472,7 @@ namespace TestProbabilisticDataStructures
                 ("BloomierFilter", FilledBloomier()),
                 ("HeavyKeeper", new HeavyKeeper(10, 64, seed: 1).Add(Key("a")).ToByteArray()),
                 ("VarOpt", new VarOpt(10, seed: 1).Add(Key("a")).ToByteArray()),
+                ("UltraLogLog", new UltraLogLog(10).Add(Key("a")).ToByteArray()),
             };
 
             // Read every payload as a BloomFilter; only its own may succeed.
@@ -506,6 +533,7 @@ namespace TestProbabilisticDataStructures
                 ("BloomierFilter", b => Persistence.FromByteArray<BloomierFilter>(b), FilledBloomier()),
                 ("HeavyKeeper", b => Persistence.FromByteArray<HeavyKeeper>(b), FilledHeavyKeeper()),
                 ("VarOpt", b => Persistence.FromByteArray<VarOpt>(b), FilledVarOpt()),
+                ("UltraLogLog", b => Persistence.FromByteArray<UltraLogLog>(b), FilledUltraLogLog()),
             };
 
             foreach (var (name, read, clean) in payloads)
@@ -519,6 +547,16 @@ namespace TestProbabilisticDataStructures
                         $"{name}: a flipped bit at offset {i} was not caught");
                 }
             }
+        }
+
+        private static byte[] FilledUltraLogLog()
+        {
+            var sketch = new UltraLogLog(5);
+            for (int i = 0; i < 200; i++)
+            {
+                sketch.Add(Key($"item-{i}"));
+            }
+            return sketch.ToByteArray();
         }
 
         private static byte[] FilledVarOpt()

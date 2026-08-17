@@ -434,6 +434,40 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Registers that have saturated -- recorded the highest bit position there
+        /// is -- still produce a usable estimate rather than running off to infinity.
+        /// </summary>
+        /// <remarks>
+        /// A register saturates when a hash's whole tail below the index is zero,
+        /// which for a real hash happens about once in 2^56 elements at these
+        /// precisions, so no amount of adding will reach it. It is reached here on
+        /// purpose with a hash chosen to do so. Without the correction for saturated
+        /// registers the sum they contribute to is empty, the estimate is infinite,
+        /// and a caller asking for a count gets the largest number there is.
+        /// </remarks>
+        [TestMethod]
+        public void TestSaturatedRegistersStillEstimate()
+        {
+            // At precision 4 the top four bits pick the register. A hash whose other
+            // sixty bits are all zero leaves the run of zeros nothing to stop at, so
+            // the register records the last position there is.
+            var sketch = new UltraLogLog(4, data => (ulong)data[0] << 60);
+            for (byte i = 0; i < 16; i++)
+            {
+                sketch.Add(new[] { i });
+            }
+
+            var estimate = sketch.Count();
+
+            Assert.IsTrue(estimate > 1e18,
+                "Every register saturated, which only happens for enormous distinct " +
+                $"counts, so the estimate should be enormous. It was {estimate}.");
+            Assert.AreNotEqual(ulong.MaxValue, estimate,
+                "The estimate ran to infinity and saturated the count. Saturated " +
+                "registers are meant to be corrected for, not left out of the sum.");
+        }
+
+        /// <summary>
         /// Packing and unpacking a register is a round trip for every value an
         /// insertion can produce, and an empty register unpacks to nothing.
         /// </summary>

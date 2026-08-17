@@ -35,6 +35,15 @@ namespace ProbabilisticDataStructures
     /// tabulated, for the same reason HyperLogLog tabulates its alpha: they correct a
     /// finite-register bias that has no closed form.
     /// </para>
+    /// <para>
+    /// Ertl also describes a martingale estimator, maintained as registers change,
+    /// which is more accurate again -- it is where the paper's headline 28% comes
+    /// from. It is deliberately not implemented here, because it is only valid for a
+    /// sketch built by insertion alone: merging two sketches leaves no way to carry
+    /// it, and an estimate that quietly stops being available once a caller merges is
+    /// a worse thing to offer than one that was never there. What this class delivers
+    /// is the 24% that survives merging.
+    /// </para>
     /// </remarks>
     public class UltraLogLog : IBinaryPersistable<UltraLogLog>
     {

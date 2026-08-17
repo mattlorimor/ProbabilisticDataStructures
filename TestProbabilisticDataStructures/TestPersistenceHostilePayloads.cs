@@ -220,6 +220,69 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// An UltraLogLog payload for the tests below to corrupt: precision 5, so
+        /// thirty-two registers. Its layout is fixed, so field offsets are too: the
+        /// precision at 0, the register count at 4, and the registers themselves
+        /// from 8.
+        /// </summary>
+        private static byte[] UltraLogLogPayload()
+        {
+            var sketch = new UltraLogLog(5);
+            for (var i = 0; i < 200; i++)
+            {
+                sketch.Add(Key($"item-{i}"));
+            }
+            return sketch.ToByteArray();
+        }
+
+        /// <summary>
+        /// A precision this library never builds would size the register array to
+        /// something the estimator's per-precision factors do not cover.
+        /// </summary>
+        [TestMethod]
+        public void TestUltraLogLogWithUnsupportedPrecisionIsRefused()
+        {
+            AssertRefused(
+                () => Persistence.FromByteArray<UltraLogLog>(
+                    PokeUInt32(UltraLogLogPayload(), 0, 2)),
+                "only builds precisions");
+            AssertRefused(
+                () => Persistence.FromByteArray<UltraLogLog>(
+                    PokeUInt32(UltraLogLogPayload(), 0, 27)),
+                "only builds precisions");
+        }
+
+        /// <summary>
+        /// A precision that disagrees with the number of registers carried would
+        /// index the array by a mask it was not sized for.
+        /// </summary>
+        [TestMethod]
+        public void TestUltraLogLogWithMismatchedRegisterCountIsRefused()
+        {
+            var bytes = PokeUInt32(UltraLogLogPayload(), 0, 6);
+            AssertRefused(
+                () => Persistence.FromByteArray<UltraLogLog>(bytes), "and carries");
+        }
+
+        /// <summary>
+        /// A register recording a bit position below the index bits cannot have come
+        /// from an insertion at this precision, and would put the estimator outside
+        /// the range its corrections cover.
+        /// </summary>
+        [TestMethod]
+        public void TestUltraLogLogWithImpossibleRegisterIsRefused()
+        {
+            // The registers begin at payload offset 8, after the precision and the
+            // register count. Written little-endian, 4 sets the first register to a
+            // recorded position of 1 and leaves the next three empty; precision 5
+            // can never record below position 4.
+            var bytes = PokeUInt32(UltraLogLogPayload(), 8, 4);
+            AssertRefused(
+                () => Persistence.FromByteArray<UltraLogLog>(bytes),
+                "cannot have come from an insertion");
+        }
+
+        /// <summary>
         /// A VarOpt payload for the tests below to corrupt: k = 5, past capacity, so
         /// it is sampling. Its scalar prefix is fixed, so field offsets are too:
         /// k at 0, the generator state at 4, the count of items seen at 12, the
