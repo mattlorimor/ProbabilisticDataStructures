@@ -49,6 +49,7 @@ eleven structures the Go library does not have.
   [`MinHash`](#minhash) · [`SimHash`](#simhash) ·
   [`MinHashIndex` and `SimHashIndex`](#minhashindex-and-simhashindex)
 - [Distributions](#distributions) — [`DDSketch`](#ddsketch)
+- [Sampling](#sampling) — [`VarOpt`](#varopt)
 - [Recent data](#recent-data)
 - [Contributions](#contributions)
 
@@ -83,6 +84,7 @@ eleven structures the Go library does not have.
 | Are these two **documents** near-duplicates? | `SimHash` | [Similarity](#similarity) |
 | …across a corpus, without comparing every pair | `MinHashIndex`, `SimHashIndex` | [Similarity](#similarity) |
 | What does this distribution look like? p50, p99? | `DDSketch` | [Distributions](#distributions) |
+| What is the total weight of *(question not yet asked)*? | `VarOpt` | [Sampling](#sampling) |
 | …but only about the **last hour** | `SlidingWindow<T>` | [Recent data](#recent-data) |
 
 ### If you only read one thing
@@ -1115,6 +1117,69 @@ bytes, and so the only one that never hashes.
 
 From Masson, Rim and Lee,
 [DDSketch](https://arxiv.org/abs/1908.10693).
+
+---
+
+## Sampling
+
+<sup>[↑ Contents](#contents)</sup>
+
+Every structure above fixes its question when the data goes in. A filter answers
+membership, a sketch answers the counts or quantiles it was built to count, and a
+question nobody thought of at ingest cannot be asked afterwards at any price.
+
+A sample fixes nothing. It keeps some of the items themselves, so the questions can
+come later — including the ones prompted by what the earlier questions turned up.
+
+### `VarOpt`
+
+<sup>[↑ Contents](#contents)</sup>
+
+Keeps **k items with weights**, chosen so that adding up the weights of whichever
+sampled items match your predicate estimates the true total weight of everything that
+would have matched.
+
+The estimate is unbiased, and its variance is the smallest any k-item sample can
+achieve — that is the "var-opt" in the name, and it is a proof, not a benchmark. One
+number is not estimated at all: the sampled weights sum to the **exact** total weight
+of the stream, because every eviction hands the evicted item's weight to the
+survivors rather than dropping it.
+
+Items heavier than the current threshold are kept at their own weights; the rest
+share the threshold, since below it survival is luck and luck is priced the same for
+everyone.
+
+**Reach for it when** the questions are not known in advance: exploratory analysis
+over a stream too big to keep, or a sample retained so that next quarter's question
+can still be asked of last quarter's traffic. Weights make it "sample by revenue" or
+"by bytes" rather than by count.
+
+**Look elsewhere if** you know the question now. A dedicated sketch is far more
+accurate per byte — `CountMinSketch` for frequencies, `DDSketch` for quantiles,
+`HyperLogLogPlus` for cardinality. A sample of k items answering everything is
+worse at any *particular* thing than a structure built for it.
+
+```C#
+var sample = new VarOpt(k: 1000, seed: 42);
+sample.Add(orderBytes, weight: 249.99);       // sample by revenue
+
+double revenue = sample.EstimateSubset(       // a question asked later
+    item => IsFromEurope(item.Span));
+double exact = sample.TotalWeight;            // not an estimate
+
+WeightedElement[] kept = sample.Samples();
+```
+
+Two samples built with the same **k** merge, which is how a sample of a stream split
+across shards is assembled: `left.Merge(right)`. Equal k is required rather than
+encouraged — the paper's recurrence is what makes merging valid, and it holds when
+the k's agree.
+
+The eviction draws come from a seeded generator whose state persists, so a sample
+written out and read back continues its sequence rather than replaying it.
+
+Described by Cohen, Duffield, Kaplan, Lund and Thorup in
+[Stream Sampling for Variance-Optimal Estimation of Subset Sums](https://arxiv.org/abs/0803.0473).
 
 ---
 

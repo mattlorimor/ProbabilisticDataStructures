@@ -82,6 +82,7 @@ checksum still matches.
 | 21 | `InvertibleBloomLookupTable` |
 | 22 | `BloomierFilter` |
 | 23 | `HeavyKeeper` |
+| 24 | `VarOpt` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
@@ -548,6 +549,39 @@ u64       its recorded frequency
 The tracked elements are re-heaped on read rather than being trusted to arrive in heap
 order, for the same reason `TopK`'s are. The generator's state is stored so a reloaded
 structure resumes its decay sequence rather than replaying it; see below.
+
+### `VarOpt` (id 24)
+
+```
+u32     k, the number of items kept
+u64     the eviction generator's state
+u64     n, the number of items added
+u32     the count of items held at their own weights
+u32     the count of items held at the threshold
+f64     the threshold region's total weight
+        per exact item:
+bytes     the item's data
+f64       its weight
+        per threshold item:
+bytes     the item's data
+```
+
+The threshold itself is **not** stored. It is the region's total weight divided by
+the region's size, and storing the quotient instead of the total would let rounding
+accumulate across a save-and-reload cycle — the one number this structure promises
+exactly is the sum of its adjusted weights.
+
+Which reading a payload gets is decided by the threshold-region size: zero means the
+sample is still exact and holds everything it has seen, so the reader requires the
+held count to equal `n` and the region weight to be zero. Any other value means
+sampling has begun, so the reader requires the two regions together to fill `k`
+exactly, `n` to exceed `k`, and the region weight to be a positive finite number.
+Neither state can be forged into the other without failing one of those.
+
+The items held at their own weights are re-heaped on read rather than being trusted to
+arrive in heap order, for the same reason `TopK`'s and `HeavyKeeper`'s are. The
+generator's state is stored so a reloaded sample resumes its eviction sequence rather
+than replaying it; see below.
 
 ## The random generator's state
 
