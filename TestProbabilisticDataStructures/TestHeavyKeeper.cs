@@ -517,7 +517,7 @@ namespace TestProbabilisticDataStructures
             // in every array: a full collision, the exact case Optimization I exists
             // for. Four buckets and sixteen fingerprint bits put one pair in roughly
             // every million, so a few thousand keys make one nearly certain.
-            string? incumbent = null, collider = null;
+            string incumbent = null, collider = null;
             var seen = new Dictionary<string, string>();
             for (var i = 0; i < 20000 && collider is null; i++)
             {
@@ -542,7 +542,7 @@ namespace TestProbabilisticDataStructures
             // admission is actually contested.
             for (var i = 0; i < 50; i++)
             {
-                hk.Add(Key(incumbent!));
+                hk.Add(Key(incumbent));
             }
             for (var i = 0; i < 30; i++)
             {
@@ -553,7 +553,7 @@ namespace TestProbabilisticDataStructures
             // buckets, so its estimate reads the incumbent's count -- far beyond
             // nmin + 1 -- and Theorem 2's no-overestimation guarantee is exactly
             // what a fingerprint collision forfeits.
-            hk.Add(Key(collider!));
+            hk.Add(Key(collider));
 
             var reported = hk.Elements()
                 .Select(e => Encoding.ASCII.GetString(e.Data.Span))
@@ -581,7 +581,7 @@ namespace TestProbabilisticDataStructures
             // elsewhere in array 1.
             var flow = "the-flow";
             var flowMap = hk.MappingOf(Key(flow)).ToArray();
-            string? collider = null;
+            string collider = null;
             for (var i = 0; i < 20000 && collider is null; i++)
             {
                 var m = hk.MappingOf(Key($"candidate-{i}")).ToArray();
@@ -600,7 +600,7 @@ namespace TestProbabilisticDataStructures
             }
             for (var i = 0; i < 10; i++)
             {
-                hk.Add(Key(collider!));
+                hk.Add(Key(collider));
             }
 
             // Premise guards, through the internals: the contested bucket must have
