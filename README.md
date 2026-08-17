@@ -40,7 +40,7 @@ eleven structures the Go library does not have.
   [`ScalableBloomFilter`](#scalablebloomfilter) ·
   [`StableBloomFilter`](#stablebloomfilter) · [`InverseBloomFilter`](#inversebloomfilter)
 - [Cardinality](#cardinality) —
-  [`HyperLogLogPlus`](#hyperloglogplus) · [`HyperLogLog`](#hyperloglog) ·
+  [`UltraLogLog`](#ultraloglog) · [`HyperLogLogPlus`](#hyperloglogplus) · [`HyperLogLog`](#hyperloglog) ·
   [`ThetaSketch`](#thetasketch) ·
   [`InvertibleBloomLookupTable`](#invertiblebloomlookuptable)
 - [Frequency](#frequency) —
@@ -73,7 +73,8 @@ eleven structures the Go library does not have.
 | …and the stream never ends, on fixed memory | `StableBloomFilter` | [Membership](#membership) |
 | …and I have no idea how big the set is | `ScalableBloomFilter` | [Membership](#membership) |
 | …and a false positive would be expensive | `InverseBloomFilter` | [Membership](#membership) |
-| How many distinct things are there? | `HyperLogLogPlus` | [Cardinality](#cardinality) |
+| How many distinct things are there? | `UltraLogLog` | [Cardinality](#cardinality) |
+| …and I want the sparse representation for small sets | `HyperLogLogPlus` | [Cardinality](#cardinality) |
 | How many are in **both** of these sets? | `ThetaSketch` | [Cardinality](#cardinality) |
 | **Which** keys do these two sets differ by? | `InvertibleBloomLookupTable` | [Cardinality](#cardinality) |
 | How often have I seen this particular thing? | `CountMinSketch` | [Frequency](#frequency) |
@@ -668,13 +669,73 @@ far, because the next arrival might be a repeat — that is a set again, and at 
 items it is gigabytes. These answer within a few percent in kilobytes, which is why
 "distinct users today" can be a dashboard number instead of a nightly batch job.
 
-They differ in what they give up. `HyperLogLogPlus` is the default: smallest, exact
-until it has a few thousand items, mergeable. `HyperLogLog` is its 2007 predecessor,
-kept for compatibility and measurably worse at the high end. A `ThetaSketch` pays more
+They differ in what they give up. `UltraLogLog` is the most accurate per byte and the
+one to reach for by default. `HyperLogLogPlus` costs more memory for the same error but
+stays exact until it has a few thousand items, which matters when most of your sketches
+are nearly empty. `HyperLogLog` is the 2007 original, kept for compatibility and
+measurably worse at the high end. A `ThetaSketch` pays more
 memory for set algebra — intersect and difference, not just union. And the
 `InvertibleBloomLookupTable` is the deliberate odd member: not an estimator at all, but
 a set *difference* that decodes exactly when the difference is small, however large the
 sets.
+
+### `UltraLogLog`
+
+<sup>[↑ Contents](#contents)</sup>
+
+The same question as `HyperLogLog`, answered from the same bytes with about half the
+error — or the same error from far fewer bytes.
+
+A HyperLogLog register remembers one number: the largest update value that ever landed
+on it. Everything else is thrown away, and the thrown-away part is not worthless —
+knowing that the next two values down also occurred says something about how many
+elements passed through. UltraLogLog keeps two bits of it, one byte per register: the
+largest position in the top six bits, and in the bottom two, whether the positions just
+below it were reached.
+
+At equal accuracy that is **43% less memory than this library's `HyperLogLog`**, which
+spends a whole byte per register too. Against a HyperLogLog that packs its registers
+into six bits — the comparison Ertl's paper makes — it is 24% less.
+
+| Relative error | `UltraLogLog` | `HyperLogLog` here |
+| --- | --- | --- |
+| 2% | 1.5 KB | 2.6 KB |
+| 1% | 6.0 KB | 10.5 KB |
+| 0.5% | 23.9 KB | 42.2 KB |
+
+(Registers before rounding: both take a power-of-two register count in practice, so what
+you actually save depends on which side of a power of two each lands on.)
+
+**Reach for it when** you are counting distinct things and would rather spend the
+memory on accuracy than on a sparse representation.
+
+**Look elsewhere if** most of your sketches hold only a handful of items and you keep
+very many of them: `HyperLogLogPlus` stores those in a sparse form that an UltraLogLog
+has no equivalent of, and pays its full register cost from the first element.
+
+```C#
+var counter = new UltraLogLog(precision: 12);   // 4 KB, about 1.2% error
+counter.Add(bytes);
+ulong distinct = counter.Count();
+
+var sized = UltraLogLog.NewDefault(errorRate: 0.01);
+counter.Merge(other);          // same precision, or finer folded down
+```
+
+Merging is exact in a way worth knowing about: a sketch built at a fine precision and
+merged into a coarser one is **byte for byte** the sketch that coarser precision would
+have built from the same stream. So sketches collected at different precisions can be
+combined without anyone having to agree in advance, and a sketch can be shrunk after
+the fact by merging it into an empty smaller one. Merging the other way is refused —
+the registers a coarse sketch never recorded cannot be invented.
+
+Ertl also describes a *martingale* estimator, more accurate again, which this
+implementation deliberately leaves out: it is only valid for a sketch built by
+insertion alone, so it would stop being available the moment you merged, and an
+estimate that silently disappears is worse than one that was never offered.
+
+Described by Otmar Ertl in
+[UltraLogLog: A Practical and More Space-Efficient Alternative to HyperLogLog for Approximate Distinct Counting](https://arxiv.org/abs/2308.16862).
 
 ### `HyperLogLogPlus`
 

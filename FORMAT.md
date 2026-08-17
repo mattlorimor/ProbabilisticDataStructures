@@ -83,6 +83,7 @@ checksum still matches.
 | 22 | `BloomierFilter` |
 | 23 | `HeavyKeeper` |
 | 24 | `VarOpt` |
+| 25 | `UltraLogLog` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
@@ -582,6 +583,28 @@ The items held at their own weights are re-heaped on read rather than being trus
 arrive in heap order, for the same reason `TopK`'s and `HeavyKeeper`'s are. The
 generator's state is stored so a reloaded sample resumes its eviction sequence rather
 than replaying it; see below.
+
+### `UltraLogLog` (id 25)
+
+```
+u32     p, the precision
+bytes   the registers, 2^p of them, one byte each
+```
+
+A register holds the position of the highest bit a run of zeros stopped at, in its top
+six bits, and whether the two positions below it were also reached, in its bottom two.
+Zero means untouched.
+
+What is stored is the **absolute** bit position, not the length of the run — the
+precision is inside the value rather than subtracted out of it. That is what makes a
+sketch foldable: the same element yields the same register value at every precision, so
+merging a finer sketch into a coarser one reproduces the coarser sketch exactly rather
+than approximating it. A format that stored the run length would be smaller by nothing
+and would make folding lossy.
+
+A reader rejects any register recording a position below the precision's index bits,
+since no insertion at that precision can produce one, and it would take the estimator
+outside the range its corrections cover.
 
 ## The random generator's state
 
