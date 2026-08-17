@@ -422,6 +422,147 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(30UL, hk.Count(Key("after-reset")));
         }
 
+        /// <summary>
+        /// While the heap has room, a flow is tracked from its very first arrival --
+        /// there is nothing to compete with, so there is nothing to wait for. Kills
+        /// the mutant that drops the heap-has-room clause and makes every flow wait
+        /// for the organic nmin + 1 step, which is one arrival too late.
+        /// </summary>
+        [TestMethod]
+        public void TestAFlowIsTrackedOnFirstSightWhileTheHeapHasRoom()
+        {
+            var hk = new HeavyKeeper(10, 1024, seed: 11);
+
+            hk.Add(Key("first"));
+            hk.Add(Key("second"));
+            hk.Add(Key("third"));
+
+            var reported = hk.Elements()
+                .Select(e => Encoding.ASCII.GetString(e.Data.Span))
+                .ToArray();
+            Assert.HasCount(3, reported);
+            Assert.Contains("first", reported);
+            Assert.Contains("second", reported);
+            Assert.Contains("third", reported);
+        }
+
+        /// <summary>
+        /// The decay probability is b^-C, not merely "less likely as C grows". At
+        /// b = 2 a count of one decays half the time and a count of three an eighth
+        /// of the time, and 200 independently seeded trials of each are held to
+        /// binomial three-sigma bands around those rates. The bands come from the
+        /// formula, not from running the code, so an implementation that decays at
+        /// some other rate -- always, never, or at the wrong exponent -- lands
+        /// outside them.
+        /// </summary>
+        [TestMethod]
+        public void TestDecayFollowsItsStatedProbability()
+        {
+            // One bucket, one array: the intruder's arrival is guaranteed to contest
+            // the holder's bucket, so every trial is one Bernoulli draw at exactly
+            // the counter value the trial built.
+            var decaysAtOne = 0;
+            var decaysAtThree = 0;
+            for (ulong t = 0; t < 200; t++)
+            {
+                var atOne = new HeavyKeeper(2, 1, depth: 1, decay: 2.0, seed: t);
+                atOne.Add(Key("holder"));
+                atOne.Add(Key("intruder"));
+                if (atOne.Counters[0][0] == 0
+                    || atOne.Count(Key("intruder")) == 1)
+                {
+                    // Decayed from one to zero -- and possibly claimed by the
+                    // intruder in the same arrival, which is the same decay.
+                    decaysAtOne++;
+                }
+
+                var atThree = new HeavyKeeper(2, 1, depth: 1, decay: 2.0, seed: t + 1000);
+                for (var i = 0; i < 3; i++)
+                {
+                    atThree.Add(Key("holder"));
+                }
+                atThree.Add(Key("intruder"));
+                if (atThree.Counters[0][0] == 2)
+                {
+                    decaysAtThree++;
+                }
+            }
+
+            // Binomial three-sigma bands: 200 trials at p = 1/2 give 100 +/- 21.2,
+            // at p = 1/8 give 25 +/- 14.0.
+            Assert.IsGreaterThanOrEqualTo(79, decaysAtOne,
+                $"C=1 decayed {decaysAtOne}/200; b^-1 = 1/2 predicts about 100.");
+            Assert.IsLessThanOrEqualTo(122, decaysAtOne,
+                $"C=1 decayed {decaysAtOne}/200; b^-1 = 1/2 predicts about 100.");
+            Assert.IsGreaterThanOrEqualTo(11, decaysAtThree,
+                $"C=3 decayed {decaysAtThree}/200; b^-3 = 1/8 predicts about 25.");
+            Assert.IsLessThanOrEqualTo(39, decaysAtThree,
+                $"C=3 decayed {decaysAtThree}/200; b^-3 = 1/8 predicts about 25.");
+        }
+
+        /// <summary>
+        /// A fingerprint collider does not ride the incumbent's count into the heap.
+        /// Admission demands an estimate of exactly nmin + 1 -- Optimization I,
+        /// justified by Theorem 1: without collisions, one arrival moves an estimate
+        /// by at most one, so an estimate that arrives far above the heap minimum
+        /// was stolen, not earned. The staging finds a genuine collider by scanning
+        /// keys through the structure's own addressing.
+        /// </summary>
+        [TestMethod]
+        public void TestAFingerprintColliderIsNotAdmittedOnAStolenCount()
+        {
+            var hk = new HeavyKeeper(2, 4, depth: 2, seed: 12);
+
+            // Find two distinct keys with identical (bucket, fingerprint) addresses
+            // in every array: a full collision, the exact case Optimization I exists
+            // for. Four buckets and sixteen fingerprint bits put one pair in roughly
+            // every million, so a few thousand keys make one nearly certain.
+            string? incumbent = null, collider = null;
+            var seen = new Dictionary<string, string>();
+            for (var i = 0; i < 20000 && collider is null; i++)
+            {
+                var key = $"candidate-{i}";
+                var address = string.Join(";", hk.MappingOf(Key(key))
+                    .Select(m => $"{m.Array}:{m.Bucket}:{m.Fingerprint}"));
+                if (seen.TryGetValue(address, out var holder))
+                {
+                    incumbent = holder;
+                    collider = key;
+                }
+                else
+                {
+                    seen[address] = key;
+                }
+            }
+            Assert.IsNotNull(collider,
+                "No colliding pair within 20,000 keys; the premise could not be " +
+                "staged.");
+
+            // The incumbent earns a large count; a filler fills the heap so that
+            // admission is actually contested.
+            for (var i = 0; i < 50; i++)
+            {
+                hk.Add(Key(incumbent!));
+            }
+            for (var i = 0; i < 30; i++)
+            {
+                hk.Add(Key("filler"));
+            }
+
+            // One arrival by the collider. Its fingerprint matches the incumbent's
+            // buckets, so its estimate reads the incumbent's count -- far beyond
+            // nmin + 1 -- and Theorem 2's no-overestimation guarantee is exactly
+            // what a fingerprint collision forfeits.
+            hk.Add(Key(collider!));
+
+            var reported = hk.Elements()
+                .Select(e => Encoding.ASCII.GetString(e.Data.Span))
+                .ToArray();
+            Assert.IsFalse(reported.Contains(collider),
+                "A collider was admitted on a count it never earned.");
+            Assert.Contains(incumbent, reported);
+        }
+
         // ------------------------------------------------------------------
         // Helpers
         // ------------------------------------------------------------------
