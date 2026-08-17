@@ -220,6 +220,76 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A VarOpt payload for the tests below to corrupt: k = 5, past capacity, so
+        /// it is sampling. Its scalar prefix is fixed, so field offsets are too:
+        /// k at 0, the generator state at 4, the count of items seen at 12, the
+        /// exact-region size at 20, the threshold-region size at 24, and the
+        /// threshold region's total weight at 28.
+        /// </summary>
+        private static byte[] VarOptPayload()
+        {
+            var sample = new VarOpt(5, seed: 7);
+            for (var i = 0; i < 60; i++)
+            {
+                sample.Add(Key($"item-{i}"), 1.0 + (i % 8));
+            }
+            return sample.ToByteArray();
+        }
+
+        /// <summary>
+        /// A sample that keeps nothing answers nothing, so the reader refuses to
+        /// build one.
+        /// </summary>
+        [TestMethod]
+        public void TestVarOptKeepingNothingIsRefused()
+        {
+            var bytes = PokeUInt32(VarOptPayload(), 0, 0);
+            AssertRefused(
+                () => Persistence.FromByteArray<VarOpt>(bytes), "keeps no samples");
+        }
+
+        /// <summary>
+        /// A sample claiming to hold more items than it has room for would read
+        /// past the end of its own arrays.
+        /// </summary>
+        [TestMethod]
+        public void TestVarOptHoldingMoreThanItsRoomIsRefused()
+        {
+            var bytes = PokeUInt32(VarOptPayload(), 24, 200);
+            AssertRefused(
+                () => Persistence.FromByteArray<VarOpt>(bytes), "with room for");
+        }
+
+        /// <summary>
+        /// The threshold is the region's weight divided by its size, so a weight
+        /// that is not a positive number puts every adjusted weight in the sample
+        /// beyond meaning while each item still looks reasonable.
+        /// </summary>
+        [TestMethod]
+        public void TestVarOptWithUnusableThresholdWeightIsRefused()
+        {
+            var bytes = PokeUInt64(VarOptPayload(), 28,
+                BitConverter.DoubleToUInt64Bits(double.NaN));
+            AssertRefused(
+                () => Persistence.FromByteArray<VarOpt>(bytes),
+                "no positive weights can sum to");
+        }
+
+        /// <summary>
+        /// Sampling only begins once more items have been seen than are kept, so a
+        /// payload that is sampling while claiming to have seen fewer describes a
+        /// state this structure never reaches.
+        /// </summary>
+        [TestMethod]
+        public void TestVarOptSamplingWithoutEnoughItemsIsRefused()
+        {
+            var bytes = PokeUInt64(VarOptPayload(), 12, 3);
+            AssertRefused(
+                () => Persistence.FromByteArray<VarOpt>(bytes),
+                "takes more items than fit");
+        }
+
+        /// <summary>
         /// A HeavyKeeper payload for the tests below to corrupt: k = 5, two arrays of
         /// sixteen buckets. Its payload layout is fixed, so field offsets are too:
         /// k at 0, width at 4, depth at 8, decay at 12, and -- after the 36-byte

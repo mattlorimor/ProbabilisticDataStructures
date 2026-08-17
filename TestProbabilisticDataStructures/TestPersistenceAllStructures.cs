@@ -219,6 +219,29 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestVarOptRoundTrips()
+        {
+            var sample = new VarOpt(24, seed: 6);
+            var rand = new Random(6);
+            for (int i = 0; i < 20000; i++)
+            {
+                sample.Add(Key($"item-{i}"), (rand.NextDouble() * 50.0) + 0.01);
+            }
+
+            var restored = RoundTrip(sample);
+
+            var before = sample.Samples()
+                .Select(s => (Encoding.ASCII.GetString(s.Data.Span), s.Weight)).ToArray();
+            var after = restored.Samples()
+                .Select(s => (Encoding.ASCII.GetString(s.Data.Span), s.Weight)).ToArray();
+            CollectionAssert.AreEqual(before, after,
+                "the sample changed across the round trip");
+            Assert.AreEqual(sample.TotalWeight, restored.TotalWeight, 0.0,
+                "the total weight is exact, and a round trip must not round it");
+            Assert.AreEqual(sample.N, restored.N);
+        }
+
+        [TestMethod]
         public void TestHeavyKeeperRoundTrips()
         {
             var hk = new HeavyKeeper(10, 512, seed: 6);
@@ -297,6 +320,7 @@ namespace TestProbabilisticDataStructures
             Assert.IsFalse(RoundTrip(new ScalableBloomFilter(100, 0.01, 0.8)).Test(Key("x")));
             Assert.HasCount(0, RoundTrip(new TopK(0.001, 0.01, 10)).Elements());
             Assert.HasCount(0, RoundTrip(new HeavyKeeper(10, 64, seed: 1)).Elements());
+            Assert.AreEqual(0u, RoundTrip(new VarOpt(10, seed: 1)).SampleCount);
 
             Assert.AreEqual(0ul, RoundTrip(new CountMinSketch(0.01, 0.01)).TotalCount());
             Assert.AreEqual(0u, RoundTrip(BinaryFuseFilter.Build(Array.Empty<byte[]>())).Count());
@@ -421,6 +445,7 @@ namespace TestProbabilisticDataStructures
                 ("InvertibleBloomLookupTable", new InvertibleBloomLookupTable(4, 8).Add(new byte[8]).ToByteArray()),
                 ("BloomierFilter", FilledBloomier()),
                 ("HeavyKeeper", new HeavyKeeper(10, 64, seed: 1).Add(Key("a")).ToByteArray()),
+                ("VarOpt", new VarOpt(10, seed: 1).Add(Key("a")).ToByteArray()),
             };
 
             // Read every payload as a BloomFilter; only its own may succeed.
@@ -480,6 +505,7 @@ namespace TestProbabilisticDataStructures
                 ("InvertibleBloomLookupTable", b => Persistence.FromByteArray<InvertibleBloomLookupTable>(b), FilledIblt()),
                 ("BloomierFilter", b => Persistence.FromByteArray<BloomierFilter>(b), FilledBloomier()),
                 ("HeavyKeeper", b => Persistence.FromByteArray<HeavyKeeper>(b), FilledHeavyKeeper()),
+                ("VarOpt", b => Persistence.FromByteArray<VarOpt>(b), FilledVarOpt()),
             };
 
             foreach (var (name, read, clean) in payloads)
@@ -493,6 +519,16 @@ namespace TestProbabilisticDataStructures
                         $"{name}: a flipped bit at offset {i} was not caught");
                 }
             }
+        }
+
+        private static byte[] FilledVarOpt()
+        {
+            var sample = new VarOpt(5, seed: 7);
+            for (int i = 0; i < 60; i++)
+            {
+                sample.Add(Key($"item-{i}"), 1.0 + (i % 8));
+            }
+            return sample.ToByteArray();
         }
 
         private static byte[] FilledHeavyKeeper()

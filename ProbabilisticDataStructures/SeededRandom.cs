@@ -77,5 +77,14 @@ namespace ProbabilisticDataStructures
         {
             return (uint)(((ulong)(uint)(Next() >> 32) * bound) >> 32);
         }
+
+        /// <summary>
+        /// Returns a value in [0, 1), built from the top 53 bits so every result is
+        /// exactly representable.
+        /// </summary>
+        internal double NextDouble()
+        {
+            return (Next() >> 11) * (1.0 / (1UL << 53));
+        }
     }
 }
