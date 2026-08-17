@@ -85,6 +85,7 @@ checksum still matches.
 | 24 | `VarOpt` |
 | 25 | `UltraLogLog` |
 | 26 | `Grafite` |
+| 27 | `InfiniFilter` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
@@ -639,6 +640,38 @@ indexes.
 
 A reader also rejects a code at or above the reduced universe, a split wider than a
 code, and more codes than keys — none of which hashing can produce.
+
+### `InfiniFilter` (id 27)
+
+```
+u64     the number of items added, less those removed
+u32     how many times the active table has doubled
+u32     the number of tables in the chain
+        per table:
+u32       address bits, so the table has 2^this slots
+u32       fingerprint bits given to a fresh entry
+u32       how many entries the table holds
+u32       the number of 64-bit words that follow
+u64       each word of the table
+```
+
+Each slot is three metadata bits — the quotient filter's occupied, shifted and
+continuation flags — followed by one field of *fingerprint bits + 1*. That field holds a
+unary age counter, being as many ones as expansions the entry has lived through followed
+by a single zero, and then whatever fingerprint bits remain. The counter is
+self-delimiting, which is what lets a reader recover a fingerprint whose length was
+never written down.
+
+The address is the **low** bits of the hash and the fingerprint the bits above it, which
+is the opposite of the usual quotient filter arrangement. It has to be: an expansion
+takes the next bit up, so an entry's address is a growing prefix of its hash and the
+table can double without the original keys.
+
+A reader rejects a chain of no tables, a chain longer than a 64-bit hash could justify,
+a table holding more entries than it has slots, a table whose address and fingerprint
+together exceed the hash, and a word count that disagrees with the shape claimed. The
+tables are stored newest first, and the count of entries per table is stored rather than
+recomputed, because a table's occupancy cannot be derived from its bits alone.
 
 ## The random generator's state
 
