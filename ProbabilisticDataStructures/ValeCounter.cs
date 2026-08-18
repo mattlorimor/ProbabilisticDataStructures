@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 
 namespace ProbabilisticDataStructures
 {
@@ -28,6 +27,12 @@ namespace ProbabilisticDataStructures
     /// no lengths written down. It is also what lets a whole word be searched for
     /// terminators at once, since two adjacent set bits occur nowhere else.
     /// </para>
+    /// <para>
+    /// Fragments are addressed by their bit position in a packed pool rather than held
+    /// as a list. That is how <see cref="ValeCounterArray"/> stores them, and reading
+    /// and writing them in place is what keeps a counter and its extension inside one
+    /// cache line.
+    /// </para>
     /// </remarks>
     internal static class ValeCounter
     {
@@ -41,6 +46,9 @@ namespace ProbabilisticDataStructures
         /// three leaves spare.
         /// </summary>
         internal const byte Delimiter = 0b11;
+
+        private const int WordBits = 64;
+        private const ulong FragmentMask = 0b11;
 
         /// <summary>
         /// Which base-three digit a fragment stands for, or -1 for the delimiter.
@@ -78,58 +86,77 @@ namespace ProbabilisticDataStructures
             OverflowOf(count, stubBits) != 0;
 
         /// <summary>
-        /// Encodes the overflowing part of a count as fragments, ending with the
-        /// delimiter.
+        /// Rebuilds a count from its stub and the value its extension held.
         /// </summary>
-        /// <remarks>
-        /// Digits run least significant first, so decoding can accumulate as it reads
-        /// and a longer number simply has more fragments before its delimiter.
-        /// </remarks>
-        internal static List<byte> EncodeExtension(ulong overflow)
+        internal static ulong Rebuild(ulong stub, ulong overflow, int stubBits) =>
+            (overflow << stubBits) | stub;
+
+        /// <summary>
+        /// Reads the fragment at a bit position in a pool.
+        /// </summary>
+        internal static byte FragmentAt(ReadOnlySpan<ulong> pool, int at) =>
+            (byte)((pool[at / WordBits] >> (at % WordBits)) & FragmentMask);
+
+        /// <summary>
+        /// Writes the fragment at a bit position in a pool.
+        /// </summary>
+        internal static void SetFragment(Span<ulong> pool, int at, byte fragment)
         {
-            var fragments = new List<byte>();
-
-            if (overflow == 0)
-            {
-                // Nought still takes one digit; an empty extension would be
-                // indistinguishable from a counter that never overflowed.
-                fragments.Add(0);
-            }
-            else
-            {
-                var remaining = overflow;
-                while (remaining > 0)
-                {
-                    fragments.Add((byte)(remaining % 3));
-                    remaining /= 3;
-                }
-            }
-
-            fragments.Add(Delimiter);
-            return fragments;
+            var word = at / WordBits;
+            var shift = at % WordBits;
+            pool[word] = (pool[word] & ~(FragmentMask << shift))
+                | ((ulong)fragment << shift);
         }
 
         /// <summary>
-        /// Reads back the value an extension holds, starting at a fragment index.
+        /// Writes the overflowing part of a count into a pool as an extension, ending
+        /// with the delimiter, and says how many bits it took.
         /// </summary>
-        /// <param name="fragments">The pool the extension lives in.</param>
-        /// <param name="start">Where this extension begins.</param>
-        /// <param name="length">How many fragments it occupied, delimiter included.</param>
+        /// <remarks>
+        /// Digits run least significant first, so decoding can accumulate as it reads
+        /// and a longer number simply has more fragments before its delimiter. Nought
+        /// still takes a digit; an empty extension would be indistinguishable from a
+        /// counter that never overflowed.
+        /// </remarks>
+        internal static int WriteExtension(Span<ulong> pool, int at, ulong overflow)
+        {
+            var bits = 0;
+            var remaining = overflow;
+
+            do
+            {
+                SetFragment(pool, at + bits, (byte)(remaining % 3));
+                remaining /= 3;
+                bits += FragmentBits;
+            }
+            while (remaining > 0);
+
+            SetFragment(pool, at + bits, Delimiter);
+            return bits + FragmentBits;
+        }
+
+        /// <summary>
+        /// Reads back the value an extension holds.
+        /// </summary>
+        /// <param name="pool">The pool the extension lives in.</param>
+        /// <param name="at">Where this extension begins, in bits.</param>
+        /// <param name="limit">The bit position the pool ends at.</param>
+        /// <param name="bits">How many bits it occupied, delimiter included.</param>
         internal static ulong DecodeExtension(
-            IReadOnlyList<byte> fragments, int start, out int length)
+            ReadOnlySpan<ulong> pool, int at, int limit, out int bits)
         {
             var value = 0UL;
             var place = 1UL;
-            var at = start;
+            var b = at;
 
-            while (at < fragments.Count)
+            while (b < limit)
             {
-                var digit = FragmentToDigit(fragments[at]);
-                at++;
+                var digit = FragmentToDigit(FragmentAt(pool, b));
+                b += FragmentBits;
 
                 if (digit < 0)
                 {
-                    length = at - start;
+                    bits = b - at;
                     return value;
                 }
 
@@ -138,12 +165,11 @@ namespace ProbabilisticDataStructures
             }
 
             // A pool that ends without a delimiter is a corrupt one; the caller is
-            // told how far the read got rather than being given a value that looks
-            // complete.
-            length = at - start;
+            // refused a value rather than given one that looks complete.
+            bits = b - at;
             throw new InvalidOperationException(
-                $"An extension beginning at fragment {start} runs to the end of the " +
-                "pool without a delimiter, so its length cannot be known.");
+                $"An extension beginning at bit {at} runs to the end of the pool " +
+                "without a delimiter, so its length cannot be known.");
         }
 
         /// <summary>
@@ -160,11 +186,5 @@ namespace ProbabilisticDataStructures
             }
             return digits + 1;
         }
-
-        /// <summary>
-        /// Rebuilds a count from its stub and the value its extension held.
-        /// </summary>
-        internal static ulong Rebuild(ulong stub, ulong overflow, int stubBits) =>
-            (overflow << stubBits) | stub;
     }
 }

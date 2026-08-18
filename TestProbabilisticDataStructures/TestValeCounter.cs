@@ -21,6 +21,41 @@ namespace TestProbabilisticDataStructures
     public class TestValeCounter
     {
         /// <summary>
+        /// A pool large enough for any extension a 64-bit count can produce.
+        /// </summary>
+        private const int PoolBits = 512;
+
+        /// <summary>
+        /// The fragments an overflow is written as, in the order they are stored.
+        /// </summary>
+        private static byte[] Fragments(ulong overflow)
+        {
+            var pool = new ulong[PoolBits / 64];
+            var bits = ValeCounter.WriteExtension(pool, 0, overflow);
+
+            var fragments = new byte[bits / ValeCounter.FragmentBits];
+            for (var f = 0; f < fragments.Length; f++)
+            {
+                fragments[f] = ValeCounter.FragmentAt(
+                    pool, f * ValeCounter.FragmentBits);
+            }
+            return fragments;
+        }
+
+        /// <summary>
+        /// A pool holding the given fragments, one after another.
+        /// </summary>
+        private static ulong[] PoolOf(params byte[] fragments)
+        {
+            var pool = new ulong[PoolBits / 64];
+            for (var f = 0; f < fragments.Length; f++)
+            {
+                ValeCounter.SetFragment(
+                    pool, f * ValeCounter.FragmentBits, fragments[f]);
+            }
+            return pool;
+        }
+        /// <summary>
         /// The paper's own worked example, which pins the encoding rather than merely
         /// checking it is self-consistent.
         /// </summary>
@@ -43,16 +78,17 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestThePapersWorkedExample()
         {
-            var fragments = ValeCounter.EncodeExtension(5);
+            var fragments = Fragments(5);
 
             CollectionAssert.AreEqual(
-                new List<byte> { 2, 1, ValeCounter.Delimiter }, fragments,
+                new byte[] { 2, 1, ValeCounter.Delimiter }, fragments,
                 "The paper encodes an overflow of five as the digits two then one, "
                 + "drawn 01 10 and stored as 2 1, then the delimiter.");
 
-            var decoded = ValeCounter.DecodeExtension(fragments, 0, out var length);
+            var decoded = ValeCounter.DecodeExtension(
+                PoolOf(fragments), 0, PoolBits, out var bits);
             Assert.AreEqual(5UL, decoded);
-            Assert.AreEqual(3, length);
+            Assert.AreEqual(3 * ValeCounter.FragmentBits, bits);
 
             // And the whole counter, given a five-bit stub holding 21.
             Assert.AreEqual(21UL + (5UL << 5), ValeCounter.Rebuild(21, 5, 5));
@@ -67,15 +103,16 @@ namespace TestProbabilisticDataStructures
         {
             for (ulong overflow = 0; overflow <= 5000; overflow++)
             {
-                var fragments = ValeCounter.EncodeExtension(overflow);
-                var decoded = ValeCounter.DecodeExtension(fragments, 0, out var length);
+                var fragments = Fragments(overflow);
+                var decoded = ValeCounter.DecodeExtension(
+                    PoolOf(fragments), 0, PoolBits, out var bits);
 
                 Assert.AreEqual(overflow, decoded,
                     $"An overflow of {overflow} came back as {decoded}.");
-                Assert.AreEqual(fragments.Count, length,
-                    $"Reading an overflow of {overflow} consumed {length} fragments " +
-                    $"where it wrote {fragments.Count}.");
-                Assert.AreEqual(fragments.Count, ValeCounter.ExtensionLength(overflow),
+                Assert.AreEqual(fragments.Length * ValeCounter.FragmentBits, bits,
+                    $"Reading an overflow of {overflow} consumed {bits} bits where " +
+                    $"it wrote {fragments.Length * ValeCounter.FragmentBits}.");
+                Assert.AreEqual(fragments.Length, ValeCounter.ExtensionLength(overflow),
                     $"The predicted length for {overflow} disagrees with the encoding.");
             }
         }
@@ -89,22 +126,24 @@ namespace TestProbabilisticDataStructures
         {
             var values = new ulong[] { 0, 1, 2, 3, 8, 26, 27, 500, 6561, 99999 };
 
-            var pool = new List<byte>();
+            var pool = new ulong[PoolBits / 64];
+            var written = 0;
             foreach (var value in values)
             {
-                pool.AddRange(ValeCounter.EncodeExtension(value));
+                written += ValeCounter.WriteExtension(pool, written, value);
             }
 
             var at = 0;
             foreach (var value in values)
             {
-                var decoded = ValeCounter.DecodeExtension(pool, at, out var length);
+                var decoded = ValeCounter.DecodeExtension(
+                    pool, at, PoolBits, out var bits);
                 Assert.AreEqual(value, decoded,
-                    $"The extension at fragment {at} should hold {value}.");
-                at += length;
+                    $"The extension at bit {at} should hold {value}.");
+                at += bits;
             }
 
-            Assert.AreEqual(pool.Count, at,
+            Assert.AreEqual(written, at,
                 "Reading every extension should consume the pool exactly; a mismatch " +
                 "means one of them was measured wrongly and the next began in the " +
                 "middle of it.");
@@ -131,8 +170,7 @@ namespace TestProbabilisticDataStructures
                 Assert.AreEqual(fragments, ValeCounter.ExtensionLength(overflow),
                     $"An overflow of {overflow} should take {fragments} fragments, " +
                     "the delimiter included.");
-                Assert.AreEqual(fragments,
-                    ValeCounter.EncodeExtension(overflow).Count);
+                Assert.AreEqual(fragments, Fragments(overflow).Length);
             }
         }
 
@@ -206,11 +244,11 @@ namespace TestProbabilisticDataStructures
             var seen = new HashSet<byte>();
             for (ulong overflow = 0; overflow < 100; overflow++)
             {
-                var fragments = ValeCounter.EncodeExtension(overflow);
+                var fragments = Fragments(overflow);
                 Assert.AreEqual(ValeCounter.Delimiter, fragments[^1],
                     $"The extension for {overflow} does not end in the delimiter.");
 
-                for (var i = 0; i < fragments.Count - 1; i++)
+                for (var i = 0; i < fragments.Length - 1; i++)
                 {
                     Assert.AreNotEqual(ValeCounter.Delimiter, fragments[i],
                         $"The extension for {overflow} contains a delimiter before " +
@@ -231,10 +269,10 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestAnUnterminatedExtensionIsRefused()
         {
-            var pool = new List<byte> { 2, 1 };
+            var pool = PoolOf(2, 1);
 
             Assert.ThrowsExactly<InvalidOperationException>(
-                () => ValeCounter.DecodeExtension(pool, 0, out _),
+                () => ValeCounter.DecodeExtension(pool, 0, 2 * ValeCounter.FragmentBits, out _),
                 "Without a delimiter there is no way to know the value ended, so " +
                 "returning one would be inventing it.");
         }
