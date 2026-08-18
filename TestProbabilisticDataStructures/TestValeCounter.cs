@@ -26,10 +26,19 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         /// <remarks>
         /// Section 4.1: a counter holding 21 in its stub and 5 above it stores that 5
-        /// as the fragments 01, 10, 11 -- the base-three digits two and one, least
-        /// significant first, then the delimiter -- and decoding gives
-        /// 3^0 * 2 + 3^1 * 1 = 5. A self-consistent encoding with the digits the other
-        /// way round would pass every other test in this file and fail this one.
+        /// as the fragments drawn 01, 10, 11 -- the base-three digits two and one,
+        /// least significant first, then the delimiter -- and decoding gives
+        /// 3^0 * 2 + 3^1 * 1 = 5.
+        /// <para>
+        /// The drawn fragments are least significant bit first, so the one drawn 01
+        /// holds the value two and the one drawn 10 holds one; the stored values are
+        /// therefore 2, 1, 3. Reading the drawings the other way round gives an
+        /// encoding that is perfectly self-consistent -- it round-trips, it packs, it
+        /// passes every other test in this file -- and disagrees with every other
+        /// implementation of the paper. Section 5 is what settles the direction: a stub
+        /// holding 21 is drawn 111111 101010, and incrementing it is drawn
+        /// 111111 011010, which is 22 only if the leftmost bit drawn is the lowest.
+        /// </para>
         /// </remarks>
         [TestMethod]
         public void TestThePapersWorkedExample()
@@ -37,8 +46,9 @@ namespace TestProbabilisticDataStructures
             var fragments = ValeCounter.EncodeExtension(5);
 
             CollectionAssert.AreEqual(
-                new List<byte> { 0b01, 0b10, 0b11 }, fragments,
-                "The paper encodes an overflow of five as 01, 10, 11.");
+                new List<byte> { 2, 1, ValeCounter.Delimiter }, fragments,
+                "The paper encodes an overflow of five as the digits two then one, "
+                + "drawn 01 10 and stored as 2 1, then the delimiter.");
 
             var decoded = ValeCounter.DecodeExtension(fragments, 0, out var length);
             Assert.AreEqual(5UL, decoded);
@@ -221,7 +231,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestAnUnterminatedExtensionIsRefused()
         {
-            var pool = new List<byte> { 0b01, 0b10 };
+            var pool = new List<byte> { 2, 1 };
 
             Assert.ThrowsExactly<InvalidOperationException>(
                 () => ValeCounter.DecodeExtension(pool, 0, out _),

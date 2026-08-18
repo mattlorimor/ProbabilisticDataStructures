@@ -25,7 +25,8 @@ namespace ProbabilisticDataStructures
     /// three rather than four is what makes the terminator possible: three of the four
     /// bit patterns carry digits, and the fourth is free to mean "the number ends
     /// here". That is what lets extensions of different lengths sit side by side with
-    /// no lengths written down.
+    /// no lengths written down. It is also what lets a whole word be searched for
+    /// terminators at once, since two adjacent set bits occur nowhere else.
     /// </para>
     /// </remarks>
     internal static class ValeCounter
@@ -42,26 +43,20 @@ namespace ProbabilisticDataStructures
         internal const byte Delimiter = 0b11;
 
         /// <summary>
-        /// The fragments standing for base-three digits nought, one and two.
-        /// </summary>
-        /// <remarks>
-        /// The order is the paper's and is not the obvious one -- digit one is
-        /// <c>10</c> and digit two is <c>01</c>. Any assignment of three patterns to
-        /// three digits would encode and decode correctly, so this exists to match the
-        /// published encoding rather than because the arithmetic requires it.
-        /// </remarks>
-        private static readonly byte[] DigitToFragment = { 0b00, 0b10, 0b01 };
-
-        /// <summary>
         /// Which base-three digit a fragment stands for, or -1 for the delimiter.
         /// </summary>
-        private static int FragmentToDigit(byte fragment) => fragment switch
-        {
-            0b00 => 0,
-            0b10 => 1,
-            0b01 => 2,
-            _ => -1,
-        };
+        /// <remarks>
+        /// A fragment holds its digit directly: nought, one and two are the two-bit
+        /// values 0, 1 and 2, and 3 is left over to be the delimiter. Reading the paper
+        /// as though its figures put the most significant bit first suggests instead
+        /// that digit one is stored as <c>10</c> and digit two as <c>01</c>, which is a
+        /// misreading: the figures run least significant bit first throughout. Section
+        /// 5's worked example settles it -- a stub holding 21 is drawn as
+        /// <c>111111 101010</c> and incrementing it gives <c>111111 011010</c>, which is
+        /// 22 only if the leftmost bit drawn is the lowest one.
+        /// </remarks>
+        private static int FragmentToDigit(byte fragment) =>
+            fragment == Delimiter ? -1 : fragment;
 
         /// <summary>
         /// The part of a count that fits in a stub of the given width.
@@ -98,14 +93,14 @@ namespace ProbabilisticDataStructures
             {
                 // Nought still takes one digit; an empty extension would be
                 // indistinguishable from a counter that never overflowed.
-                fragments.Add(DigitToFragment[0]);
+                fragments.Add(0);
             }
             else
             {
                 var remaining = overflow;
                 while (remaining > 0)
                 {
-                    fragments.Add(DigitToFragment[(int)(remaining % 3)]);
+                    fragments.Add((byte)(remaining % 3));
                     remaining /= 3;
                 }
             }
