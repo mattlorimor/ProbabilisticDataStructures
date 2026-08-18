@@ -215,6 +215,52 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A sketch whose counters crowd their chunks lays them out again, rather than
+        /// letting the chunks fall back to tails arrays.
+        /// </summary>
+        /// <remarks>
+        /// Expansion alone does not cover this. A stream of a few keys repeated many
+        /// times grows the counts without growing the number of keys enough to expand,
+        /// so the chunks fill while the width stays put. That is the case the tails
+        /// fallback exists for and the case retuning exists to avoid.
+        /// <para>
+        /// Measured both ways: with retuning the counters take 640 bytes, and with it
+        /// disabled the chunks fall back and take 3,040. The width is unchanged either
+        /// way, so a bound on the bytes at a fixed width is what tells them apart.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestCrowdedChunksAreLaidOutAgainRatherThanFallingBack()
+        {
+            var sketch = new SublimeCountMinSketch(0.01);
+
+            const int Distinct = 40;
+            for (var step = 0; step < 4000; step++)
+            {
+                sketch.Add(Key(step % Distinct));
+            }
+
+            Assert.AreEqual(64, sketch.Width,
+                "Four thousand keys is not enough to expand, which is the point: the " +
+                "counters grew and the width did not.");
+
+            Assert.IsTrue(sketch.SizeInBytes <= 1024,
+                $"The counters took {sketch.SizeInBytes} bytes. Chunks that crowd and " +
+                "are not laid out again fall back to tails arrays, which measured at " +
+                "3,040 bytes for this stream.");
+
+            // Forty keys over sixty-four counters collide, so the counts are not all
+            // exact. They may not be low, though, and laying the counters out again
+            // must not lose any of them.
+            for (var key = 0; key < Distinct; key++)
+            {
+                Assert.IsTrue(sketch.Count(Key(key)) >= 100,
+                    $"Key {key} was added a hundred times but reports " +
+                    $"{sketch.Count(Key(key))}.");
+            }
+        }
+
+        /// <summary>
         /// Growing faster gives more counters and closer estimates.
         /// </summary>
         [TestMethod]
@@ -233,6 +279,80 @@ namespace TestProbabilisticDataStructures
                 $"A growth exponent of 0.7 reached a width of {fast.Width} where 0.4 " +
                 $"reached {slow.Width}; the faster one should have expanded further.");
             Assert.IsTrue(fast.SizeInBytes > slow.SizeInBytes);
+        }
+
+        /// <summary>
+        /// The number of rows follows from delta, and does not change as the sketch
+        /// grows.
+        /// </summary>
+        /// <remarks>
+        /// Depth is the one dimension Sublime leaves alone. Width tracks the stream, so
+        /// the error falls as the stream grows; the confidence that an estimate is
+        /// within that error comes from the rows, and the paper keeps it steady on
+        /// purpose so that a query means the same thing early and late.
+        /// </remarks>
+        [TestMethod]
+        public void TestDepthFollowsFromDelta()
+        {
+            Assert.AreEqual(3, new SublimeCountMinSketch(0.1).Depth);
+            Assert.AreEqual(5, new SublimeCountMinSketch(0.01).Depth);
+            Assert.AreEqual(7, new SublimeCountMinSketch(0.001).Depth);
+
+            var sketch = new SublimeCountMinSketch(0.01);
+            foreach (var key in Skewed(20_000, 5_000, 6))
+            {
+                sketch.Add(Key(key));
+            }
+            Assert.IsTrue(sketch.Width > 64, "The sketch should have expanded.");
+            Assert.AreEqual(5, sketch.Depth, "Expanding must not change the depth.");
+        }
+
+        /// <summary>
+        /// The tuning keeps a chunk's extension pool between the bounds the paper sets
+        /// for it, whatever the stream does.
+        /// </summary>
+        /// <remarks>
+        /// A chunk is a cache line whether its bits go to stubs or to a pool, so these
+        /// bounds cost nothing in space and are not about space. Below the floor a
+        /// chunk has too little room to hold the extensions it will be given and falls
+        /// back to tails; above the ceiling it is holding counts in extensions that
+        /// stubs would have held in half the bits, which is slower on every insertion
+        /// that carries.
+        /// </remarks>
+        [TestMethod]
+        public void TestTheTuningKeepsThePoolWithinItsBounds()
+        {
+            var sketch = new SublimeCountMinSketch(0.01);
+
+            var checks = 0;
+            var width = 0;
+            var tuning = (0, 0);
+            foreach (var key in Skewed(300_000, 100_000, 9))
+            {
+                sketch.Add(Key(key));
+
+                if (sketch.Width == width
+                    && tuning == (sketch.CountersPerChunk, sketch.StubBits))
+                {
+                    continue;
+                }
+                width = sketch.Width;
+                tuning = (sketch.CountersPerChunk, sketch.StubBits);
+                checks++;
+
+                var pool = ValeCounterArray.ChunkBits
+                    - sketch.CountersPerChunk * (sketch.StubBits + 1) - 1;
+
+                Assert.IsTrue(pool >= 2 * ValeCounterArray.MinPoolFragments,
+                    $"{sketch.CountersPerChunk} counters with {sketch.StubBits}-bit " +
+                    $"stubs leave a pool of {pool} bits, below the floor.");
+                Assert.IsTrue(pool <= 128,
+                    $"{sketch.CountersPerChunk} counters with {sketch.StubBits}-bit " +
+                    $"stubs leave a pool of {pool} bits, above the 128 worth keeping.");
+            }
+
+            Assert.IsTrue(checks >= 5,
+                $"Only {checks} tunings were seen, so this checked almost nothing.");
         }
 
         /// <summary>

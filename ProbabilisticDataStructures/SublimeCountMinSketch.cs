@@ -178,6 +178,15 @@ namespace ProbabilisticDataStructures
         public int Depth => this.rows.Length;
 
         /// <summary>
+        /// How many counters currently share a chunk, and how wide their fixed parts
+        /// are. These are the two the sketch retunes as it grows.
+        /// </summary>
+        internal int CountersPerChunk => this.countersPerChunk;
+
+        /// <inheritdoc cref="CountersPerChunk"/>
+        internal int StubBits => this.stubBits;
+
+        /// <summary>
         /// Returns the probability that an estimate exceeds the error allowed.
         /// </summary>
         public double Delta() => this.delta;
