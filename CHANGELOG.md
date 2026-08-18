@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`SetSketch`**, one sketch that estimates both how many distinct elements a set holds
+  and how much two sets have in common (Ertl, VLDB 2021). `HyperLogLog` does the first in
+  very little room and cannot do the second; MinHash does the second and spends four or
+  eight bytes on every component. This does both from the same registers, and a base
+  parameter dials between them: towards one the registers grow fine and it behaves like
+  MinHash, towards two they coarsen towards HyperLogLog, and cardinality estimation barely
+  notices either way. Registers combine under maximum, so merging is exact rather than
+  approximate — a merged sketch is register-for-register the sketch that adding both sets
+  would have built — and adding the same element twice changes nothing. Cardinality error
+  ran between 0.4% and 2.4% across seven orders of magnitude against the 1.56% that 4,096
+  registers implies. Its joint estimator beat the obvious one built from inclusion and
+  exclusion by between 1.2 and 2.1 times at every similarity tried, and beat MinHash's own
+  estimator with the same number of components on sets of different sizes — 0.0029, 0.0034
+  and 0.0038 against 0.0034, 0.0047 and 0.0056 — because MinHash counts only the registers
+  that agree while this also uses which way the disagreeing ones fall. Estimates Jaccard,
+  cosine, both inclusion coefficients, and the sizes of the union, intersection and both
+  differences. (#105)
+
 - **`SublimeCountMinSketch`**, per-item frequencies for a stream whose length is not known
   in advance (Eslami, Bercea, Pagh and Dayan, SIGMOD 2026). A `CountMinSketch` has to be
   sized before it has seen anything, and its error then grows in step with the stream.
