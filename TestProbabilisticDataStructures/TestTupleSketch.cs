@@ -319,6 +319,96 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A set operation that overflows what the result may keep discards down to it,
+        /// and what it keeps is still a sample the sketch can describe.
+        /// </summary>
+        /// <remarks>
+        /// The set operations build their result from scratch and trim it themselves,
+        /// which is a second place the sampling threshold gets chosen and one that
+        /// ordinary use does not reach: it needs two sketches that each held everything
+        /// they saw and that together hold more than the result may. The invariant is
+        /// that every key kept is strictly below the threshold, and the reader is what
+        /// checks it -- a sketch whose threshold is off by one key writes a payload it
+        /// cannot read back.
+        /// </remarks>
+        [TestMethod]
+        public void TestASetOperationThatOverflowsTrimsToASketchItCanStillWrite()
+        {
+            // Three hundred keys each, below the six hundred at which these sketches
+            // discard, so both are exact and their union is not.
+            var left = new TupleSketch(256);
+            var right = new TupleSketch(256);
+
+            for (var i = 0; i < 300; i++)
+            {
+                left.Add(Key(i), 2.0);
+                right.Add(Key(10_000 + i), 3.0);
+            }
+
+            Assert.AreEqual(300UL, left.Count(), "The inputs should not have discarded.");
+            Assert.AreEqual(300UL, right.Count());
+
+            var union = left.Union(right);
+
+            Assert.AreEqual(256U, union.Retained(),
+                "Six hundred keys is past what a 256-key sketch may hold, so the union " +
+                "should have discarded down to it.");
+            Assert.AreEqual(600.0, union.Count(), 600 * 0.15);
+
+            var stream = new MemoryStream();
+            union.WriteTo(stream);
+            stream.Position = 0;
+            var read = TupleSketch.ReadFrom(stream);
+
+            Assert.AreEqual(union.Count(), read.Count());
+            Assert.AreEqual(union.Total(), read.Total());
+        }
+
+        /// <summary>
+        /// Combining sketches that sampled at different rates is trusted only at the
+        /// lower of the two.
+        /// </summary>
+        /// <remarks>
+        /// One sketch here kept everything it saw and the other kept a small sample.
+        /// Above the sampled one's threshold, a key is in the first sketch's list simply
+        /// because it existed and absent from the second's because it was never
+        /// sampled -- so counting anything up there mixes a census with a survey.
+        /// Dropping to the lower threshold throws away real keys, and that is the
+        /// point: what is left was sampled the same way on both sides.
+        /// <para>
+        /// Two sketches fed the same amount will have much the same threshold, so
+        /// nothing catches this unless they are deliberately lopsided.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestCombiningSketchesThatSampledDifferentlyUsesTheLowerRate()
+        {
+            var exact = new TupleSketch(1024);
+            for (var i = 0; i < 200; i++)
+            {
+                exact.Add(Key(i), 1.0);
+            }
+            Assert.AreEqual(200UL, exact.Count(), "This side should have kept everything.");
+
+            var sampled = new TupleSketch(1024);
+            for (var i = 10_000; i < 110_000; i++)
+            {
+                sampled.Add(Key(i), 1.0);
+            }
+            Assert.IsTrue(sampled.Retained() < 100_000, "This side should be sampling.");
+
+            var union = exact.Union(sampled);
+
+            // Almost all of the union is the sampled side, so the estimate has to come
+            // out near its size rather than near the number of keys actually held.
+            Assert.AreEqual(100_200.0, union.Count(), 100_200 * 0.1,
+                $"The union reports {union.Count()} distinct keys where about 100,200 " +
+                "were added between the two sketches.");
+            Assert.AreEqual(100_200.0, union.Total(), 100_200 * 0.1,
+                "Every key is worth one, so the total should track the count.");
+        }
+
+        /// <summary>
         /// A total over lopsided values carries much more error than the count does.
         /// </summary>
         /// <remarks>
@@ -483,31 +573,6 @@ namespace TestProbabilisticDataStructures
 
             Assert.AreEqual(0UL, read.Count());
             Assert.AreEqual(0.0, read.Total());
-        }
-
-        /// <summary>
-        /// A payload claiming a way of folding this library does not know is refused.
-        /// </summary>
-        [TestMethod]
-        public void TestAPayloadWithAnUnknownPolicyIsRefused()
-        {
-            var sketch = new TupleSketch(64);
-            for (var i = 0; i < 10; i++)
-            {
-                sketch.Add(Key(i), i);
-            }
-
-            var written = sketch.ToByteArray();
-
-            // The policy is the byte after the four-byte retained size.
-            var policyAt = Array.IndexOf(written, (byte)SummaryPolicy.Sum,
-                written.Length - (10 * (sizeof(ulong) + sizeof(double))) - 20);
-
-            var corrupt = (byte[])written.Clone();
-            corrupt[policyAt] = 99;
-
-            Assert.ThrowsExactly<InvalidDataException>(
-                () => Persistence.FromByteArray<TupleSketch>(corrupt));
         }
     }
 }

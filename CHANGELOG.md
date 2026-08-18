@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`TupleSketch`**, a `ThetaSketch` that carries a value alongside every distinct key,
+  so one pass answers both "how many distinct users" and "what did they spend between
+  them". The sampling is what makes both possible at once: a hash is kept when it falls
+  below the threshold, which happens with probability equal to the threshold, so the keys
+  kept are a uniform sample of the distinct keys and the values riding with them are a
+  uniform sample of the per-key totals. Where a theta sketch drops a repeated hash, this
+  folds the values the repeats carry, by sum, smallest or largest. Union, intersection
+  and difference fold the summaries of keys they share. Note that the total carries much
+  more error than the count when values are lopsided — the sample is uniform over keys
+  and not weighted by value — measured at up to 18% against the count's half a percent
+  when one key in a hundred was worth a thousand times the rest. (#106)
+
 - **`SetSketch`**, one sketch that estimates both how many distinct elements a set holds
   and how much two sets have in common (Ertl, VLDB 2021). `HyperLogLog` does the first in
   very little room and cannot do the second; MinHash does the second and spends four or
@@ -120,6 +132,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contest, and `TopK` remains the structure for shards. Implements the authors'
   reference inequality where Algorithm 1 as printed deadlocks admission, a
   discrepancy recorded in the class documentation. (#96)
+
+### Fixed
+
+- Six persistence tests were passing on the checksum rather than on what they claimed to
+  check. `SetSketch`, `SublimeCountMinSketch` and `TupleSketch` each had tests that
+  corrupted a field and expected the reader to refuse it, but none repaired the trailing
+  CRC, so the frame was rejected before the guard was ever reached — and the guard could
+  be removed entirely without any of them failing. They now live in the hostile-payload
+  suite, which repairs the checksum so that a guard is what has to refuse them.
 
 ## [6.1.0] - 2026-08-16
 

@@ -41,7 +41,7 @@ eleven structures the Go library does not have.
   [`StableBloomFilter`](#stablebloomfilter) · [`InverseBloomFilter`](#inversebloomfilter)
 - [Cardinality](#cardinality) —
   [`UltraLogLog`](#ultraloglog) · [`HyperLogLogPlus`](#hyperloglogplus) · [`HyperLogLog`](#hyperloglog) ·
-  [`ThetaSketch`](#thetasketch) ·
+  [`ThetaSketch`](#thetasketch) · [`TupleSketch`](#tuplesketch) ·
   [`InvertibleBloomLookupTable`](#invertiblebloomlookuptable)
 - [Frequency](#frequency) —
   [`CountMinSketch`](#countminsketch) · [`SublimeCountMinSketch`](#sublimecountminsketch) ·
@@ -890,6 +890,55 @@ rather than the intersection, so a small enough intersection between large enoug
 still beyond reach. It is better arithmetic, not a different kind of answer.
 
 Counts are exact while the sketch holds fewer values than it retains.
+
+### `TupleSketch`
+
+<sup>[↑ Contents](#contents)</sup>
+
+A `ThetaSketch` that carries a value alongside every distinct key.
+
+`ThetaSketch` answers "how many distinct users". This answers "how many distinct users,
+**and** what did they spend between them", from one pass over the data. The sampling is
+what makes both possible at once: the keys it keeps are a uniform sample of the distinct
+keys, so the values riding along with them are a uniform sample of the per-key totals,
+and dividing either by the sampling rate estimates the whole.
+
+The value is per *distinct key*, not per record. Adding the same user twice folds their
+two values together rather than counting two users or two amounts — which is the whole
+difference from summing a column, and it happens at a size that does not grow with the
+stream.
+
+```C#
+var q1 = new TupleSketch(4096);              // or SummaryPolicy.Min / .Max
+q1.Add(userId, amountSpent);
+
+ulong customers = q1.Count();
+double revenue  = q1.Total();
+
+var loyal = q1.Intersect(q2);                // in both quarters
+double fromLoyal = loyal.Total();            // and what they were worth
+```
+
+**Read the error on `Total()` carefully.** The sample is uniform over keys and *not*
+weighted by value, so a sketch that happens to keep a few big spenders reads high and one
+that misses them reads low. Over five runs where one key in a hundred was worth a
+thousand times the rest, the count was out by half a percent and the total by up to 18%.
+It is an estimate of a total, not a total. Where the values are of similar size — a count
+per key, a duration, a score — the total tracks the count closely.
+
+**Reach for it when** you need a per-key aggregate over set operations: revenue from
+customers in both quarters, bytes from addresses seen in either window.
+
+**Look elsewhere if** you only need the count, which is `ThetaSketch` at half the memory;
+or if you need an exact total, which no sketch will give you.
+
+Which keys survive depends on the order they arrived in, exactly as it does for
+`ThetaSketch` — but a key's own summary does not.
+
+The tuple sketch of [Apache DataSketches](https://datasketches.apache.org/docs/Tuple/TupleOverview.html).
+That implementation lets a caller supply the fold as code over a summary of any type;
+this one offers sum, smallest and largest over a single number, because a fold supplied as
+code cannot be written to a stream.
 
 ### `InvertibleBloomLookupTable`
 

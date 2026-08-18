@@ -220,6 +220,20 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestTupleSketchRoundTrips()
+        {
+            var f = new TupleSketch(512, SummaryPolicy.Max);
+            for (var i = 0; i < 20_000; i++) f.Add(Key($"item-{i}"), i + 1);
+
+            var r = RoundTrip(f);
+
+            Assert.AreEqual(f.Count(), r.Count());
+            Assert.AreEqual(f.Total(), r.Total());
+            Assert.AreEqual(f.Retained(), r.Retained());
+            Assert.AreEqual(f.Policy, r.Policy);
+        }
+
+        [TestMethod]
         public void TestSetSketchRoundTrips()
         {
             var f = new SetSketch(256, 1.05, 20, 30_000);
