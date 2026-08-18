@@ -39,6 +39,7 @@ namespace ProbabilisticDataStructures
         Grafite = 26,
         InfiniFilter = 27,
         MementoFilter = 28,
+        SublimeCountMinSketch = 29,
     }
 
     /// <summary>

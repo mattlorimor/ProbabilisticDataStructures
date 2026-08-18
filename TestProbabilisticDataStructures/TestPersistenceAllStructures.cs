@@ -220,6 +220,24 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestSublimeCountMinSketchRoundTrips()
+        {
+            var f = new SublimeCountMinSketch(0.01);
+            for (var i = 0; i < 30000; i++) f.Add(Key($"item-{i % 4000}"));
+
+            var r = RoundTrip(f);
+
+            Assert.AreEqual(f.Width, r.Width);
+            Assert.AreEqual(f.Depth, r.Depth);
+            Assert.AreEqual(f.TotalCount(), r.TotalCount());
+            for (var i = 0; i < 4000; i++)
+            {
+                Assert.AreEqual(f.Count(Key($"item-{i}")), r.Count(Key($"item-{i}")),
+                    $"restored sketch disagreed about item-{i}");
+            }
+        }
+
+        [TestMethod]
         public void TestMementoFilterRoundTrips()
         {
             var f = new MementoFilter(256, 8, 1024);

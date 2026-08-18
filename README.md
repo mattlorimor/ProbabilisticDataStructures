@@ -1001,7 +1001,7 @@ whole claim.
 rather the sketch grew than drifted.
 
 **Look elsewhere if** you know how much you are counting: a `CountMinSketch` sized for it
-is simpler, faster per insertion, and can be persisted, which this cannot yet.
+is simpler and faster per insertion.
 
 ```C#
 var sketch = new SublimeCountMinSketch(delta: 0.01);
@@ -1009,7 +1009,7 @@ sketch.Add(bytes);
 ulong count = sketch.Count(bytes);   // never lower than the truth
 sketch.Remove(bytes);                // deletions, which CountMinSketch does not support
 
-int counters = sketch.Width;         // grows with the stream
+int counters = sketch.Width;         // grows with the stream, and shrinks again
 ```
 
 Described by Eslami, Bercea, Pagh and Dayan in

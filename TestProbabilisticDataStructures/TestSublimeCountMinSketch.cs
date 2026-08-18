@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -367,6 +368,221 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The arrays fold back in half once most of the stream has been deleted, and
+        /// the counts they carry are neither lost nor doubled.
+        /// </summary>
+        /// <remarks>
+        /// This is the case the record of each expansion exists for, and the sharpest
+        /// test of it. An expansion gives both halves of an array the same values, so
+        /// simply adding the halves together on the way back down would count
+        /// everything inserted before the expansion twice. Here that would turn 2,559
+        /// into something near 6,600.
+        /// <para>
+        /// Only one key is ever added, so nothing can collide with it and the count is
+        /// exact. The thresholds are the size function's: a width of 128 folds back
+        /// below the average of the two thresholds already crossed, 4,096 and 1,024,
+        /// which is 2,560.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestFoldingBackNeitherLosesNorDoublesCounts()
+        {
+            var sketch = new SublimeCountMinSketch(0.01);
+            var key = Key(7);
+
+            for (var i = 0; i < 5000; i++)
+            {
+                sketch.Add(key);
+            }
+            Assert.AreEqual(128, sketch.Width, "The arrays should have doubled at 4,096.");
+            Assert.AreEqual(5000UL, sketch.Count(key));
+
+            for (var i = 0; i < 2441; i++)
+            {
+                sketch.Remove(key);
+            }
+
+            Assert.AreEqual(64, sketch.Width,
+                "Falling to 2,559 keys should have folded the arrays back.");
+            Assert.AreEqual(2559UL, sketch.Count(key),
+                "The count should be what is left after the deletions. Twice that " +
+                "would mean the expansion's copies were added to each other.");
+        }
+
+        /// <summary>
+        /// Folding back keeps the Count-Min guarantee over a real stream.
+        /// </summary>
+        /// <remarks>
+        /// Counters shared by several keys make the arithmetic of a contraction less
+        /// tidy than one key makes it look, and a counter can be left below where it
+        /// started once deletions are in play. None of that is allowed to leave an
+        /// estimate below the truth.
+        /// </remarks>
+        [TestMethod]
+        public void TestFoldingBackKeepsEstimatesAtOrAboveTheTruth()
+        {
+            var sketch = new SublimeCountMinSketch(0.01);
+            var truth = new Dictionary<int, ulong>();
+            var added = new List<int>();
+
+            foreach (var key in Skewed(40_000, 2_000, 3))
+            {
+                sketch.Add(Key(key));
+                added.Add(key);
+                truth.TryGetValue(key, out var had);
+                truth[key] = had + 1;
+            }
+            Assert.IsTrue(sketch.Width > 64, "The sketch should have expanded.");
+            var grown = sketch.SizeInBytes;
+
+            for (var i = added.Count - 1; i >= 2000; i--)
+            {
+                sketch.Remove(Key(added[i]));
+                truth[added[i]]--;
+            }
+
+            Assert.AreEqual(64, sketch.Width,
+                "Deleting all but two thousand keys should have folded the arrays " +
+                "back to where they started.");
+            Assert.IsTrue(sketch.SizeInBytes < grown,
+                $"The sketch still takes {sketch.SizeInBytes} bytes where it took " +
+                $"{grown} at its largest; folding back should have given memory up.");
+
+            foreach (var (key, want) in truth)
+            {
+                Assert.IsTrue(sketch.Count(Key(key)) >= want,
+                    $"Key {key} is left at {want} but the sketch reports " +
+                    $"{sketch.Count(Key(key))}, below the truth.");
+            }
+        }
+
+        /// <summary>
+        /// A sketch that has folded back grows again as though it had never expanded.
+        /// </summary>
+        [TestMethod]
+        public void TestASketchThatFoldedBackGrowsAgain()
+        {
+            var sketch = new SublimeCountMinSketch(0.01);
+            var key = Key(3);
+
+            for (var i = 0; i < 5000; i++)
+            {
+                sketch.Add(key);
+            }
+            for (var i = 0; i < 2441; i++)
+            {
+                sketch.Remove(key);
+            }
+            Assert.AreEqual(64, sketch.Width);
+
+            for (var i = 0; i < 20_000; i++)
+            {
+                sketch.Add(key);
+            }
+
+            Assert.AreEqual(256, sketch.Width,
+                "22,559 keys should have taken the arrays through 4,096 and 16,384.");
+            Assert.AreEqual(22_559UL, sketch.Count(key));
+        }
+
+        /// <summary>
+        /// A sketch sitting on an expansion threshold does not resize on every update.
+        /// </summary>
+        /// <remarks>
+        /// This is the whole reason the threshold to fold back is the average of the
+        /// two already crossed rather than the one just crossed. Were it the one just
+        /// crossed, a sketch that had expanded at 4,096 keys would fold back on the
+        /// next deletion and expand again on the next insertion, rebuilding every
+        /// counter twice per pair of updates. The authors' own implementation does
+        /// exactly that; the paper says not to.
+        /// </remarks>
+        [TestMethod]
+        public void TestSittingOnAThresholdDoesNotResizeEveryUpdate()
+        {
+            var sketch = new SublimeCountMinSketch(0.01);
+            var key = Key(2);
+
+            for (var i = 0; i < 4096; i++)
+            {
+                sketch.Add(key);
+            }
+            Assert.AreEqual(128, sketch.Width);
+
+            for (var i = 0; i < 200; i++)
+            {
+                sketch.Remove(key);
+                Assert.AreEqual(128, sketch.Width,
+                    $"The sketch folded back after removal {i + 1}, at " +
+                    $"{sketch.TotalCount()} keys, which is far above the 2,560 it " +
+                    "should hold to.");
+
+                sketch.Add(key);
+                Assert.AreEqual(128, sketch.Width);
+            }
+
+            Assert.AreEqual(4096UL, sketch.Count(key));
+        }
+
+        /// <summary>
+        /// Removing more than was ever added leaves the counts low, not absurd.
+        /// </summary>
+        /// <remarks>
+        /// The sketch cannot tell that a removal is unmatched, and the paper does not
+        /// ask it to. What it must not do is fold back into a counter that has gone
+        /// below where the expansion left it and read the result as an enormous
+        /// positive number.
+        /// </remarks>
+        [TestMethod]
+        public void TestUnmatchedRemovalsDoNotProduceAbsurdCounts()
+        {
+            var sketch = new SublimeCountMinSketch(0.01);
+
+            for (var i = 0; i < 5000; i++)
+            {
+                sketch.Add(Key(i % 300));
+            }
+            Assert.AreEqual(128, sketch.Width);
+
+            // Take out far more than went in, including keys never added at all.
+            for (var i = 0; i < 4000; i++)
+            {
+                sketch.Remove(Key(i % 600));
+            }
+
+            Assert.AreEqual(64, sketch.Width, "The sketch should have folded back.");
+
+            for (var key = 0; key < 600; key++)
+            {
+                Assert.IsTrue(sketch.Count(Key(key)) < 100_000,
+                    $"Key {key} reports {sketch.Count(Key(key))}, which is a counter " +
+                    "that went below nought and was read as unsigned.");
+            }
+        }
+
+        /// <summary>
+        /// A sketch at its starting size has nothing to fold back to.
+        /// </summary>
+        [TestMethod]
+        public void TestASketchThatNeverGrewDoesNotFoldBack()
+        {
+            var sketch = new SublimeCountMinSketch(0.01);
+            var key = Key(1);
+
+            for (var i = 0; i < 100; i++)
+            {
+                sketch.Add(key);
+            }
+            for (var i = 0; i < 200; i++)
+            {
+                sketch.Remove(key);
+            }
+
+            Assert.AreEqual(64, sketch.Width);
+            Assert.AreEqual(0UL, sketch.TotalCount());
+            Assert.AreEqual(0UL, sketch.Count(key));
+        }
+
+        /// <summary>
         /// Removing takes counts back out.
         /// </summary>
         [TestMethod]
@@ -407,6 +623,125 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(64, sketch.Width);
             Assert.AreEqual(0UL, sketch.TotalCount());
             Assert.AreEqual(0UL, sketch.Count(Key(1)));
+        }
+
+        /// <summary>
+        /// A sketch survives a round trip through a stream, records and all.
+        /// </summary>
+        /// <remarks>
+        /// The records of earlier states matter as much as the counters: a sketch read
+        /// back without them could still grow but could never fold back, so it would
+        /// answer the same and behave differently.
+        /// </remarks>
+        [TestMethod]
+        public void TestASketchSurvivesARoundTrip()
+        {
+            var sketch = new SublimeCountMinSketch(0.01);
+            var truth = new Dictionary<int, ulong>();
+            foreach (var key in Skewed(50_000, 5_000, 12))
+            {
+                sketch.Add(Key(key));
+                truth.TryGetValue(key, out var had);
+                truth[key] = had + 1;
+            }
+            Assert.IsTrue(sketch.Width > 64, "The sketch should have expanded.");
+
+            var stream = new MemoryStream();
+            sketch.WriteTo(stream);
+            stream.Position = 0;
+            var read = SublimeCountMinSketch.ReadFrom(stream);
+
+            Assert.AreEqual(sketch.Width, read.Width);
+            Assert.AreEqual(sketch.Depth, read.Depth);
+            Assert.AreEqual(sketch.TotalCount(), read.TotalCount());
+
+            foreach (var (key, want) in truth)
+            {
+                Assert.AreEqual(sketch.Count(Key(key)), read.Count(Key(key)),
+                    $"Key {key}, added {want} times, reads back differently.");
+            }
+
+            // The records came back too, so the sketch can still fold.
+            var widthBefore = read.Width;
+            for (var i = 0; i < 45_000; i++)
+            {
+                read.Remove(Key(1));
+            }
+            Assert.IsTrue(read.Width < widthBefore,
+                "A sketch read back should still fold when its stream is deleted.");
+        }
+
+        /// <summary>
+        /// A sketch that has never expanded survives a round trip.
+        /// </summary>
+        [TestMethod]
+        public void TestASketchWithNoRecordsSurvivesARoundTrip()
+        {
+            var sketch = new SublimeCountMinSketch(0.01);
+            sketch.Add(Key(1));
+
+            var stream = new MemoryStream();
+            sketch.WriteTo(stream);
+            stream.Position = 0;
+            var read = SublimeCountMinSketch.ReadFrom(stream);
+
+            Assert.AreEqual(64, read.Width);
+            Assert.AreEqual(1UL, read.TotalCount());
+            Assert.AreEqual(1UL, read.Count(Key(1)));
+        }
+
+        /// <summary>
+        /// A payload claiming an impossible shape is refused.
+        /// </summary>
+        /// <remarks>
+        /// The width is the one field a reader cannot simply believe. Counters are
+        /// picked by the low bits of a hash, which only works if the width is a power
+        /// of two, and a width that is not one would send every query to a counter the
+        /// writer never used.
+        /// </remarks>
+        [TestMethod]
+        public void TestAPayloadWithAnImpossibleShapeIsRefused()
+        {
+            var sketch = new SublimeCountMinSketch(0.01);
+            sketch.Add(Key(1));
+            var good = sketch.ToByteArray();
+
+            // The width sits after three doubles and a four-byte depth.
+            var offset = HeaderLength(good) + 3 * sizeof(double) + sizeof(uint);
+
+            foreach (var (width, why) in new (uint, string)[]
+            {
+                (0u, "no counters at all"),
+                (100u, "a width that is not a power of two"),
+                (uint.MaxValue, "more counters than a row may hold"),
+            })
+            {
+                var bad = (byte[])good.Clone();
+                BitConverter.GetBytes(width).CopyTo(bad, offset);
+
+                Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<SublimeCountMinSketch>(bad),
+                    $"A payload claiming {why} should be refused.");
+            }
+        }
+
+        /// <summary>
+        /// Where a payload's own fields begin, past the format's header.
+        /// </summary>
+        private static int HeaderLength(byte[] payload)
+        {
+            // Found rather than assumed: the first field is delta, which every sketch
+            // in these tests was built with.
+            for (var at = 0; at + sizeof(double) <= payload.Length; at++)
+            {
+                if (BitConverter.ToDouble(payload, at) == 0.01)
+                {
+                    return at;
+                }
+            }
+
+            throw new InvalidOperationException(
+                "The payload does not appear to begin with the delta it was built with.");
         }
 
         /// <summary>

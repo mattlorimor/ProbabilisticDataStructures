@@ -26,7 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sixty-four. Given the same bytes and rows on the same skewed stream, it was out by 263
   on average against a fixed sketch's 684 at a hundred thousand events, and 830 against
   2,811 at a million — a margin that widens as the stream runs on. Supports deletions,
-  which `CountMinSketch` does not; not yet persistable. (#103)
+  which `CountMinSketch` does not, and folds its arrays back in half once most of a
+  stream has been deleted, subtracting out a record of each expansion so that the counts
+  gathered before one are not counted twice on the way down. Persists as counts rather
+  than as its packed layout, so a payload survives any change to how counters are
+  packed. (#103)
 
 - **`MementoFilter`**, range emptiness for a set that keeps changing (Eslami and Dayan,
   SIGMOD 2025). `Grafite` answers the same question but is built once and never updated;

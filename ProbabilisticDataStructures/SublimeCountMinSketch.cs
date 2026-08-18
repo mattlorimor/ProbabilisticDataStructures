@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Numerics;
 
 namespace ProbabilisticDataStructures
@@ -36,7 +38,7 @@ namespace ProbabilisticDataStructures
     /// and why the counts already gathered survive it.
     /// </para>
     /// </remarks>
-    public class SublimeCountMinSketch
+    public class SublimeCountMinSketch : IBinaryPersistable<SublimeCountMinSketch>
     {
         /// <summary>
         /// One counter array per row, all of the same width.
@@ -59,9 +61,27 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private ulong expansionLimit;
 
-        private readonly double growthExponent;
-        private readonly double sizeFactor;
-        private readonly double delta;
+        /// <summary>
+        /// The number of keys at which the arrays fold back in half, or nought if they
+        /// have never doubled.
+        /// </summary>
+        private ulong contractionLimit;
+
+        /// <summary>
+        /// The rows as they stood just before each expansion, most recent last.
+        /// </summary>
+        /// <remarks>
+        /// Folding an array's halves onto each other by adding them would count the
+        /// keys inserted before the expansion twice, since the expansion gave both
+        /// halves the same starting values. Keeping what those values were is what
+        /// lets a contraction subtract them out again. The records are a geometric
+        /// series, so holding all of them costs less than the sketch itself.
+        /// </remarks>
+        private readonly List<ValeCounterArray[]> records = new List<ValeCounterArray[]>();
+
+        private double growthExponent;
+        private double sizeFactor;
+        private double delta;
 
         private int countersPerChunk;
         private int stubBits;
@@ -164,6 +184,20 @@ namespace ProbabilisticDataStructures
             }
 
             this.expansionLimit = LimitFor(this.width);
+            this.contractionLimit = 0;
+        }
+
+        /// <summary>
+        /// Used only by <see cref="Read"/>, which sets every field itself. The public
+        /// constructor sizes the arrays from the parameters, which is not how a sketch
+        /// being restored gets its size.
+        /// </summary>
+        private SublimeCountMinSketch()
+        {
+            this.rows = Array.Empty<ValeCounterArray>();
+            this.Hash = null!;
+            this.countersPerChunk = ValeCounterArray.DefaultCountersPerChunk;
+            this.stubBits = ValeCounterArray.DefaultStubBits;
         }
 
         /// <summary>
@@ -288,6 +322,11 @@ namespace ProbabilisticDataStructures
                 this.count--;
             }
 
+            if (this.count < this.contractionLimit && this.records.Count > 0)
+            {
+                Contract();
+            }
+
             return this;
         }
 
@@ -332,8 +371,10 @@ namespace ProbabilisticDataStructures
                     this.width, this.countersPerChunk, this.stubBits);
             }
 
+            this.records.Clear();
             this.count = 0;
             this.expansionLimit = LimitFor(this.width);
+            this.contractionLimit = 0;
             return this;
         }
 
@@ -346,6 +387,224 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(h);
             Guard.HashMayBeReplaced(this.count == 0, nameof(SublimeCountMinSketch));
             this.Hash = h;
+        }
+
+
+        /// <summary>
+        /// Writes the sketch to a stream.
+        /// </summary>
+        /// <remarks>
+        /// The payload holds the counts, not the way they are packed. Packing depends
+        /// on two parameters the sketch retunes as it runs, so a payload carrying the
+        /// packed bits would be a payload that only the version that wrote it could
+        /// safely believe -- and a corrupt one would not look corrupt, it would decode
+        /// into different counters. Counts cost more room and every ulong is a valid
+        /// one. The sketch packs them again on the way in, at a tuning chosen to suit
+        /// them.
+        /// </remarks>
+        /// <param name="stream">The stream to write to.</param>
+        public void WriteTo(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = new PayloadWriter();
+            payload.WriteDouble(this.delta);
+            payload.WriteDouble(this.growthExponent);
+            payload.WriteDouble(this.sizeFactor);
+            payload.WriteUInt32((uint)this.rows.Length);
+            payload.WriteUInt32((uint)this.width);
+            payload.WriteUInt64(this.count);
+            payload.WriteUInt64(this.expansionLimit);
+            payload.WriteUInt64(this.contractionLimit);
+
+            // The records of earlier states, oldest first, each half the width of the
+            // one after it. Without them the sketch could grow but never fold back.
+            payload.WriteUInt32((uint)this.records.Count);
+            foreach (var record in this.records)
+            {
+                payload.WriteUInt32((uint)record[0].Count);
+                WriteCounters(payload, record);
+            }
+
+            WriteCounters(payload, this.rows);
+
+            PersistenceFormat.Write(
+                stream,
+                StructureId.SublimeCountMinSketch,
+                PersistenceFormat.Identify(this.Hash),
+                payload.WrittenSpan);
+        }
+
+        private static void WriteCounters(PayloadWriter payload, ValeCounterArray[] rows)
+        {
+            foreach (var row in rows)
+            {
+                for (var j = 0; j < row.Count; j++)
+                {
+                    payload.WriteUInt64(row.Get(j));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Reads a sketch written by <see cref="WriteTo"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        public static SublimeCountMinSketch ReadFrom(Stream stream)
+        {
+            return Read(stream, null);
+        }
+
+        /// <summary>
+        /// Reads a sketch written by <see cref="WriteTo"/>, installing a hash function.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function the sketch was written with.</param>
+        public static SublimeCountMinSketch ReadFrom(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            return Read(stream, hash);
+        }
+
+        private static SublimeCountMinSketch Read(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.SublimeCountMinSketch, out var hashId);
+            var reader = new PayloadReader(payload);
+
+            var delta = reader.ReadDouble();
+            var growthExponent = reader.ReadDouble();
+            var sizeFactor = reader.ReadDouble();
+            var depth = reader.ReadUInt32();
+            var width = reader.ReadUInt32();
+
+            if (double.IsNaN(delta) || delta <= 0 || delta >= 1)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims a delta of {delta}, and a probability of failure " +
+                    "lies between nought and one.");
+            }
+            if (double.IsNaN(growthExponent) || growthExponent <= 0 || growthExponent >= 1)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims a growth exponent of {growthExponent}, which has " +
+                    "to lie between nought and one.");
+            }
+            if (double.IsNaN(sizeFactor) || double.IsInfinity(sizeFactor) || sizeFactor <= 0)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims a size factor of {sizeFactor}, which has to be " +
+                    "a positive number.");
+            }
+            if (depth == 0 || depth > 64)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims {depth} rows. A sketch has at least one, and " +
+                    "sixty-four would mean a delta no double can express.");
+            }
+            if (width == 0 || width > 1 << 30 || BitOperations.PopCount(width) != 1)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims {width} counters a row. A width is a power of two " +
+                    "-- the low bits of a hash pick the counter -- and this is not.");
+            }
+
+            var sketch = new SublimeCountMinSketch
+            {
+                delta = delta,
+                growthExponent = growthExponent,
+                sizeFactor = sizeFactor,
+                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+            };
+
+            sketch.count = reader.ReadUInt64();
+            sketch.expansionLimit = reader.ReadUInt64();
+            sketch.contractionLimit = reader.ReadUInt64();
+
+            var recordCount = reader.ReadUInt32();
+            if (recordCount > 30)
+            {
+                throw new InvalidDataException(
+                    $"Sketch carries {recordCount} records of earlier states. Each " +
+                    "stands for a doubling, and thirty doublings is more counters " +
+                    "than a row may hold.");
+            }
+
+            var expected = width;
+            for (var i = 0; i < recordCount; i++)
+            {
+                expected /= 2;
+            }
+            if (expected == 0)
+            {
+                throw new InvalidDataException(
+                    $"Sketch carries {recordCount} records but is only {width} " +
+                    "counters wide, so it cannot have doubled that many times.");
+            }
+
+            for (var i = 0; i < recordCount; i++)
+            {
+                var recordWidth = reader.ReadUInt32();
+                if (recordWidth != expected)
+                {
+                    throw new InvalidDataException(
+                        $"Record {i} claims {recordWidth} counters where the " +
+                        $"doublings that follow it require {expected}.");
+                }
+
+                sketch.width = (int)recordWidth;
+                sketch.records.Add(ReadCounters(ref reader, (int)depth, (int)recordWidth));
+                expected *= 2;
+            }
+
+            sketch.width = (int)width;
+            sketch.rows = ReadCounters(ref reader, (int)depth, (int)width);
+            reader.ExpectEnd();
+
+            return sketch;
+        }
+
+        /// <summary>
+        /// Reads one state's counts and packs them.
+        /// </summary>
+        /// <remarks>
+        /// The reader is passed by reference because it is a ref struct holding its own
+        /// position. Taken by value it would read the right bytes and leave the caller
+        /// where it started, which looks like a payload with everything left over.
+        /// </remarks>
+        private static ValeCounterArray[] ReadCounters(
+            ref PayloadReader reader, int depth, int forWidth)
+        {
+            var values = new ulong[depth][];
+            for (var i = 0; i < depth; i++)
+            {
+                values[i] = new ulong[forWidth];
+                for (var j = 0; j < forWidth; j++)
+                {
+                    values[i][j] = reader.ReadUInt64();
+                }
+            }
+
+            var (chunkCounters, stub) = Tune(values);
+
+            var rows = new ValeCounterArray[depth];
+            for (var i = 0; i < depth; i++)
+            {
+                rows[i] = new ValeCounterArray(forWidth, chunkCounters, stub);
+                for (var j = 0; j < forWidth; j++)
+                {
+                    if (values[i][j] != 0)
+                    {
+                        rows[i].Set(j, values[i][j]);
+                    }
+                }
+            }
+
+            return rows;
         }
 
         /// <summary>
@@ -388,8 +647,73 @@ namespace ProbabilisticDataStructures
         private void Expand()
         {
             var doubled = this.width * 2;
+
+            this.records.Add(this.rows);
             Retune(doubled);
+
             this.expansionLimit = LimitFor(doubled);
+            this.contractionLimit = ContractionLimitFor(doubled);
+        }
+
+        /// <summary>
+        /// The number of keys below which arrays of the given width fold back in half.
+        /// </summary>
+        /// <remarks>
+        /// The paper puts this at the average of the two expansion thresholds already
+        /// crossed, deliberately far below the one ahead, so that a sketch sitting near
+        /// a threshold does not resize on every second update. The authors' own
+        /// implementation instead contracts at the threshold just crossed, which is the
+        /// thrashing the paper describes avoiding, so this follows the paper.
+        /// </remarks>
+        private ulong ContractionLimitFor(int forWidth)
+        {
+            var half = LimitFor(Math.Max(1, forWidth / 2));
+            var quarter = LimitFor(Math.Max(1, forWidth / 4));
+            return half / 2 + quarter / 2;
+        }
+
+        /// <summary>
+        /// Folds every row back in half, keeping the updates made since the expansion
+        /// that doubled it.
+        /// </summary>
+        /// <remarks>
+        /// Both halves start an expansion holding what the single array held, so what
+        /// each has gathered since is its current value less that starting value. A
+        /// counter's new value is those two gains added back to the value it started
+        /// from, which is the same as the two halves added together with the record
+        /// taken off once.
+        /// <para>
+        /// A counter can end up below where it started, since deletions are what brings
+        /// a sketch here in the first place, so the arithmetic is done signed and
+        /// nothing is allowed to fall below nought.
+        /// </para>
+        /// </remarks>
+        private void Contract()
+        {
+            var record = this.records[^1];
+            this.records.RemoveAt(this.records.Count - 1);
+
+            var halved = this.width / 2;
+            var folded = new ulong[this.rows.Length][];
+            for (var i = 0; i < this.rows.Length; i++)
+            {
+                folded[i] = new ulong[halved];
+                for (var j = 0; j < halved; j++)
+                {
+                    var kept = (long)this.rows[i].Get(j)
+                        + (long)this.rows[i].Get(j + halved)
+                        - (long)record[i].Get(j);
+                    folded[i][j] = kept > 0 ? (ulong)kept : 0;
+                }
+            }
+
+            this.width = halved;
+            LayOut(folded);
+
+            this.expansionLimit = LimitFor(halved);
+            this.contractionLimit = this.records.Count == 0
+                ? 0
+                : ContractionLimitFor(halved);
         }
 
         /// <summary>
@@ -398,25 +722,42 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private void Retune(int newWidth)
         {
-            var (chunkCounters, stub) = Tune(newWidth);
-
-            var rebuilt = new ValeCounterArray[this.rows.Length];
+            var values = new ulong[this.rows.Length][];
             for (var i = 0; i < this.rows.Length; i++)
             {
-                var row = new ValeCounterArray(newWidth, chunkCounters, stub);
+                values[i] = new ulong[newWidth];
                 for (var j = 0; j < newWidth; j++)
                 {
-                    var value = this.rows[i].Get(j & (this.width - 1));
-                    if (value != 0)
+                    values[i][j] = this.rows[i].Get(j & (this.width - 1));
+                }
+            }
+
+            this.width = newWidth;
+            LayOut(values);
+        }
+
+        /// <summary>
+        /// Stores the given counts, choosing a tuning to suit them.
+        /// </summary>
+        private void LayOut(ulong[][] values)
+        {
+            var (chunkCounters, stub) = Tune(values);
+
+            var rebuilt = new ValeCounterArray[values.Length];
+            for (var i = 0; i < values.Length; i++)
+            {
+                var row = new ValeCounterArray(this.width, chunkCounters, stub);
+                for (var j = 0; j < this.width; j++)
+                {
+                    if (values[i][j] != 0)
                     {
-                        row.Set(j, value);
+                        row.Set(j, values[i][j]);
                     }
                 }
                 rebuilt[i] = row;
             }
 
             this.rows = rebuilt;
-            this.width = newWidth;
             this.countersPerChunk = chunkCounters;
             this.stubBits = stub;
         }
@@ -458,9 +799,9 @@ namespace ProbabilisticDataStructures
         /// in a hundred are passed over.
         /// </para>
         /// </remarks>
-        private (int CountersPerChunk, int StubBits) Tune(int newWidth)
+        private static (int CountersPerChunk, int StubBits) Tune(ulong[][] values)
         {
-            var lengths = CounterLengths(newWidth);
+            var lengths = CounterLengths(values);
 
             var counters = 0L;
             foreach (var atLength in lengths)
@@ -470,7 +811,8 @@ namespace ProbabilisticDataStructures
 
             if (counters == 0)
             {
-                return (this.countersPerChunk, this.stubBits);
+                return (ValeCounterArray.DefaultCountersPerChunk,
+                    ValeCounterArray.DefaultStubBits);
             }
 
             for (var c = ValeCounterArray.MaxCountersPerChunk;
@@ -540,15 +882,14 @@ namespace ProbabilisticDataStructures
         /// How many counters hold a value of each bit length, counted over the sketch
         /// as it will be once it has been laid out at the given width.
         /// </summary>
-        private long[] CounterLengths(int newWidth)
+        private static long[] CounterLengths(ulong[][] values)
         {
             var lengths = new long[64];
 
-            foreach (var row in this.rows)
+            foreach (var row in values)
             {
-                for (var j = 0; j < newWidth; j++)
+                foreach (var value in row)
                 {
-                    var value = row.Get(j & (this.width - 1));
                     lengths[64 - BitOperations.LeadingZeroCount(value)]++;
                 }
             }
