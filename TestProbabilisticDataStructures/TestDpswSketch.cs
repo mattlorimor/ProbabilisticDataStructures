@@ -304,6 +304,89 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Memory stops growing once the window is full.
+        /// </summary>
+        /// <remarks>
+        /// A sliding window that never lets go is not a sliding window. The structure
+        /// forgets by dropping whole substreams once every item in them has left the
+        /// window, and nothing else reclaims anything -- a query that simply ignored
+        /// expired substreams would give every right answer while growing without
+        /// bound, which is the failure this catches.
+        /// </remarks>
+        [TestMethod]
+        public void TestMemoryStopsGrowingOnceTheWindowIsFull()
+        {
+            var sketch = new DpswSketch(4_000, 20.0, 0.5, 0.7, 512, 5, seed: 1);
+
+            var settled = 0;
+            for (var i = 1; i <= 100_000; i++)
+            {
+                sketch.Add(Key(i % 500));
+
+                if (i == 25_000)
+                {
+                    settled = sketch.SketchesHeld;
+                }
+                else if (i > 25_000 && i % 25_000 == 0)
+                {
+                    Assert.IsTrue(sketch.SketchesHeld <= settled * 1.2,
+                        $"After {i} items the structure keeps {sketch.SketchesHeld} " +
+                        $"sketches where it kept {settled} at 25,000. A window that " +
+                        "keeps growing is not forgetting.");
+                }
+            }
+
+            Assert.IsTrue(sketch.SizeInBytes < 16L * 1024 * 1024,
+                $"A window of 4,000 settled at {sketch.SizeInBytes / 1024 / 1024} MB.");
+        }
+
+        /// <summary>
+        /// The substream still being filled is read from its widest sketch, not its
+        /// narrowest.
+        /// </summary>
+        /// <remarks>
+        /// A range that has not finished holds exactly the items that have arrived, so
+        /// it can be read now; the paper's query rule passes it over in favour of a
+        /// short checkpoint sketch holding a small share of the budget. Reading the
+        /// widest one instead is correct, costs no privacy, and is much quieter.
+        /// Measured over 351 query points, the mean error is -30 rather than -51 and
+        /// the fifth percentile -60 rather than -77. The bound below is inside what the
+        /// narrower reading achieves, so it fails if that behaviour comes back.
+        /// </remarks>
+        [TestMethod]
+        public void TestTheFillingSubstreamIsReadFromItsWidestSketch()
+        {
+            var errors = new List<double>();
+
+            for (ulong seed = 1; seed <= 3; seed++)
+            {
+                var sketch = new DpswSketch(4_000, 20.0, 0.5, 0.7, 512, 5, seed);
+
+                for (var i = 1; i <= 24_000; i++)
+                {
+                    sketch.Add(i % 3 == 0 ? Key(1) : Key(1_000 + (i % 500)));
+
+                    if (i > 8_000 && i % 137 == 0)
+                    {
+                        errors.Add(sketch.Count(Key(1)) - (4_000 / 3.0));
+                    }
+                }
+            }
+
+            var mean = 0.0;
+            foreach (var error in errors)
+            {
+                mean += error;
+            }
+            mean /= errors.Count;
+
+            Assert.IsTrue(mean > -40,
+                $"The mean error over {errors.Count} query points is {mean:F1}. " +
+                "Reading the filling substream from a narrow checkpoint sketch instead " +
+                "of its widest gives about -51.");
+        }
+
+        /// <summary>
         /// The parameters are checked.
         /// </summary>
         [TestMethod]

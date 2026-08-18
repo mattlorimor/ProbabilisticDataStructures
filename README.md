@@ -45,7 +45,8 @@ eleven structures the Go library does not have.
   [`InvertibleBloomLookupTable`](#invertiblebloomlookuptable)
 - [Frequency](#frequency) —
   [`CountMinSketch`](#countminsketch) · [`SublimeCountMinSketch`](#sublimecountminsketch) ·
-  [`CountSketch`](#countsketch) · [`TopK`](#topk) · [`HeavyKeeper`](#heavykeeper)
+  [`CountSketch`](#countsketch) · [`TopK`](#topk) · [`HeavyKeeper`](#heavykeeper) ·
+  [`DpswSketch`](#dpswsketch)
 - [Similarity](#similarity) —
   [`SetSketch`](#setsketch) · [`MinHash`](#minhash) · [`SimHash`](#simhash) ·
   [`MinHashIndex` and `SimHashIndex`](#minhashindex-and-simhashindex)
@@ -86,6 +87,7 @@ eleven structures the Go library does not have.
 | How many distinct things, **and** how alike are two sets? | `SetSketch` | [Similarity](#similarity) |
 | What are the most common things? | `TopK` | [Frequency](#frequency) |
 | …and accuracy matters more than mergeability | `HeavyKeeper` | [Frequency](#frequency) |
+| …over a sliding window, without exposing anyone | `DpswSketch` | [Frequency](#frequency) |
 | How alike are these two **sets**? | `MinHash` | [Similarity](#similarity) |
 | Are these two **documents** near-duplicates? | `SimHash` | [Similarity](#similarity) |
 | …across a corpus, without comparing every pair | `MinHashIndex`, `SimHashIndex` | [Similarity](#similarity) |
@@ -1170,6 +1172,62 @@ Described by Gong, Yang et al. in
 [HeavyKeeper: An Accurate Algorithm for Finding Top-k Elephant Flows](https://www.usenix.org/conference/atc18/presentation/gong).
 
 ---
+
+### `DpswSketch`
+
+<sup>[↑ Contents](#contents)</sup>
+
+How often something happened in the recent past, without revealing whether any one
+record was there.
+
+This is the first structure here whose contract is a **privacy guarantee** rather than an
+error rate, and it is worth being precise about what that means. Counters do not start at
+nought: each begins at a draw from a normal distribution, which is the Gaussian mechanism
+at the sketch's sensitivity. The result satisfies event-level zero-concentrated
+differential privacy — an observer holding the whole structure cannot tell whether any
+single record was in the stream.
+
+```C#
+// A budget in the epsilon and delta most policies are written in.
+double rho = PrivateCountMinSketch.BudgetFor(epsilon: 1.0, delta: 1e-6);
+
+var recent = new DpswSketch(window: 100_000, rho: rho);
+recent.Add(record);
+
+double howOften = recent.Count(record);          // over the last 100,000 records
+var heavy = recent.HeavyHitters(candidates, 0.01);
+```
+
+**What is guaranteed, and by whom.** The privacy claim is the paper's theorem. This
+library does not prove it and no test here pretends to. What the tests do is hold the
+implementation to the distribution the theorem assumes — the noise's centre, spread and
+shape, how its spread moves with the budget and the depth, and that no item is ever
+charged more than the whole budget. That is the checkable part, and it is the part that
+fails silently: a mechanism at half the required noise is exactly as accurate, exactly as
+fast, and protects nobody.
+
+**Read these limits before using it.**
+
+- The guarantee is **event-level**: one record. Someone who appears a thousand times is
+  protected as one record a thousand times over, which is much weaker.
+- Estimates are **two-sided**. Unlike a plain `CountMinSketch`, this can read below the
+  truth, and an item that never appeared can read below nought.
+- It is **not small**. A private window cannot forget by overwriting a counter, because a
+  counter that could be overwritten is one whose history could be inferred — so it keeps
+  many sketches and drops whole ones. A window of 4,000 settles around 4 MB.
+- **Never supply a seed** outside tests. Anyone who knows it can subtract the noise back
+  off.
+
+**Reach for it when** you must publish or retain recent-frequency statistics over data
+about people, and a policy names an epsilon.
+
+**Look elsewhere if** nobody is asking for a privacy guarantee. It costs accuracy,
+memory and speed against `CountMinSketch`, and every one of those costs buys only the
+guarantee.
+
+Described by Wang, Wang and Chen in
+[DPSW-Sketch: A Differentially Private Sketch Framework for Frequency Estimation over
+Sliding Windows](https://doi.org/10.1145/3637528.3671694), KDD 2024.
 
 ## Similarity
 

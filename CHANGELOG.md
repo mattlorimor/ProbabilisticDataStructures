@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`DpswSketch`** and **`PrivateCountMinSketch`**, frequency estimation over a sliding
+  window that is differentially private (Wang, Wang and Chen, KDD 2024). The first
+  structures here whose contract is a privacy guarantee rather than an error rate.
+  `PrivateCountMinSketch` is a Count-Min Sketch whose counters start at a draw from a
+  normal distribution rather than at nought — the Gaussian mechanism at the sketch's
+  l2-sensitivity, giving event-level zero-concentrated differential privacy — and the
+  noise is drawn once at construction, so repeated queries cannot average it away.
+  `DpswSketch` cuts the stream into substreams, builds private sketches over nested
+  ranges chosen by a smooth histogram, and answers a window query by summing one sketch
+  per substream, splitting the budget so that everything covering any one item comes to
+  no more than the whole.
+  <br><br>
+  The privacy guarantee is the authors' theorem and nothing here proves it. What the
+  tests hold is the distribution the theorem assumes — variance of depth over budget to
+  within five percent, kurtosis within 0.2 of a Gaussian's three, tail masses within a
+  point at one, two and three deviations, variance scaling with the budget and the depth
+  and not the width — and the structural condition it rests on, that no item is charged
+  more than the whole budget. Estimates are two-sided: unlike a plain Count-Min Sketch
+  this can read below the truth, and below nought.
+  <br><br>
+  Small checkpoint factors are refused rather than merely discouraged. The budget for
+  the j-th checkpoint falls as the factor to the power of j while the range it covers
+  falls only as one minus the factor, so at 0.25 on a window of four thousand the
+  leanest sketch carries noise of half a million: over 351 query points the median error
+  was -46 and the fifth percentile -6150. Not yet persistable. (#104)
+
 - **`TupleSketch`**, a `ThetaSketch` that carries a value alongside every distinct key,
   so one pass answers both "how many distinct users" and "what did they spend between
   them". The sampling is what makes both possible at once: a hash is kept when it falls
