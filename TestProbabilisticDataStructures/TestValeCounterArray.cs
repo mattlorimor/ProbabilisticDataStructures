@@ -427,6 +427,15 @@ namespace TestProbabilisticDataStructures
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(
                 () => new ValeCounterArray(100, 16, 32));
 
+            // Sixty-eight six-bit stubs leave room for seventeen fragments. That is a
+            // pool, just not one worth having: a chunk is required to keep at least
+            // twenty-four, which is the floor the paper's own tuning works within and
+            // the width its tails pointer needs. A tuning between the two is the only
+            // thing that tells the floor apart from a check that the pool is not
+            // negative.
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new ValeCounterArray(100, 68, 6));
+
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(
                 () => new ValeCounterArray(100, ValeCounterArray.MinCountersPerChunk - 1, S));
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(

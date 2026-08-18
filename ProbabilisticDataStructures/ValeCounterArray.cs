@@ -361,6 +361,8 @@ namespace ProbabilisticDataStructures
 
             if (wants)
             {
+                // The gap is opened to the length the extension is about to be written
+                // at, both taken from the same count, so the write covers all of it.
                 OpenGap(start, wanted);
                 ValeCounter.WriteExtension(_pool, start, overflow);
             }
@@ -512,9 +514,14 @@ namespace ProbabilisticDataStructures
         /// Moves everything from a position up, to make room for an extension.
         /// </summary>
         /// <remarks>
+        /// The gap is left holding whatever it held before; the caller writes the
+        /// extension over the whole of it, so clearing it first would be work no test
+        /// could tell the absence of.
+        /// <para>
         /// A fragment at a time. The authors shift whole words, in a routine written
         /// out separately for pools of one, two and more words; the last of those reads
         /// one word past the end of the pool it was given.
+        /// </para>
         /// </remarks>
         private void OpenGap(int at, int amount)
         {
@@ -523,11 +530,6 @@ namespace ProbabilisticDataStructures
                  b -= ValeCounter.FragmentBits)
             {
                 ValeCounter.SetFragment(_pool, b + amount, ValeCounter.FragmentAt(_pool, b));
-            }
-
-            for (var b = at; b < at + amount; b += ValeCounter.FragmentBits)
-            {
-                ValeCounter.SetFragment(_pool, b, 0);
             }
         }
 
