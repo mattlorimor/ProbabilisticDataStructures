@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 
 namespace ProbabilisticDataStructures
 {
@@ -34,7 +35,7 @@ namespace ProbabilisticDataStructures
     /// cardinality to be estimated at all.
     /// </para>
     /// </remarks>
-    public class SetSketch
+    public class SetSketch : IBinaryPersistable<SetSketch>
     {
         /// <summary>
         /// The register values, each in the range nought to q + 1.
@@ -84,6 +85,17 @@ namespace ProbabilisticDataStructures
         private readonly uint[] permutation;
         private readonly uint[] permutationPass;
         private uint pass;
+
+        /// <summary>
+        /// How many hash values have been drawn across every insertion so far.
+        /// </summary>
+        /// <remarks>
+        /// Kept so that the constant-time claim can be asserted as work rather than as
+        /// wall-clock time, which would depend on the machine and on what else it was
+        /// doing. An insertion that stopped skipping would still give every right
+        /// answer; it would just draw m values per element instead of a couple.
+        /// </remarks>
+        private long drawn;
 
         private Func<ReadOnlySpan<byte>, ulong> Hash { get; set; }
 
@@ -233,6 +245,11 @@ namespace ProbabilisticDataStructures
         internal ushort[] RegisterValues => this.registers;
 
         /// <summary>
+        /// How many hash values every insertion so far has drawn between them.
+        /// </summary>
+        internal long HashValuesDrawn => this.drawn;
+
+        /// <summary>
         /// Adds the data to the sketch.
         /// </summary>
         /// <param name="data">The data to add.</param>
@@ -259,6 +276,7 @@ namespace ProbabilisticDataStructures
             var x = 0.0;
             for (var i = 0; i < this.m; i++)
             {
+                this.drawn++;
                 x += Exponential(ref random) / (this.a * (this.m - i));
 
                 var k = ValueFor(x);
@@ -523,6 +541,121 @@ namespace ProbabilisticDataStructures
             this.lowerBound = 0;
             this.updatesUntilRescan = this.m;
             return this;
+        }
+
+        /// <summary>
+        /// Writes the sketch to a stream.
+        /// </summary>
+        /// <remarks>
+        /// The registers and the four parameters that give them meaning. The lower
+        /// bound the insert path keeps is not written: it is an accelerator, any value
+        /// no register is below will do, and the registers themselves say what it
+        /// should be.
+        /// </remarks>
+        /// <param name="stream">The stream to write to.</param>
+        public void WriteTo(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = new PayloadWriter();
+            payload.WriteDouble(this.b);
+            payload.WriteDouble(this.a);
+            payload.WriteUInt32((uint)this.m);
+            payload.WriteUInt32((uint)this.q);
+
+            foreach (var register in this.registers)
+            {
+                payload.WriteUInt16(register);
+            }
+
+            PersistenceFormat.Write(
+                stream,
+                StructureId.SetSketch,
+                PersistenceFormat.Identify(this.Hash),
+                payload.WrittenSpan);
+        }
+
+        /// <summary>
+        /// Reads a sketch written by <see cref="WriteTo"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        public static SetSketch ReadFrom(Stream stream)
+        {
+            return Read(stream, null);
+        }
+
+        /// <summary>
+        /// Reads a sketch written by <see cref="WriteTo"/>, installing a hash function.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function the sketch was written with.</param>
+        public static SetSketch ReadFrom(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            return Read(stream, hash);
+        }
+
+        private static SetSketch Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.SetSketch, out var hashId);
+            var reader = new PayloadReader(payload);
+
+            var b = reader.ReadDouble();
+            var a = reader.ReadDouble();
+            var m = reader.ReadUInt32();
+            var q = reader.ReadUInt32();
+
+            if (double.IsNaN(b) || b <= 1 || b > 2)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims a base of {b}. At one the register values would " +
+                    "not move with the cardinality at all, and this library only " +
+                    "writes bases up to two.");
+            }
+            if (double.IsNaN(a) || a <= 0 || double.IsInfinity(a))
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims a hash rate of {a}, and a rate is a positive " +
+                    "number.");
+            }
+            if (m == 0 || m > 1 << 26)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims {m} registers. A sketch has at least one, and this " +
+                    "many would be half a gigabyte of them.");
+            }
+            if (q == 0 || q > ushort.MaxValue - 1)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims a ceiling of {q}, and a register holds two bytes " +
+                    "and has to hold one more than the ceiling.");
+            }
+
+            var sketch = new SetSketch(
+                (int)m, b, a, (int)q,
+                PersistenceFormat.ResolveOrThrow(hashId, hash));
+
+            for (var i = 0; i < m; i++)
+            {
+                var register = reader.ReadUInt16();
+                if (register > q + 1)
+                {
+                    throw new InvalidDataException(
+                        $"Register {i} holds {register}, above the {q + 1} this " +
+                        "sketch's ceiling allows. It was not written by a sketch with " +
+                        "these parameters.");
+                }
+                sketch.registers[i] = register;
+            }
+
+            reader.ExpectEnd();
+
+            sketch.RescanLowerBound();
+            return sketch;
         }
 
         /// <summary>

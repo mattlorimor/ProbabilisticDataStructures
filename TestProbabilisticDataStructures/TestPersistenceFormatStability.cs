@@ -311,6 +311,30 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestStoredSetSketchStillReads()
+        {
+            var sketch = SetSketch.ReadFrom(Fixture("setsketch-v1.bin"));
+
+            Assert.AreEqual(512, sketch.Registers);
+            Assert.AreEqual(1.01, sketch.Base);
+            Assert.AreEqual(20.0, sketch.Rate);
+            Assert.AreEqual(40_000, sketch.MaxRegisterValue);
+
+            // Twenty thousand elements, held to the error 512 registers implies.
+            Assert.AreEqual(20_000.0, sketch.Cardinality(), 20_000 * 0.15,
+                "the stored sketch no longer estimates what was put into it");
+
+            // And it still compares: a sketch of the same elements is identical to it.
+            var rebuilt = new SetSketch(512, 1.01, 20, 40_000);
+            for (var i = 0; i < 20_000; i++)
+            {
+                rebuilt.Add(Key($"item-{i}"));
+            }
+            Assert.AreEqual(1.0, sketch.Jaccard(rebuilt),
+                "the stored sketch disagrees with one built the same way now");
+        }
+
+        [TestMethod]
         public void TestStoredSublimeCountMinSketchStillReads()
         {
             var sketch = SublimeCountMinSketch.ReadFrom(
@@ -699,6 +723,14 @@ namespace TestProbabilisticDataStructures
             }
 
             AssertBytes("infinifilter-v1.bin", infini.ToByteArray());
+
+            var setSketch = new SetSketch(512, 1.01, 20, 40_000);
+            for (var i = 0; i < 20_000; i++)
+            {
+                setSketch.Add(Key($"item-{i}"));
+            }
+
+            AssertBytes("setsketch-v1.bin", setSketch.ToByteArray());
 
             var sublime = new SublimeCountMinSketch(0.02);
             for (var i = 0; i < 6000; i++)

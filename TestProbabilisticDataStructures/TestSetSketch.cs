@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -89,6 +90,43 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Cardinality estimates hold at every base, not just the fine one.
+        /// </summary>
+        /// <remarks>
+        /// The paper's claim is that the base barely affects cardinality -- the error
+        /// runs from one to 1.04 over the root of the register count as the base goes
+        /// from one to two -- and that is worth checking rather than assuming, because
+        /// the base is the one parameter this structure is really about.
+        /// <para>
+        /// It is also the only place several kinds of mistake are visible. A register
+        /// value out by one shifts every register equally, which changes the estimate
+        /// by a factor of the base: undetectable at 1.001, where it is a tenth of a
+        /// percent, and a factor of two at base two. The same goes for an insertion
+        /// that abandons an element one step too early. A test at the default base
+        /// alone would let both through.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestCardinalityHoldsAtEveryBase()
+        {
+            foreach (var b in new[] { 1.001, 1.05, 1.2, 1.5, 2.0 })
+            {
+                var sketch = new SetSketch(M, b, 20, 65534);
+                for (var i = 0; i < 100_000; i++)
+                {
+                    sketch.Add(Key(i));
+                }
+
+                var estimate = sketch.Cardinality();
+                var error = Math.Abs(estimate - 100_000) / 100_000.0;
+
+                Assert.IsTrue(error < 4 * ExpectedRelativeError,
+                    $"At base {b}, 100,000 elements were estimated at {estimate:F0}, " +
+                    $"out by {error * 100:F2}%.");
+            }
+        }
+
+        /// <summary>
         /// A sketch nothing has been added to holds nothing.
         /// </summary>
         /// <remarks>
@@ -142,6 +180,111 @@ namespace TestProbabilisticDataStructures
                 "A merged sketch should be indistinguishable from one built by adding " +
                 "both sets, register for register.");
             Assert.AreEqual(together.Cardinality(), left.Cardinality());
+        }
+
+        /// <summary>
+        /// Skipping work never changes the answer.
+        /// </summary>
+        /// <remarks>
+        /// Almost all of the machinery in an insertion exists to avoid doing it. An
+        /// element's hash values are drawn in ascending order so that the first one too
+        /// small to matter ends the element, and the bound it is compared against is
+        /// raised as the registers rise. None of that is allowed to change the state
+        /// the sketch reaches, only how long it takes to get there.
+        /// <para>
+        /// The oracle is the sketch's own mergeability. A sketch given one element
+        /// never gets to skip anything -- its bound is still where it started -- so
+        /// merging one such sketch per element gives the state with no skipping at all.
+        /// It must equal the state reached by adding the elements one after another to
+        /// a single sketch, which skips a great deal.
+        /// </para>
+        /// <para>
+        /// The coarse base is the one that matters here, and the default base cannot
+        /// replace it. At 1.001 a register value runs into the thousands, so the step
+        /// where an element stops is almost never the step that would have changed
+        /// anything, and an exit condition out by one is invisible. At base two a
+        /// register value spans about twenty levels, the exit condition is live, and
+        /// the same mistake costs a fifth of the cardinality.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestSkippingWorkDoesNotChangeTheResult()
+        {
+            foreach (var (registers, elements, b) in new[]
+            {
+                (256, 3_000, 1.001),
+                (64, 10_000, 2.0),
+                (256, 30_000, 2.0),
+            })
+            {
+                var direct = new SetSketch(registers, b, 20, 60_000);
+                var elementByElement = new SetSketch(registers, b, 20, 60_000);
+
+                for (var i = 0; i < elements; i++)
+                {
+                    direct.Add(Key(i));
+
+                    var alone = new SetSketch(registers, b, 20, 60_000);
+                    alone.Add(Key(i));
+                    elementByElement.Merge(alone);
+                }
+
+                CollectionAssert.AreEqual(
+                    elementByElement.RegisterValues, direct.RegisterValues,
+                    $"At {registers} registers and base {b}, a sketch that skipped " +
+                    "work reached a different state from one that could not skip any.");
+            }
+        }
+
+        /// <summary>
+        /// An insertion costs a constant amount of work however large the set gets.
+        /// </summary>
+        /// <remarks>
+        /// The naive reading of the definition draws one hash value per register for
+        /// every element, which at four thousand registers would make this unusable.
+        /// The paper's arrangement draws them in ascending order and stops at the first
+        /// that cannot matter, which brings the cost per element down to a constant
+        /// once the set is comfortably larger than the register count.
+        /// <para>
+        /// Asserted as work rather than as elapsed time. A wall clock would measure the
+        /// machine and whatever else it was doing; counting the hash values drawn
+        /// measures the algorithm, and gives the same answer everywhere. Losing the
+        /// skipping entirely would still give every right answer -- it is an
+        /// accelerator, not part of the definition -- so nothing else in this file
+        /// would notice.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestAnInsertionCostsAConstantAmountOfWork()
+        {
+            // Deliberately small. The point is a ratio, not a scale, and a sketch
+            // that had stopped skipping would draw a register's worth of values per
+            // element -- so this has to stay cheap enough to fail quickly rather than
+            // run for an hour when something breaks.
+            const int Registers = 256;
+            const int Elements = 20_000;
+
+            var sketch = new SetSketch(Registers);
+
+            // Fill it well past the register count, so the lower bound has risen and
+            // the early stop is doing its job.
+            for (var i = 0; i < Elements; i++)
+            {
+                sketch.Add(Key(i));
+            }
+
+            var before = sketch.HashValuesDrawn;
+            for (var i = Elements; i < 2 * Elements; i++)
+            {
+                sketch.Add(Key(i));
+            }
+
+            var perElement = (sketch.HashValuesDrawn - before) / (double)Elements;
+
+            Assert.IsTrue(perElement < 10,
+                $"Each of the last {Elements} elements drew {perElement:F2} hash " +
+                $"values. With {Registers} registers, an insertion that had stopped " +
+                "skipping would draw about that many.");
         }
 
         /// <summary>
@@ -530,6 +673,115 @@ namespace TestProbabilisticDataStructures
 
             Assert.AreEqual(0.0, sketch.Cardinality());
             CollectionAssert.AreEqual(new SetSketch().RegisterValues, sketch.RegisterValues);
+        }
+
+        /// <summary>
+        /// A sketch survives a round trip through a stream, and the sketch that comes
+        /// back is the same sketch rather than one that merely agrees.
+        /// </summary>
+        [TestMethod]
+        public void TestASketchSurvivesARoundTrip()
+        {
+            var sketch = new SetSketch(1024, 1.01, 25, 40_000);
+            for (var i = 0; i < 50_000; i++)
+            {
+                sketch.Add(Key(i));
+            }
+
+            var stream = new MemoryStream();
+            sketch.WriteTo(stream);
+            stream.Position = 0;
+            var read = SetSketch.ReadFrom(stream);
+
+            CollectionAssert.AreEqual(sketch.RegisterValues, read.RegisterValues);
+            Assert.AreEqual(sketch.Registers, read.Registers);
+            Assert.AreEqual(sketch.Base, read.Base);
+            Assert.AreEqual(sketch.Rate, read.Rate);
+            Assert.AreEqual(sketch.MaxRegisterValue, read.MaxRegisterValue);
+            Assert.AreEqual(sketch.Cardinality(), read.Cardinality());
+
+            // And it is still a working sketch, not just the right bytes: it merges
+            // with the original, compares against it, and keeps counting.
+            Assert.AreEqual(1.0, sketch.Jaccard(read));
+            Assert.IsTrue(sketch.Merge(read));
+
+            read.Add(Key(999_999));
+            Assert.IsTrue(read.Cardinality() > 0);
+        }
+
+        /// <summary>
+        /// An empty sketch survives a round trip.
+        /// </summary>
+        [TestMethod]
+        public void TestAnEmptySketchSurvivesARoundTrip()
+        {
+            var stream = new MemoryStream();
+            new SetSketch(64).WriteTo(stream);
+            stream.Position = 0;
+
+            var read = SetSketch.ReadFrom(stream);
+
+            Assert.AreEqual(0.0, read.Cardinality());
+            Assert.AreEqual(64, read.Registers);
+        }
+
+        /// <summary>
+        /// A payload holding a register the sketch could never have produced is
+        /// refused.
+        /// </summary>
+        /// <remarks>
+        /// A register is held to the ceiling the sketch was built with. One above it is
+        /// not a value this code can write, and taken at face value it would quietly
+        /// drag every estimate the sketch makes.
+        /// </remarks>
+        [TestMethod]
+        public void TestAPayloadWithAnImpossibleRegisterIsRefused()
+        {
+            var sketch = new SetSketch(64, 1.001, 20, 1_000);
+            for (var i = 0; i < 100; i++)
+            {
+                sketch.Add(Key(i));
+            }
+
+            var written = sketch.ToByteArray();
+
+            // The registers follow two doubles, the register count and the ceiling.
+            var offset = written.Length - (64 * sizeof(ushort));
+            var corrupt = (byte[])written.Clone();
+            BitConverter.GetBytes((ushort)1_002).CopyTo(corrupt, offset);
+
+            Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<SetSketch>(corrupt));
+
+            // The ceiling itself, one above the largest a two-byte register can hold
+            // alongside its own ceiling.
+            var badCeiling = (byte[])written.Clone();
+            BitConverter.GetBytes((uint)ushort.MaxValue)
+                .CopyTo(badCeiling, offset - sizeof(uint));
+
+            Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<SetSketch>(badCeiling));
+        }
+
+        /// <summary>
+        /// A payload claiming a base the estimators do not hold for is refused.
+        /// </summary>
+        [TestMethod]
+        public void TestAPayloadWithAnImpossibleBaseIsRefused()
+        {
+            var written = new SetSketch(64, 1.001, 20, 1_000).ToByteArray();
+            var offset = written.Length - (64 * sizeof(ushort))
+                - (2 * sizeof(uint)) - (2 * sizeof(double));
+
+            foreach (var b in new[] { 1.0, 0.5, 3.0, double.NaN })
+            {
+                var corrupt = (byte[])written.Clone();
+                BitConverter.GetBytes(b).CopyTo(corrupt, offset);
+
+                Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<SetSketch>(corrupt),
+                    $"A payload claiming a base of {b} should be refused.");
+            }
         }
 
         /// <summary>

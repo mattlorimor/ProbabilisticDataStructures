@@ -220,6 +220,20 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestSetSketchRoundTrips()
+        {
+            var f = new SetSketch(256, 1.05, 20, 30_000);
+            for (var i = 0; i < 20_000; i++) f.Add(Key($"item-{i}"));
+
+            var r = RoundTrip(f);
+
+            Assert.AreEqual(f.Registers, r.Registers);
+            Assert.AreEqual(f.Base, r.Base);
+            Assert.AreEqual(f.Cardinality(), r.Cardinality());
+            Assert.AreEqual(1.0, f.Jaccard(r), "restored sketch is not the same set");
+        }
+
+        [TestMethod]
         public void TestSublimeCountMinSketchRoundTrips()
         {
             var f = new SublimeCountMinSketch(0.01);

@@ -47,7 +47,7 @@ eleven structures the Go library does not have.
   [`CountMinSketch`](#countminsketch) · [`SublimeCountMinSketch`](#sublimecountminsketch) ·
   [`CountSketch`](#countsketch) · [`TopK`](#topk) · [`HeavyKeeper`](#heavykeeper)
 - [Similarity](#similarity) —
-  [`MinHash`](#minhash) · [`SimHash`](#simhash) ·
+  [`SetSketch`](#setsketch) · [`MinHash`](#minhash) · [`SimHash`](#simhash) ·
   [`MinHashIndex` and `SimHashIndex`](#minhashindex-and-simhashindex)
 - [Distributions](#distributions) — [`DDSketch`](#ddsketch)
 - [Ranges](#ranges) — [`Grafite`](#grafite) · [`MementoFilter`](#mementofilter)
@@ -83,6 +83,7 @@ eleven structures the Go library does not have.
 | How often have I seen this particular thing? | `CountMinSketch` | [Frequency](#frequency) |
 | …and the stream has no end in sight | `SublimeCountMinSketch` | [Frequency](#frequency) |
 | …and it is rare, or I need to subtract | `CountSketch` | [Frequency](#frequency) |
+| How many distinct things, **and** how alike are two sets? | `SetSketch` | [Similarity](#similarity) |
 | What are the most common things? | `TopK` | [Frequency](#frequency) |
 | …and accuracy matters more than mergeability | `HeavyKeeper` | [Frequency](#frequency) |
 | How alike are these two **sets**? | `MinHash` | [Similarity](#similarity) |
@@ -1142,6 +1143,64 @@ vectors, by cosine similarity, where a term repeated often counts for more.
 One input where they disagree completely: a document of 40 "apple" and 2 "banana" against
 one of 2 "apple" and 40 "banana". Same *set*, so MinHash calls them identical — correctly,
 for its question. SimHash calls them unrelated — correctly, for its.
+
+### `SetSketch`
+
+<sup>[↑ Contents](#contents)</sup>
+
+How many distinct things a set holds **and** how much two sets have in common, from one
+structure.
+
+Normally these are two questions for two structures: a `HyperLogLog` counts distinct
+elements and can say almost nothing about how two sets relate, and a MinHash signature
+compares sets but estimates their size poorly. SetSketch does both from the same
+registers. A base parameter dials between them — towards one the registers grow fine and
+it behaves like MinHash, towards two they coarsen towards `HyperLogLog` — and cardinality
+estimation barely notices which end you pick.
+
+**When one sketch beats two.** When you need both answers, because the pair has to split
+your memory between them. Measured on two sets of 100,000 with a third of their union in
+common, at 8 kB total:
+
+| | cardinality error | Jaccard error |
+|---|---|---|
+| `SetSketch`, 4,096 registers | 1.24% | 0.0098 |
+| `HyperLogLog` (4 kB) + MinHash (4 kB) | 1.72% | 0.0195 |
+
+**When two beat one.** When you only need one answer. For counting alone `HyperLogLog`
+spends one byte a register where this spends two, and at the same 8 kB it estimated
+cardinality to 1.14% against this sketch's 1.24%. The paper says as much: a fine base is
+what makes similarity estimation good, and it is not what makes cardinality estimation
+cheap.
+
+Merging is exact rather than approximate — a merged sketch is register-for-register the
+sketch that adding both sets would have built — and adding the same element twice changes
+nothing, so shards and retries are both safe.
+
+**Reach for it when** you want distinct counts and set comparison over the same data, or
+when you are storing MinHash signatures and would rather they were a quarter the size.
+
+**Look elsewhere if** you only ever count — that is `HyperLogLog`, or `UltraLogLog` for
+fewer bytes still.
+
+```C#
+var users = new SetSketch();          // 4,096 registers, 8 kB
+var buyers = new SetSketch();
+users.Add(bytes);
+buyers.Add(otherBytes);
+
+double howMany = users.Cardinality();
+double overlap = users.Jaccard(buyers);
+
+var both = users.Compare(buyers);     // and everything that follows from it
+double shared = both.IntersectionSize;
+double cosine = both.CosineSimilarity;
+double whatShareOfBuyersAreUsers = both.OtherInclusionCoefficient;
+```
+
+Described by Otmar Ertl in
+[SetSketch: Filling the Gap between MinHash and HyperLogLog](https://doi.org/10.14778/3476249.3476276),
+VLDB 2021.
 
 ### `MinHash`
 
