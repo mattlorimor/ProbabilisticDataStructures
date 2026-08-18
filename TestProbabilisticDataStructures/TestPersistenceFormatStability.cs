@@ -311,6 +311,34 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestStoredSublimeCountMinSketchStillReads()
+        {
+            var sketch = SublimeCountMinSketch.ReadFrom(
+                Fixture("sublimecountminsketch-v1.bin"));
+
+            Assert.AreEqual(128, sketch.Width);
+            Assert.AreEqual(4, sketch.Depth);
+            Assert.AreEqual(5500UL, sketch.TotalCount());
+
+            // Forty flows, each added 150 times and the first five hundred additions
+            // taken back out again.
+            for (var i = 0; i < 40; i++)
+            {
+                Assert.IsTrue(sketch.Count(Key($"flow-{i}")) >= 137,
+                    $"stored sketch reports {sketch.Count(Key($"flow-{i}"))} for " +
+                    $"flow-{i}, below what was put in");
+            }
+
+            // The record of the expansion came back, so the sketch can still fold.
+            for (var i = 0; i < 3000; i++)
+            {
+                sketch.Remove(Key($"flow-{i % 40}"));
+            }
+            Assert.AreEqual(64, sketch.Width,
+                "the stored sketch no longer carries the record it needs to fold back");
+        }
+
+        [TestMethod]
         public void TestStoredGrafiteStillReads()
         {
             var filter = Grafite.ReadFrom(Fixture("grafite-v1.bin"));
@@ -671,6 +699,18 @@ namespace TestProbabilisticDataStructures
             }
 
             AssertBytes("infinifilter-v1.bin", infini.ToByteArray());
+
+            var sublime = new SublimeCountMinSketch(0.02);
+            for (var i = 0; i < 6000; i++)
+            {
+                sublime.Add(Key($"flow-{i % 40}"));
+            }
+            for (var i = 0; i < 500; i++)
+            {
+                sublime.Remove(Key($"flow-{i % 40}"));
+            }
+
+            AssertBytes("sublimecountminsketch-v1.bin", sublime.ToByteArray());
 
             AssertBytes("grafite-v1.bin", Grafite.Build(
                 Enumerable.Range(0, 500).Select(i => (ulong)(i * 1009)),

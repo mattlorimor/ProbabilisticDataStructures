@@ -44,7 +44,8 @@ eleven structures the Go library does not have.
   [`ThetaSketch`](#thetasketch) ·
   [`InvertibleBloomLookupTable`](#invertiblebloomlookuptable)
 - [Frequency](#frequency) —
-  [`CountMinSketch`](#countminsketch) · [`CountSketch`](#countsketch) · [`TopK`](#topk) · [`HeavyKeeper`](#heavykeeper)
+  [`CountMinSketch`](#countminsketch) · [`SublimeCountMinSketch`](#sublimecountminsketch) ·
+  [`CountSketch`](#countsketch) · [`TopK`](#topk) · [`HeavyKeeper`](#heavykeeper)
 - [Similarity](#similarity) —
   [`MinHash`](#minhash) · [`SimHash`](#simhash) ·
   [`MinHashIndex` and `SimHashIndex`](#minhashindex-and-simhashindex)
@@ -80,6 +81,7 @@ eleven structures the Go library does not have.
 | How many are in **both** of these sets? | `ThetaSketch` | [Cardinality](#cardinality) |
 | **Which** keys do these two sets differ by? | `InvertibleBloomLookupTable` | [Cardinality](#cardinality) |
 | How often have I seen this particular thing? | `CountMinSketch` | [Frequency](#frequency) |
+| …and the stream has no end in sight | `SublimeCountMinSketch` | [Frequency](#frequency) |
 | …and it is rare, or I need to subtract | `CountSketch` | [Frequency](#frequency) |
 | What are the most common things? | `TopK` | [Frequency](#frequency) |
 | …and accuracy matters more than mergeability | `HeavyKeeper` | [Frequency](#frequency) |
@@ -970,6 +972,49 @@ ulong count = sketch.Count(bytes);
 
 Described by Cormode and Muthukrishnan in
 [An Improved Data Stream Summary](http://dimacs.rutgers.edu/~graham/pubs/papers/cm-full.pdf).
+
+### `SublimeCountMinSketch`
+
+<sup>[↑ Contents](#contents)</sup>
+
+The same question as `CountMinSketch`, for a stream whose length you do not know.
+
+A `CountMinSketch` has to be sized before it has seen anything, and whatever you choose,
+its error grows in step with the stream: a fixed number of counters shared among ever more
+keys can do nothing else. Sublime gives up the fixed size. Its arrays start at a single
+cache line and double as the stream grows, holding about the square root of its length, so
+the expected error grows as the square root too.
+
+Paying for that with memory would defeat the point, so the counters are stored variably: a
+count keeps its low bits in a short fixed **stub**, and only a count too large for its stub
+spends anything on the rest, in a variable-length extension packed alongside its
+neighbours in the same cache line. Counters that stay small cost a stub. In practice they
+settle at twelve to fourteen bits each, against the sixty-four `CountMinSketch` spends on
+every counter whatever it holds.
+
+Given the same bytes and the same number of rows on the same skewed stream, this was out
+by 263 on average where a fixed sketch was out by 684, at a hundred thousand events — and
+830 against 2,811 at a million. The margin widens as the stream runs on, which is the
+whole claim.
+
+**Reach for it when** the stream is unbounded or its length is unknown, and you would
+rather the sketch grew than drifted.
+
+**Look elsewhere if** you know how much you are counting: a `CountMinSketch` sized for it
+is simpler and faster per insertion.
+
+```C#
+var sketch = new SublimeCountMinSketch(delta: 0.01);
+sketch.Add(bytes);
+ulong count = sketch.Count(bytes);   // never lower than the truth
+sketch.Remove(bytes);                // deletions, which CountMinSketch does not support
+
+int counters = sketch.Width;         // grows with the stream, and shrinks again
+```
+
+Described by Eslami, Bercea, Pagh and Dayan in
+[Sublime: Sublinear Error & Space for Unbounded Skewed Streams](https://doi.org/10.1145/3802116),
+SIGMOD 2026.
 
 ### `CountSketch`
 

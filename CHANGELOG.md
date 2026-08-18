@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`SublimeCountMinSketch`**, per-item frequencies for a stream whose length is not known
+  in advance (Eslami, Bercea, Pagh and Dayan, SIGMOD 2026). A `CountMinSketch` has to be
+  sized before it has seen anything, and its error then grows in step with the stream.
+  This one starts at a single cache line per row and doubles as the stream grows, holding
+  about the square root of its length, so the error grows as the square root too;
+  expansion copies each array onto itself, so a key that hashed to a counter before an
+  expansion hashes to that counter or its copy afterwards and its count survives. Paying
+  for that in memory would defeat the point, so a count keeps its low bits in a short stub
+  and spends on a variable-length extension only when it outgrows one — packed alongside
+  its neighbours in the same cache line, in base three so that the one spare two-bit
+  pattern can mark where each one ends. The two parameters this depends on are retuned as
+  the sketch grows, using Chebyshev's inequality on the spread of extension lengths to
+  reject any tuning that would push more than three chunks in a hundred onto their
+  fallback. Counters settle at twelve to fourteen bits each against `CountMinSketch`'s
+  sixty-four. Given the same bytes and rows on the same skewed stream, it was out by 263
+  on average against a fixed sketch's 684 at a hundred thousand events, and 830 against
+  2,811 at a million — a margin that widens as the stream runs on. Supports deletions,
+  which `CountMinSketch` does not, and folds its arrays back in half once most of a
+  stream has been deleted, subtracting out a record of each expansion so that the counts
+  gathered before one are not counted twice on the way down. Persists as counts rather
+  than as its packed layout, so a payload survives any change to how counters are
+  packed. (#103)
+
 - **`MementoFilter`**, range emptiness for a set that keeps changing (Eslami and Dayan,
   SIGMOD 2025). `Grafite` answers the same question but is built once and never updated;
   this one inserts, deletes and grows, which is what makes a range filter usable behind a
