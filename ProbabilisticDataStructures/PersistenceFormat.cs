@@ -41,6 +41,7 @@ namespace ProbabilisticDataStructures
         MementoFilter = 28,
         SublimeCountMinSketch = 29,
         SetSketch = 30,
+        TupleSketch = 31,
     }
 
     /// <summary>

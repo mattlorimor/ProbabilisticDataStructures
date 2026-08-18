@@ -726,65 +726,6 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A payload holding a register the sketch could never have produced is
-        /// refused.
-        /// </summary>
-        /// <remarks>
-        /// A register is held to the ceiling the sketch was built with. One above it is
-        /// not a value this code can write, and taken at face value it would quietly
-        /// drag every estimate the sketch makes.
-        /// </remarks>
-        [TestMethod]
-        public void TestAPayloadWithAnImpossibleRegisterIsRefused()
-        {
-            var sketch = new SetSketch(64, 1.001, 20, 1_000);
-            for (var i = 0; i < 100; i++)
-            {
-                sketch.Add(Key(i));
-            }
-
-            var written = sketch.ToByteArray();
-
-            // The registers follow two doubles, the register count and the ceiling.
-            var offset = written.Length - (64 * sizeof(ushort));
-            var corrupt = (byte[])written.Clone();
-            BitConverter.GetBytes((ushort)1_002).CopyTo(corrupt, offset);
-
-            Assert.ThrowsExactly<InvalidDataException>(
-                () => Persistence.FromByteArray<SetSketch>(corrupt));
-
-            // The ceiling itself, one above the largest a two-byte register can hold
-            // alongside its own ceiling.
-            var badCeiling = (byte[])written.Clone();
-            BitConverter.GetBytes((uint)ushort.MaxValue)
-                .CopyTo(badCeiling, offset - sizeof(uint));
-
-            Assert.ThrowsExactly<InvalidDataException>(
-                () => Persistence.FromByteArray<SetSketch>(badCeiling));
-        }
-
-        /// <summary>
-        /// A payload claiming a base the estimators do not hold for is refused.
-        /// </summary>
-        [TestMethod]
-        public void TestAPayloadWithAnImpossibleBaseIsRefused()
-        {
-            var written = new SetSketch(64, 1.001, 20, 1_000).ToByteArray();
-            var offset = written.Length - (64 * sizeof(ushort))
-                - (2 * sizeof(uint)) - (2 * sizeof(double));
-
-            foreach (var b in new[] { 1.0, 0.5, 3.0, double.NaN })
-            {
-                var corrupt = (byte[])written.Clone();
-                BitConverter.GetBytes(b).CopyTo(corrupt, offset);
-
-                Assert.ThrowsExactly<InvalidDataException>(
-                    () => Persistence.FromByteArray<SetSketch>(corrupt),
-                    $"A payload claiming a base of {b} should be refused.");
-            }
-        }
-
-        /// <summary>
         /// The parameters are checked when the sketch is built.
         /// </summary>
         [TestMethod]

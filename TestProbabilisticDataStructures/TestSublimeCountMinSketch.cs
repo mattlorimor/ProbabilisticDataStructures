@@ -691,60 +691,6 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A payload claiming an impossible shape is refused.
-        /// </summary>
-        /// <remarks>
-        /// The width is the one field a reader cannot simply believe. Counters are
-        /// picked by the low bits of a hash, which only works if the width is a power
-        /// of two, and a width that is not one would send every query to a counter the
-        /// writer never used.
-        /// </remarks>
-        [TestMethod]
-        public void TestAPayloadWithAnImpossibleShapeIsRefused()
-        {
-            var sketch = new SublimeCountMinSketch(0.01);
-            sketch.Add(Key(1));
-            var good = sketch.ToByteArray();
-
-            // The width sits after three doubles and a four-byte depth.
-            var offset = HeaderLength(good) + 3 * sizeof(double) + sizeof(uint);
-
-            foreach (var (width, why) in new (uint, string)[]
-            {
-                (0u, "no counters at all"),
-                (100u, "a width that is not a power of two"),
-                (uint.MaxValue, "more counters than a row may hold"),
-            })
-            {
-                var bad = (byte[])good.Clone();
-                BitConverter.GetBytes(width).CopyTo(bad, offset);
-
-                Assert.ThrowsExactly<InvalidDataException>(
-                    () => Persistence.FromByteArray<SublimeCountMinSketch>(bad),
-                    $"A payload claiming {why} should be refused.");
-            }
-        }
-
-        /// <summary>
-        /// Where a payload's own fields begin, past the format's header.
-        /// </summary>
-        private static int HeaderLength(byte[] payload)
-        {
-            // Found rather than assumed: the first field is delta, which every sketch
-            // in these tests was built with.
-            for (var at = 0; at + sizeof(double) <= payload.Length; at++)
-            {
-                if (BitConverter.ToDouble(payload, at) == 0.01)
-                {
-                    return at;
-                }
-            }
-
-            throw new InvalidOperationException(
-                "The payload does not appear to begin with the delta it was built with.");
-        }
-
-        /// <summary>
         /// The parameters are checked when the sketch is built.
         /// </summary>
         [TestMethod]

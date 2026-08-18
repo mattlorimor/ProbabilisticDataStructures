@@ -50,6 +50,30 @@ namespace TestProbabilisticDataStructures
         /// the eight-byte sibling of <see cref="PokeUInt32"/>, for doubles poked by
         /// their bit pattern.
         /// </summary>
+        /// <summary>
+        /// Overwrites a single byte at an offset within the payload and repairs the
+        /// checksum.
+        /// </summary>
+        private static byte[] PokeByte(byte[] original, int payloadOffset, byte value)
+        {
+            var bytes = (byte[])original.Clone();
+            bytes[PayloadStart + payloadOffset] = value;
+            RepairChecksum(bytes);
+            return bytes;
+        }
+
+        /// <summary>
+        /// Overwrites a u16 at an offset within the payload and repairs the checksum.
+        /// </summary>
+        private static byte[] PokeUInt16(byte[] original, int payloadOffset, ushort value)
+        {
+            var bytes = (byte[])original.Clone();
+            BinaryPrimitives.WriteUInt16LittleEndian(
+                bytes.AsSpan(PayloadStart + payloadOffset), value);
+            RepairChecksum(bytes);
+            return bytes;
+        }
+
         private static byte[] PokeUInt64(byte[] original, int payloadOffset, ulong value)
         {
             var bytes = (byte[])original.Clone();
@@ -609,6 +633,227 @@ namespace TestProbabilisticDataStructures
             var bytes = PokeUInt32(HeavyKeeperPayload(), 4, 1 << 30);
             AssertRefused(
                 () => Persistence.FromByteArray<HeavyKeeper>(bytes), "buckets, beyond");
+        }
+    
+        /// <summary>
+        /// A tuple sketch to corrupt. Its prefix is fixed, so the offsets are: the
+        /// retained size at 0, the way it folds values at 4, the sampling threshold at
+        /// 5, and how many keys it holds at 13. The keys follow at 17, and their
+        /// summaries after all of them.
+        /// </summary>
+        private static byte[] TuplePayload()
+        {
+            var sketch = new TupleSketch(64);
+            for (var i = 0; i < 5_000; i++)
+            {
+                sketch.Add(Key($"user-{i}"), 1.0);
+            }
+            return sketch.ToByteArray();
+        }
+
+        /// <summary>
+        /// A way of folding values this library does not have describes summaries that
+        /// were built by something else.
+        /// </summary>
+        [TestMethod]
+        public void TestTupleSketchWithAnUnknownPolicyIsRefused()
+        {
+            AssertRefused(
+                () => Persistence.FromByteArray<TupleSketch>(PokeByte(TuplePayload(), 4, 99)),
+                "folding");
+        }
+
+        /// <summary>
+        /// Every key a tuple sketch keeps is strictly below its threshold, which is what
+        /// makes the threshold usable as the sampling rate.
+        /// </summary>
+        [TestMethod]
+        public void TestTupleSketchWithAKeyAboveItsThresholdIsRefused()
+        {
+            var payload = TuplePayload();
+            var held = BinaryPrimitives.ReadUInt32LittleEndian(
+                payload.AsSpan(PayloadStart + 13));
+
+            // The last key, raised past the threshold while staying in order.
+            var lastKey = 17 + (((int)held - 1) * sizeof(ulong));
+
+            AssertRefused(
+                () => Persistence.FromByteArray<TupleSketch>(
+                    PokeUInt64(payload, lastKey, ulong.MaxValue - 1)),
+                "threshold");
+        }
+
+        /// <summary>
+        /// A tuple sketch writes its keys in increasing order, so a payload whose keys
+        /// are not is not one it wrote.
+        /// </summary>
+        [TestMethod]
+        public void TestTupleSketchWithKeysOutOfOrderIsRefused()
+        {
+            AssertRefused(
+                () => Persistence.FromByteArray<TupleSketch>(
+                    // The second key dropped to nought, below the first.
+                    PokeUInt64(TuplePayload(), 17 + sizeof(ulong), 0)),
+                "order");
+        }
+
+        /// <summary>
+        /// A tuple sketch trims once it reaches twice what it retains, so it never holds
+        /// more than that.
+        /// </summary>
+        [TestMethod]
+        public void TestTupleSketchHoldingMoreThanItCouldIsRefused()
+        {
+            AssertRefused(
+                () => Persistence.FromByteArray<TupleSketch>(
+                    PokeUInt32(TuplePayload(), 13, 900_000)),
+                "retains");
+        }
+
+        /// <summary>
+        /// A summary that is not a number would spread to every total its key took part
+        /// in.
+        /// </summary>
+        [TestMethod]
+        public void TestTupleSketchWithASummaryThatIsNotANumberIsRefused()
+        {
+            var payload = TuplePayload();
+            var held = BinaryPrimitives.ReadUInt32LittleEndian(
+                payload.AsSpan(PayloadStart + 13));
+
+            var firstSummary = 17 + ((int)held * sizeof(ulong));
+
+            AssertRefused(
+                () => Persistence.FromByteArray<TupleSketch>(
+                    PokeUInt64(payload, firstSummary,
+                        BitConverter.DoubleToUInt64Bits(double.NaN))),
+                "number");
+        }
+    
+        /// <summary>
+        /// A set sketch to corrupt. Its prefix is fixed: the base at 0, the hash rate at
+        /// 8, the register count at 16, the ceiling at 20, and the registers from 24.
+        /// </summary>
+        private static byte[] SetSketchPayload()
+        {
+            var sketch = new SetSketch(64, 1.001, 20, 1_000);
+            for (var i = 0; i < 100; i++)
+            {
+                sketch.Add(Key($"item-{i}"));
+            }
+            return sketch.ToByteArray();
+        }
+
+        /// <summary>
+        /// A register above the ceiling the sketch was built with is not a value it can
+        /// write, and taken at face value it drags every estimate the sketch makes.
+        /// </summary>
+        [TestMethod]
+        public void TestSetSketchWithARegisterAboveItsCeilingIsRefused()
+        {
+            AssertRefused(
+                () => Persistence.FromByteArray<SetSketch>(
+                    PokeUInt16(SetSketchPayload(), 24, 1_002)),
+                "ceiling");
+        }
+
+        /// <summary>
+        /// At a base of one the register values would not move with the cardinality at
+        /// all, and the estimators are only claimed up to two.
+        /// </summary>
+        [TestMethod]
+        public void TestSetSketchWithAnImpossibleBaseIsRefused()
+        {
+            foreach (var b in new[] { 1.0, 0.5, 3.0, double.NaN })
+            {
+                AssertRefused(
+                    () => Persistence.FromByteArray<SetSketch>(
+                        PokeUInt64(SetSketchPayload(), 0,
+                            BitConverter.DoubleToUInt64Bits(b))),
+                    "base");
+            }
+        }
+
+        /// <summary>
+        /// A register holds two bytes and has to hold one more than the ceiling.
+        /// </summary>
+        [TestMethod]
+        public void TestSetSketchWithAnImpossibleCeilingIsRefused()
+        {
+            AssertRefused(
+                () => Persistence.FromByteArray<SetSketch>(
+                    PokeUInt32(SetSketchPayload(), 20, ushort.MaxValue)),
+                "ceiling");
+        }
+
+        /// <summary>
+        /// A sketch with no registers has nothing to estimate from.
+        /// </summary>
+        [TestMethod]
+        public void TestSetSketchWithNoRegistersIsRefused()
+        {
+            AssertRefused(
+                () => Persistence.FromByteArray<SetSketch>(
+                    PokeUInt32(SetSketchPayload(), 16, 0)),
+                "registers");
+        }
+
+        /// <summary>
+        /// A Sublime sketch to corrupt. Its prefix is fixed: delta at 0, the growth
+        /// exponent at 8, the size factor at 16, the row count at 24, the width at 28,
+        /// and the counts that follow.
+        /// </summary>
+        private static byte[] SublimePayload()
+        {
+            var sketch = new SublimeCountMinSketch(0.02);
+            for (var i = 0; i < 6_000; i++)
+            {
+                sketch.Add(Key($"flow-{i % 40}"));
+            }
+            return sketch.ToByteArray();
+        }
+
+        /// <summary>
+        /// A width is a power of two, because the low bits of a hash pick the counter.
+        /// A width that is not one sends every query to a counter the writer never used.
+        /// </summary>
+        [TestMethod]
+        public void TestSublimeCountMinSketchWithAWidthThatIsNotAPowerOfTwoIsRefused()
+        {
+            AssertRefused(
+                () => Persistence.FromByteArray<SublimeCountMinSketch>(
+                    PokeUInt32(SublimePayload(), 28, 100)),
+                "power of two");
+        }
+
+        /// <summary>
+        /// A sketch with no rows reports every element as seen the maximum number of
+        /// times.
+        /// </summary>
+        [TestMethod]
+        public void TestSublimeCountMinSketchWithNoRowsIsRefused()
+        {
+            AssertRefused(
+                () => Persistence.FromByteArray<SublimeCountMinSketch>(
+                    PokeUInt32(SublimePayload(), 24, 0)),
+                "rows");
+        }
+
+        /// <summary>
+        /// The growth exponent has to lie between nought and one; at one the sketch
+        /// would grow as fast as the stream it summarises.
+        /// </summary>
+        [TestMethod]
+        public void TestSublimeCountMinSketchWithAnImpossibleGrowthIsRefused()
+        {
+            foreach (var growth in new[] { 0.0, 1.0, 2.0, double.NaN })
+            {
+                AssertRefused(
+                    () => Persistence.FromByteArray<SublimeCountMinSketch>(
+                        PokeUInt64(SublimePayload(), 8,
+                            BitConverter.DoubleToUInt64Bits(growth))),
+                    "growth exponent");
+            }
         }
     }
 }

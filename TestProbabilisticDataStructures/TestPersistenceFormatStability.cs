@@ -311,6 +311,22 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestStoredTupleSketchStillReads()
+        {
+            var sketch = TupleSketch.ReadFrom(Fixture("tuplesketch-v1.bin"));
+
+            Assert.AreEqual(SummaryPolicy.Sum, sketch.Policy);
+            Assert.AreEqual(308U, sketch.Retained());
+
+            // Five thousand distinct keys, each added four times at two apiece, so the
+            // total should come out at eight times the count.
+            Assert.AreEqual(5_000.0, sketch.Count(), 5_000 * 0.15,
+                "the stored sketch no longer estimates the keys put into it");
+            Assert.AreEqual(sketch.Count() * 8.0, sketch.Total(), 8.0,
+                "the stored sketch's summaries no longer match its keys");
+        }
+
+        [TestMethod]
         public void TestStoredSetSketchStillReads()
         {
             var sketch = SetSketch.ReadFrom(Fixture("setsketch-v1.bin"));
@@ -723,6 +739,14 @@ namespace TestProbabilisticDataStructures
             }
 
             AssertBytes("infinifilter-v1.bin", infini.ToByteArray());
+
+            var tuple = new TupleSketch(256);
+            for (var i = 0; i < 20_000; i++)
+            {
+                tuple.Add(Key($"user-{i % 5000}"), 2.0);
+            }
+
+            AssertBytes("tuplesketch-v1.bin", tuple.ToByteArray());
 
             var setSketch = new SetSketch(512, 1.01, 20, 40_000);
             for (var i = 0; i < 20_000; i++)
