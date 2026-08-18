@@ -59,7 +59,13 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestStableTestAndAdd()
         {
-            var f = StableBloomFilter.NewDefaultStableBloomFilter(10000, 0.01);
+            // Seeded, and it matters here more than it looks. This filter evicts as it
+            // goes: every add decays cells chosen at random, so an earlier item can
+            // stop being a member because a later one displaced it. That is the
+            // structure working, not failing. What this test is actually about is the
+            // mechanics of Test, Add and TestAndAdd, so the eviction is pinned rather
+            // than left to chance -- unseeded, it removed 'a' about one run in four.
+            var f = new StableBloomFilter(10000, 1, 0.01, seed: 1);
 
             // 'a' is not in the filter.
             if (f.Test(A_BYTES))
