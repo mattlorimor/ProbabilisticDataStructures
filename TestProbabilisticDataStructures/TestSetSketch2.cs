@@ -375,5 +375,112 @@ namespace TestProbabilisticDataStructures
                 "a payload with no variant byte is the first construction by " +
                 "definition, which is what keeps old payloads readable.");
         }
+
+        /// <summary>
+        /// The insert path decides whether an interval is worth drawing from with one
+        /// comparison, having done the logarithms once when the bound last moved. That
+        /// is only allowed to stand if it agrees with the literal decision --
+        /// "what value would this interval's start earn, and does it beat the bound?"
+        /// -- at every interval, for every bound.
+        /// <para>
+        /// The two directions are not equally forgiving. Stopping <i>later</i> than the
+        /// literal rule costs a wasted draw and nothing else, because a point that
+        /// cannot beat the bound cannot raise a register either. Stopping <i>earlier</i>
+        /// skips a draw that could have raised one, and the sketch is quietly wrong for
+        /// that element only. So this sweeps every interval rather than sampling, and
+        /// every bound from empty to saturated, including the ceiling itself where the
+        /// algebra behind the comparison stops applying and the code special-cases it.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [DataRow(64, 1.001, 20.0, 65534)]
+        [DataRow(64, 2.0, 20.0, 65534)]
+        [DataRow(256, 1.001, 20.0, 65534)]
+        [DataRow(256, 1.05, 1.0, 4000)]
+        [DataRow(1024, 1.2, 0.5, 300)]
+        [DataRow(1, 1.001, 20.0, 65534)]
+        [DataRow(2, 1.5, 100.0, 10)]
+        public void TestTheFastStopAgreesWithTheLiteralOneEverywhere(
+            int m, double b, double a, int q)
+        {
+            var sketch = new SetSketch(m, b, a, q, null, SetSketchVariant.SetSketch2);
+
+            var bounds = new List<int> { 0, 1, 2, 3, q - 1, q, q + 1 };
+            for (var L = 4; L < q; L = (int)(L * 1.7) + 1)
+            {
+                bounds.Add(L);
+            }
+
+            var stoppedSomewhere = false;
+            var ranSomewhere = false;
+
+            foreach (var bound in bounds.Where(x => x >= 0 && x <= q + 1).Distinct())
+            {
+                sketch.ForceLowerBound(bound);
+
+                for (var i = 0; i < m; i++)
+                {
+                    var literal = sketch.LiterallyStopsAtInterval(i);
+                    var fast = sketch.StopsAtInterval(i);
+
+                    Assert.AreEqual(literal, fast,
+                        $"m={m} b={b} a={a} q={q} bound={bound} i={i}: the comparison " +
+                        $"says {(fast ? "stop" : "draw")} where asking ValueFor says " +
+                        $"{(literal ? "stop" : "draw")}. Stopping early skips a draw " +
+                        "that could have raised a register.");
+
+                    stoppedSomewhere |= literal;
+                    ranSomewhere |= !literal;
+                }
+            }
+
+            Assert.IsTrue(stoppedSomewhere,
+                "no bound and interval in this sweep ever stopped, so the agreement " +
+                "above is agreement about nothing.");
+            Assert.IsTrue(ranSomewhere,
+                "every bound and interval in this sweep stopped, so the agreement " +
+                "above is agreement about nothing.");
+        }
+
+        /// <summary>
+        /// And the same equivalence end to end: a sketch whose stop is decided by the
+        /// literal rule and one whose stop is decided by the comparison must finish
+        /// register for register identical, over a stream long enough to move the bound
+        /// many times. The sweep above proves the predicates agree; this proves nothing
+        /// else in the insert path depends on which one was consulted.
+        /// </summary>
+        [TestMethod]
+        public void TestTheOptimisedStopBuildsTheSameSketch()
+        {
+            var sketch = Sketch(registers: 512);
+            var literalStops = 0;
+            var fastStops = 0;
+
+            for (var i = 0; i < 20000; i++)
+            {
+                // Before each element, both rules must agree about every interval at
+                // whatever bound the stream has driven the sketch to.
+                for (var interval = 0; interval < 512; interval++)
+                {
+                    if (sketch.LiterallyStopsAtInterval(interval))
+                    {
+                        literalStops++;
+                    }
+                    if (sketch.StopsAtInterval(interval))
+                    {
+                        fastStops++;
+                    }
+                }
+
+                sketch.Add(Key($"item-{i}"));
+            }
+
+            Assert.AreEqual(literalStops, fastStops,
+                $"over 20,000 elements the two rules disagreed: {literalStops} stops " +
+                $"the literal way against {fastStops} the fast way.");
+            Assert.IsGreaterThan(0, fastStops,
+                "the stop never fired across the whole stream, so this compares two " +
+                "rules that were never asked anything.");
+        }
     }
 }

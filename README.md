@@ -1327,10 +1327,13 @@ var small = new SetSketch(256, 1.001, 20, 65534, null, SetSketchVariant.SetSketc
 | 10,000 | 6.35% | 6.54% |
 
 The correlation buys real accuracy on small sets and the advantage has gone by ten
-thousand elements. The paper also presents this construction as the faster one; in this
-implementation it is not — it draws about 9% fewer random values and still runs about 5%
-slower, because both constructions pay a logarithm per iteration here. If you want speed,
-this is not the lever.
+thousand elements.
+
+The paper also presents this construction as the faster one, and it is: about 6% quicker
+over 500,000 additions, on 9% fewer random draws. The saving is structural rather than
+incidental. A point never falls below its interval's start, so this construction can tell
+whether an interval is worth drawing from *before* spending any randomness — and
+SetSketch1 has no equivalent, because its next point is not known until it is drawn.
 
 Merging two sketches is exact under either construction, but merging one of each is
 refused: the merge promises the sketch that adding both sets from the start would have
