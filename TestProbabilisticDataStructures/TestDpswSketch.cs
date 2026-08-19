@@ -417,5 +417,118 @@ namespace TestProbabilisticDataStructures
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(
                 () => sketch.HeavyHitters(new List<byte[]>(), 1.5));
         }
+
+        /// <summary>
+        /// A window round-trips exactly as far as its state goes: same shape, same
+        /// position, same sketches, and the same answer for every item.
+        /// </summary>
+        [TestMethod]
+        public void TestRoundTripsThroughPersistenceExactly()
+        {
+            var original = new DpswSketch(
+                window: 512, rho: 1.0, alpha: 0.5, width: 32, depth: 3, seed: 2024);
+            for (var i = 0; i < 900; i++)
+            {
+                original.Add(Key(i % 60));
+            }
+
+            var restored = Persistence.FromByteArray<DpswSketch>(original.ToByteArray());
+
+            Assert.AreEqual(original.Window, restored.Window);
+            Assert.AreEqual(original.Rho, restored.Rho);
+            Assert.AreEqual(original.Position, restored.Position);
+            Assert.AreEqual(original.SubstreamSize, restored.SubstreamSize);
+            Assert.AreEqual(original.SketchesHeld, restored.SketchesHeld);
+            Assert.AreEqual(original.SizeInBytes, restored.SizeInBytes);
+            CollectionAssert.AreEqual(original.Checkpointing, restored.Checkpointing);
+
+            for (var i = 0; i < 60; i++)
+            {
+                Assert.AreEqual(original.Count(Key(i)), restored.Count(Key(i)), 1e-9,
+                    $"item {i} must estimate identically after a round trip.");
+            }
+        }
+
+        /// <summary>
+        /// A restored window keeps counting, across the substream boundaries still
+        /// ahead of it -- which is the point of re-seeding on read rather than handing
+        /// back something query-only. The new substreams get their noise from a fresh
+        /// generator, and that is sound because they cover items disjoint from
+        /// everything already written: differential privacy composes in parallel over
+        /// disjoint data, taking a maximum rather than a sum.
+        /// </summary>
+        [TestMethod]
+        public void TestARestoredWindowKeepsCountingAcrossSubstreams()
+        {
+            var original = new DpswSketch(
+                window: 512, rho: 1.0, alpha: 0.5, width: 32, depth: 3, seed: 77);
+            for (var i = 0; i < 100; i++)
+            {
+                original.Add(Key(i % 20));
+            }
+
+            var restored = Persistence.FromByteArray<DpswSketch>(original.ToByteArray());
+            var substreamsBefore = restored.SketchesHeld;
+
+            for (var i = 0; i < 400; i++)
+            {
+                restored.Add(Key(7));
+            }
+
+            Assert.AreEqual(500, restored.Position,
+                "a restored window must go on counting from where it left off.");
+            Assert.IsGreaterThan(substreamsBefore, restored.SketchesHeld,
+                "400 further items must have opened at least one new substream, or " +
+                "the fresh generator was never exercised and this proves nothing.");
+
+            // 400 of the 500 items in the window are item 7, plus whatever the first
+            // hundred contributed. The estimate is noisy and unclamped, so the
+            // assertion is that it is in the right country, not on the nose.
+            var estimate = restored.Count(Key(7));
+            Assert.IsGreaterThan(300.0, estimate,
+                $"item 7 was added 400 times after the read and estimates " +
+                $"{estimate:F1}; the sketches built after a round trip are not " +
+                "counting into the window.");
+        }
+
+        /// <summary>
+        /// The cost of not writing the generator down, stated as a test so that nobody
+        /// later mistakes it for a bug. Two windows built from the same seed agree
+        /// exactly; write one, read it back, and the pair diverge as soon as a new
+        /// substream is opened, because the restored one draws its noise from a fresh
+        /// unpredictable generator. Reproducibility across a round trip is precisely
+        /// what persisting the generator would buy, and precisely what must not be
+        /// bought at that price.
+        /// </summary>
+        [TestMethod]
+        public void TestReproducibilityDoesNotSurviveARoundTrip()
+        {
+            static DpswSketch Build() => new DpswSketch(
+                window: 512, rho: 1.0, alpha: 0.5, width: 32, depth: 3, seed: 31337);
+
+            var twin = Build();
+            var original = Build();
+            for (var i = 0; i < 100; i++)
+            {
+                twin.Add(Key(i % 20));
+                original.Add(Key(i % 20));
+            }
+
+            Assert.AreEqual(twin.Count(Key(3)), original.Count(Key(3)), 1e-12,
+                "two windows from the same seed must agree before any round trip, or " +
+                "the divergence below is not the round trip's doing.");
+
+            var restored = Persistence.FromByteArray<DpswSketch>(original.ToByteArray());
+            for (var i = 0; i < 400; i++)
+            {
+                twin.Add(Key(11));
+                restored.Add(Key(11));
+            }
+
+            Assert.AreNotEqual(twin.Count(Key(11)), restored.Count(Key(11)),
+                "the restored window drew the same noise as the seeded twin, which " +
+                "means the generator state crossed the payload -- the one value that " +
+                "must never be written down.");
+        }
     }
 }

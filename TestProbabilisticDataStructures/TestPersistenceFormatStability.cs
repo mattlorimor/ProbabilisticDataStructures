@@ -326,6 +326,54 @@ namespace TestProbabilisticDataStructures
                 "the stored sketch's summaries no longer match its keys");
         }
 
+        /// <summary>
+        /// The stored private sketch still reads, counters and all. The estimate is
+        /// pinned exactly rather than to a tolerance: the bytes are fixed, so the
+        /// noise in them is fixed, and the whole point of writing the counters rather
+        /// than a seed is that the answer cannot move.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredPrivateCountMinSketchStillReads()
+        {
+            var sketch = PrivateCountMinSketch.ReadFrom(
+                Fixture("privatecountminsketch-v1.bin"));
+
+            Assert.AreEqual(64U, sketch.Width);
+            Assert.AreEqual(4U, sketch.Depth);
+            Assert.AreEqual(0.5, sketch.Rho);
+            Assert.AreEqual(5000UL, sketch.TotalCount());
+
+            // Two hundred and fifty distinct keys, each added twenty times.
+            Assert.AreEqual(60.99662491197003, sketch.Count(Key("item-0")),
+                "the stored sketch no longer answers with the noise it was written " +
+                "with, which means the counters are being read differently");
+        }
+
+        /// <summary>
+        /// The stored window still reads, with its substreams, its checkpoint plan --
+        /// which is recomputed on read rather than stored -- and its estimates. If the
+        /// plan derivation ever changes, this fails, which is the point: the stored
+        /// counters are laid out in plan order, so a different plan reads them into
+        /// the wrong segments while the bytes stay perfectly valid.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredDpswSketchStillReads()
+        {
+            var sketch = DpswSketch.ReadFrom(Fixture("dpswsketch-v1.bin"));
+
+            Assert.AreEqual(128L, sketch.Window);
+            Assert.AreEqual(1.0, sketch.Rho);
+            Assert.AreEqual(256L, sketch.Position);
+            Assert.AreEqual(30, sketch.SubstreamSize);
+            Assert.HasCount(6, sketch.Checkpointing);
+            Assert.AreEqual(55, sketch.SketchesHeld);
+
+            Assert.AreEqual(21.1711091838772, sketch.Count(Key("item-0")),
+                "the stored window no longer answers as written");
+            Assert.AreEqual(6.784935661383209, sketch.Count(Key("item-7")),
+                "the stored window no longer answers as written");
+        }
+
         [TestMethod]
         public void TestStoredSetSketchStillReads()
         {
@@ -755,6 +803,23 @@ namespace TestProbabilisticDataStructures
             }
 
             AssertBytes("setsketch-v1.bin", setSketch.ToByteArray());
+
+            var priv = new PrivateCountMinSketch(64, 4, 0.5, seed: 20260818);
+            for (var i = 0; i < 5000; i++)
+            {
+                priv.Add(Key($"item-{i % 250}"));
+            }
+
+            AssertBytes("privatecountminsketch-v1.bin", priv.ToByteArray());
+
+            var dpsw = new DpswSketch(
+                window: 128, rho: 1.0, alpha: 0.5, width: 8, depth: 2, seed: 20260818);
+            for (var i = 0; i < 256; i++)
+            {
+                dpsw.Add(Key($"item-{i % 20}"));
+            }
+
+            AssertBytes("dpswsketch-v1.bin", dpsw.ToByteArray());
 
             var sublime = new SublimeCountMinSketch(0.02);
             for (var i = 0; i < 6000; i++)

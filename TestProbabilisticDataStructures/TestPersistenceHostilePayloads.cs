@@ -855,5 +855,114 @@ namespace TestProbabilisticDataStructures
                     "growth exponent");
             }
         }
+
+        /// <summary>
+        /// The guard the private sketch exists for. A counter is a draw from a
+        /// continuous distribution plus a whole number of hits, so it is non-integral
+        /// with probability one and stays so for the sketch's whole life. A payload
+        /// whose every counter is an exact integer is a plain Count-Min Sketch wearing
+        /// this one's name -- it protects nobody, and reading it would hand back a
+        /// structure whose entire contract is silently false.
+        /// <para>
+        /// The payload is rewritten counter by counter with the noise floored away,
+        /// which is precisely what a sketch built with the mechanism disabled would
+        /// have written, and the checksum repaired so the guard is what refuses it.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestAPrivateSketchWithNoNoiseIsRefused()
+        {
+            var sketch = new PrivateCountMinSketch(16, 3, 0.5, seed: 99);
+            for (var i = 0; i < 200; i++)
+            {
+                sketch.Add(Key($"item-{i}"));
+            }
+
+            var bytes = sketch.ToByteArray();
+
+            // Shape is four u32/u64 fields: width, depth, rho, count.
+            const int CountersAt = 4 + 4 + 8 + 8;
+            for (var i = 0; i < 16 * 3; i++)
+            {
+                var at = PayloadStart + CountersAt + (i * 8);
+                var counter = BitConverter.ToDouble(bytes, at);
+                BinaryPrimitives.WriteDoubleLittleEndian(
+                    bytes.AsSpan(at), Math.Floor(counter));
+            }
+            RepairChecksum(bytes);
+
+            AssertRefused(
+                () => Persistence.FromByteArray<PrivateCountMinSketch>(bytes),
+                "exact integer");
+        }
+
+        /// <summary>
+        /// The same guard reached through a DPSW payload, which holds its private
+        /// sketches inline. Every counter in every nested sketch is floored, which is
+        /// what a window built with the mechanism disabled would have written.
+        /// <para>
+        /// The payload is walked field by field rather than scanned at a fixed stride:
+        /// a stride guesses at where the doubles are, and the first draft of this test
+        /// guessed wrong, flooring the window length itself and getting refused for
+        /// the wrong reason. Walking it means the bytes edited are exactly the
+        /// counters and nothing else.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestADpswWindowWithNoNoiseIsRefused()
+        {
+            var sketch = new DpswSketch(
+                window: 256, rho: 1.0, alpha: 0.5, width: 16, depth: 3, seed: 7);
+            for (var i = 0; i < 400; i++)
+            {
+                sketch.Add(Key($"item-{i % 40}"));
+            }
+
+            var bytes = sketch.ToByteArray();
+            var planLength = 1 + (2 * (sketch.Checkpointing.Length - 1));
+
+            // window(8) rho(8) alpha(8) substreamSize(4) width(4) depth(4) position(8)
+            var at = PayloadStart + 44;
+            var substreamCount = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at));
+            at += 4;
+
+            var floored = 0;
+            for (var s = 0u; s < substreamCount; s++)
+            {
+                at += 12;  // start(8) held(4)
+
+                for (var p = 0; p < planLength; p++)
+                {
+                    var width = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at));
+                    var depth = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at + 4));
+                    at += 24;  // width(4) depth(4) rho(8) count(8)
+
+                    for (var c = 0; c < width * depth; c++)
+                    {
+                        var counter = BitConverter.ToDouble(bytes, at);
+                        BinaryPrimitives.WriteDoubleLittleEndian(
+                            bytes.AsSpan(at), Math.Floor(counter));
+                        if (counter != Math.Floor(counter))
+                        {
+                            floored++;
+                        }
+                        at += 8;
+                    }
+                }
+            }
+
+            Assert.AreEqual(bytes.Length - 4, at,
+                "the walk did not land exactly on the trailing checksum, so the " +
+                "layout assumed here is not the layout written.");
+            Assert.IsGreaterThan(0, floored,
+                "no non-integral counter was found, so nothing was disabled and the " +
+                "guard below is asserted on air.");
+
+            RepairChecksum(bytes);
+
+            AssertRefused(
+                () => Persistence.FromByteArray<DpswSketch>(bytes),
+                "exact integer");
+        }
     }
 }

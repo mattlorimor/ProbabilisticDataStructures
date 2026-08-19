@@ -42,6 +42,8 @@ namespace ProbabilisticDataStructures
         SublimeCountMinSketch = 29,
         SetSketch = 30,
         TupleSketch = 31,
+        PrivateCountMinSketch = 32,
+        DpswSketch = 33,
     }
 
     /// <summary>
