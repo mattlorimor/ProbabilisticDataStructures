@@ -733,6 +733,13 @@ back off, and recover the exact counts, which is the whole guarantee gone. A ske
 back therefore has no seed at all. It can be queried and it can keep counting, because
 adding touches no randomness.
 
+The counters are noise, and that noise is drawn through `Math.Log`, which .NET does not
+guarantee to be bit-identical across platforms. Two sketches built from the same seed on
+different operating systems can therefore differ in the last bit of a counter. This costs
+nothing on the read side — loading a payload compares and adds stored doubles and touches
+no transcendental function, so a stored sketch answers identically everywhere — but it
+does mean these payloads have no byte-exact write fixture, only a pinned layout.
+
 A reader rejects a sketch with no rows or no columns, a budget that is not a positive
 finite number, and any counter that is infinite or not a number.
 

@@ -272,6 +272,20 @@ rather than contorting a test to kill them.
 
 ## Persistence
 
+- **A payload full of transcendentally-derived floating point cannot have a
+  byte-exact write fixture.** `Math.Log`, `Math.Pow` and `Math.Exp` are not
+  guaranteed bit-identical across platforms in .NET — only `Math.Sqrt` and plain
+  arithmetic are correctly rounded. The private structures' payloads are mostly
+  Gaussian noise drawn through `Math.Log`, and their first write fixture passed on
+  macOS and failed on Linux *and* Windows at one counter, one unit apart in the low
+  byte of a double. Note which way the luck ran: the `PrivateCountMinSketch` fixture
+  passed everywhere, and would have sat in the suite as a latent failure waiting for
+  a runtime update. Both were replaced by *layout* pins — the payload's exact length,
+  which catches a field added, dropped or a seed quietly written — with reordering
+  still caught by the read fixtures, since those decode old bytes into the wrong
+  places. Reading is unaffected: it compares and adds stored doubles and touches no
+  transcendental, so a stored sketch answers identically everywhere.
+
 - **Bytes read forever; written bytes may change.** Golden fixtures pin both
   directions separately: `thetasketch-v1.bin` is the read-side witness (bytes 6.0.0
   wrote must load forever), `thetasketch-v1b.bin` pins the current writer. A bug fix

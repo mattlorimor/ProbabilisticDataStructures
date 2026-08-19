@@ -332,6 +332,71 @@ namespace TestProbabilisticDataStructures
         /// noise in them is fixed, and the whole point of writing the counters rather
         /// than a seed is that the answer cannot move.
         /// </summary>
+        /// <summary>
+        /// Why the two private structures have a read fixture but no write fixture.
+        /// <para>
+        /// Their payloads are mostly Gaussian noise, and that noise is drawn through
+        /// <c>Math.Log</c>, which .NET does not guarantee to be bit-identical across
+        /// platforms -- only <c>Math.Sqrt</c> and plain arithmetic are correctly
+        /// rounded. A byte-exact write fixture is therefore not a well-defined promise
+        /// for them: the first version of this file had one, it passed on macOS, and
+        /// it failed on Linux and Windows at a single counter, one unit apart in the
+        /// low byte of a double.
+        /// </para>
+        /// <para>
+        /// Reading is unaffected, which is why the read fixtures stay and are the
+        /// direction that matters: loading a payload compares and adds stored doubles
+        /// and touches no transcendental function, so a stored sketch answers
+        /// identically everywhere. What the write side can still promise is the
+        /// <i>layout</i> -- that the payload is exactly its header, shape and
+        /// counters, with no room for anything else. That is pinned here by length,
+        /// which is what would catch a field added, dropped, or a seed quietly
+        /// written; and a field reordered without changing the length is caught by the
+        /// read fixtures, which would then decode the old bytes into the wrong places.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestTheNoisyStructuresPinTheirLayoutRatherThanTheirBytes()
+        {
+            var priv = new PrivateCountMinSketch(64, 4, 0.5, seed: 20260818);
+            for (var i = 0; i < 5000; i++)
+            {
+                priv.Add(Key($"item-{i % 250}"));
+            }
+
+            // 14 bytes of header, 4 of checksum; body is width, depth (4 each), rho,
+            // count (8 each), then one double per counter.
+            Assert.HasCount(
+                14 + 4 + 4 + 4 + 8 + 8 + (64 * 4 * 8), priv.ToByteArray(),
+                "the private sketch's payload is no longer exactly its header, shape " +
+                "and counters, so something else is being written -- and the one " +
+                "thing that must never be written is the seed.");
+
+            var dpsw = new DpswSketch(
+                window: 128, rho: 1.0, alpha: 0.5, width: 8, depth: 2, seed: 20260818);
+            for (var i = 0; i < 256; i++)
+            {
+                dpsw.Add(Key($"item-{i % 20}"));
+            }
+
+            // Header is window, rho, alpha (8, 8, 8), substreamSize, width, depth
+            // (4 each), position (8), then the substream count (4); each substream is
+            // start (8) and held (4) followed by one sketch body per planned segment.
+            var planLength = 1 + (2 * (dpsw.Checkpointing.Length - 1));
+            var sketchBody = 4 + 4 + 8 + 8 + (8 * 2 * 8);
+            var substreams = dpsw.SketchesHeld / planLength;
+
+            Assert.AreEqual(dpsw.SketchesHeld, substreams * planLength,
+                "the sketches held are not a whole number of plans, so the layout " +
+                "asserted below is not the layout written.");
+            Assert.HasCount(
+                14 + 4 + 44 + 4 + (substreams * (12 + (planLength * sketchBody))),
+                dpsw.ToByteArray(),
+                "the window's payload is no longer exactly its header, its substreams " +
+                "and their counters. A generator state written alongside them would " +
+                "show up here.");
+        }
+
         [TestMethod]
         public void TestStoredPrivateCountMinSketchStillReads()
         {
@@ -804,22 +869,9 @@ namespace TestProbabilisticDataStructures
 
             AssertBytes("setsketch-v1.bin", setSketch.ToByteArray());
 
-            var priv = new PrivateCountMinSketch(64, 4, 0.5, seed: 20260818);
-            for (var i = 0; i < 5000; i++)
-            {
-                priv.Add(Key($"item-{i % 250}"));
-            }
+            // The two private structures have no write fixture, deliberately. See
+            // TestTheNoisyStructuresPinTheirLayoutRatherThanTheirBytes.
 
-            AssertBytes("privatecountminsketch-v1.bin", priv.ToByteArray());
-
-            var dpsw = new DpswSketch(
-                window: 128, rho: 1.0, alpha: 0.5, width: 8, depth: 2, seed: 20260818);
-            for (var i = 0; i < 256; i++)
-            {
-                dpsw.Add(Key($"item-{i % 20}"));
-            }
-
-            AssertBytes("dpswsketch-v1.bin", dpsw.ToByteArray());
 
             var sublime = new SublimeCountMinSketch(0.02);
             for (var i = 0; i < 6000; i++)
