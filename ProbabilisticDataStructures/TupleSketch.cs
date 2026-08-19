@@ -91,6 +91,16 @@ namespace ProbabilisticDataStructures
         /// The keys the sketch is holding, so that tests can check a summary still sits
         /// beside the key it belongs to.
         /// </summary>
+        /// <summary>Theta itself, so tests can pin it to the order statistic.</summary>
+        internal ulong ThetaValue
+        {
+            get
+            {
+                this.EnsureCompact();
+                return this.theta;
+            }
+        }
+
         internal ulong[] KeysHeld
         {
             get
