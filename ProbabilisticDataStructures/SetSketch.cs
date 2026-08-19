@@ -48,6 +48,9 @@ namespace ProbabilisticDataStructures
         private readonly int q;
         private readonly double lnBase;
 
+        /// <summary>Which construction draws this sketch's runs of hash values.</summary>
+        private readonly SetSketchVariant variant;
+
         /// <summary>
         /// A value no register is below.
         /// </summary>
@@ -175,10 +178,23 @@ namespace ProbabilisticDataStructures
         /// <param name="hash">
         /// The hash function to use, or null for the default.
         /// </param>
+        /// <param name="variant">
+        /// Which of the paper's two constructions draws the runs of hash values.
+        /// The default keeps the registers independent, which is what makes the
+        /// estimators exact rather than approximate; see <see cref="SetSketchVariant"/>.
+        /// </param>
         public SetSketch(
             int registers, double b, double a, int q,
-            Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            Func<ReadOnlySpan<byte>, ulong>? hash = null,
+            SetSketchVariant variant = SetSketchVariant.SetSketch1)
         {
+            if (variant != SetSketchVariant.SetSketch1
+                && variant != SetSketchVariant.SetSketch2)
+            {
+                throw new ArgumentOutOfRangeException(nameof(variant),
+                    variant, "The paper describes two constructions, and this is " +
+                    "neither of them.");
+            }
             if (registers < 1)
             {
                 throw new ArgumentOutOfRangeException(nameof(registers),
@@ -215,6 +231,7 @@ namespace ProbabilisticDataStructures
             this.pass = 0;
             this.lowerBound = 0;
             this.updatesUntilRescan = registers;
+            this.variant = variant;
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
         }
 
@@ -229,6 +246,9 @@ namespace ProbabilisticDataStructures
 
         /// <summary>The largest value a register may hold, less one.</summary>
         public int MaxRegisterValue => this.q;
+
+        /// <summary>Which of the paper's two constructions this sketch uses.</summary>
+        public SetSketchVariant Variant => this.variant;
 
         /// <summary>How many bytes the registers occupy.</summary>
         public long SizeInBytes => (long)this.m * sizeof(ushort);
@@ -276,8 +296,29 @@ namespace ProbabilisticDataStructures
             var x = 0.0;
             for (var i = 0; i < this.m; i++)
             {
-                this.drawn++;
-                x += Exponential(ref random) / (this.a * (this.m - i));
+                if (this.variant == SetSketchVariant.SetSketch1)
+                {
+                    this.drawn++;
+                    x += Exponential(ref random) / (this.a * (this.m - i));
+                }
+                else
+                {
+                    // The i-th point cannot fall below the i-th interval's start, and
+                    // the register value a point earns falls as the point rises. So if
+                    // the interval's start alone already fails to beat the bound,
+                    // nothing drawn from this interval or any later one can beat it,
+                    // and the element is finished without spending a draw at all.
+                    // This is where SetSketch2's speed actually comes from: the bound
+                    // is a deterministic function of the interval, and SetSketch1 has
+                    // no equivalent -- its next point is not known until it is drawn.
+                    if (ValueFor(IntervalStart(this.m, this.a, i)) <= this.lowerBound)
+                    {
+                        return this;
+                    }
+
+                    this.drawn++;
+                    x = this.IntervalPoint(ref random, i);
+                }
 
                 var k = ValueFor(x);
                 if (k <= this.lowerBound)
@@ -290,6 +331,60 @@ namespace ProbabilisticDataStructures
 
             return this;
         }
+
+        /// <summary>
+        /// SetSketch2's draw: one point from the i-th of the m disjoint intervals the
+        /// exponential's domain is cut into.
+        /// </summary>
+        /// <remarks>
+        /// The paper puts the boundaries at gamma_j = ln(1 + j/(m-j)) / a, which is
+        /// ln(m/(m-j)) / a, and draws x_j from an exponential truncated to
+        /// [gamma_(j-1), gamma_j). Writing that out, the truncated draw's rate over the
+        /// i-th interval is ln((m-i)/(m-i-1)) and the mass it spans is 1/(m-i), so
+        /// inverting its distribution leaves one expression:
+        /// <code>
+        ///   x = ( ln(m/(m-i)) - ln(1 - u/(m-i)) ) / a
+        /// </code>
+        /// <para>
+        /// At i = m-1 the last interval runs to infinity, and the reference
+        /// implementation draws it as gamma + Exp(a) rather than as a truncated
+        /// exponential. It does not need a separate case here: at i = m-1 the term
+        /// 1 - u/(m-i) is exactly 1 - u, so the expression above already <i>is</i>
+        /// gamma + Exp(a). One line covers all m intervals, and that agreement is
+        /// checked as a test rather than asserted here.
+        /// </para>
+        /// <para>
+        /// Successive points still ascend, because the i-th lies inside the i-th
+        /// interval and the intervals ascend. That is what lets the caller stop at the
+        /// first value too large to matter, exactly as it does for SetSketch1.
+        /// </para>
+        /// </remarks>
+        private double IntervalPoint(ref SeededRandom random, int i)
+        {
+            // One less the uniform value for the same reason Exponential does it: the
+            // generator's range includes nought, and at i = m-1 a u of exactly one
+            // would ask for the logarithm of nought.
+            return PointInInterval(this.m, this.a, i, 1 - random.NextDouble());
+        }
+
+        /// <summary>
+        /// The point SetSketch2 draws from the i-th interval, given a uniform value.
+        /// Separated from the draw so that a test can hold it to the paper's two-case
+        /// definition at chosen inputs rather than to itself.
+        /// </summary>
+        internal static double PointInInterval(int m, double a, int i, double u)
+        {
+            var remaining = (double)(m - i);
+            return (Math.Log(m / remaining) - Math.Log(1 - (u / remaining))) / a;
+        }
+
+        /// <summary>
+        /// Where the i-th of SetSketch2's m intervals begins: the paper's
+        /// gamma_i = ln(1 + i/(m-i)) / a, written as ln(m/(m-i)) / a. Every point drawn
+        /// from this interval or a later one is at least this large.
+        /// </summary>
+        internal static double IntervalStart(int m, double a, int i) =>
+            Math.Log(m / (double)(m - i)) / a;
 
         /// <summary>
         /// Estimates how many distinct elements have been added.
@@ -563,6 +658,19 @@ namespace ProbabilisticDataStructures
             payload.WriteUInt32((uint)this.m);
             payload.WriteUInt32((uint)this.q);
 
+            // The variant is written only when it is not the default one, and the
+            // version bumped only then. A sketch built the way every sketch was built
+            // before this variant existed still writes the bytes it always wrote, and
+            // still loads in a library too old to know there was a choice. Bumping
+            // unconditionally would make every SetSketch payload unreadable to those
+            // libraries to record a change that the sketches in them did not make.
+            var version = PersistenceFormat.DefaultVersion;
+            if (this.variant != SetSketchVariant.SetSketch1)
+            {
+                payload.WriteByte((byte)this.variant);
+                version = PersistenceFormat.SetSketchVariantVersion;
+            }
+
             foreach (var register in this.registers)
             {
                 payload.WriteUInt16(register);
@@ -572,7 +680,8 @@ namespace ProbabilisticDataStructures
                 stream,
                 StructureId.SetSketch,
                 PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+                payload.WrittenSpan,
+                version);
         }
 
         /// <summary>
@@ -601,13 +710,31 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var payload = PersistenceFormat.Read(
-                stream, StructureId.SetSketch, out var hashId);
+                stream, StructureId.SetSketch, out var hashId, out var version);
             var reader = new PayloadReader(payload);
 
             var b = reader.ReadDouble();
             var a = reader.ReadDouble();
             var m = reader.ReadUInt32();
             var q = reader.ReadUInt32();
+
+            // Payloads written before the second variant existed carry no variant byte
+            // and are the first variant by definition, which is what keeps them
+            // readable rather than merely tolerated.
+            var variant = SetSketchVariant.SetSketch1;
+            if (version >= PersistenceFormat.SetSketchVariantVersion)
+            {
+                var stored = reader.ReadByte();
+                if (stored != (byte)SetSketchVariant.SetSketch2)
+                {
+                    throw new InvalidDataException(
+                        $"Sketch names construction {stored}. A payload at version " +
+                        $"{version} carries a variant byte, and the only one it is " +
+                        "written with is the second construction -- the first writes " +
+                        "no byte at all.");
+                }
+                variant = SetSketchVariant.SetSketch2;
+            }
 
             if (double.IsNaN(b) || b <= 1 || b > 2)
             {
@@ -637,7 +764,8 @@ namespace ProbabilisticDataStructures
 
             var sketch = new SetSketch(
                 (int)m, b, a, (int)q,
-                PersistenceFormat.ResolveOrThrow(hashId, hash));
+                PersistenceFormat.ResolveOrThrow(hashId, hash),
+                variant);
 
             for (var i = 0; i < m; i++)
             {
@@ -699,6 +827,21 @@ namespace ProbabilisticDataStructures
                     $"base {this.b}, rate {this.a} and ceiling {this.q} against " +
                     $"{other.m}, {other.b}, {other.a} and {other.q}. A register only " +
                     "means the same thing in two sketches that agree on all four.",
+                    paramName);
+            }
+
+            // The merge's promise is that the result is the sketch adding both sets to
+            // one sketch would have built. Across variants there is no such sketch --
+            // one sketch draws its runs one way or the other, not both -- so the
+            // promise cannot be kept and the merge is refused rather than quietly
+            // returning something that only looks right.
+            if (this.variant != other.variant)
+            {
+                throw new ArgumentException(
+                    $"One sketch is {this.variant} and the other {other.variant}. " +
+                    "Merging promises the sketch that adding both sets to a single " +
+                    "sketch would have built, and no single sketch draws its hash " +
+                    "values both ways.",
                     paramName);
             }
         }

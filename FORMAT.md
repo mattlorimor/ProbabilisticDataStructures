@@ -715,6 +715,21 @@ read another", so a small count costs as much as one memento and a large one sti
 A reader rejects an impossible memento width, a chain of no tables or absurdly many, a
 table with more entries than slots, and a word count disagreeing with the shape claimed.
 
+### `SetSketch` variants
+
+A sketch built with the paper's **second** construction writes one extra byte after the
+ceiling, naming the construction, at format version 4. A sketch built with the first
+writes no such byte and stays at version 1 — the layout it has always written.
+
+The asymmetry is deliberate. Writing the byte unconditionally would raise the version of
+every `SetSketch` payload, making them unreadable to libraries that predate the choice,
+to record a decision those sketches did not make. A payload with no variant byte is the
+first construction by definition, which is what keeps old data readable rather than
+merely tolerated.
+
+A reader at version 4 or above rejects any variant byte other than the second
+construction's, since the first writes none.
+
 ### `PrivateCountMinSketch` (id 32)
 
 ```
