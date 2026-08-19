@@ -49,6 +49,26 @@ namespace ProbabilisticDataStructures
 
         internal Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
 
+        /// <summary>Theta itself, so tests can pin it to the order statistic.</summary>
+        internal ulong ThetaValue
+        {
+            get
+            {
+                this.EnsureCompact();
+                return this.theta;
+            }
+        }
+
+        /// <summary>The values held, compacted, so tests can pin what a trim kept.</summary>
+        internal ulong[] ValuesHeld
+        {
+            get
+            {
+                this.EnsureCompact();
+                return this.values.AsSpan(0, this.held).ToArray();
+            }
+        }
+
         /// <summary>
         /// Creates a sketch retaining the given number of hash values.
         /// </summary>

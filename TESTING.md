@@ -122,6 +122,57 @@ empirical test in the suite; only the formula assertions caught them. Measuring 
 outcome cannot see a quietly-degraded structure. Comparing the size against the
 closed form can.
 
+### Anchor outside your own reading
+
+Every test above shares an author with the code it checks. Round trips, merge
+identities, model oracles, worked examples derived while implementing -- each is
+an internal anchor: if the paper was misread, the test was written from the same
+misreading, and the two agree with each other instead of with the paper. This is
+not hypothetical. Sublime's counter encoding was caught with digits 1 and 2
+swapped behind a worked-example test derived from the same wrong reading, seven
+of its eight tests passing; the persistence corruption tests for three
+structures died at the checksum while asserting they tested the guards behind
+it; DPSW's budget series summed to twice the budget under a misread exponent
+with every utility test green.
+
+The defence is a second derivation that did not pass through this repository:
+values the paper itself prints, a reference implementation's arithmetic, or --
+weakest but real -- the golden bytes this library wrote in an earlier version,
+which anchor today's reading to yesterday's. The external-anchor tests (the
+sizing rules in `TestStructureGeometry`, the estimator pipelines in
+`TestHyperLogLogInternals`, `TestHyperLogLogPlus` and `TestDDSketch`, the
+order-statistic pins in the theta sketches) restate printed formulas and
+evaluate them at hand-checked points, and each header says which source the
+numbers came from and when it was checked against that source.
+
+Two adjudications from the pass that added these are worth keeping:
+
+- **A self-consistent offset can survive everything but the stored bytes.**
+  Shifting every DDSketch bucket index up by one and the reported midpoint down
+  to match passes 844 of 846 tests -- including the new anchor rows, which see
+  the same right answers. The two that fail are the persistence fixtures.
+  Behavioral equivalence is not format equivalence: the fixtures own the paper's
+  index convention, and regenerating them to green a build is how that ownership
+  would be silently signed away.
+
+- **A term can be real code and still be untestable where you first look.**
+  HLL++'s tau correction rides 2^-(64-p): at precision 12, deleting it entirely
+  survived, twelve orders of magnitude below the harmonic term. The state where
+  tau carries ten percent of the denominator needs precision 18 and 194,000
+  registers parked at value 46. A survivor is not always an equivalent mutant --
+  sometimes it is a test parameterized where the mutation cannot matter.
+
+Where no external source exists, no external anchor is possible, and the honest
+move is to say so rather than dress an internal test as one. KeepsakeBox, the
+Buckets bit-packing, the Bloomier filter's encoding and the inverse Bloom
+filter are this repository's own designs: their golden fixtures pin that the
+format is stable, not that it is right, because there is nothing outside the
+repository for them to be right against. The quotient filter's model oracle
+recomputes every fingerprint independently but was written by the same hand as
+the filter; the stable filter is anchored to its own measured behavior, which
+catches the formula disagreeing with the mechanism but not both agreeing on a
+misreading. These are the structures where a second reader adds the most.
+
 ## Mutation testing
 
 Manual, targeted mutation is part of every test commit (step 3 of the loop). Whole-file

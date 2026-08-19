@@ -243,5 +243,183 @@ namespace TestProbabilisticDataStructures
                 $"n={n} p={fpRate}: packing must actually save something against the " +
                 $"byte-aligned {byteAligned} bytes, or there is nothing to justify it.");
         }
+
+        /// <summary>
+        /// Count-Min width is ceil(e/epsilon) and depth is ceil(ln(1/delta)) -- Theorem
+        /// 1 of Cormode and Muthukrishnan, "An Improved Data Stream Summary: The
+        /// Count-Min Sketch and its Applications" (2005). The e is Euler's constant,
+        /// not a typo for 2: the error bound is proved through Markov's inequality
+        /// with e as the base that makes ln(1/delta) rows suffice. A sketch built with
+        /// 2/epsilon columns is 26% narrower, overcounts proportionally more, and
+        /// passes every behavioral bound in this suite regardless, because the bound
+        /// tests carry the slack the loose inequality forces on them. Only this
+        /// restatement notices.
+        /// <para>
+        /// The last two rows straddle the ceilings: e/0.0271 = 100.3 rounds up to 101
+        /// where e/0.0272 = 99.94 rounds to 100, and ln(1/0.05) = 2.996 stays at
+        /// depth 3 where ln(1/0.049) = 3.016 forces 4. An implementation that floors,
+        /// rounds, or drops the ceiling entirely agrees with ceil on almost every
+        /// input; these are chosen from the inputs on which it cannot.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [DataRow(0.01, 0.01, 272u, 5u)]
+        [DataRow(0.001, 0.02, 2719u, 4u)]
+        [DataRow(0.1, 0.001, 28u, 7u)]
+        [DataRow(0.0271, 0.05, 101u, 3u)]
+        [DataRow(0.0272, 0.049, 100u, 4u)]
+        public void TestCountMinGeometryMatchesThePaper(
+            double epsilon, double delta, uint expectedWidth, uint expectedDepth)
+        {
+            var cms = new CountMinSketch(epsilon, delta);
+
+            Assert.AreEqual((uint)Math.Ceiling(Math.E / epsilon), cms.Width,
+                $"e={epsilon}: width must be ceil(e/epsilon), with e Euler's constant.");
+            Assert.AreEqual(expectedWidth, cms.Width,
+                $"e={epsilon}: the formula evaluated by hand gives {expectedWidth}.");
+
+            Assert.AreEqual((uint)Math.Ceiling(Math.Log(1 / delta)), cms.Depth,
+                $"d={delta}: depth must be ceil(ln(1/delta)), the natural logarithm.");
+            Assert.AreEqual(expectedDepth, cms.Depth,
+                $"d={delta}: the formula evaluated by hand gives {expectedDepth}.");
+        }
+
+        /// <summary>
+        /// The fuse filter's segment geometry is the reference implementation's
+        /// arithmetic -- binary_fuse_calculate_segment_length and _size_factor in
+        /// FastFilter's binaryfusefilter.h, verified against the source 2026-08-18:
+        /// for arity 3, a segment length of 2^floor(ln(n)/ln(3.33) + 2.25) capped at
+        /// 2^18, and a size factor of max(1.125, 0.875 + 0.25 ln(10^6)/ln(n)). The
+        /// constants are empirical fits from the paper's authors; nothing rederives
+        /// them, so nothing but this restatement would notice 3.33 becoming 3.
+        /// <para>
+        /// n = 3565 is chosen because ln(3565)/ln(3.33) has fractional part 0.80,
+        /// inside the [0.75, 1) band where floor(x + 2.25) and floor(x + 2.0)
+        /// disagree; every rounder n in this list is blind to that edit.
+        /// </para>
+        /// <para>
+        /// n = 1 and n = 4 pin the small-set path, where the segment subtraction
+        /// underflows by design and the clamp turns the wreckage into one segment.
+        /// The restatement reproduces the underflow rather than special-casing it,
+        /// because the reference behaves this way and the implementation documents
+        /// itself as following the reference.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [DataRow(1u)]
+        [DataRow(4u)]
+        [DataRow(1000u)]
+        [DataRow(3565u)]
+        [DataRow(65536u)]
+        [DataRow(1000000u)]
+        public void TestBinaryFuseGeometryMatchesTheReferenceImplementation(uint n)
+        {
+            var keys = new System.Collections.Generic.List<byte[]>();
+            for (uint i = 0; i < n; i++)
+            {
+                keys.Add(System.Text.Encoding.ASCII.GetBytes($"geometry-{i}"));
+            }
+            var f = BinaryFuseFilter.Build(keys);
+
+            var segmentLength = n == 0
+                ? 4u
+                : Math.Min(262144u, 1u << (int)Math.Floor(Math.Log(n) / Math.Log(3.33) + 2.25));
+            var factor = n <= 1
+                ? 0
+                : Math.Max(1.125, 0.875 + (0.25 * Math.Log(1000000.0) / Math.Log(n)));
+            var capacity = n <= 1 ? 0 : (uint)Math.Round(n * factor);
+
+            uint arrayLength;
+            unchecked
+            {
+                var initialSegments = ((capacity + segmentLength - 1) / segmentLength) - 2;
+                arrayLength = (initialSegments + 2) * segmentLength;
+            }
+            var segmentCount = (arrayLength + segmentLength - 1) / segmentLength;
+            segmentCount = segmentCount <= 2 ? 1u : segmentCount - 2;
+            arrayLength = (segmentCount + 2) * segmentLength;
+
+            Assert.AreEqual(segmentLength, f.SegmentLengthChosen,
+                $"n={n}: segment length must be 2^floor(ln(n)/ln(3.33) + 2.25).");
+            Assert.AreEqual(segmentCount, f.SegmentCountChosen,
+                $"n={n}: segment count must follow the reference derivation.");
+            Assert.AreEqual(arrayLength, f.ArrayLengthChosen,
+                $"n={n}: array length must be (segments + 2) segment lengths.");
+        }
+
+        /// <summary>
+        /// Each filter a scalable Bloom filter adds is built to the rate p0*r^i --
+        /// section 3 of Almeida, Baquero, Preguica and Hutchison, "Scalable Bloom
+        /// Filters" (2007), where the compounded rate telescopes to at most
+        /// p0/(1-r). The series is only observable through the geometry the rate
+        /// buys, so the assertion goes through OptimalK and OptimalM, which the
+        /// tests above hold to their own papers. With p0 = 0.05 and r = 0.8, k
+        /// crosses a ceiling boundary between filters 2 and 3 (log2(1/rate) passes
+        /// 5), so a mutation that stops tightening -- r^i frozen at r, or applied to
+        /// the wrong exponent -- shifts the transition and fails.
+        /// <para>
+        /// The paper also grows each successive filter's capacity geometrically.
+        /// This implementation adds fixed-size filters instead and only tightens the
+        /// rates; the union bound the series exists for cares about the rates alone,
+        /// so that is what this pins.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestScalableFilterRatesFollowTheTighteningSeries()
+        {
+            var s = new ScalableBloomFilter(1000, 0.05, 0.8);
+            for (int i = 0; i < 5000; i++)
+            {
+                s.Add(System.Text.Encoding.ASCII.GetBytes($"series-{i}"));
+            }
+
+            Assert.IsGreaterThanOrEqualTo(4, s.Filters.Count,
+                "5,000 additions against a 1,000-item hint must force at least four " +
+                "filters, or the series below is asserted on air.");
+
+            double compounded = 0;
+            for (int i = 0; i < s.Filters.Count; i++)
+            {
+                var rate = 0.05 * Math.Pow(0.8, i);
+                compounded += rate;
+
+                Assert.AreEqual(Utils.OptimalK(rate), s.Filters[i].PartitionCount,
+                    $"filter {i} must be built with k for the tightened rate 0.05*0.8^{i}.");
+                Assert.AreEqual(Utils.OptimalM(1000, rate), s.Filters[i].BitCount,
+                    $"filter {i} must be sized for the tightened rate 0.05*0.8^{i}.");
+            }
+
+            Assert.IsLessThan(0.05 / (1 - 0.8), compounded,
+                "the compounded rate must stay below p0/(1-r), the geometric series " +
+                "bound the tightening exists to enforce.");
+        }
+
+        /// <summary>
+        /// An invertible Bloom lookup table can only list its contents while it has
+        /// more than c4 = 1.295 cells per entry -- the 2-core threshold for four
+        /// hashes, Table 1 of Goodrich and Mitzenmacher, "Invertible Bloom Lookup
+        /// Tables" (2011). The 1.5 the sizing uses is that threshold plus margin.
+        /// Nothing else fails fast if the margin is edited away: listing degrades
+        /// probabilistically, at scale, in someone else's diff.
+        /// </summary>
+        [TestMethod]
+        public void TestIbltProvisioningClearsThePeelingThreshold()
+        {
+            Assert.IsGreaterThanOrEqualTo(1.295, InvertibleBloomLookupTable.CellsPerDifference,
+                "cells per difference must clear the four-hash 2-core threshold " +
+                "c4 = 1.295, below which listEntries stops succeeding with high " +
+                "probability.");
+
+            foreach (var d in new uint[] { 3, 50, 1000 })
+            {
+                var t = new InvertibleBloomLookupTable(d, 8);
+                Assert.AreEqual((uint)Math.Ceiling(d * 1.5), t.CellCount,
+                    $"d={d}: the table must provision ceil(1.5d) cells.");
+            }
+
+            Assert.AreEqual(4u, new InvertibleBloomLookupTable(2, 8).CellCount,
+                "two differences ask for three cells, but four hashes need four " +
+                "distinct cells to land in, so the hash count is the floor.");
+        }
     }
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.IO;
+using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 
@@ -474,6 +475,204 @@ namespace TestProbabilisticDataStructures
             crc.Append(bytes.AsSpan(4, bytes.Length - 8));
             BinaryPrimitives.WriteUInt32LittleEndian(
                 bytes.AsSpan(bytes.Length - 4), crc.GetCurrentHashAsUInt32());
+        }
+
+        /// <summary>
+        /// Ertl's sigma function, restated from equation 33 of "New cardinality
+        /// estimation algorithms for HyperLogLog sketches" (2017), verified against
+        /// the paper 2026-08-18: sigma(x) = x + sum over k of x^(2^k) * 2^(k-1),
+        /// diverging at x = 1. This is the zero-register correction that replaces
+        /// linear counting in the dense estimator.
+        /// </summary>
+        private static double ErtlSigma(double x)
+        {
+            if (x == 1.0)
+            {
+                return double.PositiveInfinity;
+            }
+
+            double z = x, y = 1.0, previous;
+            do
+            {
+                x *= x;
+                previous = z;
+                z += x * y;
+                y += y;
+            }
+            while (previous != z);
+            return z;
+        }
+
+        /// <summary>
+        /// Ertl's tau function in the numerically stable form of equation 37:
+        /// tau(x) = (1 - x - sum over k of (1 - x^(2^-k))^2 * 2^-k) / 3. This is the
+        /// saturated-register correction that replaces the classic large-range
+        /// correction.
+        /// </summary>
+        private static double ErtlTau(double x)
+        {
+            if (x == 0.0 || x == 1.0)
+            {
+                return 0.0;
+            }
+
+            double y = 1.0, z = 1 - x, previous;
+            do
+            {
+                x = Math.Sqrt(x);
+                previous = z;
+                y *= 0.5;
+                z -= Math.Pow(1 - x, 2) * y;
+            }
+            while (previous != z);
+            return z / 3.0;
+        }
+
+        /// <summary>
+        /// The full estimator of Ertl's equation 32, from the register histogram:
+        /// alpha_inf * m^2 / (m*sigma(C0/m) + sum C_k 2^-k + m*tau(1 - C_(q+1)/m) * 2^-q),
+        /// with alpha_inf = 1/(2 ln 2). Summed here in the opposite order from the
+        /// implementation's Horner fold, deliberately: agreement then says the fold
+        /// computes the printed series, not merely something self-consistent.
+        /// </summary>
+        private static double ErtlEstimate(byte[] registers, int q)
+        {
+            var m = (double)registers.Length;
+            var counts = new int[q + 2];
+            foreach (var r in registers)
+            {
+                counts[r]++;
+            }
+
+            var denominator = m * ErtlTau(1 - (counts[q + 1] / m)) * Math.Pow(2, -q);
+            for (var k = q; k >= 1; k--)
+            {
+                denominator += counts[k] * Math.Pow(2, -k);
+            }
+            denominator += m * ErtlSigma(counts[0] / m);
+
+            return 1.0 / (2.0 * Math.Log(2)) * registers.Length * registers.Length / denominator;
+        }
+
+        /// <summary>
+        /// An estimator forced dense: 9,000 distinct items cannot fit the sparse
+        /// form's budget at precision 12, so the registers exist and can be crafted.
+        /// </summary>
+        private static HyperLogLogPlus DenseEstimator()
+        {
+            var hll = new HyperLogLogPlus(12);
+            for (int i = 0; i < 9000; i++)
+            {
+                hll.Add(Encoding.ASCII.GetBytes($"dense-{i}"));
+            }
+            Assert.IsFalse(hll.IsSparse,
+                "9,000 distinct items must force the dense form, or nothing below " +
+                "tests dense at all.");
+            return hll;
+        }
+
+        /// <summary>
+        /// The dense estimator against Ertl's printed pipeline on four crafted
+        /// register states: a mixed state that exercises only the harmonic series, a
+        /// half-zeros state where sigma carries the answer, a state with saturated
+        /// registers present (whose tau contribution at q = 52 sits twelve orders
+        /// below the harmonic term -- the state where tau actually carries weight
+        /// needs precision 18 and lives in the next test), and the empty state,
+        /// which must answer exactly zero because sigma(1) diverges.
+        /// <para>
+        /// No behavioral test can check this estimator against anything but itself:
+        /// its whole claim is to be less biased than the raw formula, and bias this
+        /// small only shows against the closed form. The alpha_inf constant is
+        /// 1/(2 ln 2) = 0.7213475...; the truncated 0.7213 an older HLL formula uses
+        /// moves the mixed row by one count in fifteen thousand, and only exact
+        /// agreement with the restated series notices.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestDenseEstimateIsErtlsPrintedFormula()
+        {
+            var hll = DenseEstimator();
+            var registers = hll.DenseRegisterState!;
+            var q = 64 - 12;
+
+            for (int i = 0; i < registers.Length; i++)
+            {
+                registers[i] = (byte)(1 + (i % 7));
+            }
+            Assert.AreEqual((ulong)Math.Round(ErtlEstimate(registers, q)), hll.Count(),
+                "mixed registers: the estimate must be equation 32 to the digit.");
+
+            for (int i = 0; i < registers.Length; i++)
+            {
+                registers[i] = (byte)(i % 2 == 0 ? 0 : 3);
+            }
+            var zeros = ErtlEstimate(registers, q);
+            Assert.IsGreaterThan(0, Array.IndexOf(registers, (byte)0) + 1,
+                "the sigma row must actually contain zero registers.");
+            Assert.AreEqual((ulong)Math.Round(zeros), hll.Count(),
+                "half-zero registers: sigma must carry the estimate, per equation 33.");
+
+            for (int i = 0; i < registers.Length; i++)
+            {
+                registers[i] = (byte)(i % 8 == 0 ? q + 1 : 2);
+            }
+            Assert.IsGreaterThan(0, Array.IndexOf(registers, (byte)(q + 1)) + 1,
+                "the saturation row must actually contain saturated registers.");
+            Assert.AreEqual((ulong)Math.Round(ErtlEstimate(registers, q)), hll.Count(),
+                "saturated registers present: the estimate must still be equation 32.");
+
+            Array.Clear(registers);
+            Assert.AreEqual(0UL, hll.Count(),
+                "all-zero registers: sigma(1) diverges and the estimate must be " +
+                "exactly zero, not merely small.");
+        }
+
+        /// <summary>
+        /// The state where tau genuinely carries the estimate. At precision 12 the
+        /// tau term is scaled by 2^-52 and contributes twelve orders of magnitude
+        /// below the harmonic term -- dropping it entirely is invisible to Count()
+        /// there, a fact the first mutation run against these anchors demonstrated.
+        /// At precision 18 (q = 46), 194,000 registers at value 46 and the remaining
+        /// 68,144 saturated at 47 put tau at 10% of the denominator with the
+        /// estimate at 1.62e19, still inside ulong: dropping the tau term moves the
+        /// answer to 1.80e19, and feeding tau the count at q instead of q+1 moves it
+        /// comparably. The tolerance is 4,096 counts -- two ulps of a double at that
+        /// magnitude, against a mutation displacement of 1.8e18.
+        /// </summary>
+        [TestMethod]
+        public void TestTauCarriesTheEstimateWhenRegistersSaturate()
+        {
+            var hll = new HyperLogLogPlus(18);
+            for (int i = 0; i < 40000; i++)
+            {
+                hll.Add(Encoding.ASCII.GetBytes($"tau-{i}"));
+            }
+            Assert.IsFalse(hll.IsSparse,
+                "40,000 distinct items must force the dense form at precision 18.");
+
+            var registers = hll.DenseRegisterState!;
+            var q = 64 - 18;
+            for (int i = 0; i < registers.Length; i++)
+            {
+                registers[i] = (byte)(i < 194000 ? q : q + 1);
+            }
+
+            var m = (double)registers.Length;
+            var tauTerm = m * ErtlTau(1 - ((m - 194000) / m)) * Math.Pow(2, -q);
+            var harmonic = 194000 * Math.Pow(2, -q);
+            var expected = 1.0 / (2.0 * Math.Log(2)) * m * m / (tauTerm + harmonic);
+
+            Assert.IsGreaterThan(0.05, tauTerm / (tauTerm + harmonic),
+                "tau must carry at least 5% of the denominator, or this row pins " +
+                "the harmonic series a second time and the tau mutations survive.");
+            Assert.IsLessThan((double)ulong.MaxValue, expected,
+                "the crafted estimate must fit a ulong, or saturation hides the " +
+                "comparison entirely.");
+
+            Assert.IsLessThanOrEqualTo(4096.0, Math.Abs(hll.Count() - expected),
+                "with saturated registers dominating, the estimate must be " +
+                "equation 32 with tau evaluated at 1 - C_(q+1)/m, to within two " +
+                "ulps of a double at 1.6e19.");
         }
     }
 }

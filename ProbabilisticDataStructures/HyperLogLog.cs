@@ -78,6 +78,12 @@ namespace ProbabilisticDataStructures
         /// Number of registers
         /// </summary>
         internal uint M { get; set; }
+
+        /// <summary>
+        /// The raw registers, so tests can put the estimator into a crafted state
+        /// and hold Count() to the paper's printed formulas.
+        /// </summary>
+        internal byte[] RegisterState => this.Registers;
         /// <summary>
         /// Number of bits to calculate register
         /// </summary>

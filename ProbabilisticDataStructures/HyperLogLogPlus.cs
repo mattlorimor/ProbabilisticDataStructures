@@ -89,6 +89,12 @@ namespace ProbabilisticDataStructures
         internal bool IsSparse => this.sparse is not null;
 
         /// <summary>
+        /// The dense registers, so tests can put the estimator into a crafted state
+        /// and hold Count() to Ertl's printed formulas. Null while sparse.
+        /// </summary>
+        internal byte[]? DenseRegisterState => this.registers;
+
+        /// <summary>
         /// Creates an estimator with the given precision.
         /// </summary>
         /// <param name="precision">

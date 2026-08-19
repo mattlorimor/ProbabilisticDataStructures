@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.IO;
+using System.Linq;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -502,5 +503,53 @@ namespace TestProbabilisticDataStructures
             Assert.IsLessThan(1024ul, new ThetaSketch(K).SizeInBytes());
         }
 
+
+        /// <summary>
+        /// Theta after a trim must be exactly the (k+1)-th smallest distinct hash of
+        /// the stream, and the survivors exactly the k below it. This is the
+        /// unbiased KMV estimator -- DataSketches' "better estimator" (K-1)/V(K),
+        /// Beyer et al. 2007 -- written with K = k+1: retain k values strictly below
+        /// the (k+1)-th order statistic and estimate k divided by that statistic's
+        /// fraction of the hash space.
+        /// <para>
+        /// The characterization tests cannot see this: "the values held are exactly
+        /// the input hashes below theta" is just as true of a sketch that sets theta
+        /// to the k-th smallest and keeps k-1 -- self-consistent, biased by one part
+        /// in k, and invisible to every behavioral test at any realistic k. The
+        /// order statistic has to be computed by something that is not the trim
+        /// code, which is what the independent sort below is.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestThetaIsTheKPlusFirstSmallestHash()
+        {
+            const uint k = 32;
+            var sketch = new ThetaSketch(k);
+
+            var hashes = new ulong[2 * k];
+            for (var i = 0; i < 2 * k; i++)
+            {
+                var key = System.Text.Encoding.ASCII.GetBytes($"order-statistic-{i}");
+                hashes[i] = sketch.Hash(key);
+                sketch.Add(key);
+            }
+
+            var sorted = hashes.Distinct().OrderBy(h => h).ToArray();
+            Assert.HasCount((int)(2 * k), sorted,
+                "the 64 keys must hash distinctly, or the stream never reaches the " +
+                "trim and theta is asserted on air.");
+
+            Assert.AreEqual(sorted[k], sketch.ThetaValue,
+                "theta must be the (k+1)-th smallest hash the stream produced -- " +
+                "the k-th leaves a sample the stated rate was never applied to.");
+            CollectionAssert.AreEqual(sorted.Take((int)k).ToArray(), sketch.ValuesHeld,
+                "the survivors must be exactly the k hashes below theta, in order.");
+
+            var expected = (ulong)Math.Round(
+                k / (sorted[k] / 18446744073709551616.0));
+            Assert.AreEqual(expected, sketch.Count(),
+                "the estimate must be k over theta's fraction of the hash space, " +
+                "the unbiased (K-1)/V(K) form.");
+        }
     }
 }

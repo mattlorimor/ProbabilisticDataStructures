@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -573,6 +574,51 @@ namespace TestProbabilisticDataStructures
 
             Assert.AreEqual(0UL, read.Count());
             Assert.AreEqual(0.0, read.Total());
+        }
+
+        /// <summary>
+        /// The same order-statistic pin TestThetaSketch carries, because TupleSketch
+        /// trims with its own copy of the rule: theta becomes the (k+1)-th smallest
+        /// distinct hash, the k keys below it survive, and each keeps the summary
+        /// that was folded for it. The pairing matters as much as the rule -- a trim
+        /// that sorts keys without carrying summaries, or off by one slot, leaves
+        /// every surviving key wearing a neighbor's value, which no theta-side test
+        /// can notice.
+        /// </summary>
+        [TestMethod]
+        public void TestThetaIsTheKPlusFirstSmallestHashAndSummariesFollow()
+        {
+            const uint k = 32;
+            var sketch = new TupleSketch(k);
+
+            var hashes = new ulong[2 * k];
+            var values = new System.Collections.Generic.Dictionary<ulong, double>();
+            for (var i = 0; i < 2 * k; i++)
+            {
+                var key = System.Text.Encoding.ASCII.GetBytes($"order-statistic-{i}");
+                hashes[i] = sketch.Hash(key);
+                values[hashes[i]] = 10.0 * i;
+                sketch.Add(key, 10.0 * i);
+            }
+
+            var sorted = hashes.Distinct().OrderBy(h => h).ToArray();
+            Assert.HasCount((int)(2 * k), sorted,
+                "the 64 keys must hash distinctly, or the stream never reaches the " +
+                "trim and theta is asserted on air.");
+
+            Assert.AreEqual(sorted[k], sketch.ThetaValue,
+                "theta must be the (k+1)-th smallest hash the stream produced.");
+            CollectionAssert.AreEqual(sorted.Take((int)k).ToArray(), sketch.KeysHeld,
+                "the survivors must be exactly the k hashes below theta, in order.");
+
+            var keys = sketch.KeysHeld;
+            var summaries = sketch.SummariesHeld;
+            for (var i = 0; i < keys.Length; i++)
+            {
+                Assert.AreEqual(values[keys[i]], summaries[i],
+                    $"survivor {i} must keep the summary folded for its own key, " +
+                    "not a neighbor's.");
+            }
         }
     }
 }

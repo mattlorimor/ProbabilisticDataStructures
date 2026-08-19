@@ -560,5 +560,65 @@ namespace TestProbabilisticDataStructures
                 bytes.AsSpan(bytes.Length - 4), crc.GetCurrentHashAsUInt32());
         }
 
+
+        /// <summary>
+        /// The bucket pipeline held to the paper's printed formulas -- Masson, Rim
+        /// and Lee, "DDSketch" (VLDB 2019), section 2, verified against the paper
+        /// 2026-08-18: gamma = (1+a)/(1-a), a value x lands in bucket
+        /// i = ceil(log_gamma(x)) covering (gamma^(i-1), gamma^i], and the bucket
+        /// answers 2*gamma^i/(gamma+1). At a = 0.5 every one of those is exact in
+        /// floating point (gamma is exactly 3), so the expected answers are literals
+        /// and the assertions are equality.
+        /// <para>
+        /// No behavioral test can pin this: the mapping and its inverse share any
+        /// offset, so a sketch that buckets by floor, or shifts every index by one
+        /// and reports the bucket below, still answers within its accuracy bound --
+        /// self-consistently wrong the same way on both sides. Only evaluating the
+        /// printed formulas at hand-checked points notices. The rows at 8, 9 and
+        /// 9.0001 straddle the gamma^2 = 9 boundary: the interval is right-closed,
+        /// so 9 answers with bucket 2 and 9.0001 with bucket 3, and a mapping that
+        /// flips ceil to floor moves 10 from 13.5 to 4.5 while leaving 9 alone.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [DataRow(0.5, 0.5)]
+        [DataRow(2.0, 1.5)]
+        [DataRow(8.0, 4.5)]
+        [DataRow(9.0, 4.5)]
+        [DataRow(9.0001, 13.5)]
+        [DataRow(10.0, 13.5)]
+        [DataRow(27.0, 13.5)]
+        [DataRow(100.0, 121.5)]
+        [DataRow(-10.0, -13.5)]
+        public void TestBucketsAnswerThePapersMidpoint(double value, double expected)
+        {
+            var sketch = new DDSketch(0.5);
+            sketch.Add(value);
+
+            Assert.AreEqual(expected, sketch.Quantile(0.5),
+                $"a lone {value} lives in bucket ceil(log3(|{value}|)) and every " +
+                $"quantile of it must answer the bucket's 2*3^i/4 = {expected}, " +
+                "mirrored for negatives, exactly.");
+        }
+
+        /// <summary>
+        /// The quantile walk in bucket order, at the same hand-checked points: 2, 10
+        /// and 100 land in buckets 1, 3 and 5, so the median must be bucket 3's
+        /// 13.5 -- not an interpolation, not a neighbor. A walk that misorders
+        /// buckets or miscounts ranks lands on 1.5 or 121.5, both far outside any
+        /// tolerance this could have hidden behind.
+        /// </summary>
+        [TestMethod]
+        public void TestTheQuantileWalkAnswersTheMiddleBucket()
+        {
+            var sketch = new DDSketch(0.5);
+            sketch.Add(2);
+            sketch.Add(10);
+            sketch.Add(100);
+
+            Assert.AreEqual(13.5, sketch.Quantile(0.5),
+                "the median of one value each in buckets 1, 3 and 5 must be bucket " +
+                "3's midpoint.");
+        }
     }
 }

@@ -59,6 +59,12 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private uint count { get; set; }
 
+        /// <summary>How many bits the filter holds across every partition, for tests.</summary>
+        internal uint BitCount => this.M;
+
+        /// <summary>How many hash functions (and partitions) the filter uses, for tests.</summary>
+        internal uint PartitionCount => this.k;
+
         /// <summary>
         /// Creates a new partitioned Bloom filter optimized to store n items with a
         /// specified target false-positive rate.

@@ -89,6 +89,15 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal int AttemptsUsed { get; private set; }
 
+        /// <summary>The chosen segment length, for the geometry tests.</summary>
+        internal uint SegmentLengthChosen => this.segmentLength;
+
+        /// <summary>How many logical segments the array spans, for the geometry tests.</summary>
+        internal uint SegmentCountChosen => this.segmentCount;
+
+        /// <summary>How many fingerprint slots the array holds, for the geometry tests.</summary>
+        internal uint ArrayLengthChosen => this.arrayLength;
+
         /// <summary>Bytes per fingerprint, which the width fixes at one or two.</summary>
         private int Stride => (int)this.width / 8;
 
