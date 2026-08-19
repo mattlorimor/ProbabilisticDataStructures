@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`DpswSketch` and `PrivateCountMinSketch` now persist**, which every other structure
+  here already did. The counters are written and the seed never is: the counters already
+  carry their noise, so a payload of them reveals no more than the live structure does,
+  while anyone holding the seed could regenerate that noise, subtract it off, and recover
+  the exact counts. A `PrivateCountMinSketch` read back can be queried *and* can keep
+  counting, because adding touches no randomness.
+  <br><br>
+  A `DpswSketch` read back draws a fresh unpredictable generator for the substreams it
+  goes on to build. That is sound rather than convenient: a substream's sketches are all
+  built when the substream begins, so the new generator only ever serves substreams
+  starting after the read, and those cover items disjoint from everything already
+  written — and privacy composes in parallel over disjoint data, taking a maximum rather
+  than a sum. The cost is that reproducibility does not survive a round trip, which is
+  pinned as a test rather than left to be discovered. The segment plan is not written
+  either; it is recomputed, so a payload cannot express a budget split that fails to sum
+  to the whole.
+  <br><br>
+  Both readers refuse a payload whose counters are all exact integers — the shape of a
+  sketch written with no noise. A counter is a continuous draw plus a whole number of
+  hits, so it is non-integral with probability one and stays so for the sketch's life;
+  reading an all-integer payload would hand back a structure whose entire contract is
+  silently false. (#120)
+
 - **`DpswSketch`** and **`PrivateCountMinSketch`**, frequency estimation over a sliding
   window that is differentially private (Wang, Wang and Chen, KDD 2024). The first
   structures here whose contract is a privacy guarantee rather than an error rate.

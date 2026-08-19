@@ -234,6 +234,43 @@ namespace TestProbabilisticDataStructures
         }
 
         [TestMethod]
+        public void TestPrivateCountMinSketchRoundTrips()
+        {
+            var f = new PrivateCountMinSketch(128, 4, 0.5, seed: 8);
+            for (var i = 0; i < 5_000; i++) f.Add(Key($"item-{i % 200}"));
+
+            var r = RoundTrip(f);
+
+            Assert.AreEqual(f.Width, r.Width);
+            Assert.AreEqual(f.Depth, r.Depth);
+            Assert.AreEqual(f.Rho, r.Rho);
+            Assert.AreEqual(f.TotalCount(), r.TotalCount());
+            for (var i = 0; i < 200; i++)
+            {
+                Assert.AreEqual(f.Count(Key($"item-{i}")), r.Count(Key($"item-{i}")));
+            }
+        }
+
+        [TestMethod]
+        public void TestDpswSketchRoundTrips()
+        {
+            var f = new DpswSketch(
+                window: 400, rho: 1.0, alpha: 0.5, width: 32, depth: 3, seed: 8);
+            for (var i = 0; i < 700; i++) f.Add(Key($"item-{i % 40}"));
+
+            var r = RoundTrip(f);
+
+            Assert.AreEqual(f.Window, r.Window);
+            Assert.AreEqual(f.Rho, r.Rho);
+            Assert.AreEqual(f.Position, r.Position);
+            Assert.AreEqual(f.SketchesHeld, r.SketchesHeld);
+            for (var i = 0; i < 40; i++)
+            {
+                Assert.AreEqual(f.Count(Key($"item-{i}")), r.Count(Key($"item-{i}")), 1e-9);
+            }
+        }
+
+        [TestMethod]
         public void TestSetSketchRoundTrips()
         {
             var f = new SetSketch(256, 1.05, 20, 30_000);
@@ -594,6 +631,9 @@ namespace TestProbabilisticDataStructures
                 ("Grafite", Grafite.Build(new ulong[] { 1, 2, 3 }, 0.01, 16, seed: 1).ToByteArray()),
                 ("InfiniFilter", new InfiniFilter(64, 8).Add(Key("a")).ToByteArray()),
                 ("MementoFilter", new MementoFilter(256, 8).Add(5).ToByteArray()),
+                ("PrivateCountMinSketch",
+                    new PrivateCountMinSketch(16, 2, 0.5, seed: 1).Add(Key("a")).ToByteArray()),
+                ("DpswSketch", FilledDpsw()),
             };
 
             // Read every payload as a BloomFilter; only its own may succeed.
@@ -658,6 +698,9 @@ namespace TestProbabilisticDataStructures
                 ("Grafite", b => Persistence.FromByteArray<Grafite>(b), FilledGrafite()),
                 ("InfiniFilter", b => Persistence.FromByteArray<InfiniFilter>(b), FilledInfiniFilter()),
                 ("MementoFilter", b => Persistence.FromByteArray<MementoFilter>(b), FilledMementoFilter()),
+                ("PrivateCountMinSketch", b => Persistence.FromByteArray<PrivateCountMinSketch>(b),
+                    FilledPrivateSketch()),
+                ("DpswSketch", b => Persistence.FromByteArray<DpswSketch>(b), FilledDpsw()),
             };
 
             foreach (var (name, read, clean) in payloads)
@@ -671,6 +714,24 @@ namespace TestProbabilisticDataStructures
                         $"{name}: a flipped bit at offset {i} was not caught");
                 }
             }
+        }
+
+        private static byte[] FilledPrivateSketch()
+        {
+            var f = new PrivateCountMinSketch(8, 2, 0.5, seed: 3);
+            for (var i = 0; i < 40; i++) f.Add(Key($"item-{i % 8}"));
+            return f.ToByteArray();
+        }
+
+        private static byte[] FilledDpsw()
+        {
+            // Small on purpose: the distance-one sweep flips every bit of the payload
+            // one at a time, and a window holds a private sketch per checkpoint per
+            // substream, so a realistic one runs to hundreds of kilobytes.
+            var f = new DpswSketch(
+                window: 16, rho: 4.0, alpha: 0.6, width: 4, depth: 2, seed: 3);
+            for (var i = 0; i < 20; i++) f.Add(Key($"item-{i % 5}"));
+            return f.ToByteArray();
         }
 
         private static byte[] FilledMementoFilter()

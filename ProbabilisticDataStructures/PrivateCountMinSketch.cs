@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 
 namespace ProbabilisticDataStructures
 {
@@ -40,7 +41,7 @@ namespace ProbabilisticDataStructures
     /// stream sketched again under a fresh seed.
     /// </para>
     /// </remarks>
-    public class PrivateCountMinSketch
+    public class PrivateCountMinSketch : IBinaryPersistable<PrivateCountMinSketch>
     {
         private readonly double[][] matrix;
         private readonly uint width;
@@ -261,6 +262,178 @@ namespace ProbabilisticDataStructures
 
         private uint ColumnOf(in HashKernelReturnValue kernel, uint row) =>
             (uint)((kernel.LowerBaseHash + (kernel.UpperBaseHash * row)) % this.width);
+
+        /// <summary>
+        /// Writes this sketch to a stream, in the format documented in FORMAT.md.
+        /// </summary>
+        /// <remarks>
+        /// <b>The seed is not written, and must never be.</b> The counters are safe to
+        /// write because they already carry the noise: a payload of them reveals no
+        /// more than the live sketch does. The seed is the opposite -- anyone holding
+        /// it can regenerate the noise, subtract it back off, and recover the exact
+        /// counts, which is the entire guarantee gone. So a sketch read back has no
+        /// seed at all. It can be queried, and it can keep counting, because adding
+        /// touches no randomness; what it cannot do is tell anyone where its noise
+        /// came from.
+        /// </remarks>
+        /// <param name="stream">The stream to write to.</param>
+        public void WriteTo(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = new PayloadWriter();
+            this.WriteBody(payload);
+
+            PersistenceFormat.Write(
+                stream,
+                StructureId.PrivateCountMinSketch,
+                PersistenceFormat.Identify(this.Hash),
+                payload.WrittenSpan);
+        }
+
+        /// <summary>
+        /// Reads a sketch written by <see cref="WriteTo"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <returns>The sketch that was written, with no seed.</returns>
+        public static PrivateCountMinSketch ReadFrom(Stream stream)
+        {
+            return Read(stream, null);
+        }
+
+        /// <summary>
+        /// Reads a sketch written by <see cref="WriteTo"/>, using the supplied hash
+        /// function rather than the one named in the payload.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function the sketch was written with.</param>
+        /// <returns>The sketch that was written, with no seed.</returns>
+        public static PrivateCountMinSketch ReadFrom(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            return Read(stream, hash);
+        }
+
+        private static PrivateCountMinSketch Read(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.PrivateCountMinSketch, out var hashId);
+            var reader = new PayloadReader(payload);
+
+            return ReadBody(ref reader, PersistenceFormat.ResolveOrThrow(hashId, hash));
+        }
+
+        /// <summary>
+        /// Reads the body of a sketch from a payload already positioned at one, so that
+        /// <see cref="DpswSketch"/> can read the sketches it holds without each one
+        /// carrying its own frame.
+        /// </summary>
+        internal static PrivateCountMinSketch ReadBody(
+            ref PayloadReader reader, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            var width = reader.ReadUInt32();
+            var depth = reader.ReadUInt32();
+            var rho = reader.ReadDouble();
+            var count = reader.ReadUInt64();
+
+            if (width == 0 || depth == 0)
+            {
+                throw new InvalidDataException(
+                    $"Sketch has a {depth} by {width} matrix. A sketch with no rows " +
+                    "reports every item as seen infinitely often, and one with no " +
+                    "columns divides by zero.");
+            }
+            if (double.IsNaN(rho) || rho <= 0 || double.IsInfinity(rho))
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims a privacy budget of {rho}. It has to be a positive " +
+                    "number: at nought the noise would be infinite and at infinity " +
+                    "there would be none, and neither is a sketch.");
+            }
+
+            var matrix = new double[depth][];
+            var anyNoise = false;
+
+            for (var i = 0; i < depth; i++)
+            {
+                matrix[i] = new double[width];
+                for (var j = 0; j < width; j++)
+                {
+                    var counter = reader.ReadDouble();
+                    if (double.IsNaN(counter) || double.IsInfinity(counter))
+                    {
+                        throw new InvalidDataException(
+                            $"Counter [{i}][{j}] is {counter}. A counter is a noise " +
+                            "draw plus a count, and neither can be infinite or " +
+                            "not a number.");
+                    }
+
+                    matrix[i][j] = counter;
+                    anyNoise |= counter != Math.Floor(counter);
+                }
+            }
+
+            // A counter is a draw from a continuous distribution plus a whole number of
+            // hits, so it is non-integral with probability one, and stays so for the
+            // sketch's whole life. A payload whose every counter is an exact integer is
+            // therefore not one this mechanism produced: it is a plain Count-Min Sketch
+            // wearing this one's name, and it protects nobody. Reading it would hand
+            // back a structure whose entire contract is silently false, so it is
+            // refused here rather than believed.
+            if (!anyNoise)
+            {
+                throw new InvalidDataException(
+                    $"Every one of the {(long)depth * width} counters is an exact " +
+                    "integer, which is what a sketch written without noise looks like. " +
+                    "A private sketch's counters are a continuous draw plus a count, " +
+                    "so at least one is non-integral with probability one. Refusing " +
+                    "rather than handing back a sketch that guarantees nothing.");
+            }
+
+            return new PrivateCountMinSketch(width, depth, rho, count, matrix, hash);
+        }
+
+        /// <summary>
+        /// Used only by the read path, which supplies counters that already carry their
+        /// noise. The public constructor draws that noise, which is exactly what
+        /// restoring a sketch must not do.
+        /// </summary>
+        private PrivateCountMinSketch(
+            uint width, uint depth, double rho, ulong count,
+            double[][] matrix, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            this.width = width;
+            this.depth = depth;
+            this.rho = rho;
+            this.count = count;
+            this.matrix = matrix;
+            this.Hash = hash;
+        }
+
+        /// <summary>
+        /// Writes the body of this sketch into a payload already being written, so that
+        /// <see cref="DpswSketch"/> can hold sketches without each carrying its own
+        /// frame. The seed is no more written here than it is by <see cref="WriteTo"/>.
+        /// </summary>
+        internal void WriteBody(PayloadWriter payload)
+        {
+            payload.WriteUInt32(this.width);
+            payload.WriteUInt32(this.depth);
+            payload.WriteDouble(this.rho);
+            payload.WriteUInt64(this.count);
+
+            for (var i = 0; i < this.depth; i++)
+            {
+                for (var j = 0; j < this.width; j++)
+                {
+                    payload.WriteDouble(this.matrix[i][j]);
+                }
+            }
+        }
 
         /// <summary>
         /// One draw from the standard normal distribution.

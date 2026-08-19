@@ -715,6 +715,88 @@ read another", so a small count costs as much as one memento and a large one sti
 A reader rejects an impossible memento width, a chain of no tables or absurdly many, a
 table with more entries than slots, and a word count disagreeing with the shape claimed.
 
+### `PrivateCountMinSketch` (id 32)
+
+```
+u32     counters per row
+u32     rows
+f64     the zero-concentrated privacy budget the noise was drawn for
+u64     items added
+        per row, per counter:
+f64       the counter, which is a noise draw plus a count
+```
+
+**The seed is not written, and must never be.** The counters are safe to write because
+they already carry the noise: a payload of them reveals no more than the live sketch
+does. The seed is the opposite — anyone holding it can regenerate the noise, subtract it
+back off, and recover the exact counts, which is the whole guarantee gone. A sketch read
+back therefore has no seed at all. It can be queried and it can keep counting, because
+adding touches no randomness.
+
+The counters are noise, and that noise is drawn through `Math.Log`, which .NET does not
+guarantee to be bit-identical across platforms. Two sketches built from the same seed on
+different operating systems can therefore differ in the last bit of a counter. This costs
+nothing on the read side — loading a payload compares and adds stored doubles and touches
+no transcendental function, so a stored sketch answers identically everywhere — but it
+does mean these payloads have no byte-exact write fixture, only a pinned layout.
+
+A reader rejects a sketch with no rows or no columns, a budget that is not a positive
+finite number, and any counter that is infinite or not a number.
+
+It also rejects a payload whose counters are **all exact integers**. A counter is a draw
+from a continuous distribution plus a whole number of hits, so it is non-integral with
+probability one, and stays so for the sketch's whole life. A payload without a single
+non-integral counter is therefore not one this mechanism produced — it is a plain
+`CountMinSketch` wearing this one's name, and reading it would hand back a structure
+whose entire contract is silently false. This is the one guard here that is
+probabilistic rather than structural: at a single counter it could in principle refuse a
+legitimate payload, with probability around 2^-53.
+
+### `DpswSketch` (id 33)
+
+```
+u64     the window, in items
+f64     the zero-concentrated privacy budget for the whole structure
+f64     the checkpoint factor
+u32     the substream size, in items
+u32     counters per row in every sketch
+u32     rows in every sketch
+u64     items seen in all
+u32     the number of substreams held
+        per substream:
+u64       the stream position it begins at
+u32       how many items it holds
+          per planned segment, in plan order:
+...         a PrivateCountMinSketch body, exactly as above
+```
+
+**Neither the generator nor the segment plan is written.** The generator is the secret,
+for the reason given above. The segment ranges and their budgets are a pure function of
+the substream size, the checkpoint factor and the budget — all of which *are* written —
+so recomputing them on read means a payload has **no way to express a budget split that
+does not sum to the whole**. Only the counters are stored, laid out in the order the
+plan produces its segments.
+
+A window read back draws a **fresh unpredictable generator** for the substreams it goes
+on to build. This is sound rather than merely convenient: a substream's sketches are all
+built at once, when the substream begins, so the new generator is only ever used for
+substreams starting after the read, and those cover items disjoint from everything
+already written. Differential privacy composes in parallel over disjoint data, taking a
+maximum rather than a sum — the same disjointness the smooth histogram already relies
+on. The cost is that **reproducibility does not survive a round trip**: a window built
+from a fixed seed, written and read back, will not produce the same noise for its later
+substreams. That is the price of not writing the secret down, and it is the right way
+round.
+
+A reader rejects a window shorter than one item, a budget or checkpoint factor outside
+its range, a substream size below one or larger than the window, sketches with no rows
+or columns, a negative position, substreams that do not follow one another in order, a
+substream holding nothing or more than its size, a substream ending past the items the
+window claims to have seen, and a nested sketch whose shape disagrees with the window's.
+It also applies the same refusal the constructor makes for a checkpoint factor whose
+leanest sketch would be drowned in its own noise, so that a payload is not a way around
+it — and every nested sketch carries the all-integers guard above.
+
 ## The random generator's state
 
 `StableBloomFilter` chooses which cells to decay and `CuckooBloomFilter` chooses which

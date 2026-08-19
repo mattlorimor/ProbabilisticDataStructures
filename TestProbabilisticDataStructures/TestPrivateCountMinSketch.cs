@@ -36,6 +36,8 @@ namespace TestProbabilisticDataStructures
     {
         private static byte[] Key(int i) => Encoding.UTF8.GetBytes("k" + i);
 
+        private static byte[] Key(string s) => Encoding.UTF8.GetBytes(s);
+
         private static double[] NoiseOf(PrivateCountMinSketch sketch) =>
             sketch.Counters.SelectMany(row => row).ToArray();
 
@@ -456,6 +458,101 @@ namespace TestProbabilisticDataStructures
             var (_, variance) = MomentsOf(one);
             Assert.AreEqual(4.0, variance, 4.0 * 0.15,
                 "An unseeded sketch drew noise of the wrong scale.");
+        }
+
+        /// <summary>
+        /// A sketch round-trips exactly: same shape, same budget, same count, and the
+        /// same answer for every item, because the counters carry their noise and the
+        /// noise is what is written.
+        /// </summary>
+        [TestMethod]
+        public void TestRoundTripsThroughPersistenceExactly()
+        {
+            var original = new PrivateCountMinSketch(64, 4, 0.5, seed: 12345);
+            for (var i = 0; i < 500; i++)
+            {
+                original.Add(Key($"item-{i % 50}"));
+            }
+
+            var restored = Persistence.FromByteArray<PrivateCountMinSketch>(
+                original.ToByteArray());
+
+            Assert.AreEqual(original.Width, restored.Width);
+            Assert.AreEqual(original.Depth, restored.Depth);
+            Assert.AreEqual(original.Rho, restored.Rho);
+            Assert.AreEqual(original.TotalCount(), restored.TotalCount());
+            Assert.AreEqual(original.NoiseDeviation, restored.NoiseDeviation);
+
+            for (var i = 0; i < 50; i++)
+            {
+                Assert.AreEqual(
+                    original.Count(Key($"item-{i}")), restored.Count(Key($"item-{i}")),
+                    $"item-{i} must estimate identically after a round trip.");
+            }
+
+            for (var i = 0; i < original.Depth; i++)
+            {
+                CollectionAssert.AreEqual(
+                    original.Counters[i], restored.Counters[i],
+                    $"row {i} must be restored counter for counter, noise included.");
+            }
+        }
+
+        /// <summary>
+        /// A restored sketch keeps counting. Adding touches no randomness -- it
+        /// increments counters that already carry their noise -- so a sketch with no
+        /// seed is a fully working sketch, not a read-only snapshot. This is the whole
+        /// reason the seed can be left out of the payload without crippling it.
+        /// </summary>
+        [TestMethod]
+        public void TestARestoredSketchKeepsCounting()
+        {
+            var original = new PrivateCountMinSketch(64, 4, 0.5, seed: 999);
+            for (var i = 0; i < 100; i++)
+            {
+                original.Add(Key("steady"));
+            }
+
+            var restored = Persistence.FromByteArray<PrivateCountMinSketch>(
+                original.ToByteArray());
+
+            var before = restored.Count(Key("steady"));
+            for (var i = 0; i < 100; i++)
+            {
+                restored.Add(Key("steady"));
+                original.Add(Key("steady"));
+            }
+
+            Assert.AreEqual(before + 100, restored.Count(Key("steady")), 1e-9,
+                "a restored sketch must count exactly as it did before being written.");
+            Assert.AreEqual(200UL, restored.TotalCount());
+            Assert.AreEqual(
+                original.Count(Key("steady")), restored.Count(Key("steady")), 1e-9,
+                "the restored sketch and the one it came from must stay in step, " +
+                "since neither draws randomness while counting.");
+        }
+
+        /// <summary>
+        /// The payload must not carry the seed, and the strongest available statement
+        /// of that is a size argument: the payload is exactly the header, the four
+        /// shape fields and the counters, with no room left for anything else. An
+        /// eight-byte seed appended -- the obvious way for one to creep in -- would
+        /// show up here as surely as it would show up in a diff.
+        /// </summary>
+        [TestMethod]
+        public void TestThePayloadHasNoRoomForASeed()
+        {
+            var sketch = new PrivateCountMinSketch(32, 3, 0.25, seed: 4242);
+            sketch.Add(Key("one"));
+
+            // Envelope is 14 bytes of header and 4 of checksum; the body is
+            // width, depth (4 each), rho, count (8 each), then the counters.
+            var expected = 14 + 4 + 4 + 4 + 8 + 8 + (32 * 3 * 8);
+
+            Assert.HasCount(expected, sketch.ToByteArray(),
+                "the payload is not exactly its header, shape and counters, which " +
+                "means something else is being written -- and the one thing that " +
+                "must never be written is the seed.");
         }
     }
 }

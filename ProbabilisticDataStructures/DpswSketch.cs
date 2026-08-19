@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 
 namespace ProbabilisticDataStructures
 {
@@ -38,7 +39,7 @@ namespace ProbabilisticDataStructures
     /// person's whole history.
     /// </para>
     /// </remarks>
-    public class DpswSketch
+    public class DpswSketch : IBinaryPersistable<DpswSketch>
     {
         /// <summary>One private sketch and the range of the substream it covers.</summary>
         private sealed class Segment
@@ -489,6 +490,262 @@ namespace ProbabilisticDataStructures
             }
 
             return planned;
+        }
+
+        /// <summary>
+        /// Writes this window to a stream, in the format documented in FORMAT.md.
+        /// </summary>
+        /// <remarks>
+        /// <b>The generator is not written, and must never be.</b> The counters carry
+        /// their noise already, so writing them reveals no more than the live structure
+        /// does; the generator is the one value that would let a holder regenerate that
+        /// noise and subtract it back off. A window read back therefore draws a fresh
+        /// unpredictable generator for the substreams it goes on to build. See
+        /// <see cref="ReadFrom(Stream)"/> for why that costs nothing.
+        /// <para>
+        /// Nor are the segment ranges and budgets written. They are a pure function of
+        /// the substream size, the checkpoint factor and the budget, all of which are
+        /// written -- so a payload has no way to express a budget split that does not
+        /// sum to the whole. Only the counters of each sketch are stored, in the order
+        /// the plan produces them.
+        /// </para>
+        /// </remarks>
+        /// <param name="stream">The stream to write to.</param>
+        public void WriteTo(Stream stream)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = new PayloadWriter();
+            payload.WriteUInt64((ulong)this.window);
+            payload.WriteDouble(this.rho);
+            payload.WriteDouble(this.alpha);
+            payload.WriteUInt32((uint)this.substreamSize);
+            payload.WriteUInt32(this.width);
+            payload.WriteUInt32(this.depth);
+            payload.WriteUInt64((ulong)this.position);
+
+            payload.WriteUInt32((uint)this.substreams.Count);
+            foreach (var substream in this.substreams)
+            {
+                payload.WriteUInt64((ulong)substream.Start);
+                payload.WriteUInt32((uint)substream.Held);
+
+                foreach (var segment in substream.Segments)
+                {
+                    segment.Sketch.WriteBody(payload);
+                }
+            }
+
+            PersistenceFormat.Write(
+                stream,
+                StructureId.DpswSketch,
+                PersistenceFormat.Identify(this.hash ?? Defaults.GetDefaultHashFunction()),
+                payload.WrittenSpan);
+        }
+
+        /// <summary>
+        /// Reads a window written by <see cref="WriteTo"/>.
+        /// </summary>
+        /// <remarks>
+        /// The window that comes back can be queried and can keep counting, including
+        /// across the substream boundaries still ahead of it. The noise for those
+        /// future substreams comes from a fresh unpredictable generator rather than the
+        /// one that produced the noise already in the payload.
+        /// <para>
+        /// <b>Why that is sound.</b> A substream's sketches are all built at once, when
+        /// the substream begins, so the fresh generator is only ever used for
+        /// substreams that start after the read. Those cover items disjoint from
+        /// everything already written, and differential privacy composes in parallel
+        /// over disjoint data -- the budgets take a maximum, not a sum. The guarantee
+        /// is the same one the smooth histogram already relies on.
+        /// </para>
+        /// <para>
+        /// <b>What it costs.</b> Reproducibility does not survive a round trip. A
+        /// window built from a fixed seed, written and read back, will not produce the
+        /// same noise for its later substreams as the original would have. That is the
+        /// price of not writing the secret down, and it is the right way round.
+        /// </para>
+        /// </remarks>
+        /// <param name="stream">The stream to read from.</param>
+        /// <returns>The window that was written, with a fresh generator.</returns>
+        public static DpswSketch ReadFrom(Stream stream)
+        {
+            return Read(stream, null);
+        }
+
+        /// <summary>
+        /// Reads a window written by <see cref="WriteTo"/>, using the supplied hash
+        /// function rather than the one named in the payload.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function the window was written with.</param>
+        /// <returns>The window that was written, with a fresh generator.</returns>
+        public static DpswSketch ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            return Read(stream, hash);
+        }
+
+        private static DpswSketch Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.DpswSketch, out var hashId);
+            var reader = new PayloadReader(payload);
+
+            var window = (long)reader.ReadUInt64();
+            var rho = reader.ReadDouble();
+            var alpha = reader.ReadDouble();
+            var substreamSize = (int)reader.ReadUInt32();
+            var width = reader.ReadUInt32();
+            var depth = reader.ReadUInt32();
+            var position = (long)reader.ReadUInt64();
+
+            if (window < 1)
+            {
+                throw new InvalidDataException(
+                    $"Window covers {window} items, and a window covers at least one.");
+            }
+            if (double.IsNaN(rho) || rho <= 0 || double.IsInfinity(rho))
+            {
+                throw new InvalidDataException(
+                    $"Window claims a privacy budget of {rho}, which has to be a " +
+                    "positive number.");
+            }
+            if (double.IsNaN(alpha) || alpha <= 0 || alpha >= 1)
+            {
+                throw new InvalidDataException(
+                    $"Window claims a checkpoint factor of {alpha}, which lies " +
+                    "strictly between nought and one.");
+            }
+            if (substreamSize < 1 || substreamSize > window)
+            {
+                throw new InvalidDataException(
+                    $"Window claims substreams of {substreamSize} items against a " +
+                    $"window of {window}. A substream holds at least one item and " +
+                    "never more than the window it divides.");
+            }
+            if (width == 0 || depth == 0)
+            {
+                throw new InvalidDataException(
+                    $"Window claims sketches of {depth} by {width}. A sketch needs at " +
+                    "least one counter and one row.");
+            }
+            if (position < 0)
+            {
+                throw new InvalidDataException(
+                    $"Window claims {position} items seen, which cannot be negative.");
+            }
+
+            var resolved = PersistenceFormat.ResolveOrThrow(hashId, hash);
+            var sketch = new DpswSketch(
+                window, rho, alpha, substreamSize, width, depth, resolved)
+            {
+                position = position,
+            };
+
+            // The same refusal the constructor makes, so a payload is not a way around
+            // it: a configuration whose leanest sketch is drowned in its own noise
+            // answers with thousands of counts of nothing.
+            var leanest = BudgetAt(sketch.checkpoints.Length, rho, alpha);
+            var worstDeviation = Math.Sqrt(depth / leanest);
+            if (worstDeviation > window)
+            {
+                throw new InvalidDataException(
+                    $"Window claims a checkpoint factor of {alpha}, which leaves its " +
+                    $"leanest sketch a budget of {leanest:E2} -- noise of deviation " +
+                    $"{worstDeviation:E2} against a window of {window} items. The " +
+                    "constructor refuses this shape, and a payload is not a way " +
+                    "around it.");
+            }
+
+            var plan = sketch.PlanFor(0);
+            var substreamCount = reader.ReadUInt32();
+            var previousStart = 0L;
+
+            for (var s = 0u; s < substreamCount; s++)
+            {
+                var start = (long)reader.ReadUInt64();
+                var held = (int)reader.ReadUInt32();
+
+                if (start <= previousStart)
+                {
+                    throw new InvalidDataException(
+                        $"Substream {s} starts at {start}, which does not follow the " +
+                        $"one before it at {previousStart}. Substreams divide the " +
+                        "stream in order and cannot overlap or repeat.");
+                }
+                if (held < 1 || held > substreamSize)
+                {
+                    throw new InvalidDataException(
+                        $"Substream {s} holds {held} of a possible {substreamSize} " +
+                        "items. A substream exists because something was added to it, " +
+                        "and never holds more than its size.");
+                }
+                if (start + held - 1 > position)
+                {
+                    throw new InvalidDataException(
+                        $"Substream {s} ends at item {start + held - 1}, past the " +
+                        $"{position} items the window says it has seen.");
+                }
+
+                previousStart = start;
+
+                var substream = new Substream(start) { Held = held };
+                foreach (var planned in plan)
+                {
+                    var heldSketch = PrivateCountMinSketch.ReadBody(ref reader, resolved);
+
+                    if (heldSketch.Width != width || heldSketch.Depth != depth)
+                    {
+                        throw new InvalidDataException(
+                            $"Substream {s} holds a {heldSketch.Depth} by " +
+                            $"{heldSketch.Width} sketch where the window says every " +
+                            $"sketch is {depth} by {width}.");
+                    }
+
+                    substream.Segments.Add(new Segment(
+                        planned.From, planned.To, heldSketch, planned.Budget));
+                }
+
+                sketch.substreams.Add(substream);
+            }
+
+            reader.ExpectEnd();
+            return sketch;
+        }
+
+        /// <summary>
+        /// Used only by the read path. The public constructor derives the substream
+        /// size from the window and the substream factor, draws a generator, and
+        /// refuses shapes the payload has already been checked for; a window being
+        /// restored has its substream size on record and needs none of that.
+        /// <para>
+        /// The hash is the resolved one rather than the nullable the public
+        /// constructor takes, so that substreams built after the read use exactly the
+        /// function the payload named -- storing null here would quietly hand future
+        /// sketches the default while the restored ones kept a custom one.
+        /// </para>
+        /// </summary>
+        private DpswSketch(
+            long window, double rho, double alpha, int substreamSize,
+            uint width, uint depth,
+            Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            this.window = window;
+            this.rho = rho;
+            this.alpha = alpha;
+            this.substreamSize = substreamSize;
+            this.width = width;
+            this.depth = depth;
+            this.hash = hash;
+            this.checkpoints = Checkpoints(substreamSize, alpha);
+
+            // A fresh generator, never the one that wrote the payload. Everything it
+            // will be asked for covers substreams that start after this read, disjoint
+            // from every item already counted.
+            this.seeds = SeededRandom.Unpredictable();
         }
 
         /// <summary>
