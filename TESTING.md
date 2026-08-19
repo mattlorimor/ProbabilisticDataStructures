@@ -199,8 +199,34 @@ rebuilds a segment, so work is only ever measured on expansion-free spans.
 
 ## Mutation testing
 
-Manual, targeted mutation is part of every test commit (step 3 of the loop). Whole-file
-sweeps use Stryker.NET. The config carries the settings; the scope belongs on the
+Manual, targeted mutation is part of every test commit (step 3 of the loop).
+`scripts/mutate.sh` carries the mechanics; a run is a scratch script naming the edits,
+which belong next to the commit they verify:
+
+```bash
+source scripts/mutate.sh
+mutation_target ProbabilisticDataStructures
+
+MUTATION_FILTER='FullyQualifiedName~TestHyperLogLogInternals' \
+run_mutation "alpha 0.673 -> 0.697" \
+    ProbabilisticDataStructures/HyperLogLog.cs \
+    'return 0.673;' 'return 0.697;'
+
+mutation_done
+```
+
+It restores the target between edits, refuses a pattern that does not name exactly one
+place, distinguishes a mutation the tests killed from one that would not compile, and
+checks the tree still builds at the end.
+
+**It refuses to start on a dirty target.** The restore is `git checkout -- <dir>`, which
+discards every uncommitted change in that directory and not only the deliberate break.
+That rule was learned three times before it was enforced: twice by losing a nearly
+finished change to its own verification step, and once by losing a fix, re-running the
+harness, and reporting a mutation table measured against the tree without it. Commit
+first — the commit is what the table is describing anyway.
+
+Whole-file sweeps use Stryker.NET. The config carries the settings; the scope belongs on the
 command line, per run:
 
 ```
