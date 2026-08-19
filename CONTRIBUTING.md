@@ -15,9 +15,10 @@ worth two minutes of your time before you write the tests rather than after.
   to fail proves nothing. Twice in this repository a test that *named* a constant
   turned out to be unable to detect that constant changing.
 - **Break the implementation on purpose** to prove the new test catches it, then put it
-  back, and record what you broke in the commit message. Commit *before* you start
-  breaking things — the obvious way to undo a deliberate break also discards everything
-  else uncommitted.
+  back, and record what you broke in the commit message. `scripts/mutate.sh` does the
+  mechanics; see TESTING.md. Commit *before* you start breaking things — the obvious way
+  to undo a deliberate break also discards everything else uncommitted, which is why the
+  script refuses to run on a dirty tree rather than trusting anyone to remember.
 - **Say what survived.** If you tried a mutation and the suite did not catch it, that
   belongs in the commit message too, along with why you decided it was acceptable. A
   documented survivor is worth more than a tidy story.
