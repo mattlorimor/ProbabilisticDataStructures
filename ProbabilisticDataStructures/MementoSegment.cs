@@ -47,6 +47,13 @@ namespace ProbabilisticDataStructures
         internal int MementoBits { get; private set; }
 
         internal uint Slots { get; private set; }
+
+        /// <summary>
+        /// Every slot read this segment has ever performed, so the work-bound
+        /// tests can hold the metadata walks to the work the paper's invariants
+        /// imply, rather than to a wall clock.
+        /// </summary>
+        internal long SlotReads { get; private set; }
         internal uint Count { get; set; }
         internal ulong[] Data { get; set; } = null!;
 
@@ -607,6 +614,8 @@ namespace ProbabilisticDataStructures
 
         private ulong ReadSlot(uint index)
         {
+            this.SlotReads++;
+
             var bit = (ulong)index * (ulong)this.bitsPerSlot;
             var word = (int)(bit >> 6);
             var offset = (int)(bit & 63);

@@ -44,6 +44,19 @@ namespace ProbabilisticDataStructures
         internal Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
 
         /// <summary>
+        /// Every slot read the filter has ever performed. The metadata walks are
+        /// while-true loops whose termination rests on the three-bit invariants, so
+        /// a defect there does not fail -- it spins, or quietly walks the whole
+        /// table per operation while still answering correctly. Wall clocks cannot
+        /// adjudicate either (a timeout mostly measures the machine); this counter
+        /// can, so the tests bound the work as well as the answers.
+        /// </summary>
+        internal long SlotReads { get; private set; }
+
+        /// <summary>How many slots the table holds, for the work-bound tests.</summary>
+        internal uint SlotCount => this.slots;
+
+        /// <summary>
         /// Creates a filter sized for the given number of items and false positive rate.
         /// </summary>
         /// <param name="n">The number of items the filter is sized for.</param>
@@ -755,6 +768,8 @@ namespace ProbabilisticDataStructures
 
         private ulong ReadSlot(uint index)
         {
+            this.SlotReads++;
+
             var bit = (ulong)index * (ulong)this.bitsPerSlot;
             var word = (int)(bit >> 6);
             var offset = (int)(bit & 63);
