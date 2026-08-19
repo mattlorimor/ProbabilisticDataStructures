@@ -39,12 +39,16 @@ namespace ProbabilisticDataStructures
         private const int HashCount = 4;
 
         /// <summary>
-        /// Cells per expected difference. Below roughly 1.22 the peeling threshold for
-        /// four hashes, decoding starts to fail; 1.5 leaves room.
+        /// Cells per expected difference. Complete listing needs more than c4 = 1.295
+        /// cells per entry -- the 2-core threshold for four hashes, Table 1 of the
+        /// paper (1.222 is the three-hash figure); 1.5 leaves room.
         /// </summary>
-        private const double CellsPerDifference = 1.5;
+        internal const double CellsPerDifference = 1.5;
 
         private uint cells;
+
+        /// <summary>How many cells the table was provisioned with, for tests.</summary>
+        internal uint CellCount => this.cells;
         private int keySize;
         private long[] counts = null!;
         private byte[] keySums = null!;
