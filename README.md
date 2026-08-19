@@ -1,6 +1,6 @@
 # Probabilistic Data Structures for C<span>#</span> [![CI](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml/badge.svg)](https://github.com/mattlorimor/ProbabilisticDataStructures/actions/workflows/ci.yml) [![NuGet](https://img.shields.io/nuget/v/MattLorimor.ProbabilisticDataStructures.svg)](https://www.nuget.org/packages/MattLorimor.ProbabilisticDataStructures/)
 
-Twenty-five structures that answer questions about data too large to keep, by keeping
+Thirty-six structures that answer questions about data too large to keep, by keeping
 something much smaller and being approximately right.
 
 Each one trades exactness for space. What makes them usable is that the trade is
@@ -13,7 +13,7 @@ Originally a C# port of [Tyler Treat's](https://github.com/tylertreat)
 [BoomFilters](https://github.com/tylertreat/BoomFilters), and still owing it the
 descriptions of the original eight structures. It has since diverged deliberately —
 different hashing, argument validation, a documented persistence format, merging, and
-eleven structures the Go library does not have.
+twenty-four structures the Go library does not have.
 
 > **On compatibility with BoomFilters.** This is a port of the algorithms, not a
 > wire-compatible implementation. The two libraries hash with different functions —
@@ -46,7 +46,7 @@ eleven structures the Go library does not have.
 - [Frequency](#frequency) —
   [`CountMinSketch`](#countminsketch) · [`SublimeCountMinSketch`](#sublimecountminsketch) ·
   [`CountSketch`](#countsketch) · [`TopK`](#topk) · [`HeavyKeeper`](#heavykeeper) ·
-  [`DpswSketch`](#dpswsketch)
+  [`PrivateCountMinSketch`](#privatecountminsketch) · [`DpswSketch`](#dpswsketch)
 - [Similarity](#similarity) —
   [`SetSketch`](#setsketch) · [`MinHash`](#minhash) · [`SimHash`](#simhash) ·
   [`MinHashIndex` and `SimHashIndex`](#minhashindex-and-simhashindex)
@@ -84,10 +84,11 @@ eleven structures the Go library does not have.
 | How often have I seen this particular thing? | `CountMinSketch` | [Frequency](#frequency) |
 | …and the stream has no end in sight | `SublimeCountMinSketch` | [Frequency](#frequency) |
 | …and it is rare, or I need to subtract | `CountSketch` | [Frequency](#frequency) |
+| …and the answer must not expose any one record | `PrivateCountMinSketch` | [Frequency](#frequency) |
+| …without exposing anyone, over a sliding window | `DpswSketch` | [Frequency](#frequency) |
 | How many distinct things, **and** how alike are two sets? | `SetSketch` | [Similarity](#similarity) |
 | What are the most common things? | `TopK` | [Frequency](#frequency) |
 | …and accuracy matters more than mergeability | `HeavyKeeper` | [Frequency](#frequency) |
-| …over a sliding window, without exposing anyone | `DpswSketch` | [Frequency](#frequency) |
 | How alike are these two **sets**? | `MinHash` | [Similarity](#similarity) |
 | Are these two **documents** near-duplicates? | `SimHash` | [Similarity](#similarity) |
 | …across a corpus, without comparing every pair | `MinHashIndex`, `SimHashIndex` | [Similarity](#similarity) |
@@ -230,9 +231,12 @@ var filter = BloomFilter.ReadFrom(restored);
 The layout is specified in [FORMAT.md](FORMAT.md) and is stable: a payload written by any
 version is readable by every later one, or is refused with an explanation. Corruption,
 truncation, or reading a payload as the wrong structure throws `InvalidDataException`
-rather than producing something that answers incorrectly. Every structure has a fixture
-checked in that pins its bytes, so a change that would break stored data fails in CI
-rather than in your storage.
+rather than producing something that answers incorrectly. Structures have a fixture
+checked in that pins their bytes, so a change that would break stored data fails in CI
+rather than in your storage. The two whose payloads are mostly Gaussian noise are the
+exception, and deliberately: `Math.Log` is not guaranteed to give the same last bit on
+every platform, so what is pinned for them is the payload's layout and that the stored
+bytes still read, rather than that the same seed writes the same bytes everywhere.
 
 Three things deliberately do not persist. `MinHashIndex` and `SimHashIndex` are derived
 data, rebuildable from signatures that already persist, and storing them would mean keeping
@@ -1173,6 +1177,53 @@ Described by Gong, Yang et al. in
 
 ---
 
+### `PrivateCountMinSketch`
+
+<sup>[↑ Contents](#contents)</sup>
+
+How often something happened, without revealing whether any one record was there.
+
+A `CountMinSketch` whose counters do not start at nought: each begins at a draw from a
+normal distribution, which is the Gaussian mechanism at the sketch's sensitivity. The
+result satisfies event-level zero-concentrated differential privacy. Counting proceeds
+exactly as the plain sketch does.
+
+```C#
+// A budget in the epsilon and delta most policies are written in.
+double rho = PrivateCountMinSketch.BudgetFor(epsilon: 1.0, delta: 1e-6);
+
+var counts = new PrivateCountMinSketch(width: 2048, depth: 5, rho: rho);
+counts.Add(record);
+
+double howOften = counts.Count(record);
+double epsilon = PrivateCountMinSketch.EpsilonFor(rho, delta: 1e-6);
+```
+
+The noise is drawn **once, at construction**, not per query. That is what stops a caller
+asking the same question repeatedly and averaging the noise away — and it is why the same
+question always gets the same answer.
+
+- Estimates are **two-sided**. Unlike a plain `CountMinSketch` this can read below the
+  truth, and an item that never appeared can read below nought. Nothing is clamped,
+  because clamping would hide the noise from a caller who needs to see it to know what
+  they are holding.
+- **Never supply a seed** outside tests. Anyone who knows it can regenerate the noise and
+  subtract it back off, which is the whole guarantee gone. The seed is never written to a
+  payload for the same reason; a sketch read back has none, and can still be queried and
+  still keep counting, because adding needs no randomness.
+- The guarantee is **event-level**: one record. Someone appearing a thousand times is
+  protected as one record a thousand times over.
+
+**Reach for it when** you need frequencies over a whole stream and a policy names an
+epsilon. For frequencies over a *recent window*, use [`DpswSketch`](#dpswsketch), which
+is built out of these.
+
+**Look elsewhere if** nobody is asking for a privacy guarantee — `CountMinSketch` is
+smaller, exact in one direction, and free of all of the above.
+
+The mechanism is Zhao et al.'s, as used by Wang, Wang and Chen in the DPSW-Sketch paper
+below.
+
 ### `DpswSketch`
 
 <sup>[↑ Contents](#contents)</sup>
@@ -1180,12 +1231,16 @@ Described by Gong, Yang et al. in
 How often something happened in the recent past, without revealing whether any one
 record was there.
 
-This is the first structure here whose contract is a **privacy guarantee** rather than an
-error rate, and it is worth being precise about what that means. Counters do not start at
-nought: each begins at a draw from a normal distribution, which is the Gaussian mechanism
-at the sketch's sensitivity. The result satisfies event-level zero-concentrated
-differential privacy — an observer holding the whole structure cannot tell whether any
+A sliding window built out of [`PrivateCountMinSketch`](#privatecountminsketch): the
+stream is cut into substreams, each covered by several private sketches over nested
+ranges, and a query sums one sketch per substream. Like that structure, its contract is a
+**privacy guarantee** rather than an error rate — event-level zero-concentrated
+differential privacy, so an observer holding the whole thing cannot tell whether any
 single record was in the stream.
+
+The budget is split so that everything covering any one record comes to no more than the
+whole, which is what lets many overlapping sketches exist without the guarantee
+weakening.
 
 ```C#
 // A budget in the epsilon and delta most policies are written in.
@@ -1217,6 +1272,13 @@ fast, and protects nobody.
   many sketches and drops whole ones. A window of 4,000 settles around 4 MB.
 - **Never supply a seed** outside tests. Anyone who knows it can subtract the noise back
   off.
+- **A window that is written and read back is resumable, but no longer reproducible.**
+  The generator is not written to the payload — it is the one value that must not leave
+  the process — so a restored window draws fresh noise for the substreams it goes on to
+  build. That is sound rather than merely convenient: those substreams cover records
+  disjoint from everything already counted, and privacy composes in parallel over
+  disjoint data. It does mean a window built from a fixed seed will not match itself
+  across a round trip.
 
 **Reach for it when** you must publish or retain recent-frequency statistics over data
 about people, and a policy names an epsilon.
@@ -1313,7 +1375,7 @@ register and draws a point from each, leaving the registers correlated and the e
 approximate.
 
 ```C#
-var small = new SetSketch(256, 1.001, 20, 65534, null, SetSketchVariant.SetSketch2);
+var small = new SetSketch(256, 1.001, 20, 65534, variant: SetSketchVariant.SetSketch2);
 ```
 
 **Reach for the second one when your sets are small.** Measured over 200 keyed streams at
