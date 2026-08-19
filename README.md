@@ -1305,6 +1305,37 @@ double cosine = both.CosineSimilarity;
 double whatShareOfBuyersAreUsers = both.OtherInclusionCoefficient;
 ```
 
+The paper describes two constructions, and both are here. The default draws each
+element's run of hash values as exponential spacings, which leaves the registers
+statistically independent — the assumption every estimator in the paper rests on, so for
+it they are exact. The second cuts the exponential's domain into one interval per
+register and draws a point from each, leaving the registers correlated and the estimators
+approximate.
+
+```C#
+var small = new SetSketch(256, 1.001, 20, 65534, null, SetSketchVariant.SetSketch2);
+```
+
+**Reach for the second one when your sets are small.** Measured over 200 keyed streams at
+256 registers, whose nominal error is 6.25%:
+
+| Distinct elements | `SetSketch1` | `SetSketch2` |
+| --- | --- | --- |
+| 10 | 7.12% | **4.47%** |
+| 100 | 5.91% | **4.16%** |
+| 1,000 | 6.06% | 5.10% |
+| 10,000 | 6.35% | 6.54% |
+
+The correlation buys real accuracy on small sets and the advantage has gone by ten
+thousand elements. The paper also presents this construction as the faster one; in this
+implementation it is not — it draws about 9% fewer random values and still runs about 5%
+slower, because both constructions pay a logarithm per iteration here. If you want speed,
+this is not the lever.
+
+Merging two sketches is exact under either construction, but merging one of each is
+refused: the merge promises the sketch that adding both sets from the start would have
+built, and no single sketch draws its runs both ways.
+
 Described by Otmar Ertl in
 [SetSketch: Filling the Gap between MinHash and HyperLogLog](https://doi.org/10.14778/3476249.3476276),
 VLDB 2021.

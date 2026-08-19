@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`SetSketchVariant.SetSketch2`**, the paper's second construction, selectable on any
+  `SetSketch`. Where the default draws an element's run of hash values as exponential
+  spacings, this cuts the exponential's domain into one interval per register and draws a
+  point from each. That leaves the registers correlated rather than independent, so the
+  estimators — all derived under independence — become approximations here where they are
+  exact for the default.
+  <br><br>
+  **Reach for it for small-set accuracy, not for speed.** Measured over 200 keyed streams
+  at 256 registers, whose nominal relative error is 6.25%, the second construction's
+  spread is 4.47% against the first's 7.12% at ten elements, 4.16% against 5.91% at a
+  hundred, and the advantage has gone by ten thousand (6.54% against 6.35%). The paper's
+  claim that the correlation helps small sets holds, clearly and monotonically.
+  <br><br>
+  The paper's *other* claim, that this construction is faster, does not hold in this
+  implementation, and it seemed better to measure it than to repeat it. Testing an
+  interval's start before spending a draw — sound, since a point never falls below its
+  interval — cuts random draws by 9.2%, and the variant still runs about 5% slower over
+  500,000 additions (median 43.5ms against 40.5ms over nine alternating runs). Both
+  constructions pay a logarithm per iteration and the interval check pays two; the
+  paper's advantage rests on a ziggurat sampler and a precomputed interval table this
+  port does not have, and that table would cost four times the register array in memory.
+  <br><br>
+  The merge stays exact under the correlated construction — register for register, the
+  sketch that adding both sets from the start would have built — and merging *across*
+  constructions is refused, since no single sketch draws its runs both ways. Sketches
+  using the default are unaffected in every respect, including their persisted bytes.
+  (#121)
+
 - **`DpswSketch` and `PrivateCountMinSketch` now persist**, which every other structure
   here already did. The counters are written and the seed never is: the counters already
   carry their noise, so a payload of them reveals no more than the live structure does,
