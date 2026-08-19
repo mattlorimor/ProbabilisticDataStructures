@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.2.0] - 2026-08-19
+
 ### Added
 
 - **`SetSketchVariant.SetSketch2`**, the paper's second construction, selectable on any
@@ -36,30 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sketch that adding both sets from the start would have built — and merging *across*
   constructions is refused, since no single sketch draws its runs both ways. Sketches
   using the default are unaffected in every respect, including their persisted bytes.
-  (#121)
-
-- **`DpswSketch` and `PrivateCountMinSketch` now persist**, which every other structure
-  here already did. The counters are written and the seed never is: the counters already
-  carry their noise, so a payload of them reveals no more than the live structure does,
-  while anyone holding the seed could regenerate that noise, subtract it off, and recover
-  the exact counts. A `PrivateCountMinSketch` read back can be queried *and* can keep
-  counting, because adding touches no randomness.
   <br><br>
-  A `DpswSketch` read back draws a fresh unpredictable generator for the substreams it
-  goes on to build. That is sound rather than convenient: a substream's sketches are all
-  built when the substream begins, so the new generator only ever serves substreams
-  starting after the read, and those cover items disjoint from everything already
-  written — and privacy composes in parallel over disjoint data, taking a maximum rather
-  than a sum. The cost is that reproducibility does not survive a round trip, which is
-  pinned as a test rather than left to be discovered. The segment plan is not written
-  either; it is recomputed, so a payload cannot express a budget split that fails to sum
-  to the whole.
-  <br><br>
-  Both readers refuse a payload whose counters are all exact integers — the shape of a
-  sketch written with no noise. A counter is a continuous draw plus a whole number of
-  hits, so it is non-integral with probability one and stays so for the sketch's life;
-  reading an all-integer payload would hand back a structure whose entire contract is
-  silently false. (#120)
+  A sketch using the second construction writes a **new format version**, so a release
+  before this one cannot read it — the compatibility this library promises runs
+  backwards, not forwards. A sketch using the default writes the version it always
+  wrote, byte for byte, and stays readable by any earlier release: the version is raised
+  only for payloads that actually carry the new field, rather than for every `SetSketch`
+  to record a choice most of them did not make. (#121, #127)
 
 - **`DpswSketch`** and **`PrivateCountMinSketch`**, frequency estimation over a sliding
   window that is differentially private (Wang, Wang and Chen, KDD 2024). The first
@@ -85,7 +70,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the j-th checkpoint falls as the factor to the power of j while the range it covers
   falls only as one minus the factor, so at 0.25 on a window of four thousand the
   leanest sketch carries noise of half a million: over 351 query points the median error
-  was -46 and the fifth percentile -6150. Not yet persistable. (#104)
+  was -46 and the fifth percentile -6150.
+  <br><br>
+  Both persist, and the seed never does. The counters already carry their noise, so a
+  payload of them reveals no more than the live structure does, while anyone holding the
+  seed could regenerate that noise, subtract it off, and recover the exact counts. A
+  `PrivateCountMinSketch` read back can be queried *and* can keep counting, because
+  adding touches no randomness. A `DpswSketch` read back draws a fresh unpredictable
+  generator for the substreams it goes on to build — sound because those cover records
+  disjoint from everything already counted, and privacy composes in parallel over
+  disjoint data — so it is resumable but no longer reproducible from its original seed.
+  Both readers refuse a payload whose counters are all exact integers, the shape of a
+  sketch written with no noise at all. (#104, #120)
 
 - **`TupleSketch`**, a `ThetaSketch` that carries a value alongside every distinct key,
   so one pass answers both "how many distinct users" and "what did they spend between
@@ -1276,7 +1272,8 @@ This release modernizes the entire build. The library had not been touched since
 - Initial release: a C# port of [Tyler Treat's](https://github.com/tylertreat)
   [BoomFilters](https://github.com/tylertreat/BoomFilters) Go project.
 
-[Unreleased]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v6.1.0...HEAD
+[Unreleased]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v6.2.0...HEAD
+[6.2.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v6.1.0...v6.2.0
 [6.1.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v6.0.1...v6.1.0
 [6.0.1]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v6.0.0...v6.0.1
 [6.0.0]: https://github.com/mattlorimor/ProbabilisticDataStructures/compare/v5.2.0...v6.0.0
