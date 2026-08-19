@@ -964,5 +964,107 @@ namespace TestProbabilisticDataStructures
                 () => Persistence.FromByteArray<DpswSketch>(bytes),
                 "exact integer");
         }
+
+        /// <summary>
+        /// A window whose substreams do not follow one another in order. Substreams
+        /// divide the stream in sequence, and a payload claiming two that overlap or
+        /// repeat describes a stream that never happened -- the estimates would then
+        /// double-count an item across the two, which is both wrong and a privacy
+        /// claim the budget split was never made for.
+        /// </summary>
+        [TestMethod]
+        public void TestADpswWindowWithOutOfOrderSubstreamsIsRefused()
+        {
+            var (bytes, layout) = SmallDpswPayload();
+
+            Assert.IsGreaterThan(1u, layout.SubstreamCount,
+                "the payload must hold at least two substreams for their ordering to " +
+                "be corruptible at all.");
+
+            // Point the second substream back at the first one's start.
+            var firstStart = BinaryPrimitives.ReadUInt64LittleEndian(
+                bytes.AsSpan(layout.SubstreamAt(0)));
+            var poked = PokeUInt64(bytes, layout.SubstreamAt(1) - PayloadStart, firstStart);
+
+            AssertRefused(
+                () => Persistence.FromByteArray<DpswSketch>(poked),
+                "does not follow the one before it");
+        }
+
+        /// <summary>
+        /// A window claiming a substream holds more items than a substream can. The
+        /// count decides which items a query attributes to that substream, so a
+        /// payload inflating it moves the window boundary without moving any counter.
+        /// </summary>
+        [TestMethod]
+        public void TestADpswWindowWithAnOverfullSubstreamIsRefused()
+        {
+            var (bytes, layout) = SmallDpswPayload();
+
+            var poked = PokeUInt32(
+                bytes, layout.SubstreamAt(0) + 8 - PayloadStart, (uint)layout.SubstreamSize + 1);
+
+            AssertRefused(
+                () => Persistence.FromByteArray<DpswSketch>(poked),
+                "of a possible");
+        }
+
+        /// <summary>
+        /// And one claiming a substream holds nothing. A substream exists because
+        /// something was added to it; an empty one is a plan with no stream under it.
+        /// </summary>
+        [TestMethod]
+        public void TestADpswWindowWithAnEmptySubstreamIsRefused()
+        {
+            var (bytes, layout) = SmallDpswPayload();
+
+            var poked = PokeUInt32(bytes, layout.SubstreamAt(0) + 8 - PayloadStart, 0);
+
+            AssertRefused(
+                () => Persistence.FromByteArray<DpswSketch>(poked),
+                "of a possible");
+        }
+
+        /// <summary>Where each substream begins within a DPSW payload.</summary>
+        private sealed record DpswLayout(
+            uint SubstreamCount, int SubstreamSize, int PlanLength, uint Width, uint Depth)
+        {
+            /// <summary>
+            /// Header is window(8) rho(8) alpha(8) substreamSize(4) width(4) depth(4)
+            /// position(8), then the substream count; each substream is start(8)
+            /// held(4) followed by its plan's sketches, each of which is width(4)
+            /// depth(4) rho(8) count(8) and then its counters.
+            /// </summary>
+            internal int SubstreamAt(int index) =>
+                PayloadStart + 48
+                + (index * (12 + (PlanLength * (24 + ((int)(Width * Depth) * 8)))));
+        }
+
+        /// <summary>
+        /// A window small enough to poke at, with several substreams so their ordering
+        /// can be corrupted, and its layout worked out alongside it.
+        /// </summary>
+        private static (byte[] Bytes, DpswLayout Layout) SmallDpswPayload()
+        {
+            var sketch = new DpswSketch(
+                window: 64, rho: 4.0, alpha: 0.6, width: 4, depth: 2, seed: 11);
+            for (var i = 0; i < 90; i++)
+            {
+                sketch.Add(Key($"item-{i % 9}"));
+            }
+
+            var bytes = sketch.ToByteArray();
+            var layout = new DpswLayout(
+                BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + 44)),
+                sketch.SubstreamSize,
+                1 + (2 * (sketch.Checkpointing.Length - 1)),
+                4, 2);
+
+            Assert.AreEqual(bytes.Length - 4, layout.SubstreamAt((int)layout.SubstreamCount),
+                "the layout assumed here does not reach the trailing checksum, so " +
+                "every offset below points somewhere else.");
+
+            return (bytes, layout);
+        }
     }
 }

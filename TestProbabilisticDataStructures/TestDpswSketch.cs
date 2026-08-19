@@ -530,5 +530,50 @@ namespace TestProbabilisticDataStructures
                 "means the generator state crossed the payload -- the one value that " +
                 "must never be written down.");
         }
+
+        /// <summary>
+        /// The generator a read installs must be unpredictable, not merely different.
+        /// Reading one payload twice and driving both past a substream boundary must
+        /// give two different answers: a reader that installed any fixed seed would
+        /// give the same one twice, and would still pass
+        /// <see cref="TestReproducibilityDoesNotSurviveARoundTrip"/>, because a fixed
+        /// constant differs from the seeded twin's consumed state just as an
+        /// unpredictable draw does. That mutation survived until this test existed,
+        /// which is the difference between testing the name of a property and testing
+        /// the property.
+        /// </summary>
+        [TestMethod]
+        public void TestTwoReadsOfOnePayloadDivergeInTheirFutureNoise()
+        {
+            var original = new DpswSketch(
+                window: 512, rho: 1.0, alpha: 0.5, width: 32, depth: 3, seed: 5150);
+            for (var i = 0; i < 100; i++)
+            {
+                original.Add(Key(i % 20));
+            }
+
+            var payload = original.ToByteArray();
+            var first = Persistence.FromByteArray<DpswSketch>(payload);
+            var second = Persistence.FromByteArray<DpswSketch>(payload);
+
+            Assert.AreEqual(first.Count(Key(3)), second.Count(Key(3)), 1e-12,
+                "two reads of one payload must agree before either builds anything " +
+                "new, since both hold exactly the counters that were written.");
+
+            var before = first.SketchesHeld;
+            for (var i = 0; i < 400; i++)
+            {
+                first.Add(Key(9));
+                second.Add(Key(9));
+            }
+
+            Assert.IsGreaterThan(before, first.SketchesHeld,
+                "no new substream was opened, so no new noise was drawn and this " +
+                "test proves nothing.");
+            Assert.AreNotEqual(first.Count(Key(9)), second.Count(Key(9)),
+                "two reads of the same payload produced identical noise for the " +
+                "substreams built after them, which means the reader is installing " +
+                "a predictable generator rather than an unpredictable one.");
+        }
     }
 }
