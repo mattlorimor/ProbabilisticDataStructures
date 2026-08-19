@@ -52,6 +52,13 @@ namespace ProbabilisticDataStructures
         private readonly SetSketchVariant variant;
 
         /// <summary>
+        /// How many intervals must remain for SetSketch2's next point to be worth
+        /// drawing, given the lower bound. Kept alongside the bound rather than
+        /// recomputed per point; see <see cref="SetLowerBound"/> for the derivation.
+        /// </summary>
+        private double intervalRemainingFloor;
+
+        /// <summary>
         /// A value no register is below.
         /// </summary>
         /// <remarks>
@@ -229,10 +236,10 @@ namespace ProbabilisticDataStructures
             this.permutation = new uint[registers];
             this.permutationPass = new uint[registers];
             this.pass = 0;
-            this.lowerBound = 0;
             this.updatesUntilRescan = registers;
             this.variant = variant;
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
+            this.SetLowerBound(0);
         }
 
         /// <summary>How many registers the sketch keeps.</summary>
@@ -308,10 +315,12 @@ namespace ProbabilisticDataStructures
                     // the interval's start alone already fails to beat the bound,
                     // nothing drawn from this interval or any later one can beat it,
                     // and the element is finished without spending a draw at all.
-                    // This is where SetSketch2's speed actually comes from: the bound
-                    // is a deterministic function of the interval, and SetSketch1 has
-                    // no equivalent -- its next point is not known until it is drawn.
-                    if (ValueFor(IntervalStart(this.m, this.a, i)) <= this.lowerBound)
+                    // This is where SetSketch2's speed comes from: the bound is a
+                    // deterministic function of the interval, and SetSketch1 has no
+                    // equivalent -- its next point is not known until it is drawn.
+                    // SetLowerBound has already done the logarithms, so what is left
+                    // here is one comparison.
+                    if (this.StopsAtInterval(i))
                     {
                         return this;
                     }
@@ -385,6 +394,27 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal static double IntervalStart(int m, double a, int i) =>
             Math.Log(m / (double)(m - i)) / a;
+
+        /// <summary>
+        /// Whether SetSketch2 stops at the i-th interval, decided the slow and literal
+        /// way: ask what value the interval's start would earn and compare it to the
+        /// bound. Exists so a test can hold <see cref="StopsAtInterval"/> to it.
+        /// </summary>
+        internal bool LiterallyStopsAtInterval(int i) =>
+            this.ValueFor(IntervalStart(this.m, this.a, i)) <= this.lowerBound;
+
+        /// <summary>
+        /// Whether SetSketch2 stops at the i-th interval. The insert path calls this
+        /// rather than repeating the comparison, so that the sweep holding it to
+        /// <see cref="LiterallyStopsAtInterval"/> is testing the rule the insert path
+        /// actually applies. When the loop kept its own copy, relaxing that copy from
+        /// strict to loose changed the sketch and passed every test: two copies agreed
+        /// with each other while the sweep proved nothing about the one that ran.
+        /// </summary>
+        internal bool StopsAtInterval(int i) => this.m - i < this.intervalRemainingFloor;
+
+        /// <summary>Sets the bound directly, so a test can sweep it.</summary>
+        internal void ForceLowerBound(int value) => this.SetLowerBound(value);
 
         /// <summary>
         /// Estimates how many distinct elements have been added.
@@ -633,8 +663,8 @@ namespace ProbabilisticDataStructures
             Array.Clear(this.registers);
             Array.Clear(this.permutationPass);
             this.pass = 0;
-            this.lowerBound = 0;
             this.updatesUntilRescan = this.m;
+            this.SetLowerBound(0);
             return this;
         }
 
@@ -917,8 +947,52 @@ namespace ProbabilisticDataStructures
                 }
             }
 
-            this.lowerBound = min;
             this.updatesUntilRescan = this.m;
+            this.SetLowerBound(min);
+        }
+
+        /// <summary>
+        /// Records the lower bound, and with it the point past which SetSketch2 stops
+        /// drawing.
+        /// </summary>
+        /// <remarks>
+        /// SetSketch2 can tell whether an interval is worth drawing from before it
+        /// spends any randomness, because a point never falls below its interval's
+        /// start. Doing that literally costs two logarithms an interval -- one for the
+        /// start, one inside <see cref="ValueFor"/> -- which measured slower than the
+        /// draw it saved. It does not have to be done literally.
+        /// <para>
+        /// Writing L for the bound, the i-th interval is worth drawing from while
+        /// <c>ValueFor(gamma_i) &gt; L</c>. For a bound the register range can actually
+        /// hold, that unfolds:
+        /// </para>
+        /// <code>
+        ///   ValueFor(x) &lt;= L   &lt;=&gt;   floor(1 - ln x / ln b) &lt;= L
+        ///                      &lt;=&gt;   1 - ln x / ln b &lt; L + 1
+        ///                      &lt;=&gt;   x &gt; b^-L
+        /// </code>
+        /// <para>
+        /// and substituting gamma_i = ln(m / (m - i)) / a turns the test into one
+        /// comparison against a quantity that depends on nothing but the bound:
+        /// </para>
+        /// <code>
+        ///   stop  &lt;=&gt;  m - i  &lt;  m * exp(-a * b^-L)
+        /// </code>
+        /// <para>
+        /// So the two logarithms per interval become one exponential per change of
+        /// bound, which happens once every m updates rather than once per interval.
+        /// A bound at or above the ceiling is the one case the algebra does not cover:
+        /// every register is saturated, <see cref="ValueFor"/> is clamped to the
+        /// ceiling and so can never exceed the bound, and no interval is worth drawing
+        /// from. Positive infinity says exactly that.
+        /// </para>
+        /// </remarks>
+        private void SetLowerBound(int value)
+        {
+            this.lowerBound = value;
+            this.intervalRemainingFloor = value >= this.q + 1
+                ? double.PositiveInfinity
+                : this.m * Math.Exp(-this.a * Math.Pow(this.b, -value));
         }
 
         /// <summary>

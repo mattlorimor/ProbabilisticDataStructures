@@ -22,14 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hundred, and the advantage has gone by ten thousand (6.54% against 6.35%). The paper's
   claim that the correlation helps small sets holds, clearly and monotonically.
   <br><br>
-  The paper's *other* claim, that this construction is faster, does not hold in this
-  implementation, and it seemed better to measure it than to repeat it. Testing an
-  interval's start before spending a draw — sound, since a point never falls below its
-  interval — cuts random draws by 9.2%, and the variant still runs about 5% slower over
-  500,000 additions (median 43.5ms against 40.5ms over nine alternating runs). Both
-  constructions pay a logarithm per iteration and the interval check pays two; the
-  paper's advantage rests on a ziggurat sampler and a precomputed interval table this
-  port does not have, and that table would cost four times the register array in memory.
+  The paper's *other* claim, that this construction is faster, holds here too, though it
+  took a second pass to earn. Testing an interval's start before spending a draw — sound,
+  since a point never falls below its interval — cuts random draws by 9.2%, but done
+  literally it costs two logarithms per interval and measured about 5% *slower*. Those
+  logarithms are avoidable: the test `ValueFor(gamma_i) <= L` unfolds to
+  `m - i < m * exp(-a * b^-L)`, whose right-hand side depends on nothing but the bound,
+  so it is computed when the bound moves — once every m updates — and each interval costs
+  one comparison. That turns the 5% deficit into roughly 6% quicker over 500,000
+  additions (median 37.9ms against 40.2ms over nine alternating runs, reproduced).
   <br><br>
   The merge stays exact under the correlated construction — register for register, the
   sketch that adding both sets from the start would have built — and merging *across*
