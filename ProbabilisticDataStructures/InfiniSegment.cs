@@ -40,6 +40,13 @@ namespace ProbabilisticDataStructures
         internal int QuotientBits { get; private set; }
 
         /// <summary>
+        /// Every slot read this segment has ever performed, so the work-bound
+        /// tests can hold the metadata walks to the work the paper's invariants
+        /// imply, rather than to a wall clock.
+        /// </summary>
+        internal long SlotReads { get; private set; }
+
+        /// <summary>
         /// The fingerprint length a freshly inserted entry gets. The age counter and
         /// fingerprint together always occupy this many bits plus one.
         /// </summary>
@@ -517,6 +524,8 @@ namespace ProbabilisticDataStructures
 
         private ulong ReadSlot(uint index)
         {
+            this.SlotReads++;
+
             var bit = (ulong)index * (ulong)this.bitsPerSlot;
             var word = (int)(bit >> 6);
             var offset = (int)(bit & 63);

@@ -173,6 +173,30 @@ the filter; the stable filter is anchored to its own measured behavior, which
 catches the formula disagreeing with the mechanism but not both agreeing on a
 misreading. These are the structures where a second reader adds the most.
 
+### Bound the work, not the wall clock
+
+The quotient-style filters walk their metadata in while-true loops whose
+termination rests on the three-bit invariants, and the fuse builder retries
+construction until it succeeds. Defects there do not fail -- they spin, or they
+quietly do table-sized work per operation while answering every query
+correctly. A wall clock cannot adjudicate either kind: the Stryker section
+below shows Timeouts mostly measuring the machine, and this suite's machine
+sleeps mid-run. `TestBoundedWork` counts instead: internal work counters (slot
+reads, eviction kicks, build attempts) with probed-plus-slack ceilings and
+vacuity floors, so a scan that wanders past its cluster or a budget that stops
+being the budget turns into a deterministic red assertion at full parallelism.
+
+Instrumenting also measures what was previously only asserted to be
+deliberate: a Memento add rewrites its whole cluster through the ordinary
+insert path, and that costs a probed 44.7 slot reads per add at load 0.11 and
+2,269 just under the 0.75 expansion threshold, where the filter spends its
+working life. The choice is documented in the source and now has a price tag
+and a regression pin. Two structures need no counters: the Vale walks are all
+for-loops bounded by the pool, and HLL++'s sigma/tau converge by
+floating-point fixed-point with the one divergent input guarded and
+anchor-pinned. Memento and Infini segment counters reset when expansion
+rebuilds a segment, so work is only ever measured on expansion-free spans.
+
 ## Mutation testing
 
 Manual, targeted mutation is part of every test commit (step 3 of the loop). Whole-file

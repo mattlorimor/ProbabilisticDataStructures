@@ -35,6 +35,16 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private const int MAX_NUM_KICKS = 500;
 
+        /// <summary>The eviction budget, exposed so tests can pin it to the paper.</summary>
+        internal static int MaxKicks => MAX_NUM_KICKS;
+
+        /// <summary>
+        /// Every eviction kick ever performed, so the work-bound tests can assert
+        /// that a refused insert spent exactly its budget -- failure by count,
+        /// not by clock.
+        /// </summary>
+        internal long KickSteps { get; private set; }
+
         /// <summary>
         /// Every fingerprint, packed end to end. Entry j of bucket i begins at
         /// (i * B + j) * F.
@@ -776,6 +786,8 @@ namespace ProbabilisticDataStructures
 
             for (int n = 0; n < MAX_NUM_KICKS; n++)
             {
+                this.KickSteps++;
+
                 var bucketIdx = i % this.M;
                 var entryIdx = this.random.NextBelow(this.B);
 
