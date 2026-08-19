@@ -45,6 +45,20 @@ case error is exactly the promised accuracy), assert *near-saturation* too — a
 far better than promised means the structure is finer than asked for, which is a
 sizing defect wearing accuracy's clothes.
 
+**Guard both directions when the scenario can fail either way.** A sweep asserting that
+a stop rule fires correctly is worthless if the rule never fired, and equally worthless
+if it fired every time; the SetSketch2 sweep fails on both. One-sided vacuity guards
+are the common case, but a rule with two outcomes needs two.
+
+**And check the assertion is as strong as its name.** `DpswSketch`'s round trip draws a
+fresh generator, so a test asserted that a restored window's noise differs from a
+seeded twin's — and it did, and it would have done just as well against a *fixed*
+constant, because a constant differs from the twin's consumed state too. The test was
+named for unpredictability and proved only difference. What proves the property is two
+reads of one payload diverging from each other. When a test's name claims more than
+"these numbers differ", ask which mutation it would actually catch, and try that
+mutation.
+
 ### Probe, then pin
 
 Never invent an assertion constant. Run the measurement first, print the numbers, and
@@ -67,6 +81,31 @@ inputs don't straddle the boundary. This bit three separate times:
 
 When a formula ends in `Math.Ceiling`, `Power2`, or a byte cast, choose test inputs
 on both sides of the step, and say in a comment which inputs discriminate and why.
+
+### Run the promise at its coarsest legal corner
+
+The parameters a suite reaches for are the ones a caller would reach for, and those are
+where a one-unit error is a rounding nuisance. At the coarsest corner the guards allow,
+the same error is the whole answer. SetSketch's default base of 1.001 hid two
+off-by-ones worth 19% to 100% at coarse bases; at γ = 199 a DDSketch bucket off by one
+is a factor-199 answer.
+
+So each promise runs at the edge as well as the middle: HyperLogLog at m = 16, its
+plus at precision 4, DDSketch at α = 0.99, the theta sketches at k = 1, Count-Min and
+Count Sketch at ε = δ = 0.5. Two things worth knowing turned up on the way:
+
+- **A contract can be unreachable at sensible parameters.** Count-Min's "overcounts by
+  more than εN with probability at most δ" had never been exercised anywhere, because
+  a uniform stream cannot reach εN. It needs the coarsest sketch *and* a deliberately
+  skewed stream before there is anything to measure.
+- **A corner can be where no behavioural window exists at all.** The theta estimator's
+  variance at k = 1 is infinite, so nothing distributional can be asserted there. The
+  exact rule — θ is the (k+1)-th smallest hash — is the only possible test, which makes
+  the corner the strongest place to state it rather than the weakest.
+
+Where a coarse corner passes on first pinning, say so in the commit message. The pass
+that added these found no defects, and that is a result worth having recorded rather
+than an absence of one.
 
 ### Deterministic randomness only
 
@@ -172,6 +211,23 @@ recomputes every fingerprint independently but was written by the same hand as
 the filter; the stable filter is anchored to its own measured behavior, which
 catches the formula disagreeing with the mechanism but not both agreeing on a
 misreading. These are the structures where a second reader adds the most.
+
+### A test hook must run the code it vouches for
+
+Internal hooks let a test reach a rule the public surface cannot. A hook that
+*reimplements* that rule instead of calling it proves only that two copies agree, and
+the copy that ships is not the one under test.
+
+SetSketch2 decides whether an interval is worth drawing from before spending any
+randomness. A sweep held that decision to the literal, slow version of it at every
+interval and every bound — and passed while a mutation loosened the comparison in the
+insert loop from `<` to `<=` and changed the sketch, because the loop had the
+comparison written out and the hook had it written out again. The fix is one line: the
+loop calls the hook. Then the sweep covers the rule that runs.
+
+The tell is that the hook's body duplicates an expression rather than delegating. When
+adding one, check the production path calls it — a mutation applied to the *loop* and
+not the hook is the cheapest way to find out.
 
 ### Bound the work, not the wall clock
 
@@ -286,6 +342,16 @@ Two sound configurations:
   run and revert after; then per-test coverage is sound and the same sweep took
   19:40. The edit cannot live in the Stryker config — MSTest reads parallelism from
   the assembly, not from anything Stryker controls.
+
+**A survivor can mean the mutation is owned by a different layer.** Halving Count-Min's
+width survives its δ-contract test at any parameters — the bound comes through Markov
+and is loose enough to absorb it — and dies five times over against the geometry
+restatement. Narrowing a cuckoo filter's fingerprint by a bit slips under the rate the
+caller asked for and fails the behavioural ceiling measured beside it. Neither is a
+gap; both are the layering working, and running the mutation against each layer in turn
+is what shows which one owns it. Record that in the table rather than only the number
+killed: "survived the contract, killed by the geometry pin" says something the count
+does not.
 
 **Survivors are leads, not verdicts — and so are Timeouts.** Hand-apply each and run
 the suite before believing either. The residue that survives adjudication here is
