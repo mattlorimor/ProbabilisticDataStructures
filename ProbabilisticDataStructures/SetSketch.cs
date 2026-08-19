@@ -320,7 +320,7 @@ namespace ProbabilisticDataStructures
                     // equivalent -- its next point is not known until it is drawn.
                     // SetLowerBound has already done the logarithms, so what is left
                     // here is one comparison.
-                    if (this.m - i < this.intervalRemainingFloor)
+                    if (this.StopsAtInterval(i))
                     {
                         return this;
                     }
@@ -404,8 +404,12 @@ namespace ProbabilisticDataStructures
             this.ValueFor(IntervalStart(this.m, this.a, i)) <= this.lowerBound;
 
         /// <summary>
-        /// Whether SetSketch2 stops at the i-th interval, decided the way the insert
-        /// path decides it.
+        /// Whether SetSketch2 stops at the i-th interval. The insert path calls this
+        /// rather than repeating the comparison, so that the sweep holding it to
+        /// <see cref="LiterallyStopsAtInterval"/> is testing the rule the insert path
+        /// actually applies. When the loop kept its own copy, relaxing that copy from
+        /// strict to loose changed the sketch and passed every test: two copies agreed
+        /// with each other while the sweep proved nothing about the one that ran.
         /// </summary>
         internal bool StopsAtInterval(int i) => this.m - i < this.intervalRemainingFloor;
 
