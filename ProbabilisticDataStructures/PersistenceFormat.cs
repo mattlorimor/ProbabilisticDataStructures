@@ -119,7 +119,7 @@ namespace ProbabilisticDataStructures
         /// The highest format version this library can read. Readers refuse anything
         /// above it, since a later version may mean the payload differently.
         /// </summary>
-        internal const ushort MaxSupportedVersion = 3;
+        internal const ushort MaxSupportedVersion = 4;
 
         /// <summary>
         /// The version a payload is written at unless its structure asks for another.
@@ -141,6 +141,14 @@ namespace ProbabilisticDataStructures
         /// so that a restored filter resumes its draw sequence rather than restarting it.
         /// </summary>
         internal const ushort RandomStateVersion = 2;
+
+        /// <summary>
+        /// The version at which <see cref="SetSketch"/> carries the construction it was
+        /// built with. Written only by a sketch using the second construction: the
+        /// first writes the layout it always wrote, so payloads from before the choice
+        /// existed stay readable by libraries from before it existed too.
+        /// </summary>
+        internal const ushort SetSketchVariantVersion = 4;
 
         /// <summary>
         /// The version at which a cuckoo filter packs its fingerprints at their exact
