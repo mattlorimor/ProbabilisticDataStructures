@@ -219,11 +219,21 @@ namespace TestProbabilisticDataStructures
         /// bucket boundaries are geometric to match. A structure that quietly fell
         /// back to linear bucketing would still look correct on a narrow range.
         /// </para>
+        /// <para>
+        /// The 0.5 and 0.99 rows are the coarse corners, where gamma is 3 and 199
+        /// and the whole six-decade range spans a handful of buckets. One bucket of
+        /// error at gamma = 199 is a factor-199 answer, so these rows are where an
+        /// off-by-one in the mapping stops hiding inside slack: probed at worst
+        /// errors of 49.94% and 98.92% against bounds of 50% and 99%, saturated to
+        /// within a tenth of a point on both.
+        /// </para>
         /// </summary>
         [TestMethod]
         [DataRow(0.01)]
         [DataRow(0.02)]
         [DataRow(0.05)]
+        [DataRow(0.5)]
+        [DataRow(0.99)]
         public void TestDDSketchHoldsItsRelativeErrorOnEveryQuantile(double accuracy)
         {
             var sketch = new DDSketch(accuracy);
@@ -287,7 +297,10 @@ namespace TestProbabilisticDataStructures
         /// spread over many streams tests what m was chosen for.
         /// <para>
         /// The existing HyperLogLog tests each check a single count against a loose
-        /// tolerance, which a filter with a quarter of its registers would still pass
+        /// tolerance, which a filter with a quarter of its registers would still pass.
+        /// The m = 16 row is the coarsest legal corner: probed at ratio 0.962 with
+        /// bias 0.26%, so the asymptotic 1.04 constant still describes sixteen
+        /// registers and the window needs no loosening to hold there
         /// most of the time. This measures the distribution instead.
         /// </para>
         /// <para>
@@ -299,6 +312,7 @@ namespace TestProbabilisticDataStructures
         /// </para>
         /// </summary>
         [TestMethod]
+        [DataRow(16u)]
         [DataRow(256u)]
         [DataRow(1024u)]
         [DataRow(4096u)]
@@ -372,8 +386,17 @@ namespace TestProbabilisticDataStructures
         /// the accuracy the register count buys: the relative standard error is still
         /// 1.04/sqrt(m), and an estimator change that quietly widened the distribution
         /// would leave every single-count test passing.
+        /// <para>
+        /// The p = 4 row is the coarsest legal corner. Probed at ratio 1.135 with a
+        /// mean bias of +7.7% -- 2.3 standard errors, inside the window, and the
+        /// expected shape of the estimator family's O(1/m) small-m bias at m = 16.
+        /// If this row's bias assertion ever fires, compare against 1/m before
+        /// suspecting the pipeline; at every larger m the bias probes at a tenth of
+        /// a standard error.
+        /// </para>
         /// </summary>
         [TestMethod]
+        [DataRow(4u)]
         [DataRow(8u)]
         [DataRow(10u)]
         [DataRow(12u)]
@@ -476,8 +499,16 @@ namespace TestProbabilisticDataStructures
         /// would freeze an implementation detail -- the buffer policy -- into a test
         /// about the guarantee.
         /// </para>
+        /// <para>
+        /// The k = 16 row is the coarsest corner the spread window can honestly
+        /// hold: probed at ratio 1.037 with bias 1.7%, so the guarantee survives
+        /// down to sixteen entries. (k = 1 is legal too, but its estimator has
+        /// infinite variance -- (K-1)/V(K) at K = 2 -- so no spread window can pin
+        /// it; the order-statistic tests carry that corner exactly instead.)
+        /// </para>
         /// </summary>
         [TestMethod]
+        [DataRow(16u)]
         [DataRow(256u)]
         [DataRow(1024u)]
         [DataRow(4096u)]

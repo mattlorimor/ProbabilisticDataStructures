@@ -586,9 +586,10 @@ namespace TestProbabilisticDataStructures
         /// can notice.
         /// </summary>
         [TestMethod]
-        public void TestThetaIsTheKPlusFirstSmallestHashAndSummariesFollow()
+        [DataRow(1u)]
+        [DataRow(32u)]
+        public void TestThetaIsTheKPlusFirstSmallestHashAndSummariesFollow(uint k)
         {
-            const uint k = 32;
             var sketch = new TupleSketch(k);
 
             var hashes = new ulong[2 * k];

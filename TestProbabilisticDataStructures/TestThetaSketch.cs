@@ -519,11 +519,18 @@ namespace TestProbabilisticDataStructures
         /// order statistic has to be computed by something that is not the trim
         /// code, which is what the independent sort below is.
         /// </para>
+        /// <para>
+        /// k = 1 is the coarsest legal sketch: it trims at two values, theta is the
+        /// larger hash and the survivor the smaller, and the estimator's variance is
+        /// infinite -- which is exactly why the rule must be pinned there, because
+        /// no behavioral window can be.
+        /// </para>
         /// </summary>
         [TestMethod]
-        public void TestThetaIsTheKPlusFirstSmallestHash()
+        [DataRow(1u)]
+        [DataRow(32u)]
+        public void TestThetaIsTheKPlusFirstSmallestHash(uint k)
         {
-            const uint k = 32;
             var sketch = new ThetaSketch(k);
 
             var hashes = new ulong[2 * k];
