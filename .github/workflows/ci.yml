@@ -20,7 +20,22 @@ jobs:
       # fail-fast would hide it behind whichever runner finished first.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # Both architectures on Linux and Windows, and arm64 on macOS. Nothing here
+        # is architecture-specific by intent -- the library is managed IL with no
+        # intrinsics and no unsafe code -- but persisted payloads are little-endian
+        # by construction and DDSketch derives a persisted bucket index from
+        # Math.Log, which is not required to be correctly rounded and may differ
+        # between one platform's libm and another's. Those are claims worth running
+        # rather than believing.
+        #
+        # The arm64 labels name an image version because there is no -latest form of
+        # them, so they need bumping by hand when an image is retired.
+        os:
+          - ubuntu-latest      # x64 Linux
+          - ubuntu-24.04-arm   # arm64 Linux
+          - windows-latest     # x64 Windows
+          - windows-11-arm     # arm64 Windows
+          - macos-latest       # arm64 macOS
 
     steps:
       - name: Check out
