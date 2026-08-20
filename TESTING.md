@@ -229,6 +229,44 @@ The tell is that the hook's body duplicates an expression rather than delegating
 adding one, check the production path calls it — a mutation applied to the *loop* and
 not the hook is the cheapest way to find out.
 
+### A sweep named "every X" must derive its roster
+
+A test that sweeps the whole library is only as complete as its list, and a list typed
+out by hand is written by whoever last remembered to extend it. It agrees with itself
+perfectly: it is named "every structure" and it means "every structure someone thought
+of". Nothing fails when the next one is added.
+
+Six sweeps here made that claim and none of them was true. The empty round trip reached
+26 of 33 structures, the corruption sweep and the read-as-another sweep 30, and the
+three hash sweeps 12 of 25, 11 of 20 and 11 of 20. The gaps tracked the release: the
+structures 6.2.0 added were the ones absent, and `BloomFilter` itself had fallen out of
+the empty sweep at some earlier point without anyone noticing.
+
+The sharpest instance was the read-as-another sweep, which ends by asserting that no two
+structures share a persistence id — computed across its own roster. Three structures were
+missing from that roster, so a duplicate id handed to any of them would have passed the
+test written to catch exactly that. A completeness check downstream of an incomplete list
+is not a check.
+
+The fix is to derive the roster from something a new structure cannot omit itself from.
+`StructureId` is that for persistence: a structure that is not in it cannot be persisted
+at all. For the hash sweeps there is no enum, so the roster comes from the library's
+public surface by reflection — the types declaring `SetHash`, and the types with a
+constructor or static factory taking a hash — filtered to those that persist, which is
+what keeps the hash plumbing out. A structure that cannot be swept is exempted *with its
+reason*, and the exemption is checked in turn: one naming a structure the sweep does
+cover has gone stale and fails as loudly as a gap.
+
+The proof that this works is not that the sweeps pass. It is that adding a member to
+`StructureId` fails all four persistence sweeps by name, and dropping the persistable
+filter from the reflected roster fails the constructor sweep on the hash plumbing it
+was there to exclude.
+
+Filling the six sweeps found no defects in the library — every structure did honour a
+constructor hash, did refuse to replace one once occupied, and did catch corruption
+anywhere in its payload. That is the point worth keeping: the sweeps were not wrong
+about the structures they reached, they were silent about the ones they did not.
+
 ### Bound the work, not the wall clock
 
 The quotient-style filters walk their metadata in while-true loops whose

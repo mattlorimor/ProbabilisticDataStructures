@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO.Hashing;
 using System.Linq;
 using System.Text;
@@ -78,70 +78,81 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Every filter exposing SetHash should accept one and keep working. This is a
+        /// Every structure exposing SetHash accepts one and keeps working. This is a
         /// breadth check rather than a deep one: the point is that no implementation
-        /// was missed when the signature changed.
+        /// was missed when the signature changed, so the roster it sweeps is derived
+        /// from the library's own surface rather than typed out here.
         /// </summary>
         [TestMethod]
-        public void TestEveryFilterAcceptsASuppliedHash()
+        public void TestEveryStructureAcceptsASuppliedHash()
         {
             var a = Key("alpha");
 
-            var bloom = new BloomFilter(100, 0.01);
-            bloom.SetHash(AlternateHash);
-            bloom.Add(a);
-            Assert.IsTrue(bloom.Test(a));
+            var covered = new (Type Type, Action Exercise)[]
+            {
+                Accepting(new BloomFilter(100, 0.01), f => { f.Add(a); Assert.IsTrue(f.Test(a)); }),
+                Accepting(new BloomFilter64(100, 0.01), f => { f.Add(a); Assert.IsTrue(f.Test(a)); }),
+                Accepting(CountingBloomFilter.NewDefaultCountingBloomFilter(100, 0.01),
+                    f => { f.Add(a); Assert.IsTrue(f.Test(a)); }),
+                Accepting(new PartitionedBloomFilter(100, 0.01), f => { f.Add(a); Assert.IsTrue(f.Test(a)); }),
+                Accepting(new DeletableBloomFilter(100, 10, 0.01), f => { f.Add(a); Assert.IsTrue(f.Test(a)); }),
+                Accepting(StableBloomFilter.NewDefaultStableBloomFilter(100, 0.01),
+                    f => { f.Add(a); Assert.IsTrue(f.Test(a)); }),
+                Accepting(new InverseBloomFilter(100), f => { f.Add(a); Assert.IsTrue(f.Test(a)); }),
+                Accepting(new CuckooBloomFilter(100, 0.01), f => { f.Add(a); Assert.IsTrue(f.Test(a)); }),
+                Accepting(ScalableBloomFilter.NewDefaultScalableBloomFilter(0.01),
+                    f => { f.Add(a); Assert.IsTrue(f.Test(a)); }),
+                Accepting(new QuotientFilter(100, 0.01), f => { f.Add(a); Assert.IsTrue(f.Test(a)); }),
+                Accepting(new InfiniFilter(64, 8), f => { f.Add(a); Assert.IsTrue(f.Test(a)); }),
 
-            var bloom64 = new BloomFilter64(100, 0.01);
-            bloom64.SetHash(AlternateHash);
-            bloom64.Add(a);
-            Assert.IsTrue(bloom64.Test(a));
+                // These have no Test, so exercising the query they do have is the
+                // available check.
+                Accepting(new CountMinSketch(0.001, 0.99),
+                    f => { f.Add(a); Assert.IsGreaterThanOrEqualTo(1UL, f.Count(a)); }),
+                Accepting(HyperLogLog.NewDefaultHyperLogLog(0.01),
+                    f => { f.Add(a); Assert.IsGreaterThan(0UL, f.Count()); }),
+                Accepting(new HyperLogLogPlus(14),
+                    f => { f.Add(a); Assert.IsGreaterThan(0UL, f.Count()); }),
+                Accepting(new CountSketch(0.05, 0.01),
+                    f => { f.Add(a); Assert.IsGreaterThanOrEqualTo(1L, f.Count(a)); }),
+                Accepting(new ThetaSketch(64),
+                    f => { f.Add(a); Assert.IsGreaterThan(0UL, f.Count()); }),
+                Accepting(new UltraLogLog(10),
+                    f => { f.Add(a); Assert.IsGreaterThan(0UL, f.Count()); }),
+                Accepting(new SetSketch(64),
+                    f => { f.Add(a); Assert.IsGreaterThan(0.0, f.Cardinality()); }),
+                Accepting(new TupleSketch(16),
+                    f => { f.Add(a, 1.0); Assert.IsGreaterThan(0UL, f.Count()); }),
+                Accepting(new SublimeCountMinSketch(0.5, 0.5, ValeCounterArray.DefaultCountersPerChunk),
+                    f => { f.Add(a); Assert.IsGreaterThanOrEqualTo(1UL, f.Count(a)); }),
+            };
 
-            var counting = CountingBloomFilter.NewDefaultCountingBloomFilter(100, 0.01);
-            counting.SetHash(AlternateHash);
-            counting.Add(a);
-            Assert.IsTrue(counting.Test(a));
+            foreach (var (_, exercise) in covered)
+            {
+                exercise();
+            }
 
-            var partitioned = new PartitionedBloomFilter(100, 0.01);
-            partitioned.SetHash(AlternateHash);
-            partitioned.Add(a);
-            Assert.IsTrue(partitioned.Test(a));
+            StructureRoster.AssertCoversEveryType(
+                "supplied hash",
+                StructureRoster.WithSetHash,
+                covered.Select(c => c.Type));
+        }
 
-            var deletable = new DeletableBloomFilter(100, 10, 0.01);
-            deletable.SetHash(AlternateHash);
-            deletable.Add(a);
-            Assert.IsTrue(deletable.Test(a));
-
-            var stable = StableBloomFilter.NewDefaultStableBloomFilter(100, 0.01);
-            stable.SetHash(AlternateHash);
-            stable.Add(a);
-            Assert.IsTrue(stable.Test(a));
-
-            var inverse = new InverseBloomFilter(100);
-            inverse.SetHash(AlternateHash);
-            inverse.Add(a);
-            Assert.IsTrue(inverse.Test(a));
-
-            var cuckoo = new CuckooBloomFilter(100, 0.01);
-            cuckoo.SetHash(AlternateHash);
-            cuckoo.Add(a);
-            Assert.IsTrue(cuckoo.Test(a));
-
-            var scalable = ScalableBloomFilter.NewDefaultScalableBloomFilter(0.01);
-            scalable.SetHash(AlternateHash);
-            scalable.Add(a);
-            Assert.IsTrue(scalable.Test(a));
-
-            // These have no Test, so exercising Add is the available check.
-            var cms = new CountMinSketch(0.001, 0.99);
-            cms.SetHash(AlternateHash);
-            cms.Add(a);
-            Assert.IsGreaterThanOrEqualTo(1UL, cms.Count(a));
-
-            var hll = HyperLogLog.NewDefaultHyperLogLog(0.01);
-            hll.SetHash(AlternateHash);
-            hll.Add(a);
-            Assert.IsGreaterThan(0UL, hll.Count());
+        /// <summary>
+        /// Installs the alternate hash on a freshly built structure and hands back the
+        /// check that it still works, paired with the type so a failure names it.
+        /// </summary>
+        /// <remarks>
+        /// SetHash is a shape rather than an interface -- twenty structures declare it
+        /// and none of them share a base that does -- so it is called here through the
+        /// same signature the roster is derived from. That keeps the two in step: a
+        /// type the roster finds is a type this can drive.
+        /// </remarks>
+        private static (Type Type, Action Exercise) Accepting<T>(T structure, Action<T> exercise)
+        {
+            typeof(T).GetMethod("SetHash", new[] { typeof(Func<ReadOnlySpan<byte>, ulong>) })!
+                .Invoke(structure, new object[] { (Func<ReadOnlySpan<byte>, ulong>)AlternateHash });
+            return (typeof(T), () => exercise(structure));
         }
     }
 }

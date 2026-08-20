@@ -1,4 +1,5 @@
-using System;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -35,23 +36,62 @@ namespace TestProbabilisticDataStructures
         private const int Custom = 0;
         private const int Default = 1;
 
+        /// <summary>
+        /// A hash handed to a structure as it is built is the one it holds, and the one
+        /// its payload names. For several structures here, construction is the only
+        /// place a hash can be installed at all: they expose no SetHash.
+        /// </summary>
         [TestMethod]
         public void TestEveryStructureUsesAHashGivenToItsConstructor()
         {
-            Assert.AreEqual(Custom, RecordedHashId(new BloomFilter(100, 0.01, Alternate).ToByteArray()));
-            Assert.AreEqual(Custom, RecordedHashId(new BloomFilter64(100, 0.01, Alternate).ToByteArray()));
-            Assert.AreEqual(Custom, RecordedHashId(new CountingBloomFilter(100, 4, 0.01, Alternate).ToByteArray()));
-            Assert.AreEqual(Custom, RecordedHashId(new DeletableBloomFilter(100, 10, 0.01, Alternate).ToByteArray()));
-            Assert.AreEqual(Custom, RecordedHashId(new PartitionedBloomFilter(100, 0.01, Alternate).ToByteArray()));
-            Assert.AreEqual(Custom, RecordedHashId(new StableBloomFilter(100, 2, 0.01, Alternate).ToByteArray()));
-            Assert.AreEqual(Custom, RecordedHashId(new InverseBloomFilter(64, Alternate).ToByteArray()));
-            Assert.AreEqual(Custom, RecordedHashId(new CuckooBloomFilter(100, 0.01, Alternate).ToByteArray()));
-            Assert.AreEqual(Custom, RecordedHashId(new CountMinSketch(0.01, 0.01, Alternate).ToByteArray()));
-            Assert.AreEqual(Custom, RecordedHashId(new HyperLogLog(64, Alternate).ToByteArray()));
+            var built = new (Type Type, Func<byte[]> Payload)[]
+            {
+                (typeof(BloomFilter), () => new BloomFilter(100, 0.01, Alternate).ToByteArray()),
+                (typeof(BloomFilter64), () => new BloomFilter64(100, 0.01, Alternate).ToByteArray()),
+                (typeof(CountingBloomFilter), () => new CountingBloomFilter(100, 4, 0.01, Alternate).ToByteArray()),
+                (typeof(DeletableBloomFilter), () => new DeletableBloomFilter(100, 10, 0.01, Alternate).ToByteArray()),
+                (typeof(PartitionedBloomFilter), () => new PartitionedBloomFilter(100, 0.01, Alternate).ToByteArray()),
+                (typeof(StableBloomFilter), () => new StableBloomFilter(100, 2, 0.01, Alternate).ToByteArray()),
+                (typeof(InverseBloomFilter), () => new InverseBloomFilter(64, Alternate).ToByteArray()),
+                (typeof(CuckooBloomFilter), () => new CuckooBloomFilter(100, 0.01, Alternate).ToByteArray()),
+                (typeof(CountMinSketch), () => new CountMinSketch(0.01, 0.01, Alternate).ToByteArray()),
+                (typeof(HyperLogLog), () => new HyperLogLog(64, Alternate).ToByteArray()),
+                (typeof(CountSketch), () => new CountSketch(0.05, 0.01, Alternate).ToByteArray()),
+                (typeof(HyperLogLogPlus), () => new HyperLogLogPlus(14, Alternate).ToByteArray()),
+                (typeof(QuotientFilter), () => new QuotientFilter(100, 0.01, Alternate).ToByteArray()),
+                (typeof(UltraLogLog), () => new UltraLogLog(10, Alternate).ToByteArray()),
+                (typeof(InfiniFilter), () => new InfiniFilter(64, 8, Alternate).ToByteArray()),
+                (typeof(SetSketch), () => new SetSketch(8, Alternate).ToByteArray()),
+                (typeof(SublimeCountMinSketch), () => new SublimeCountMinSketch(
+                    0.5, 0.5, ValeCounterArray.DefaultCountersPerChunk, Alternate).ToByteArray()),
+                (typeof(HeavyKeeper), () => new HeavyKeeper(10, 64, seed: 1, hash: Alternate).ToByteArray()),
+                (typeof(PrivateCountMinSketch),
+                    () => new PrivateCountMinSketch(8, 2, 0.5, seed: 1, hash: Alternate).ToByteArray()),
+                (typeof(DpswSketch), () => new DpswSketch(
+                    window: 16, rho: 4.0, alpha: 0.6, width: 4, depth: 2,
+                    seed: 3, hash: Alternate).ToByteArray()),
+                (typeof(BinaryFuseFilter), () => BinaryFuseFilter.Build(
+                    new[] { Key("a"), Key("b"), Key("c") }, BinaryFuseWidth.Eight, Alternate).ToByteArray()),
+                (typeof(BloomierFilter), () => BloomierFilter.Build(
+                    new[] { new KeyValuePair<byte[], ulong>(Key("a"), 1UL) }, 8, Alternate).ToByteArray()),
+                (typeof(InvertibleBloomLookupTable),
+                    () => new InvertibleBloomLookupTable(10, 8, Alternate).ToByteArray()),
 
-            // The composites have to pass it down to what they hold.
-            Assert.AreEqual(Custom, RecordedHashId(new ScalableBloomFilter(50, 0.01, 0.8, Alternate).ToByteArray()));
-            Assert.AreEqual(Custom, RecordedHashId(new TopK(0.01, 0.01, 5, Alternate).ToByteArray()));
+                // The composites have to pass it down to what they hold.
+                (typeof(ScalableBloomFilter), () => new ScalableBloomFilter(50, 0.01, 0.8, Alternate).ToByteArray()),
+                (typeof(TopK), () => new TopK(0.01, 0.01, 5, Alternate).ToByteArray()),
+            };
+
+            foreach (var (type, payload) in built)
+            {
+                Assert.AreEqual(Custom, RecordedHashId(payload()),
+                    $"a {type.Name} built with a hash of its own recorded the default instead");
+            }
+
+            StructureRoster.AssertCoversEveryType(
+                "constructor hash",
+                StructureRoster.TakingAHashWhenBuilt,
+                built.Select(b => b.Type));
         }
 
         [TestMethod]
@@ -111,32 +151,61 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(500u, bloom.Count());
         }
 
+        /// <summary>
+        /// Once a structure holds anything, its hash is settled: everything already in
+        /// it was placed by the old one, and replacing it moves none of it.
+        /// </summary>
         [TestMethod]
-        public void TestEveryStructureRefusesToReplaceThHashOnceItHoldsSomething()
+        public void TestEveryStructureRefusesToReplaceTheHashOnceItHoldsSomething()
         {
-            var bloom = new BloomFilter(100, 0.01); bloom.Add(Key("a"));
-            var bloom64 = new BloomFilter64(100, 0.01); bloom64.Add(Key("a"));
-            var counting = new CountingBloomFilter(100, 4, 0.01); counting.Add(Key("a"));
-            var deletable = new DeletableBloomFilter(100, 10, 0.01); deletable.Add(Key("a"));
-            var partitioned = new PartitionedBloomFilter(100, 0.01); partitioned.Add(Key("a"));
-            var stable = new StableBloomFilter(100, 2, 0.01); stable.Add(Key("a"));
-            var inverse = new InverseBloomFilter(64); inverse.Add(Key("a"));
-            var cuckoo = new CuckooBloomFilter(100, 0.01); cuckoo.Add(Key("a"));
-            var sketch = new CountMinSketch(0.01, 0.01); sketch.Add(Key("a"));
-            var hll = new HyperLogLog(64); hll.Add(Key("a"));
-            var scalable = new ScalableBloomFilter(50, 0.01, 0.8); scalable.Add(Key("a"));
+            var occupied = new (Type Type, Action Replace)[]
+            {
+                Holding(new BloomFilter(100, 0.01), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new BloomFilter64(100, 0.01), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new CountingBloomFilter(100, 4, 0.01), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new DeletableBloomFilter(100, 10, 0.01), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new PartitionedBloomFilter(100, 0.01), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new StableBloomFilter(100, 2, 0.01), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new InverseBloomFilter(64), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new CuckooBloomFilter(100, 0.01), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new CountMinSketch(0.01, 0.01), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new HyperLogLog(64), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new ScalableBloomFilter(50, 0.01, 0.8), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new CountSketch(0.05, 0.01), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new HyperLogLogPlus(14), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new QuotientFilter(100, 0.01), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new ThetaSketch(64), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new UltraLogLog(10), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new InfiniFilter(64, 8), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new SetSketch(8), f => f.Add(Key("a")), f => f.SetHash(Alternate)),
+                Holding(new TupleSketch(16), f => f.Add(Key("a"), 1.0), f => f.SetHash(Alternate)),
+                Holding(
+                    new SublimeCountMinSketch(0.5, 0.5, ValeCounterArray.DefaultCountersPerChunk),
+                    f => f.Add(Key("a")),
+                    f => f.SetHash(Alternate)),
+            };
 
-            Assert.ThrowsExactly<InvalidOperationException>(() => bloom.SetHash(Alternate));
-            Assert.ThrowsExactly<InvalidOperationException>(() => bloom64.SetHash(Alternate));
-            Assert.ThrowsExactly<InvalidOperationException>(() => counting.SetHash(Alternate));
-            Assert.ThrowsExactly<InvalidOperationException>(() => deletable.SetHash(Alternate));
-            Assert.ThrowsExactly<InvalidOperationException>(() => partitioned.SetHash(Alternate));
-            Assert.ThrowsExactly<InvalidOperationException>(() => stable.SetHash(Alternate));
-            Assert.ThrowsExactly<InvalidOperationException>(() => inverse.SetHash(Alternate));
-            Assert.ThrowsExactly<InvalidOperationException>(() => cuckoo.SetHash(Alternate));
-            Assert.ThrowsExactly<InvalidOperationException>(() => sketch.SetHash(Alternate));
-            Assert.ThrowsExactly<InvalidOperationException>(() => hll.SetHash(Alternate));
-            Assert.ThrowsExactly<InvalidOperationException>(() => scalable.SetHash(Alternate));
+            foreach (var (type, replace) in occupied)
+            {
+                Assert.ThrowsExactly<InvalidOperationException>(replace,
+                    $"a {type.Name} holding something allowed its hash to be replaced");
+            }
+
+            StructureRoster.AssertCoversEveryType(
+                "replacing the hash",
+                StructureRoster.WithSetHash,
+                occupied.Select(o => o.Type));
+        }
+
+        /// <summary>
+        /// Builds a structure, puts something in it, and hands back the attempt to
+        /// replace its hash afterwards, paired with the type so a failure names it.
+        /// </summary>
+        private static (Type Type, Action Replace) Holding<T>(
+            T structure, Action<T> fill, Action<T> replace)
+        {
+            fill(structure);
+            return (typeof(T), () => replace(structure));
         }
 
         /// <summary>

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -485,46 +485,119 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestEveryStructureRoundTripsWhileEmpty()
         {
-            Assert.AreEqual(0ul, RoundTrip(new BloomFilter64(1000, 0.01)).Count());
-            Assert.AreEqual(0u, RoundTrip(new CountingBloomFilter(1000, 4, 0.01)).Count());
-            Assert.AreEqual(0u, RoundTrip(new DeletableBloomFilter(1000, 10, 0.01)).Count());
-            Assert.AreEqual(0u, RoundTrip(new PartitionedBloomFilter(1000, 0.01)).Count());
-            Assert.AreEqual(0u, RoundTrip(new CuckooBloomFilter(1000, 0.01)).Count());
-            Assert.AreEqual(0ul, RoundTrip(new HyperLogLog(1024)).Count());
+            var checks = new (StructureId Id, Action Check)[]
+            {
+                (StructureId.BloomFilter,
+                    () => Assert.AreEqual(0u, RoundTrip(new BloomFilter(1000, 0.01)).Count())),
+                (StructureId.BloomFilter64,
+                    () => Assert.AreEqual(0ul, RoundTrip(new BloomFilter64(1000, 0.01)).Count())),
+                (StructureId.CountingBloomFilter,
+                    () => Assert.AreEqual(0u, RoundTrip(new CountingBloomFilter(1000, 4, 0.01)).Count())),
+                (StructureId.DeletableBloomFilter,
+                    () => Assert.AreEqual(0u, RoundTrip(new DeletableBloomFilter(1000, 10, 0.01)).Count())),
+                (StructureId.PartitionedBloomFilter,
+                    () => Assert.AreEqual(0u, RoundTrip(new PartitionedBloomFilter(1000, 0.01)).Count())),
+                (StructureId.CuckooBloomFilter,
+                    () => Assert.AreEqual(0u, RoundTrip(new CuckooBloomFilter(1000, 0.01)).Count())),
+                (StructureId.HyperLogLog,
+                    () => Assert.AreEqual(0ul, RoundTrip(new HyperLogLog(1024)).Count())),
 
-            Assert.IsFalse(RoundTrip(new StableBloomFilter(1000, 2, 0.01)).Test(Key("x")));
-            Assert.IsFalse(RoundTrip(new InverseBloomFilter(500)).Test(Key("x")));
-            Assert.IsFalse(RoundTrip(new ScalableBloomFilter(100, 0.01, 0.8)).Test(Key("x")));
-            Assert.HasCount(0, RoundTrip(new TopK(0.001, 0.01, 10)).Elements());
-            Assert.HasCount(0, RoundTrip(new HeavyKeeper(10, 64, seed: 1)).Elements());
-            Assert.AreEqual(0u, RoundTrip(new VarOpt(10, seed: 1)).SampleCount);
-            Assert.AreEqual(0ul, RoundTrip(new UltraLogLog(10)).Count());
-            Assert.AreEqual(0ul, RoundTrip(Grafite.Build(Array.Empty<ulong>(), 0.01, 16)).Count());
-            Assert.IsFalse(RoundTrip(new InfiniFilter(64, 8)).Test(Key("x")));
-            Assert.IsFalse(RoundTrip(new MementoFilter(256, 8)).Test(7));
+                (StructureId.StableBloomFilter,
+                    () => Assert.IsFalse(RoundTrip(new StableBloomFilter(1000, 2, 0.01)).Test(Key("x")))),
+                (StructureId.InverseBloomFilter,
+                    () => Assert.IsFalse(RoundTrip(new InverseBloomFilter(500)).Test(Key("x")))),
+                (StructureId.ScalableBloomFilter,
+                    () => Assert.IsFalse(RoundTrip(new ScalableBloomFilter(100, 0.01, 0.8)).Test(Key("x")))),
+                (StructureId.TopK,
+                    () => Assert.HasCount(0, RoundTrip(new TopK(0.001, 0.01, 10)).Elements())),
+                (StructureId.HeavyKeeper,
+                    () => Assert.HasCount(0, RoundTrip(new HeavyKeeper(10, 64, seed: 1)).Elements())),
+                (StructureId.VarOpt,
+                    () => Assert.AreEqual(0u, RoundTrip(new VarOpt(10, seed: 1)).SampleCount)),
+                (StructureId.UltraLogLog,
+                    () => Assert.AreEqual(0ul, RoundTrip(new UltraLogLog(10)).Count())),
+                (StructureId.Grafite,
+                    () => Assert.AreEqual(0ul, RoundTrip(Grafite.Build(Array.Empty<ulong>(), 0.01, 16)).Count())),
+                (StructureId.InfiniFilter,
+                    () => Assert.IsFalse(RoundTrip(new InfiniFilter(64, 8)).Test(Key("x")))),
+                (StructureId.MementoFilter,
+                    () => Assert.IsFalse(RoundTrip(new MementoFilter(256, 8)).Test(7))),
 
-            Assert.AreEqual(0ul, RoundTrip(new CountMinSketch(0.01, 0.01)).TotalCount());
-            Assert.AreEqual(0u, RoundTrip(BinaryFuseFilter.Build(Array.Empty<byte[]>())).Count());
-            Assert.AreEqual(0ul, RoundTrip(new DDSketch(0.01)).Count());
-            Assert.AreEqual(0ul, RoundTrip(new HyperLogLogPlus(14)).Count());
-            Assert.AreEqual(0u, RoundTrip(new QuotientFilter(1000, 0.01)).Count());
-            Assert.AreEqual(0ul, RoundTrip(new ThetaSketch(4096)).Count());
-            Assert.AreEqual(0L, RoundTrip(new CountSketch(0.05, 0.01)).Count(Key("x")));
-            Assert.AreEqual(0u, RoundTrip(BloomierFilter.Build(
-                Array.Empty<System.Collections.Generic.KeyValuePair<byte[], ulong>>(), 8)).Count());
+                (StructureId.CountMinSketch,
+                    () => Assert.AreEqual(0ul, RoundTrip(new CountMinSketch(0.01, 0.01)).TotalCount())),
+                (StructureId.BinaryFuseFilter,
+                    () => Assert.AreEqual(0u, RoundTrip(BinaryFuseFilter.Build(Array.Empty<byte[]>())).Count())),
+                (StructureId.DDSketch,
+                    () => Assert.AreEqual(0ul, RoundTrip(new DDSketch(0.01)).Count())),
+                (StructureId.HyperLogLogPlus,
+                    () => Assert.AreEqual(0ul, RoundTrip(new HyperLogLogPlus(14)).Count())),
+                (StructureId.QuotientFilter,
+                    () => Assert.AreEqual(0u, RoundTrip(new QuotientFilter(1000, 0.01)).Count())),
+                (StructureId.ThetaSketch,
+                    () => Assert.AreEqual(0ul, RoundTrip(new ThetaSketch(4096)).Count())),
+                (StructureId.CountSketch,
+                    () => Assert.AreEqual(0L, RoundTrip(new CountSketch(0.05, 0.01)).Count(Key("x")))),
+                (StructureId.BloomierFilter,
+                    () => Assert.AreEqual(0u, RoundTrip(BloomierFilter.Build(
+                        Array.Empty<KeyValuePair<byte[], ulong>>(), 8)).Count())),
 
-            var emptyTable = RoundTrip(new InvertibleBloomLookupTable(10, 8));
-            Assert.AreEqual(15u, emptyTable.Cells());
-            Assert.AreEqual(8, emptyTable.KeySize());
-            Assert.IsTrue(emptyTable.TryDecode(out var nothing, out _));
-            Assert.HasCount(0, nothing);
+                (StructureId.SetSketch,
+                    () => Assert.AreEqual(0.0, RoundTrip(new SetSketch(8)).Cardinality())),
+                (StructureId.TupleSketch,
+                    () => Assert.AreEqual(0ul, RoundTrip(new TupleSketch(16)).Count())),
+                (StructureId.SublimeCountMinSketch,
+                    () => Assert.AreEqual(0ul, RoundTrip(EmptySublime()).TotalCount())),
 
-            // A signature of an empty bag is the one case here that is not all zeroes:
-            // every position holds the identity ulong.MaxValue, which a restore that
-            // defaulted the array instead of reading it would turn into 0.
-            var empty = RoundTrip(MinHash.Signature(Array.Empty<string>(), 8));
-            Assert.AreEqual(1f, MinHash.Similarity(empty, MinHash.Signature(Array.Empty<string>(), 8)));
+                // The two private structures hold noise rather than counts, so an empty
+                // one does not answer zero to a query. What has to survive the round
+                // trip is the true tally underneath, which no noise is added to.
+                (StructureId.PrivateCountMinSketch,
+                    () => Assert.AreEqual(0ul,
+                        RoundTrip(new PrivateCountMinSketch(8, 2, 0.5, seed: 1)).TotalCount())),
+                (StructureId.DpswSketch,
+                    () => Assert.AreEqual(0L, RoundTrip(EmptyDpsw()).Position)),
+
+                (StructureId.InvertibleBloomLookupTable, () =>
+                {
+                    var emptyTable = RoundTrip(new InvertibleBloomLookupTable(10, 8));
+                    Assert.AreEqual(15u, emptyTable.Cells());
+                    Assert.AreEqual(8, emptyTable.KeySize());
+                    Assert.IsTrue(emptyTable.TryDecode(out var nothing, out _));
+                    Assert.HasCount(0, nothing);
+                }),
+
+                // A signature of an empty bag is the one case here that is not all
+                // zeroes: every position holds the identity ulong.MaxValue, which a
+                // restore that defaulted the array instead of reading it would turn
+                // into 0.
+                (StructureId.MinHashSignature, () =>
+                {
+                    var empty = RoundTrip(MinHash.Signature(Array.Empty<string>(), 8));
+                    Assert.AreEqual(1f, MinHash.Similarity(empty, MinHash.Signature(Array.Empty<string>(), 8)));
+                }),
+
+                (StructureId.SimHashSignature, () =>
+                {
+                    var empty = RoundTrip(SimHash.Signature(Array.Empty<string>()));
+                    Assert.AreEqual(0, SimHash.HammingDistance(empty, SimHash.Signature(Array.Empty<string>())));
+                }),
+            };
+
+            foreach (var (id, check) in checks)
+            {
+                check();
+            }
+
+            StructureRoster.AssertCoversEveryStructure("empty round trip", checks.Select(c => c.Id));
         }
+
+        // The starting width is a chunk of counters divided by the size factor, so
+        // handing it a whole chunk asks for the smallest sketch the paper allows.
+        private static SublimeCountMinSketch EmptySublime() =>
+            new SublimeCountMinSketch(0.5, 0.5, ValeCounterArray.DefaultCountersPerChunk);
+
+        private static DpswSketch EmptyDpsw() =>
+            new DpswSketch(window: 16, rho: 4.0, alpha: 0.6, width: 4, depth: 2, seed: 3);
 
         /// <summary>
         /// Every structure names the hash it was written with, and refuses to substitute
@@ -554,7 +627,7 @@ namespace TestProbabilisticDataStructures
             var iblt = new InvertibleBloomLookupTable(10, 8, custom);
             iblt.Add(new byte[8]);
             var bloomier = BloomierFilter.Build(
-                Present.Select(w => new System.Collections.Generic.KeyValuePair<byte[], ulong>(Key(w), 1UL)),
+                Present.Select(w => new KeyValuePair<byte[], ulong>(Key(w), 1UL)),
                 8, custom);
             var theta = new ThetaSketch(4096); theta.SetHash(custom);
             foreach (var w in Present) theta.Add(Key(w));
@@ -563,34 +636,92 @@ namespace TestProbabilisticDataStructures
             var hllPlus = new HyperLogLogPlus(14); hllPlus.SetHash(custom);
             foreach (var w in Present) hllPlus.Add(Key(w));
 
-            AssertRefusesThenAccepts(bloomier.ToByteArray(), b => Persistence.FromByteArray<BloomierFilter>(b), b => Persistence.FromByteArray<BloomierFilter>(b, custom));
-            AssertRefusesThenAccepts(iblt.ToByteArray(), b => Persistence.FromByteArray<InvertibleBloomLookupTable>(b), b => Persistence.FromByteArray<InvertibleBloomLookupTable>(b, custom));
-            AssertRefusesThenAccepts(countSketch.ToByteArray(), b => Persistence.FromByteArray<CountSketch>(b), b => Persistence.FromByteArray<CountSketch>(b, custom));
-            AssertRefusesThenAccepts(theta.ToByteArray(), b => Persistence.FromByteArray<ThetaSketch>(b), b => Persistence.FromByteArray<ThetaSketch>(b, custom));
-            AssertRefusesThenAccepts(quotient.ToByteArray(), b => Persistence.FromByteArray<QuotientFilter>(b), b => Persistence.FromByteArray<QuotientFilter>(b, custom));
-            AssertRefusesThenAccepts(hllPlus.ToByteArray(), b => Persistence.FromByteArray<HyperLogLogPlus>(b), b => Persistence.FromByteArray<HyperLogLogPlus>(b, custom));
-            AssertRefusesThenAccepts(fuse.ToByteArray(), b => Persistence.FromByteArray<BinaryFuseFilter>(b), b => Persistence.FromByteArray<BinaryFuseFilter>(b, custom));
-            AssertRefusesThenAccepts(bloom.ToByteArray(), b => Persistence.FromByteArray<BloomFilter>(b), b => Persistence.FromByteArray<BloomFilter>(b, custom));
-            AssertRefusesThenAccepts(sketch.ToByteArray(), b => Persistence.FromByteArray<CountMinSketch>(b), b => Persistence.FromByteArray<CountMinSketch>(b, custom));
-            AssertRefusesThenAccepts(bloom64.ToByteArray(), b => Persistence.FromByteArray<BloomFilter64>(b), b => Persistence.FromByteArray<BloomFilter64>(b, custom));
-            AssertRefusesThenAccepts(counting.ToByteArray(), b => Persistence.FromByteArray<CountingBloomFilter>(b), b => Persistence.FromByteArray<CountingBloomFilter>(b, custom));
-            AssertRefusesThenAccepts(deletable.ToByteArray(), b => Persistence.FromByteArray<DeletableBloomFilter>(b), b => Persistence.FromByteArray<DeletableBloomFilter>(b, custom));
-            AssertRefusesThenAccepts(partitioned.ToByteArray(), b => Persistence.FromByteArray<PartitionedBloomFilter>(b), b => Persistence.FromByteArray<PartitionedBloomFilter>(b, custom));
-            AssertRefusesThenAccepts(stable.ToByteArray(), b => Persistence.FromByteArray<StableBloomFilter>(b), b => Persistence.FromByteArray<StableBloomFilter>(b, custom));
-            AssertRefusesThenAccepts(inverse.ToByteArray(), b => Persistence.FromByteArray<InverseBloomFilter>(b), b => Persistence.FromByteArray<InverseBloomFilter>(b, custom));
-            AssertRefusesThenAccepts(cuckoo.ToByteArray(), b => Persistence.FromByteArray<CuckooBloomFilter>(b), b => Persistence.FromByteArray<CuckooBloomFilter>(b, custom));
-            AssertRefusesThenAccepts(hll.ToByteArray(), b => Persistence.FromByteArray<HyperLogLog>(b), b => Persistence.FromByteArray<HyperLogLog>(b, custom));
+            // These take their hash at construction rather than through SetHash, which
+            // for several of them is the only way to install one at all.
+            var topK = new TopK(0.001, 0.01, 10, custom); topK.Add(Key("a"));
+            var keeper = new HeavyKeeper(10, 64, seed: 1, hash: custom); keeper.Add(Key("a"));
+            var ultra = new UltraLogLog(10, custom); ultra.Add(Key("a"));
+            var infini = new InfiniFilter(64, 8, custom); infini.Add(Key("a"));
+            var sublime = new SublimeCountMinSketch(
+                0.5, 0.5, ValeCounterArray.DefaultCountersPerChunk, custom);
+            sublime.Add(Key("a"));
+            var setSketch = new SetSketch(8, custom); setSketch.Add(Key("a"));
+            var tuple = new TupleSketch(16); tuple.SetHash(custom); tuple.Add(Key("a"), 1.0);
+            var priv = new PrivateCountMinSketch(8, 2, 0.5, seed: 1, hash: custom);
+            priv.Add(Key("a"));
+            var dpsw = new DpswSketch(
+                window: 16, rho: 4.0, alpha: 0.6, width: 4, depth: 2, seed: 3, hash: custom);
+            dpsw.Add(Key("a"));
 
-            // The composite one matters most: its contained filters each name the hash
-            // too, so a scalable filter cannot come back half converted.
-            AssertRefusesThenAccepts(scalable.ToByteArray(), b => Persistence.FromByteArray<ScalableBloomFilter>(b), b => Persistence.FromByteArray<ScalableBloomFilter>(b, custom));
+            var covered = new (StructureId Id, byte[] Bytes, Func<byte[], object> Without, Func<byte[], object> With)[]
+            {
+                (StructureId.BloomierFilter, bloomier.ToByteArray(), b => Persistence.FromByteArray<BloomierFilter>(b), b => Persistence.FromByteArray<BloomierFilter>(b, custom)),
+                (StructureId.InvertibleBloomLookupTable, iblt.ToByteArray(), b => Persistence.FromByteArray<InvertibleBloomLookupTable>(b), b => Persistence.FromByteArray<InvertibleBloomLookupTable>(b, custom)),
+                (StructureId.CountSketch, countSketch.ToByteArray(), b => Persistence.FromByteArray<CountSketch>(b), b => Persistence.FromByteArray<CountSketch>(b, custom)),
+                (StructureId.ThetaSketch, theta.ToByteArray(), b => Persistence.FromByteArray<ThetaSketch>(b), b => Persistence.FromByteArray<ThetaSketch>(b, custom)),
+                (StructureId.QuotientFilter, quotient.ToByteArray(), b => Persistence.FromByteArray<QuotientFilter>(b), b => Persistence.FromByteArray<QuotientFilter>(b, custom)),
+                (StructureId.HyperLogLogPlus, hllPlus.ToByteArray(), b => Persistence.FromByteArray<HyperLogLogPlus>(b), b => Persistence.FromByteArray<HyperLogLogPlus>(b, custom)),
+                (StructureId.BinaryFuseFilter, fuse.ToByteArray(), b => Persistence.FromByteArray<BinaryFuseFilter>(b), b => Persistence.FromByteArray<BinaryFuseFilter>(b, custom)),
+                (StructureId.BloomFilter, bloom.ToByteArray(), b => Persistence.FromByteArray<BloomFilter>(b), b => Persistence.FromByteArray<BloomFilter>(b, custom)),
+                (StructureId.CountMinSketch, sketch.ToByteArray(), b => Persistence.FromByteArray<CountMinSketch>(b), b => Persistence.FromByteArray<CountMinSketch>(b, custom)),
+                (StructureId.BloomFilter64, bloom64.ToByteArray(), b => Persistence.FromByteArray<BloomFilter64>(b), b => Persistence.FromByteArray<BloomFilter64>(b, custom)),
+                (StructureId.CountingBloomFilter, counting.ToByteArray(), b => Persistence.FromByteArray<CountingBloomFilter>(b), b => Persistence.FromByteArray<CountingBloomFilter>(b, custom)),
+                (StructureId.DeletableBloomFilter, deletable.ToByteArray(), b => Persistence.FromByteArray<DeletableBloomFilter>(b), b => Persistence.FromByteArray<DeletableBloomFilter>(b, custom)),
+                (StructureId.PartitionedBloomFilter, partitioned.ToByteArray(), b => Persistence.FromByteArray<PartitionedBloomFilter>(b), b => Persistence.FromByteArray<PartitionedBloomFilter>(b, custom)),
+                (StructureId.StableBloomFilter, stable.ToByteArray(), b => Persistence.FromByteArray<StableBloomFilter>(b), b => Persistence.FromByteArray<StableBloomFilter>(b, custom)),
+                (StructureId.InverseBloomFilter, inverse.ToByteArray(), b => Persistence.FromByteArray<InverseBloomFilter>(b), b => Persistence.FromByteArray<InverseBloomFilter>(b, custom)),
+                (StructureId.CuckooBloomFilter, cuckoo.ToByteArray(), b => Persistence.FromByteArray<CuckooBloomFilter>(b), b => Persistence.FromByteArray<CuckooBloomFilter>(b, custom)),
+                (StructureId.HyperLogLog, hll.ToByteArray(), b => Persistence.FromByteArray<HyperLogLog>(b), b => Persistence.FromByteArray<HyperLogLog>(b, custom)),
+                (StructureId.TopK, topK.ToByteArray(), b => Persistence.FromByteArray<TopK>(b), b => Persistence.FromByteArray<TopK>(b, custom)),
+                (StructureId.HeavyKeeper, keeper.ToByteArray(), b => Persistence.FromByteArray<HeavyKeeper>(b), b => Persistence.FromByteArray<HeavyKeeper>(b, custom)),
+                (StructureId.UltraLogLog, ultra.ToByteArray(), b => Persistence.FromByteArray<UltraLogLog>(b), b => Persistence.FromByteArray<UltraLogLog>(b, custom)),
+                (StructureId.InfiniFilter, infini.ToByteArray(), b => Persistence.FromByteArray<InfiniFilter>(b), b => Persistence.FromByteArray<InfiniFilter>(b, custom)),
+                (StructureId.SublimeCountMinSketch, sublime.ToByteArray(), b => Persistence.FromByteArray<SublimeCountMinSketch>(b), b => Persistence.FromByteArray<SublimeCountMinSketch>(b, custom)),
+                (StructureId.SetSketch, setSketch.ToByteArray(), b => Persistence.FromByteArray<SetSketch>(b), b => Persistence.FromByteArray<SetSketch>(b, custom)),
+                (StructureId.TupleSketch, tuple.ToByteArray(), b => Persistence.FromByteArray<TupleSketch>(b), b => Persistence.FromByteArray<TupleSketch>(b, custom)),
+                (StructureId.PrivateCountMinSketch, priv.ToByteArray(), b => Persistence.FromByteArray<PrivateCountMinSketch>(b), b => Persistence.FromByteArray<PrivateCountMinSketch>(b, custom)),
+                (StructureId.DpswSketch, dpsw.ToByteArray(), b => Persistence.FromByteArray<DpswSketch>(b), b => Persistence.FromByteArray<DpswSketch>(b, custom)),
+
+                // The composite one matters most: its contained filters each name the
+                // hash too, so a scalable filter cannot come back half converted.
+                (StructureId.ScalableBloomFilter, scalable.ToByteArray(), b => Persistence.FromByteArray<ScalableBloomFilter>(b), b => Persistence.FromByteArray<ScalableBloomFilter>(b, custom)),
+            };
+
+            foreach (var (id, bytes, without, with) in covered)
+            {
+                AssertRefusesThenAccepts(id, bytes, without, with);
+            }
+
+            StructureRoster.AssertCoversEveryStructure(
+                "custom hash",
+                covered.Select(c => c.Id),
+                (StructureId.DDSketch,
+                    "takes numbers rather than bytes, so it hashes nothing and records " +
+                    "HashId.None; a reader handed a hash for one is refused instead."),
+                (StructureId.MinHashSignature,
+                    "hashes with a fixed family chosen by the signature length; there " +
+                    "is no parameter through which to substitute another."),
+                (StructureId.SimHashSignature,
+                    "same: the hash is fixed by the construction rather than supplied."),
+                (StructureId.VarOpt,
+                    "samples the items themselves rather than hashing them."),
+                (StructureId.Grafite,
+                    "takes ulong keys and derives its positions from them and a seed, " +
+                    "with no hash parameter on Build."),
+                (StructureId.MementoFilter,
+                    "takes ulong keys likewise, with no hash parameter on the constructor."));
         }
 
         private static void AssertRefusesThenAccepts(
-            byte[] bytes, Func<byte[], object> withoutHash, Func<byte[], object> withHash)
+            StructureId id,
+            byte[] bytes,
+            Func<byte[], object> withoutHash,
+            Func<byte[], object> withHash)
         {
-            Assert.ThrowsExactly<InvalidDataException>(() => withoutHash(bytes));
-            Assert.IsNotNull(withHash(bytes));
+            Assert.ThrowsExactly<InvalidDataException>(() => withoutHash(bytes),
+                $"a {id} written under a custom hash was restored without being given one");
+            Assert.IsNotNull(withHash(bytes),
+                $"a {id} written under a custom hash was refused when handed that hash");
         }
 
         /// <summary>
@@ -601,45 +732,48 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestEveryStructureRefusesToBeReadAsAnother()
         {
-            var payloads = new (string Name, byte[] Bytes)[]
+            var payloads = new (StructureId Id, byte[] Bytes)[]
             {
-                ("BloomFilter", new BloomFilter(1000, 0.01).ToByteArray()),
-                ("BloomFilter64", new BloomFilter64(1000, 0.01).ToByteArray()),
-                ("CountingBloomFilter", new CountingBloomFilter(1000, 4, 0.01).ToByteArray()),
-                ("DeletableBloomFilter", new DeletableBloomFilter(1000, 10, 0.01).ToByteArray()),
-                ("PartitionedBloomFilter", new PartitionedBloomFilter(1000, 0.01).ToByteArray()),
-                ("ScalableBloomFilter", new ScalableBloomFilter(100, 0.01, 0.8).ToByteArray()),
-                ("StableBloomFilter", new StableBloomFilter(1000, 2, 0.01).ToByteArray()),
-                ("InverseBloomFilter", new InverseBloomFilter(500).ToByteArray()),
-                ("CuckooBloomFilter", new CuckooBloomFilter(1000, 0.01).ToByteArray()),
-                ("CountMinSketch", new CountMinSketch(0.01, 0.01).ToByteArray()),
-                ("HyperLogLog", new HyperLogLog(1024).ToByteArray()),
-                ("TopK", new TopK(0.001, 0.01, 10).ToByteArray()),
-                ("MinHashSignature", MinHash.Signature(new[] { "a" }, 8).ToByteArray()),
-                ("BinaryFuseFilter", BinaryFuseFilter.Build(new[] { Key("a") }).ToByteArray()),
-                ("DDSketch", FilledSketchOfNumbers()),
-                ("HyperLogLogPlus", new HyperLogLogPlus(14).Add(Key("a")).ToByteArray()),
-                ("QuotientFilter", new QuotientFilter(1000, 0.01).Add(Key("a")).ToByteArray()),
-                ("ThetaSketch", new ThetaSketch(4096).Add(Key("a")).ToByteArray()),
-                ("SimHashSignature", SimHash.Signature(new[] { "a" }).ToByteArray()),
-                ("CountSketch", new CountSketch(0.5, 0.5).Add(Key("a")).ToByteArray()),
-                ("InvertibleBloomLookupTable", new InvertibleBloomLookupTable(4, 8).Add(new byte[8]).ToByteArray()),
-                ("BloomierFilter", FilledBloomier()),
-                ("HeavyKeeper", new HeavyKeeper(10, 64, seed: 1).Add(Key("a")).ToByteArray()),
-                ("VarOpt", new VarOpt(10, seed: 1).Add(Key("a")).ToByteArray()),
-                ("UltraLogLog", new UltraLogLog(10).Add(Key("a")).ToByteArray()),
-                ("Grafite", Grafite.Build(new ulong[] { 1, 2, 3 }, 0.01, 16, seed: 1).ToByteArray()),
-                ("InfiniFilter", new InfiniFilter(64, 8).Add(Key("a")).ToByteArray()),
-                ("MementoFilter", new MementoFilter(256, 8).Add(5).ToByteArray()),
-                ("PrivateCountMinSketch",
+                (StructureId.BloomFilter, new BloomFilter(1000, 0.01).ToByteArray()),
+                (StructureId.BloomFilter64, new BloomFilter64(1000, 0.01).ToByteArray()),
+                (StructureId.CountingBloomFilter, new CountingBloomFilter(1000, 4, 0.01).ToByteArray()),
+                (StructureId.DeletableBloomFilter, new DeletableBloomFilter(1000, 10, 0.01).ToByteArray()),
+                (StructureId.PartitionedBloomFilter, new PartitionedBloomFilter(1000, 0.01).ToByteArray()),
+                (StructureId.ScalableBloomFilter, new ScalableBloomFilter(100, 0.01, 0.8).ToByteArray()),
+                (StructureId.StableBloomFilter, new StableBloomFilter(1000, 2, 0.01).ToByteArray()),
+                (StructureId.InverseBloomFilter, new InverseBloomFilter(500).ToByteArray()),
+                (StructureId.CuckooBloomFilter, new CuckooBloomFilter(1000, 0.01).ToByteArray()),
+                (StructureId.CountMinSketch, new CountMinSketch(0.01, 0.01).ToByteArray()),
+                (StructureId.HyperLogLog, new HyperLogLog(1024).ToByteArray()),
+                (StructureId.TopK, new TopK(0.001, 0.01, 10).ToByteArray()),
+                (StructureId.MinHashSignature, MinHash.Signature(new[] { "a" }, 8).ToByteArray()),
+                (StructureId.BinaryFuseFilter, BinaryFuseFilter.Build(new[] { Key("a") }).ToByteArray()),
+                (StructureId.DDSketch, FilledSketchOfNumbers()),
+                (StructureId.HyperLogLogPlus, new HyperLogLogPlus(14).Add(Key("a")).ToByteArray()),
+                (StructureId.QuotientFilter, new QuotientFilter(1000, 0.01).Add(Key("a")).ToByteArray()),
+                (StructureId.ThetaSketch, new ThetaSketch(4096).Add(Key("a")).ToByteArray()),
+                (StructureId.SimHashSignature, SimHash.Signature(new[] { "a" }).ToByteArray()),
+                (StructureId.CountSketch, new CountSketch(0.5, 0.5).Add(Key("a")).ToByteArray()),
+                (StructureId.InvertibleBloomLookupTable, new InvertibleBloomLookupTable(4, 8).Add(new byte[8]).ToByteArray()),
+                (StructureId.BloomierFilter, FilledBloomier()),
+                (StructureId.HeavyKeeper, new HeavyKeeper(10, 64, seed: 1).Add(Key("a")).ToByteArray()),
+                (StructureId.VarOpt, new VarOpt(10, seed: 1).Add(Key("a")).ToByteArray()),
+                (StructureId.UltraLogLog, new UltraLogLog(10).Add(Key("a")).ToByteArray()),
+                (StructureId.Grafite, Grafite.Build(new ulong[] { 1, 2, 3 }, 0.01, 16, seed: 1).ToByteArray()),
+                (StructureId.InfiniFilter, new InfiniFilter(64, 8).Add(Key("a")).ToByteArray()),
+                (StructureId.MementoFilter, new MementoFilter(256, 8).Add(5).ToByteArray()),
+                (StructureId.PrivateCountMinSketch,
                     new PrivateCountMinSketch(16, 2, 0.5, seed: 1).Add(Key("a")).ToByteArray()),
-                ("DpswSketch", FilledDpsw()),
+                (StructureId.DpswSketch, FilledDpsw()),
+                (StructureId.SublimeCountMinSketch, FilledSublime()),
+                (StructureId.SetSketch, FilledSetSketch()),
+                (StructureId.TupleSketch, FilledTuple()),
             };
 
             // Read every payload as a BloomFilter; only its own may succeed.
-            foreach (var (name, bytes) in payloads)
+            foreach (var (id, bytes) in payloads)
             {
-                if (name == "BloomFilter")
+                if (id == StructureId.BloomFilter)
                 {
                     Assert.IsNotNull(Persistence.FromByteArray<BloomFilter>(bytes));
                     continue;
@@ -647,12 +781,15 @@ namespace TestProbabilisticDataStructures
 
                 var ex = Assert.ThrowsExactly<InvalidDataException>(
                     () => Persistence.FromByteArray<BloomFilter>(bytes),
-                    $"a {name} payload was accepted as a BloomFilter");
-                StringAssert.Contains(ex.Message, name);
+                    $"a {id} payload was accepted as a BloomFilter");
+                StringAssert.Contains(ex.Message, id.ToString());
             }
 
+            StructureRoster.AssertCoversEveryStructure("read as another", payloads.Select(pl => pl.Id));
+
             // Every payload carries a distinct structure id, or the check above is
-            // weaker than it looks.
+            // weaker than it looks -- and the sweep has to be complete first, or this
+            // is only asserting that the structures someone remembered do not collide.
             var ids = payloads.Select(p => p.Bytes[6] | (p.Bytes[7] << 8)).ToArray();
             Assert.AreEqual(payloads.Length, ids.Distinct().Count(),
                 "two structures share a structure id");
@@ -665,45 +802,49 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestCorruptionIsCaughtInEveryStructure()
         {
-            var payloads = new (string Name, Func<byte[], object> Read, byte[] Bytes)[]
+            var payloads = new (StructureId Id, Func<byte[], object> Read, byte[] Bytes)[]
             {
-                ("BloomFilter64", b => Persistence.FromByteArray<BloomFilter64>(b), Filled(new BloomFilter64(200, 0.01))),
-                ("CountingBloomFilter", b => Persistence.FromByteArray<CountingBloomFilter>(b), Filled(new CountingBloomFilter(200, 4, 0.01))),
-                ("DeletableBloomFilter", b => Persistence.FromByteArray<DeletableBloomFilter>(b), Filled(new DeletableBloomFilter(200, 10, 0.01))),
-                ("PartitionedBloomFilter", b => Persistence.FromByteArray<PartitionedBloomFilter>(b), Filled(new PartitionedBloomFilter(200, 0.01))),
-                ("StableBloomFilter", b => Persistence.FromByteArray<StableBloomFilter>(b), Filled(new StableBloomFilter(200, 2, 0.01))),
-                ("InverseBloomFilter", b => Persistence.FromByteArray<InverseBloomFilter>(b), Filled(new InverseBloomFilter(50))),
-                ("CuckooBloomFilter", b => Persistence.FromByteArray<CuckooBloomFilter>(b), FilledCuckoo()),
-                ("HyperLogLog", b => Persistence.FromByteArray<HyperLogLog>(b), FilledHll()),
-                ("ScalableBloomFilter", b => Persistence.FromByteArray<ScalableBloomFilter>(b), Filled(new ScalableBloomFilter(50, 0.01, 0.8))),
-                ("TopK", b => Persistence.FromByteArray<TopK>(b), FilledTopK()),
-                ("BloomFilter", b => Persistence.FromByteArray<BloomFilter>(b), Filled(new BloomFilter(200, 0.01))),
-                ("CountMinSketch", b => Persistence.FromByteArray<CountMinSketch>(b), FilledSketch()),
-                ("MinHashSignature", b => Persistence.FromByteArray<MinHashSignature>(b), FilledSignature()),
-                ("BinaryFuseFilter", b => Persistence.FromByteArray<BinaryFuseFilter>(b), FilledFuse()),
-                ("DDSketch", b => Persistence.FromByteArray<DDSketch>(b), FilledSketchOfNumbers()),
+                (StructureId.BloomFilter64, b => Persistence.FromByteArray<BloomFilter64>(b), Filled(new BloomFilter64(200, 0.01))),
+                (StructureId.CountingBloomFilter, b => Persistence.FromByteArray<CountingBloomFilter>(b), Filled(new CountingBloomFilter(200, 4, 0.01))),
+                (StructureId.DeletableBloomFilter, b => Persistence.FromByteArray<DeletableBloomFilter>(b), Filled(new DeletableBloomFilter(200, 10, 0.01))),
+                (StructureId.PartitionedBloomFilter, b => Persistence.FromByteArray<PartitionedBloomFilter>(b), Filled(new PartitionedBloomFilter(200, 0.01))),
+                (StructureId.StableBloomFilter, b => Persistence.FromByteArray<StableBloomFilter>(b), Filled(new StableBloomFilter(200, 2, 0.01))),
+                (StructureId.InverseBloomFilter, b => Persistence.FromByteArray<InverseBloomFilter>(b), Filled(new InverseBloomFilter(50))),
+                (StructureId.CuckooBloomFilter, b => Persistence.FromByteArray<CuckooBloomFilter>(b), FilledCuckoo()),
+                (StructureId.HyperLogLog, b => Persistence.FromByteArray<HyperLogLog>(b), FilledHll()),
+                (StructureId.ScalableBloomFilter, b => Persistence.FromByteArray<ScalableBloomFilter>(b), Filled(new ScalableBloomFilter(50, 0.01, 0.8))),
+                (StructureId.TopK, b => Persistence.FromByteArray<TopK>(b), FilledTopK()),
+                (StructureId.BloomFilter, b => Persistence.FromByteArray<BloomFilter>(b), Filled(new BloomFilter(200, 0.01))),
+                (StructureId.CountMinSketch, b => Persistence.FromByteArray<CountMinSketch>(b), FilledSketch()),
+                (StructureId.MinHashSignature, b => Persistence.FromByteArray<MinHashSignature>(b), FilledSignature()),
+                (StructureId.BinaryFuseFilter, b => Persistence.FromByteArray<BinaryFuseFilter>(b), FilledFuse()),
+                (StructureId.DDSketch, b => Persistence.FromByteArray<DDSketch>(b), FilledSketchOfNumbers()),
                 // Both representations, which are different layouts behind one id.
-                ("HyperLogLogPlus sparse", b => Persistence.FromByteArray<HyperLogLogPlus>(b), FilledHllPlus(20)),
-                ("HyperLogLogPlus dense", b => Persistence.FromByteArray<HyperLogLogPlus>(b), FilledHllPlus(200)),
-                ("QuotientFilter", b => Persistence.FromByteArray<QuotientFilter>(b), FilledQuotient()),
-                ("ThetaSketch", b => Persistence.FromByteArray<ThetaSketch>(b), FilledTheta()),
-                ("SimHashSignature", b => Persistence.FromByteArray<SimHashSignature>(b),
+                (StructureId.HyperLogLogPlus, b => Persistence.FromByteArray<HyperLogLogPlus>(b), FilledHllPlus(20)),
+                (StructureId.HyperLogLogPlus, b => Persistence.FromByteArray<HyperLogLogPlus>(b), FilledHllPlus(200)),
+                (StructureId.QuotientFilter, b => Persistence.FromByteArray<QuotientFilter>(b), FilledQuotient()),
+                (StructureId.ThetaSketch, b => Persistence.FromByteArray<ThetaSketch>(b), FilledTheta()),
+                (StructureId.SimHashSignature, b => Persistence.FromByteArray<SimHashSignature>(b),
                     SimHash.Signature(new[] { "a", "b", "c", "d" }).ToByteArray()),
-                ("CountSketch", b => Persistence.FromByteArray<CountSketch>(b), FilledCountSketch()),
-                ("InvertibleBloomLookupTable", b => Persistence.FromByteArray<InvertibleBloomLookupTable>(b), FilledIblt()),
-                ("BloomierFilter", b => Persistence.FromByteArray<BloomierFilter>(b), FilledBloomier()),
-                ("HeavyKeeper", b => Persistence.FromByteArray<HeavyKeeper>(b), FilledHeavyKeeper()),
-                ("VarOpt", b => Persistence.FromByteArray<VarOpt>(b), FilledVarOpt()),
-                ("UltraLogLog", b => Persistence.FromByteArray<UltraLogLog>(b), FilledUltraLogLog()),
-                ("Grafite", b => Persistence.FromByteArray<Grafite>(b), FilledGrafite()),
-                ("InfiniFilter", b => Persistence.FromByteArray<InfiniFilter>(b), FilledInfiniFilter()),
-                ("MementoFilter", b => Persistence.FromByteArray<MementoFilter>(b), FilledMementoFilter()),
-                ("PrivateCountMinSketch", b => Persistence.FromByteArray<PrivateCountMinSketch>(b),
+                (StructureId.CountSketch, b => Persistence.FromByteArray<CountSketch>(b), FilledCountSketch()),
+                (StructureId.InvertibleBloomLookupTable, b => Persistence.FromByteArray<InvertibleBloomLookupTable>(b), FilledIblt()),
+                (StructureId.BloomierFilter, b => Persistence.FromByteArray<BloomierFilter>(b), FilledBloomier()),
+                (StructureId.HeavyKeeper, b => Persistence.FromByteArray<HeavyKeeper>(b), FilledHeavyKeeper()),
+                (StructureId.VarOpt, b => Persistence.FromByteArray<VarOpt>(b), FilledVarOpt()),
+                (StructureId.UltraLogLog, b => Persistence.FromByteArray<UltraLogLog>(b), FilledUltraLogLog()),
+                (StructureId.Grafite, b => Persistence.FromByteArray<Grafite>(b), FilledGrafite()),
+                (StructureId.InfiniFilter, b => Persistence.FromByteArray<InfiniFilter>(b), FilledInfiniFilter()),
+                (StructureId.MementoFilter, b => Persistence.FromByteArray<MementoFilter>(b), FilledMementoFilter()),
+                (StructureId.PrivateCountMinSketch, b => Persistence.FromByteArray<PrivateCountMinSketch>(b),
                     FilledPrivateSketch()),
-                ("DpswSketch", b => Persistence.FromByteArray<DpswSketch>(b), FilledDpsw()),
+                (StructureId.DpswSketch, b => Persistence.FromByteArray<DpswSketch>(b), FilledDpsw()),
+                (StructureId.SublimeCountMinSketch, b => Persistence.FromByteArray<SublimeCountMinSketch>(b),
+                    FilledSublime()),
+                (StructureId.SetSketch, b => Persistence.FromByteArray<SetSketch>(b), FilledSetSketch()),
+                (StructureId.TupleSketch, b => Persistence.FromByteArray<TupleSketch>(b), FilledTuple()),
             };
 
-            foreach (var (name, read, clean) in payloads)
+            foreach (var (id, read, clean) in payloads)
             {
                 for (int i = 4; i < clean.Length; i++)
                 {
@@ -711,9 +852,34 @@ namespace TestProbabilisticDataStructures
                     corrupted[i] ^= 0x01;
 
                     Assert.ThrowsExactly<InvalidDataException>(() => read(corrupted),
-                        $"{name}: a flipped bit at offset {i} was not caught");
+                        $"{id}: a flipped bit at offset {i} was not caught");
                 }
             }
+
+            StructureRoster.AssertCoversEveryStructure("corruption", payloads.Select(pl => pl.Id));
+        }
+
+        // Small on purpose, as with the other payloads here: the sweep above flips a
+        // bit at every offset of every payload one at a time.
+        private static byte[] FilledSublime()
+        {
+            var sketch = EmptySublime();
+            for (var i = 0; i < 40; i++) sketch.Add(Key($"w{i % 5}"));
+            return sketch.ToByteArray();
+        }
+
+        private static byte[] FilledSetSketch()
+        {
+            var sketch = new SetSketch(8);
+            for (var i = 0; i < 40; i++) sketch.Add(Key($"w{i}"));
+            return sketch.ToByteArray();
+        }
+
+        private static byte[] FilledTuple()
+        {
+            var sketch = new TupleSketch(16);
+            for (var i = 0; i < 40; i++) sketch.Add(Key($"w{i}"), 1.0 + i);
+            return sketch.ToByteArray();
         }
 
         private static byte[] FilledPrivateSketch()
