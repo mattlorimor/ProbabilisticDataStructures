@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -25,8 +25,12 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestFormatDocumentation
     {
+        // The trailing \r is matched rather than assumed away: the file is checked out
+        // with CRLF line endings on Windows, and a pattern anchored with $ alone finds
+        // nothing there. That failure is not loud by itself -- a sweep over no sections
+        // passes every per-section assertion it makes -- so PayloadSections guards it.
         private static readonly Regex PayloadSection =
-            new(@"^### `(?<name>[A-Za-z0-9]+)` \(id (?<id>\d+)\)$", RegexOptions.Multiline);
+            new(@"^### `(?<name>[A-Za-z0-9]+)` \(id (?<id>\d+)\)\r?$", RegexOptions.Multiline);
 
         private static string Specification()
         {
@@ -38,12 +42,29 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The payload sections, with the vacuity guard both tests below need: a
+        /// pattern matching nothing turns either of them into a loop over an empty
+        /// collection, which passes.
+        /// </summary>
+        private static MatchCollection PayloadSections()
+        {
+            var sections = PayloadSection.Matches(Specification());
+
+            Assert.IsGreaterThan(0, sections.Count,
+                "no payload sections were found in FORMAT.md at all, so every " +
+                "assertion made about them below is vacuous. The heading pattern and " +
+                "the document have diverged.");
+
+            return sections;
+        }
+
+        /// <summary>
         /// Every structure the format can write has a section describing what it writes.
         /// </summary>
         [TestMethod]
         public void TestEveryStructureHasItsPayloadDocumented()
         {
-            var documented = PayloadSection.Matches(Specification())
+            var documented = PayloadSections()
                 .Select(m => m.Groups["name"].Value)
                 .ToArray();
 
@@ -63,7 +84,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestEveryDocumentedIdMatchesTheStructureItNames()
         {
-            foreach (Match section in PayloadSection.Matches(Specification()))
+            foreach (Match section in PayloadSections())
             {
                 var name = section.Groups["name"].Value;
                 var documented = ushort.Parse(section.Groups["id"].Value);
