@@ -65,6 +65,39 @@ namespace TestProbabilisticDataStructures
                 .ToArray();
 
         /// <summary>
+        /// Every public structure offering a span query that answers without changing
+        /// anything: Test, Count, TryGetValue.
+        /// </summary>
+        internal static IReadOnlyList<Type> WithPureSpanQueries { get; } =
+            SpanMethodsWhere(name => name != "Add" && !Mutates(name));
+
+        /// <summary>
+        /// Every public structure offering a span query that answers *and* changes the
+        /// structure: TestAndAdd, TestAndRemove, Remove.
+        /// </summary>
+        /// <remarks>
+        /// These need a different check from the pure ones. Two overloads returning the
+        /// same answer is only half of it -- an array path and a span path can agree on
+        /// every answer and still leave the structure in different states, and a filter
+        /// that answers correctly while holding the wrong thing fails later, somewhere
+        /// else, for no visible reason.
+        /// </remarks>
+        internal static IReadOnlyList<Type> WithMutatingSpanQueries { get; } =
+            SpanMethodsWhere(Mutates);
+
+        private static bool Mutates(string method) =>
+            method is "TestAndAdd" or "TestAndRemove" or "Remove";
+
+        private static IReadOnlyList<Type> SpanMethodsWhere(Func<string, bool> wanted) =>
+            Library.GetTypes()
+                .Where(t => t.IsPublic && !t.IsAbstract && IsAStructure(t))
+                .Where(t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                    .Any(m => wanted(m.Name) && m.GetParameters()
+                        .Any(param => param.ParameterType == typeof(ReadOnlySpan<byte>))))
+                .OrderBy(t => t.Name, StringComparer.Ordinal)
+                .ToArray();
+
+        /// <summary>
         /// Every public structure that can be handed a hash as it is built, whether
         /// through a constructor or a static factory. This is a wider set than
         /// <see cref="WithSetHash"/>: for several structures, construction is the only
