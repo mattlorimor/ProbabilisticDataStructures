@@ -45,60 +45,6 @@ namespace TestProbabilisticDataStructures
             }
         }
 
-        /// <summary>
-        /// Asserts a sweep touched every structure the format knows about.
-        /// </summary>
-        /// <remarks>
-        /// Every roster in this file is written by hand, and a hand-written roster
-        /// agrees with itself: it is named "every structure" and means "every structure
-        /// whoever last edited it remembered". That is not a hypothetical -- when this
-        /// check was first written, all four sweeps below were missing the structures
-        /// added most recently, and one of them was asserting that no two structures
-        /// share an id across a roster three structures short of the full set.
-        /// <para>
-        /// <see cref="StructureId"/> is the roster a structure cannot leave itself off
-        /// of, because a structure that is not in it cannot be persisted at all. A new
-        /// structure therefore fails this until it is either covered or exempted.
-        /// </para>
-        /// </remarks>
-        /// <param name="sweep">Named in the failure, since four sweeps share this.</param>
-        /// <param name="covered">The structures the sweep exercised.</param>
-        /// <param name="exempt">
-        /// Structures the sweep cannot apply to, each with its reason. An exemption is
-        /// a claim about the structure rather than a way to quieten this, so it is
-        /// checked in turn: one naming a structure the sweep does cover has gone stale
-        /// and fails just as loudly as a gap.
-        /// </param>
-        private static void AssertSweepCoversEveryStructure(
-            string sweep,
-            IEnumerable<StructureId> covered,
-            params (StructureId Id, string Why)[] exempt)
-        {
-            var seen = covered.ToHashSet();
-            var excused = exempt.Select(e => e.Id).ToHashSet();
-
-            Assert.AreEqual(exempt.Length, excused.Count,
-                $"the {sweep} sweep exempts a structure twice");
-
-            foreach (var (id, why) in exempt)
-            {
-                Assert.IsFalse(string.IsNullOrWhiteSpace(why),
-                    $"the {sweep} sweep exempts {id} without saying why");
-                Assert.IsFalse(seen.Contains(id),
-                    $"the {sweep} sweep exempts {id} and then covers it anyway; " +
-                    "the reason given is out of date");
-            }
-
-            var missing = Enum.GetValues<StructureId>()
-                .Where(id => !seen.Contains(id) && !excused.Contains(id))
-                .ToArray();
-
-            Assert.IsEmpty(missing,
-                $"the {sweep} sweep is named for every structure but does not reach " +
-                string.Join(", ", missing) +
-                ". Cover it, or exempt it here with the reason it cannot apply.");
-        }
-
         [TestMethod]
         public void TestBloomFilter64RoundTrips()
         {
@@ -642,7 +588,7 @@ namespace TestProbabilisticDataStructures
                 check();
             }
 
-            AssertSweepCoversEveryStructure("empty round trip", checks.Select(c => c.Id));
+            StructureRoster.AssertCoversEveryStructure("empty round trip", checks.Select(c => c.Id));
         }
 
         // The starting width is a chunk of counters divided by the size factor, so
@@ -746,7 +692,7 @@ namespace TestProbabilisticDataStructures
                 AssertRefusesThenAccepts(id, bytes, without, with);
             }
 
-            AssertSweepCoversEveryStructure(
+            StructureRoster.AssertCoversEveryStructure(
                 "custom hash",
                 covered.Select(c => c.Id),
                 (StructureId.DDSketch,
@@ -839,7 +785,7 @@ namespace TestProbabilisticDataStructures
                 StringAssert.Contains(ex.Message, id.ToString());
             }
 
-            AssertSweepCoversEveryStructure("read as another", payloads.Select(pl => pl.Id));
+            StructureRoster.AssertCoversEveryStructure("read as another", payloads.Select(pl => pl.Id));
 
             // Every payload carries a distinct structure id, or the check above is
             // weaker than it looks -- and the sweep has to be complete first, or this
@@ -910,7 +856,7 @@ namespace TestProbabilisticDataStructures
                 }
             }
 
-            AssertSweepCoversEveryStructure("corruption", payloads.Select(pl => pl.Id));
+            StructureRoster.AssertCoversEveryStructure("corruption", payloads.Select(pl => pl.Id));
         }
 
         // Small on purpose, as with the other payloads here: the sweep above flips a
