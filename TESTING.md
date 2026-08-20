@@ -277,6 +277,15 @@ that two filters write version 2 and "the other eleven" version 1 — true at th
 structures, wrong from the next release onward. A count in a comment is a roster
 maintained by hand, and the fix is to remove the number rather than correct it.
 
+Not every sweep can be one loop. `TestPersistenceHostilePayloads` refuses payloads whose
+fields are internally absurd, and what counts as absurd differs per structure because the
+fields differ — there is nothing to iterate. Its roster is a map from each structure to
+the test that carries it, and both halves are checked: the structures come from
+`StructureId`, and each named test must exist and be a test, so an entry pointing at
+something renamed or un-attributed fails rather than silently vouching for nothing. That
+sweep had drifted the *other* way from the rest — the newest structures were the
+best-covered, and fifteen of the oldest had no field-level test at all, guards and all.
+
 The rosters also disagree with your own audit, which is the point of deriving them. The
 span-equivalence sweep was short by six, and adding those six turned up two more the
 audit had passed over — `BinaryFuseFilter` and `BloomierFilter`, which are built once

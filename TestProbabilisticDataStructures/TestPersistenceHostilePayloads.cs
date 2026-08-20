@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Buffers.Binary;
 using System.IO;
@@ -45,11 +45,6 @@ namespace TestProbabilisticDataStructures
             return bytes;
         }
 
-        /// <summary>
-        /// Overwrites a u64 at an offset within the payload and repairs the checksum --
-        /// the eight-byte sibling of <see cref="PokeUInt32"/>, for doubles poked by
-        /// their bit pattern.
-        /// </summary>
         /// <summary>
         /// Overwrites a single byte at an offset within the payload and repairs the
         /// checksum.
@@ -1066,5 +1061,441 @@ namespace TestProbabilisticDataStructures
 
             return (bytes, layout);
         }
+
+        /// <summary>
+        /// Overwrites the hash id in the envelope header and repairs the checksum. The
+        /// hash id lives before the payload, so the poking helpers above cannot reach
+        /// it.
+        /// </summary>
+        private static byte[] PokeHashId(byte[] original, ushort hashId)
+        {
+            var bytes = (byte[])original.Clone();
+            BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(8), hashId);
+            RepairChecksum(bytes);
+            return bytes;
+        }
+
+        /// <summary>
+        /// A filter's declared bit count and the buckets it carries have to describe the
+        /// same filter. They are written separately, so a payload can claim one and
+        /// carry the other.
+        /// </summary>
+        [TestMethod]
+        public void TestCountingFilterWhoseSizeDisagreesWithItsBucketsIsRefused()
+        {
+            var bytes = Filled(new CountingBloomFilter(200, 4, 0.01)).ToByteArray();
+
+            AssertRefused(
+                () => Persistence.FromByteArray<CountingBloomFilter>(PokeUInt32(bytes, 0, 12_345)),
+                "do not describe the same filter");
+        }
+
+        /// <summary>
+        /// The deletable filter's data region and its buckets, likewise.
+        /// </summary>
+        [TestMethod]
+        public void TestDeletableFilterWhoseSizeDisagreesWithItsBucketsIsRefused()
+        {
+            var bytes = Filled(new DeletableBloomFilter(200, 10, 0.01)).ToByteArray();
+
+            AssertRefused(
+                () => Persistence.FromByteArray<DeletableBloomFilter>(PokeUInt32(bytes, 0, 12_345)),
+                "do not describe the same filter");
+        }
+
+        /// <summary>
+        /// A stable filter with no hash functions sets no cells and tests none, so it
+        /// answers no to everything rather than failing.
+        /// </summary>
+        [TestMethod]
+        public void TestStableFilterWithNoHashFunctionsIsRefused()
+        {
+            // u32 m, then k.
+            const int KOffset = 4;
+
+            var bytes = Filled(new StableBloomFilter(200, 2, 0.01, seed: 5)).ToByteArray();
+
+            AssertRefused(
+                () => Persistence.FromByteArray<StableBloomFilter>(PokeUInt32(bytes, KOffset, 0)),
+                "no hash functions");
+        }
+
+        /// <summary>
+        /// The inverse filter divides by its capacity to pick a slot, so a capacity of
+        /// zero is a division by zero on the first add rather than a smaller filter.
+        /// </summary>
+        [TestMethod]
+        public void TestInverseFilterWithNoCapacityIsRefused()
+        {
+            var bytes = Filled(new InverseBloomFilter(64)).ToByteArray();
+
+            AssertRefused(
+                () => Persistence.FromByteArray<InverseBloomFilter>(PokeUInt32(bytes, 0, 0)),
+                "capacity of zero");
+        }
+
+        /// <summary>
+        /// An entry whose slot index is past the end of the filter would be written
+        /// outside the array it belongs to.
+        /// </summary>
+        [TestMethod]
+        public void TestInverseFilterHoldingAnEntryPastItsCapacityIsRefused()
+        {
+            // u32 capacity, u32 occupied, then the first entry's slot index.
+            const int FirstSlotOffset = 8;
+
+            var bytes = Filled(new InverseBloomFilter(64)).ToByteArray();
+
+            AssertRefused(
+                () => Persistence.FromByteArray<InverseBloomFilter>(
+                    PokeUInt32(bytes, FirstSlotOffset, 100_000)),
+                "beyond its capacity");
+        }
+
+        /// <summary>
+        /// A sketch with no rows reports every element as seen ulong.MaxValue times,
+        /// which is the emptiest possible sketch answering as confidently as a full one.
+        /// </summary>
+        [TestMethod]
+        public void TestCountMinSketchWithNoRowsIsRefused()
+        {
+            // f64 epsilon, f64 delta, u32 width, then depth.
+            const int DepthOffset = 8 + 8 + 4;
+
+            var bytes = FilledSketch().ToByteArray();
+
+            AssertRefused(
+                () => Persistence.FromByteArray<CountMinSketch>(PokeUInt32(bytes, DepthOffset, 0)),
+                "no rows");
+        }
+
+        /// <summary>
+        /// A register index is taken from the top bits of a hash, so a register count
+        /// that is not a power of two cannot be indexed at all.
+        /// </summary>
+        [TestMethod]
+        public void TestHyperLogLogWithARegisterCountThatIsNotAPowerOfTwoIsRefused()
+        {
+            var estimator = new HyperLogLog(64);
+            for (var i = 0; i < 40; i++) estimator.Add(Key($"item-{i}"));
+
+            AssertRefused(
+                () => Persistence.FromByteArray<HyperLogLog>(
+                    PokeUInt32(estimator.ToByteArray(), 0, 100)),
+                "not a power of two");
+        }
+
+        /// <summary>
+        /// The fingerprint width decides how many bytes each entry occupies, so a width
+        /// this library does not build would be read at the wrong stride.
+        /// </summary>
+        [TestMethod]
+        public void TestBinaryFuseFilterWithAnImpossibleFingerprintWidthIsRefused()
+        {
+            // u32 keys, u32 segment length, u32 segment count, u64 seed, then the width.
+            const int WidthOffset = 4 + 4 + 4 + 8;
+
+            var bytes = BinaryFuseFilter.Build(
+                Enumerable.Range(0, 40).Select(i => Key($"item-{i}"))).ToByteArray();
+
+            AssertRefused(
+                () => Persistence.FromByteArray<BinaryFuseFilter>(PokeByte(bytes, WidthOffset, 4)),
+                "8 or 16 bits wide");
+        }
+
+        /// <summary>
+        /// The relative accuracy is the whole of a DDSketch's promise: it fixes the
+        /// bucket boundaries, so a value outside nought to one describes no sketch.
+        /// </summary>
+        [TestMethod]
+        public void TestDDSketchWithAnImpossibleAccuracyIsRefused()
+        {
+            var sketch = new DDSketch(0.1);
+            for (var i = 1; i <= 40; i++) sketch.Add(i);
+
+            AssertRefused(
+                () => Persistence.FromByteArray<DDSketch>(
+                    PokeUInt64(sketch.ToByteArray(), 0, BitConverter.DoubleToUInt64Bits(2.0))),
+                "does not describe a sketch");
+        }
+
+        /// <summary>
+        /// A precision outside the buildable range would size the register array to
+        /// something the estimator's own constants do not describe.
+        /// </summary>
+        [TestMethod]
+        public void TestHyperLogLogPlusWithAnImpossiblePrecisionIsRefused()
+        {
+            var bytes = FilledHllPlus().ToByteArray();
+
+            AssertRefused(
+                () => Persistence.FromByteArray<HyperLogLogPlus>(PokeUInt32(bytes, 0, 3)),
+                "and this library builds");
+        }
+
+        /// <summary>
+        /// There are two representations and no third. A payload naming one this library
+        /// does not have would otherwise be read as whichever the reader defaulted to.
+        /// </summary>
+        [TestMethod]
+        public void TestHyperLogLogPlusWithAnUnknownRepresentationIsRefused()
+        {
+            // u32 precision, then the representation byte.
+            const int RepresentationOffset = 4;
+
+            var bytes = FilledHllPlus().ToByteArray();
+
+            AssertRefused(
+                () => Persistence.FromByteArray<HyperLogLogPlus>(
+                    PokeByte(bytes, RepresentationOffset, 7)),
+                "only the sparse one and the dense one");
+        }
+
+        /// <summary>
+        /// The table is indexed by the quotient bits, so zero of them indexes nothing.
+        /// </summary>
+        [TestMethod]
+        public void TestQuotientFilterWithNoQuotientBitsIsRefused()
+        {
+            var filter = new QuotientFilter(100, 0.01);
+            for (var i = 0; i < 40; i++) filter.Add(Key($"item-{i}"));
+
+            AssertRefused(
+                () => Persistence.FromByteArray<QuotientFilter>(
+                    PokeUInt32(filter.ToByteArray(), 0, 0)),
+                "between 1 and 32");
+        }
+
+        /// <summary>
+        /// A value at or above theta is one the sampling that produced the rest would
+        /// have thrown away, so its presence says the payload was not written by this.
+        /// </summary>
+        [TestMethod]
+        public void TestThetaSketchHoldingAValueAboveItsThresholdIsRefused()
+        {
+            // u32 k, u64 theta, u32 held, then the first value.
+            const int FirstValueOffset = 4 + 8 + 4;
+
+            var sketch = new ThetaSketch(16);
+            for (var i = 0; i < 200; i++) sketch.Add(Key($"item-{i}"));
+
+            AssertRefused(
+                () => Persistence.FromByteArray<ThetaSketch>(
+                    PokeUInt64(sketch.ToByteArray(), FirstValueOffset, ulong.MaxValue)),
+                "at or above its theta");
+        }
+
+        /// <summary>
+        /// A signature is a fingerprint and nothing else, so the only thing that can be
+        /// wrong about it is which hash built it -- and comparing fingerprints from
+        /// different hashes gives a number that means nothing.
+        /// </summary>
+        [TestMethod]
+        public void TestSimHashSignatureBuiltWithAnotherHashIsRefused()
+        {
+            var bytes = SimHash.Signature(new[] { "a", "b", "c" }).ToByteArray();
+
+            // 2 is the id for a structure that hashes nothing, which a signature is not.
+            AssertRefused(
+                () => Persistence.FromByteArray<SimHashSignature>(PokeHashId(bytes, 2)),
+                "this version builds them with XxHash3");
+        }
+
+        /// <summary>
+        /// A sketch with no rows has no cells to count in, and would answer every query
+        /// from an empty median.
+        /// </summary>
+        [TestMethod]
+        public void TestCountSketchWithNoRowsIsRefused()
+        {
+            // u32 width, then depth.
+            const int DepthOffset = 4;
+
+            var sketch = new CountSketch(0.5, 0.5);
+            for (var i = 0; i < 40; i++) sketch.Add(Key($"item-{i}"), i % 5);
+
+            AssertRefused(
+                () => Persistence.FromByteArray<CountSketch>(
+                    PokeUInt32(sketch.ToByteArray(), DepthOffset, 0)),
+                "no cells to count in");
+        }
+
+        /// <summary>
+        /// A key occupies several cells at once, so a table with fewer cells than that
+        /// cannot hold one key.
+        /// </summary>
+        [TestMethod]
+        public void TestIbltWithFewerCellsThanAKeyOccupiesIsRefused()
+        {
+            var table = new InvertibleBloomLookupTable(8, 8);
+            for (var i = 0; i < 6; i++)
+            {
+                var key = new byte[8];
+                key[0] = (byte)i;
+                table.Add(key);
+            }
+
+            AssertRefused(
+                () => Persistence.FromByteArray<InvertibleBloomLookupTable>(
+                    PokeUInt32(table.ToByteArray(), 0, 2)),
+                "a key occupies");
+        }
+
+        /// <summary>
+        /// A key size of zero leaves the stored keys no width, so every key in the table
+        /// would be the same empty one.
+        /// </summary>
+        [TestMethod]
+        public void TestIbltWithNoKeyWidthIsRefused()
+        {
+            // u32 cells, then the key size.
+            const int KeySizeOffset = 4;
+
+            var table = new InvertibleBloomLookupTable(8, 8);
+            table.Add(new byte[8]);
+
+            AssertRefused(
+                () => Persistence.FromByteArray<InvertibleBloomLookupTable>(
+                    PokeUInt32(table.ToByteArray(), KeySizeOffset, 0)),
+                "a key is at least one");
+        }
+
+        /// <summary>
+        /// The value width decides how wide each cell is, so one this library does not
+        /// build would be read at the wrong stride.
+        /// </summary>
+        [TestMethod]
+        public void TestBloomierFilterWithAnImpossibleValueWidthIsRefused()
+        {
+            // u32 keys, u32 segment length, u32 segment count, u64 seed, then value bits.
+            const int ValueBitsOffset = 4 + 4 + 4 + 8;
+
+            var bytes = BloomierFilter.Build(
+                Enumerable.Range(0, 40).Select(i =>
+                    new System.Collections.Generic.KeyValuePair<byte[], ulong>(
+                        Key($"item-{i}"), (ulong)i)),
+                8).ToByteArray();
+
+            AssertRefused(
+                () => Persistence.FromByteArray<BloomierFilter>(
+                    PokeUInt32(bytes, ValueBitsOffset, 50)),
+                "between 1 and 40 bits");
+        }
+
+        private static T Filled<T>(T filter) where T : IFilter
+        {
+            for (var i = 0; i < 40; i++) filter.Add(Key($"item-{i}"));
+            return filter;
+        }
+
+        private static CountMinSketch FilledSketch()
+        {
+            var sketch = new CountMinSketch(0.1, 0.5);
+            for (var i = 0; i < 40; i++) sketch.Add(Key($"item-{i % 5}"));
+            return sketch;
+        }
+
+        private static HyperLogLogPlus FilledHllPlus()
+        {
+            var estimator = new HyperLogLogPlus(6);
+            for (var i = 0; i < 40; i++) estimator.Add(Key($"item-{i}"));
+            return estimator;
+        }
+
+        /// <summary>
+        /// Every structure is refused at least one payload that is internally absurd.
+        /// </summary>
+        /// <remarks>
+        /// Unlike the sweeps in <see cref="TestPersistenceAllStructures"/>, this cannot
+        /// be one loop: what is absurd differs per structure, because the fields differ.
+        /// So the coverage is a map from each structure to the test that carries it, and
+        /// both halves are checked -- the roster comes from <see cref="StructureId"/>,
+        /// which a new structure cannot leave itself off of, and each named test has to
+        /// exist, so an entry pointing at a test someone renamed or deleted fails rather
+        /// than silently vouching for nothing.
+        /// <para>
+        /// The drift here ran backwards from the sweeps: the structures added most
+        /// recently had the most field-level guards tested, and fifteen of the oldest --
+        /// including HyperLogLog, DDSketch and ThetaSketch -- had none at all. Their
+        /// readers had the guards; nothing exercised them.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestEveryStructureRefusesSomeAbsurdPayload()
+        {
+            var carriedBy = new (StructureId Id, string Test)[]
+            {
+                (StructureId.BloomFilter, nameof(TestFormatVersionZeroIsRefused)),
+                (StructureId.BloomFilter64, nameof(TestAbsurdBucketArrayCountIsRefused)),
+                (StructureId.CountingBloomFilter,
+                    nameof(TestCountingFilterWhoseSizeDisagreesWithItsBucketsIsRefused)),
+                (StructureId.DeletableBloomFilter,
+                    nameof(TestDeletableFilterWhoseSizeDisagreesWithItsBucketsIsRefused)),
+                (StructureId.PartitionedBloomFilter,
+                    nameof(TestAbsurdPartitionCountIsRefused)),
+                (StructureId.ScalableBloomFilter,
+                    nameof(TestAbsurdContainedFilterCountIsRefused)),
+                (StructureId.StableBloomFilter,
+                    nameof(TestStableFilterWithNoHashFunctionsIsRefused)),
+                (StructureId.InverseBloomFilter,
+                    nameof(TestInverseFilterWithNoCapacityIsRefused)),
+                (StructureId.CuckooBloomFilter,
+                    nameof(TestAbsurdCuckooBucketCountIsRefused)),
+                (StructureId.CountMinSketch, nameof(TestCountMinSketchWithNoRowsIsRefused)),
+                (StructureId.HyperLogLog,
+                    nameof(TestHyperLogLogWithARegisterCountThatIsNotAPowerOfTwoIsRefused)),
+                (StructureId.TopK, nameof(TestAbsurdTopKSizeIsRefused)),
+                (StructureId.MinHashSignature, nameof(TestAbsurdSignatureLengthIsRefused)),
+                (StructureId.BinaryFuseFilter,
+                    nameof(TestBinaryFuseFilterWithAnImpossibleFingerprintWidthIsRefused)),
+                (StructureId.DDSketch,
+                    nameof(TestDDSketchWithAnImpossibleAccuracyIsRefused)),
+                (StructureId.HyperLogLogPlus,
+                    nameof(TestHyperLogLogPlusWithAnImpossiblePrecisionIsRefused)),
+                (StructureId.QuotientFilter,
+                    nameof(TestQuotientFilterWithNoQuotientBitsIsRefused)),
+                (StructureId.ThetaSketch,
+                    nameof(TestThetaSketchHoldingAValueAboveItsThresholdIsRefused)),
+                (StructureId.SimHashSignature,
+                    nameof(TestSimHashSignatureBuiltWithAnotherHashIsRefused)),
+                (StructureId.CountSketch, nameof(TestCountSketchWithNoRowsIsRefused)),
+                (StructureId.InvertibleBloomLookupTable,
+                    nameof(TestIbltWithFewerCellsThanAKeyOccupiesIsRefused)),
+                (StructureId.BloomierFilter,
+                    nameof(TestBloomierFilterWithAnImpossibleValueWidthIsRefused)),
+                (StructureId.HeavyKeeper, nameof(TestHeavyKeeperTrackingNothingIsRefused)),
+                (StructureId.VarOpt, nameof(TestVarOptKeepingNothingIsRefused)),
+                (StructureId.UltraLogLog,
+                    nameof(TestUltraLogLogWithUnsupportedPrecisionIsRefused)),
+                (StructureId.Grafite,
+                    nameof(TestGrafiteWithADegenerateMultiplierIsRefused)),
+                (StructureId.InfiniFilter, nameof(TestInfiniFilterWithNoTablesIsRefused)),
+                (StructureId.MementoFilter,
+                    nameof(TestMementoFilterWithAnAbsurdMementoWidthIsRefused)),
+                (StructureId.SublimeCountMinSketch,
+                    nameof(TestSublimeCountMinSketchWithAWidthThatIsNotAPowerOfTwoIsRefused)),
+                (StructureId.SetSketch,
+                    nameof(TestSetSketchWithARegisterAboveItsCeilingIsRefused)),
+                (StructureId.TupleSketch,
+                    nameof(TestTupleSketchWithAnUnknownPolicyIsRefused)),
+                (StructureId.PrivateCountMinSketch,
+                    nameof(TestAPrivateSketchWithNoNoiseIsRefused)),
+                (StructureId.DpswSketch, nameof(TestADpswWindowWithNoNoiseIsRefused)),
+            };
+
+            foreach (var (id, test) in carriedBy)
+            {
+                var method = typeof(TestPersistenceHostilePayloads).GetMethod(test);
+                Assert.IsNotNull(method,
+                    $"{id} is said to be covered by {test}, which is not a test here");
+                Assert.IsTrue(
+                    method.GetCustomAttributes(typeof(TestMethodAttribute), false).Length > 0,
+                    $"{id} is said to be covered by {test}, which is not a test method");
+            }
+
+            StructureRoster.AssertCoversEveryStructure(
+                "absurd payloads", carriedBy.Select(c => c.Id));
+        }
+
     }
 }
