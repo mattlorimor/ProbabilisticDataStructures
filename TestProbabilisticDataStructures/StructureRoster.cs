@@ -50,6 +50,21 @@ namespace TestProbabilisticDataStructures
                 .ToArray();
 
         /// <summary>
+        /// Every public structure offering a span overload. The span and array paths
+        /// have to be the same operation rather than a similar one, and that is a claim
+        /// about all of them: the seam between the two is per structure, so a structure
+        /// left out of the sweep is a seam nobody looked at.
+        /// </summary>
+        internal static IReadOnlyList<Type> WithSpanOverloads { get; } =
+            Library.GetTypes()
+                .Where(t => t.IsPublic && !t.IsAbstract && IsAStructure(t))
+                .Where(t => t.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                    .Any(m => m.GetParameters()
+                        .Any(param => param.ParameterType == typeof(ReadOnlySpan<byte>))))
+                .OrderBy(t => t.Name, StringComparer.Ordinal)
+                .ToArray();
+
+        /// <summary>
         /// Every public structure that can be handed a hash as it is built, whether
         /// through a constructor or a static factory. This is a wider set than
         /// <see cref="WithSetHash"/>: for several structures, construction is the only

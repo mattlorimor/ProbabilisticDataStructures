@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -12,6 +12,10 @@
     <!-- Payloads written by 3.2.0, kept byte-for-byte so that a change to the format
          fails here rather than in a user's stored data. -->
     <EmbeddedResource Include="fixtures\*.bin" LogicalName="TestProbabilisticDataStructures.fixtures.%(Filename)%(Extension)" />
+    <!-- The format specification, embedded so a test can hold it to the code it
+         describes. A spec that has drifted is worse than none: it is read by people
+         decoding a payload without this library. -->
+    <EmbeddedResource Include="..\FORMAT.md" LogicalName="TestProbabilisticDataStructures.FORMAT.md" />
   </ItemGroup>
 
   <ItemGroup>

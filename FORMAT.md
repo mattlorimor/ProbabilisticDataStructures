@@ -715,6 +715,60 @@ read another", so a small count costs as much as one memento and a large one sti
 A reader rejects an impossible memento width, a chain of no tables or absurdly many, a
 table with more entries than slots, and a word count disagreeing with the shape claimed.
 
+### `SublimeCountMinSketch` (id 29)
+
+```
+f64     delta, the probability the error bound is exceeded
+f64     the growth exponent
+f64     the size factor
+u32     the number of rows
+u32     the number of counters in a row
+u64     the total count
+u64     the count at which the arrays next double
+u64     the count at which they next fold back
+u32     the number of records of earlier states, oldest first
+u32       the number of counters in one row of that record
+u64         each of its counters, row by row
+u64     each counter of the current arrays, row by row
+```
+
+The counters are written as plain `u64` rather than in the packed form the sketch holds
+them in. Packing depends on two parameters the sketch retunes as it runs, so packed bits
+would only be safely readable by the version that wrote them — and a corrupted payload
+would not look corrupt, it would decode into different counters. Every `u64` is a valid
+count, so nothing in this layout can be misread as something else. The sketch packs them
+again on the way in, at a tuning chosen to suit what it just read.
+
+The records of earlier states are what let the sketch fold back rather than only grow.
+Each stands for one doubling and is half the width of the one after it, so a reader can
+check the whole chain against the current width: a record claiming a width the doublings
+that follow it do not require is refused.
+
+A reader also rejects a delta outside nought to one, a growth exponent outside the same
+range, a size factor that is not positive, a row count of zero or sixty-four or more,
+a width that is not a power of two — the low bits of a hash pick the counter — and more
+than thirty records, which would be more counters than a row may hold.
+
+### `SetSketch` (id 30)
+
+```
+f64     b, the base
+f64     a, the hash rate
+u32     m, the number of registers
+u32     q, the largest value a register may hold
+u8      the construction, at format version 4 only
+u16     each register
+```
+
+The lower bound the insert path keeps is not written. It is an accelerator rather than
+state: any value no register is below will do, and the registers themselves say what it
+should be, so a reader recomputes it rather than trusting a number that could be wrong.
+
+A reader rejects a base at or below one or above two, a rate that is not positive, a
+register count of zero or one that would run to half a gigabyte, a ceiling a two-byte
+register could not hold one more than, and any register above that ceiling — which no
+sketch with these parameters could have written.
+
 ### `SetSketch` variants
 
 A sketch built with the paper's **second** construction writes one extra byte after the
@@ -729,6 +783,28 @@ merely tolerated.
 
 A reader at version 4 or above rejects any variant byte other than the second
 construction's, since the first writes none.
+
+### `TupleSketch` (id 31)
+
+```
+u32     the nominal entry count
+u8      the summary policy
+u64     theta, the sampling threshold
+u32     the number of keys held
+u64     each key, in increasing order
+f64     each key's summary, in the same order
+```
+
+Keys come first and summaries after, rather than interleaved, so that a payload whose
+keys are not in increasing order is detectably not one of these without stepping over a
+value between each pair. The sketch is compacted before it is written, so the keys are
+the distinct retained set rather than whatever order they arrived in.
+
+A reader rejects a nominal entry count this library does not build, a policy byte naming
+a way of folding it does not know, more keys held than twice what the sketch retains,
+keys out of increasing order, a key at or above theta — which the sampling that produced
+the rest would have discarded — and a summary that is not a number, which the sketch
+refuses on the way in and so cannot have written.
 
 ### `PrivateCountMinSketch` (id 32)
 

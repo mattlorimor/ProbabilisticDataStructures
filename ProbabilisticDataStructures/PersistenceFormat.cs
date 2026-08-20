@@ -126,12 +126,17 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <remarks>
         /// The version travels in each payload rather than being a property of the
-        /// library, so a structure whose layout changes bumps only its own. Version 2
-        /// exists for the two filters that gained a stored random-generator state in
-        /// 6.0.0; the other eleven still write version 1 and stay readable by 3.x
-        /// onwards. Raising all of them together would have made every payload
-        /// unreadable to older versions to record a change that eleven of them did not
-        /// have.
+        /// library, so a structure whose layout changes bumps only its own and the rest
+        /// go on writing version 1, readable by 3.x onwards. Raising all of them
+        /// together would make every payload unreadable to older libraries in order to
+        /// record a change those payloads did not have.
+        /// <para>
+        /// Which structures write which version is not stated here on purpose. A count
+        /// in a comment is a roster maintained by hand, and this one was wrong for
+        /// several releases before anyone read it closely. The versions that exist are
+        /// the named constants below, and each is used by the structures that reference
+        /// it -- which the compiler keeps true and a comment cannot.
+        /// </para>
         /// </remarks>
         internal const ushort DefaultVersion = 1;
 
