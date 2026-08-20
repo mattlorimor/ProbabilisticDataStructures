@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.IO;
+using System.Reflection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 
@@ -105,6 +106,24 @@ namespace TestProbabilisticDataStructures
             (1000.0, 3454),
         };
 
+        /// <summary>
+        /// The divisor every bucket index is computed against, for the accuracies most
+        /// likely to be asked for, pinned to the bit. These are the correctly rounded
+        /// logarithms, computed to sixty digits and rounded once, rather than whatever
+        /// the machine that wrote this file happened to produce: a platform whose libm
+        /// is a bit out here fails rather than being enshrined.
+        /// </summary>
+        private static readonly (double Accuracy, ulong LogGammaBits)[] Divisors =
+        {
+            (0.1, 0x3FC9AF93CD234415UL),
+            (0.05, 0x3FB99F11CD5F7097UL),
+            (0.02, 0x3FA47B9447A9A9F8UL),
+            (0.01, 0x3F947B0E059D057DUL),
+            (0.005, 0x3F847AEC7708D35BUL),
+            (0.002, 0x3F70624F4172E1A9UL),
+            (0.001, 0x3F60624E2E91ECAFUL),
+        };
+
         [TestMethod]
         public void TestBucketIndicesHaveNotMovedAtOnePercent()
         {
@@ -136,6 +155,66 @@ namespace TestProbabilisticDataStructures
             // Also the signed round trip: an index is written as a u32 and goes negative
             // for everything below one, which is where most latency data lives.
             Assert.AreEqual(-1, StoredIndexOf(0.01, 0.97));
+        }
+
+        /// <summary>
+        /// That the divisor itself is the same number everywhere, which the pinned values
+        /// above cannot establish.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// gamma is <c>(1+a)/(1-a)</c>: two additions and a division, each correctly
+        /// rounded by IEEE 754, so it is the same number on every platform by
+        /// construction. Its logarithm is not, and this is the one place where a last-bit
+        /// difference does not stay small. Every bucket index is a value's logarithm
+        /// divided by this one, so being an ulp out shifts every quotient at once, by a
+        /// relative 2^-52 amplified by the quotient's own magnitude -- which runs to the
+        /// hundreds at one percent and the thousands at a tenth of one. That is around
+        /// one value in 10^13 landing in a different bucket, five orders of magnitude
+        /// likelier than a per-value difference in <c>Math.Log</c>, and correlated across
+        /// the whole sketch rather than scattered.
+        /// </para>
+        /// <para>
+        /// Pinning values cannot catch it. Twenty-eight of them at those odds would
+        /// notice such a divergence about one time in 10^12, so the corpus above would
+        /// pass on a platform where every sketch was quietly bucketing differently. This
+        /// is the guard for the channel that carries almost all of the risk.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestTheDivisorIsTheSameNumberOnEveryPlatform()
+        {
+            Assert.IsGreaterThan(0, Divisors.Length,
+                "the table is empty, so every assertion made about it below is vacuous.");
+
+            foreach (var (accuracy, expected) in Divisors)
+            {
+                Assert.AreEqual(expected, BitConverter.DoubleToUInt64Bits(DivisorFor(accuracy)),
+                    $"the divisor for accuracy {accuracy:R} is not the correctly rounded " +
+                    "logarithm of its gamma on this platform. Every bucket index divides " +
+                    "by this number, so a difference here is not one value in the wrong " +
+                    "bucket: it is every sketch this platform builds disagreeing with " +
+                    "every sketch built anywhere else.");
+            }
+        }
+
+        /// <summary>
+        /// The divisor a sketch actually holds. Read off the sketch rather than recomputed
+        /// here, so that changing how the constructor derives it fails this test instead of
+        /// slipping past a copy of the old formula.
+        /// </summary>
+        private static double DivisorFor(double accuracy)
+        {
+            var field = typeof(DDSketch).GetField(
+                "logGamma", BindingFlags.Instance | BindingFlags.NonPublic);
+
+            Assert.IsNotNull(field,
+                "DDSketch no longer has a logGamma field. If the divisor was renamed, this " +
+                "test should follow it. If it is now derived some other way, the pinned " +
+                "bits need deriving again from that -- not updating to whatever the new " +
+                "code produces.");
+
+            return (double)field.GetValue(new DDSketch(accuracy))!;
         }
 
         private static void AssertBucketsAreWhereTheyWere(
