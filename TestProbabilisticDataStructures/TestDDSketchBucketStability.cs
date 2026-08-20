@@ -37,6 +37,17 @@ namespace TestProbabilisticDataStructures
     /// nothing by itself about any other. What establishes agreement across platforms is
     /// this file running on all three of them.
     /// </para>
+    /// <para>
+    /// How much room there is between these values and a boundary was measured rather
+    /// than assumed. Perturbing the logarithm by a whole ulp -- more than a libm
+    /// difference plausibly amounts to -- moves none of the values below, at either
+    /// accuracy. The one exception is 1.0, and only because its logarithm is exactly
+    /// zero, so nudging it moves it off a boundary it sits exactly on; every conforming
+    /// platform returns that zero, so nothing moves there either. Landing close enough
+    /// to a boundary for the last bit to decide takes roughly one value in ten billion.
+    /// What this file pins, then, is the mapping against being changed, not against
+    /// drifting: drift of the size a logarithm can produce does not reach these values.
+    /// </para>
     /// </remarks>
     [TestClass]
     public class TestDDSketchBucketStability
