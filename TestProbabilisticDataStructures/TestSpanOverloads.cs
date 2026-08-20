@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -63,7 +63,7 @@ namespace TestProbabilisticDataStructures
         /// Drives a structure twice -- once through arrays, once through slices of a
         /// packed buffer -- and requires the two final states to be identical.
         /// </summary>
-        private static void AssertSpanPathMatches<T>(
+        private static Type AssertSpanPathMatches<T>(
             string name, Func<T> create, Action<T, byte[]> viaArray,
             Action<T, byte[], int, int> viaSpan)
             where T : IBinaryPersistable<T>
@@ -86,76 +86,148 @@ namespace TestProbabilisticDataStructures
                 $"{name}: feeding the same {Items} keys as spans left a different " +
                 "state than feeding them as arrays. The overloads must be the same " +
                 "operation, not merely a similar one.");
+
+            return typeof(T);
+        }
+
+        /// <summary>
+        /// The same, for a structure whose keys are a fixed width. One packed buffer of
+        /// equal-length keys, so the slices differ in provenance and offset but not in
+        /// length -- which is all the table will accept.
+        /// </summary>
+        private static Type AssertFixedWidthSpanPathMatches<T>(
+            string name, int keySize, Func<T> create, Action<T, byte[]> viaArray,
+            Action<T, byte[], int, int> viaSpan)
+            where T : IBinaryPersistable<T>
+        {
+            var buffer = new byte[Items * keySize];
+            for (int i = 0; i < Items; i++)
+            {
+                BitConverter.TryWriteBytes(buffer.AsSpan(i * keySize, keySize), (long)i * 2654435761L);
+            }
+
+            var arrayFed = create();
+            var spanFed = create();
+            for (int i = 0; i < Items; i++)
+            {
+                viaArray(arrayFed, buffer.AsSpan(i * keySize, keySize).ToArray());
+                viaSpan(spanFed, buffer, i * keySize, keySize);
+            }
+
+            CollectionAssert.AreEqual(arrayFed.ToByteArray(), spanFed.ToByteArray(),
+                $"{name}: feeding the same {Items} keys as spans left a different " +
+                "state than feeding them as arrays.");
+
+            return typeof(T);
         }
 
         [TestMethod]
         public void TestSpanAndArrayPathsLeaveIdenticalState()
         {
+            var covered = new[]
+            {
             AssertSpanPathMatches("BloomFilter", () => new BloomFilter(1000, 0.01),
-                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));
+                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("BloomFilter64", () => new BloomFilter64(1000, 0.01),
-                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));
+                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("PartitionedBloomFilter",
                 () => new PartitionedBloomFilter(1000, 0.01),
-                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));
+                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("CountingBloomFilter",
                 () => CountingBloomFilter.NewDefaultCountingBloomFilter(1000, 0.01),
-                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));
+                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("DeletableBloomFilter",
                 () => new DeletableBloomFilter(1000, 100, 0.01),
-                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));
+                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("CuckooBloomFilter",
                 () => new CuckooBloomFilter(1000, 0.01, seed: 9),
-                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));
+                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("QuotientFilter", () => new QuotientFilter(1000, 0.01),
-                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));
+                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("InverseBloomFilter", () => new InverseBloomFilter(500),
-                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));
+                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("CountMinSketch", () => new CountMinSketch(0.001, 0.01),
-                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l)));
+                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("CountSketch", () => new CountSketch(0.01, 0.01),
-                (s, k) => s.Add(k, 3), (s, b, o, l) => s.Add(b.AsSpan(o, l), 3));
+                (s, k) => s.Add(k, 3), (s, b, o, l) => s.Add(b.AsSpan(o, l), 3)),
 
             AssertSpanPathMatches("HyperLogLog", () => new HyperLogLog(1024),
-                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l)));
+                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("HyperLogLogPlus", () => new HyperLogLogPlus(12),
-                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l)));
+                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("ThetaSketch", () => new ThetaSketch(256),
-                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l)));
+                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("TopK", () => new TopK(0.001, 0.01, 20),
-                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l)));
+                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("HeavyKeeper", () => new HeavyKeeper(20, 512, seed: 3),
-                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l)));
+                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("VarOpt", () => new VarOpt(20, seed: 3),
-                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));
+                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("UltraLogLog", () => new UltraLogLog(10),
-                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));
+                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("InfiniFilter", () => new InfiniFilter(64, 8),
-                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));
+                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("StableBloomFilter",
                 () => new StableBloomFilter(1000, 4, 0.01, seed: 5),
-                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));
+                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l))),
 
             AssertSpanPathMatches("ScalableBloomFilter",
                 () => new ScalableBloomFilter(100, 0.01, 0.8),
-                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l)));
+                (f, k) => f.Add(k), (f, b, o, l) => f.Add(b.AsSpan(o, l))),
+
+            AssertSpanPathMatches("SetSketch", () => new SetSketch(64),
+                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l))),
+
+            AssertSpanPathMatches("TupleSketch", () => new TupleSketch(256),
+                (s, k) => s.Add(k, 1.5), (s, b, o, l) => s.Add(b.AsSpan(o, l), 1.5)),
+
+            AssertSpanPathMatches("SublimeCountMinSketch",
+                () => new SublimeCountMinSketch(0.01, 0.5, 1.0),
+                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l))),
+
+            // The two noisy sketches are seeded, so the noise either side of the seam
+            // is the same draw and a difference in the payload is a difference in the
+            // counts underneath it.
+            AssertSpanPathMatches("PrivateCountMinSketch",
+                () => new PrivateCountMinSketch(64, 4, 1.0, seed: 3),
+                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l))),
+
+            AssertSpanPathMatches("DpswSketch",
+                () => new DpswSketch(
+                    window: 128, rho: 4.0, alpha: 0.6, width: 8, depth: 2, seed: 3),
+                (s, k) => s.Add(k), (s, b, o, l) => s.Add(b.AsSpan(o, l))),
+
+            AssertFixedWidthSpanPathMatches("InvertibleBloomLookupTable", 8,
+                () => new InvertibleBloomLookupTable(64, 8),
+                (t, k) => t.Add(k), (t, b, o, l) => t.Add(b.AsSpan(o, l))),
+            };
+
+            StructureRoster.AssertCoversEveryType(
+                "span equivalence", StructureRoster.WithSpanOverloads, covered,
+                (typeof(BinaryFuseFilter),
+                    "is built once from the whole key set and has no Add, so there are " +
+                    "no two feeding paths to compare. Its span surface is Test, which " +
+                    "TestSpanAndArrayQueriesAgree covers."),
+                (typeof(BloomierFilter),
+                    "likewise: built by Build and queried by TryGetValue, with nothing " +
+                    "to feed it incrementally."));
         }
 
         /// <summary>

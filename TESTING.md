@@ -262,6 +262,27 @@ The proof that this works is not that the sweeps pass. It is that adding a membe
 filter from the reflected roster fails the constructor sweep on the hash plumbing it
 was there to exclude.
 
+The same treatment applies past the test suite. FORMAT.md is the one artefact here
+written for someone who does not have the library — it exists so a payload can be
+decoded from the bytes alone — and it had drifted the same way, silently, because a
+document has no build to fail. Two structures shipped in 6.2.0 with no section at all
+and a third had a section about its variant byte that never said what the rest of its
+payload holds. It is now embedded in the test assembly and held to `StructureId`: every
+structure has a section, and every section's heading names the id a reader will find in
+the envelope. A section under the wrong id is worse than a missing one, because someone
+decoding by hand gets an answer.
+
+Prose counts belong in the same category. `PersistenceFormat.DefaultVersion` explained
+that two filters write version 2 and "the other eleven" version 1 — true at thirteen
+structures, wrong from the next release onward. A count in a comment is a roster
+maintained by hand, and the fix is to remove the number rather than correct it.
+
+The rosters also disagree with your own audit, which is the point of deriving them. The
+span-equivalence sweep was short by six, and adding those six turned up two more the
+audit had passed over — `BinaryFuseFilter` and `BloomierFilter`, which are built once
+from a whole key set and have no incremental path to compare. They are exempt with that
+reason, and the exemption is checked. The roster found them; reading the file had not.
+
 Filling the six sweeps found no defects in the library — every structure did honour a
 constructor hash, did refuse to replace one once occupied, and did catch corruption
 anywhere in its payload. That is the point worth keeping: the sweeps were not wrong
