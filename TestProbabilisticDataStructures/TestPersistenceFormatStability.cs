@@ -193,6 +193,44 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A sparse payload at the smallest precision, holding the most it holds there:
+        /// 16 hashes, 128 bytes standing in for 16 bytes of registers. That is the
+        /// documented deviation from the paper, whose rule would convert after 2, and it
+        /// is what 6.2.0 wrote -- these are the bytes that writer produced, its sparse
+        /// path unchanged since 6.0.0. Today's writer is pinned to the same bytes in
+        /// <see cref="TestWritingStillProducesTheStoredBytes"/>.
+        /// <para>
+        /// It has to come back exactly as written, counting exactly. It is also full,
+        /// which is where #149 lived: a repeat must leave it alone, and the first new
+        /// item converts it.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestStoredHyperLogLogPlusAtTheSmallestPrecisionStillReads()
+        {
+            var bytes = ReadFixture("hyperloglogplus-sparse-p4-v1.bin");
+            var estimator = Persistence.FromByteArray<HyperLogLogPlus>(bytes);
+
+            Assert.AreEqual(4u, estimator.Precision());
+            Assert.IsTrue(estimator.IsSparse, "a stored sparse payload came back dense");
+            Assert.AreEqual(16ul, estimator.Count(), "the stored sparse form counts exactly");
+
+            for (var i = 0; i < 16; i++)
+            {
+                estimator.Add(Key($"w{i}"));
+                Assert.IsTrue(estimator.IsSparse,
+                    $"repeating stored item w{i} converted the estimator to dense");
+            }
+
+            CollectionAssert.AreEqual(bytes, estimator.ToByteArray(),
+                "repeating the stored items changed the stored estimator");
+
+            estimator.Add(Key("w16"));
+            Assert.IsFalse(estimator.IsSparse,
+                "a new item did not convert an estimator holding as many hashes as it may");
+        }
+
+        /// <summary>
         /// Loaded past its retained size, so the fixture pins the sampled case rather
         /// than the exact one -- theta itself has to come back, or every later estimate
         /// is scaled wrongly.
@@ -852,6 +890,16 @@ namespace TestProbabilisticDataStructures
 
             AssertBytes("hyperloglogplus-sparse-v1.bin", sparseHll.ToByteArray());
 
+            // Precision 4 holding the most it may. The floor that keeps small counts
+            // exact there, against the paper's rule, writes what 6.2.0 wrote.
+            var smallestHll = new HyperLogLogPlus(4);
+            for (var i = 0; i < 16; i++)
+            {
+                smallestHll.Add(Key($"w{i}"));
+            }
+
+            AssertBytes("hyperloglogplus-sparse-p4-v1.bin", smallestHll.ToByteArray());
+
             var quotient = new QuotientFilter(100, 0.01);
             foreach (var word in Words)
             {
@@ -1037,6 +1085,7 @@ namespace TestProbabilisticDataStructures
                 ("ddsketch-v1.bin", 15, 1),
                 ("hyperloglogplus-sparse-v1.bin", 16, 1),
                 ("hyperloglogplus-dense-v1.bin", 16, 1),
+                ("hyperloglogplus-sparse-p4-v1.bin", 16, 1),
                 ("quotientfilter-v1.bin", 17, 1),
                 ("thetasketch-v1.bin", 18, 1),
                 ("thetasketch-v1b.bin", 18, 1),

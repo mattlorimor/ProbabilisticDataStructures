@@ -837,7 +837,10 @@ Three things differ from `HyperLogLog`:
   items whose hashes agree there are one item as far as it can tell. Hashing consecutive
   integers finds such a pair within 67,297 of them.
 - **Small counts are exact**, because it keeps the hashes themselves until registers would
-  be cheaper. Ten distinct items is `10`, in 107 bytes rather than 16 KB.
+  be cheaper. Ten distinct items is `10`, in 107 bytes rather than 16 KB. At precisions 4
+  to 6 it keeps 16 hashes before switching even though registers would be cheaper sooner,
+  a deliberate departure from the paper that keeps those counts exact for at most 112
+  bytes more than the registers.
 - **There is no bad band.** The older estimator switches from linear counting to the raw
   estimate at 2.5*m* and is at its worst where it changes over — 2.44% mean error there
   against a nominal 0.81%, staying above nominal until about 4*m*. This holds 0.6–0.7%

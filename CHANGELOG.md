@@ -97,6 +97,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixture. One written while sampling was already a heap and reads exactly as before.
   (#148)
 
+- **A repeated item could change `HyperLogLogPlus`'s answer**, which is
+  [#149](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/149). When the
+  sparse form was exactly full, the next add converted it to the dense one before
+  anything checked whether that hash was already held, so a repeat traded the exact count
+  for an estimate: 32 distinct items at precision 8 counted 32, and adding one of them
+  again made it 31. It happened at every precision. A repeat now leaves the estimator
+  exactly as it was, merged in or added, and only a new item converts it.
+  <br><br>
+  **At precisions 4 to 6 this deliberately departs from the paper, and behaves as 6.2.0
+  did.** Heule, Nunkesser and Hall (section 5.3) convert once the sparse list would need
+  more than the dense registers' 6m bits, which with eight-byte hashes and one-byte
+  registers is `m / 8` hashes: 2, 4 and 8 at those precisions. The estimator holds 16
+  there instead, so every count up to 16 stays exact where an estimate from so few
+  registers is off by 13% to 26%. The price is at most 112 bytes over the dense registers,
+  at precision 4 (128 bytes against 16), and 96 and 64 at precisions 5 and 6. 6.2.0 held
+  16 there too, though by accident — its first buffer was 16 hashes and never shrank to
+  the cap the code declared — so the rule is now written down where it decides rather
+  than left to a buffer size. From precision 7 up the floor changes nothing and the
+  estimator follows the paper.
+  <br><br>
+  Stored estimators read exactly as before, and the layout and format version are
+  unchanged. The only payload that differs is the one a repeat used to force: an
+  estimator that sees a repeat at its conversion point now writes the sparse form it was
+  in, rather than a dense one.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

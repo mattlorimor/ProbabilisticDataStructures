@@ -820,8 +820,8 @@ namespace TestProbabilisticDataStructures
                 (StructureId.BinaryFuseFilter, b => Persistence.FromByteArray<BinaryFuseFilter>(b), FilledFuse()),
                 (StructureId.DDSketch, b => Persistence.FromByteArray<DDSketch>(b), FilledSketchOfNumbers()),
                 // Both representations, which are different layouts behind one id.
-                (StructureId.HyperLogLogPlus, b => Persistence.FromByteArray<HyperLogLogPlus>(b), FilledHllPlus(20)),
-                (StructureId.HyperLogLogPlus, b => Persistence.FromByteArray<HyperLogLogPlus>(b), FilledHllPlus(200)),
+                (StructureId.HyperLogLogPlus, b => Persistence.FromByteArray<HyperLogLogPlus>(b), FilledHllPlus(2, sparse: true)),
+                (StructureId.HyperLogLogPlus, b => Persistence.FromByteArray<HyperLogLogPlus>(b), FilledHllPlus(200, sparse: false)),
                 (StructureId.QuotientFilter, b => Persistence.FromByteArray<QuotientFilter>(b), FilledQuotient()),
                 (StructureId.ThetaSketch, b => Persistence.FromByteArray<ThetaSketch>(b), FilledTheta()),
                 (StructureId.SimHashSignature, b => Persistence.FromByteArray<SimHashSignature>(b),
@@ -1029,17 +1029,26 @@ namespace TestProbabilisticDataStructures
             return filter.ToByteArray();
         }
 
-        private static byte[] FilledHllPlus(int items)
+        private static byte[] FilledHllPlus(int items, bool sparse)
         {
-            // Precision 4 gives 16 registers, so 200 items is comfortably dense and 20
-            // is comfortably sparse.
+            // Precision 4 gives 16 registers, and the sparse form there holds at most 16
+            // hashes, so 2 items is comfortably sparse and 200 comfortably dense. This
+            // said 20 was sparse, and 20 was dense, so the sweep covered the dense layout
+            // twice and the sparse one not at all; the check below is what stops that
+            // happening quietly again.
             var estimator = new HyperLogLogPlus(4);
             for (var i = 0; i < items; i++)
             {
                 estimator.Add(Key($"w{i}"));
             }
 
-            return estimator.ToByteArray();
+            var bytes = estimator.ToByteArray();
+
+            // The envelope is 14 bytes, then the u32 precision, then the representation.
+            Assert.AreEqual(sparse ? 0 : 1, bytes[14 + 4],
+                $"{items} items at precision 4 did not come out " +
+                $"{(sparse ? "sparse" : "dense")}, so this sweep would not cover that layout");
+            return bytes;
         }
 
         // Takes numbers rather than bytes, so it shares no helper with the rest.
