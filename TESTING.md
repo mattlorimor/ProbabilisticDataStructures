@@ -350,8 +350,8 @@ finished change to its own verification step, and once by losing a fix, re-runni
 harness, and reporting a mutation table measured against the tree without it. Commit
 first — the commit is what the table is describing anyway.
 
-Whole-file sweeps use Stryker.NET. The config carries the settings; the scope belongs on the
-command line, per run:
+Whole-file sweeps use Stryker.NET, 5.0.0 or later (below). The config carries the
+settings; the scope belongs on the command line, per run:
 
 ```
 dotnet tool restore
@@ -359,24 +359,29 @@ cd TestProbabilisticDataStructures
 dotnet stryker --mutate "**/QuotientFilter.cs" --mutate "**/Buckets.cs"
 ```
 
-Scope every run. Stryker is not part of any build: a single-file sweep takes twenty
-minutes to an hour and a half depending on configuration (below), the full library
-would generate five thousand mutants, and the output needs human adjudication anyway.
-It is a periodic audit for files whose tests have not been through the loop above,
-not a gate.
+Scope every run. Stryker is not part of any build, the full library would generate five
+thousand mutants, and the output needs human adjudication anyway. It is a periodic
+audit for files whose tests have not been through the loop above, not a gate.
 
-**Stryker and this suite's parallelism do not mix unmanaged.** The test assembly
+Scoping trims the mutants, not the coverage pass that comes first. That pass runs the
+whole suite serially under Stryker's instrumentation, and code outside the scope slows
+with it, so its cost is set by the heaviest tests anywhere. On the frozen tree below, a
+Buckets.cs sweep took twelve minutes end to end. On the current suite the Memento tests
+dominate the pass: one that takes eight seconds normally took sixteen minutes under it,
+though the Memento filter never touches `Buckets`.
+
+**Before 5.0.0, Stryker and this suite's parallelism did not mix.** The test assembly
 declares `[assembly: Parallelize(Scope = ExecutionScope.MethodLevel)]`, and Stryker
 assumes it controls all parallelism — it serializes VsTest at the *container* level,
-which in-assembly workers ignore. That breaks both of its modes, silently and in
-opposite directions. Four runs on one frozen tree (Buckets.cs scope, 531 tests),
-whose true score with every verdict hand-adjudicated is 74.80%:
+which in-assembly workers ignore. Through 4.16.0 that broke both of its modes,
+silently and in opposite directions. Four runs on one frozen tree (Buckets.cs scope,
+531 tests), whose true score with every verdict hand-adjudicated is 74.80%:
 
 | coverage-analysis | MSTest workers × Stryker concurrency | reported |
 |---|---|---|
 | perTest | 10 × 5 | 66.14% — 16 false survivors; hot-path mutants misclassified `static` |
 | off     | 10 × 5 | 100.00% — 41 wall-clock timeouts counted as kills, 32 on undetectable mutants |
-| perTest | 1 × 5  | 78.74% — zero verdict errors |
+| perTest | 1 × 5  | 78.74% — zero false survivors; five detections over the true score (below) |
 | off     | 10 × 1 | 74.80% — exact |
 
 The false survivors are not attribution noise: for every one hand-checked, running
@@ -392,24 +397,43 @@ Root cause, found independently upstream as
 [stryker-net#3757](https://github.com/stryker-mutator/stryker-net/issues/3757):
 Stryker always intended to emit `<DisableParallelization>` for MSTest, but
 `DetectTestFrameworks` cleared the MSTest flag instead of setting it (`&= ~` where
-`|=` was meant), so the countermeasure was dead code. Fixed in PR #3760 (merged
-2026-08-14, unreleased as of 4.16.0). The emission is unconditional per framework,
-so the fix serializes every session — both failure modes above die with it. **When
-the next Stryker release ships: bump `dotnet-tools.json`, drop the `concurrency`
-pin from `stryker-config.json`, let `coverage-analysis` return to its default, and
-delete the Workers guidance below.** Until then, both workarounds stand.
+`|=` was meant), so the countermeasure was dead code. Fixed in
+[stryker-net#3760](https://github.com/stryker-mutator/stryker-net/pull/3760) and
+shipped in 5.0.0, which this repository pins. The emission is unconditional per framework, so
+every session now runs its tests serially, with no edit to the assembly and no pin on
+Stryker's concurrency. The runsettings 4.16.0 and 5.0.0 write for this suite differ in
+that one element, `<DisableParallelization>true</DisableParallelization>`.
 
-Two sound configurations:
+**The upgrade, rerun on the same frozen tree.** One machine (32 threads), one tree,
+and one change per row; every Survived and Timeout verdict 5.0.0 reported was then
+checked by applying the mutant by hand and running the whole suite:
 
-- **Default, enforced by `stryker-config.json`: `coverage-analysis: off` with
-  `concurrency: 1`.** What `dotnet stryker` does in this repo with no extra steps.
-  Exact and slow — the Buckets.cs sweep took 1h40, because every surviving mutant
-  runs the full suite serially.
-- **Fast path for larger sweeps: serialize the workers instead.** Set `Workers = 1`
-  on the `Parallelize` attribute in `AssemblyAttributes.cs` for the duration of the
-  run and revert after; then per-test coverage is sound and the same sweep took
-  19:40. The edit cannot live in the Stryker config — MSTest reads parallelism from
-  the assembly, not from anything Stryker controls.
+| Stryker | config | reported |
+|---|---|---|
+| 4.16.0 | defaults: perTest, concurrency 16 | 59.06% — 20 false survivors, against 16 at 10 × 5 |
+| 5.0.0  | defaults | 78.74% — zero false survivors; five Timeouts on equivalent mutants |
+| 5.0.0  | defaults + `additional-timeout: 60000` | 74.80% — exact |
+
+Serial sessions cured the survivors and exposed the clock. The five spurious Timeouts
+are equivalent mutants on the hottest paths — the `>`→`>=` and `<`→`<=` clamps in
+`Increment`, `Set` and the `Max` setter, and `>>`→`>>>` on a non-negative operand in
+`GetBits` — each covered by dozens to hundreds of tests. Run one at a time, those
+tests outlast the budget Stryker computes, so it ended each session a few
+milliseconds past the budget with every finished test passing. Applied by hand, each
+mutant passes the whole suite at normal speed. The perTest 1 × 5 row above reports
+the same 78.74%; its excess was never itemised, but it ran the same serialized
+sessions, and five spurious Timeouts are exactly the gap.
+
+`stryker-config.json` therefore adds a minute to every computed budget with
+`additional-timeout: 60000`. Detection loses nothing by it here: of the eleven genuine
+Timeouts, seven are recursion mutants in `GetBits`/`SetBits` that overflow the stack
+and crash the test host within a couple of seconds, and the other four fail tests
+outright. The margin is not a licence to trust a Timeout — a slower machine or a
+heavier test can eat it — so they are adjudicated like survivors, below.
+
+What `dotnet stryker` does in this repo with no extra steps: per-test coverage at
+Stryker's default concurrency, every session serialized by Stryker itself, and the
+budget margin above. No assembly edit is needed for any sweep.
 
 **A survivor can mean the mutation is owned by a different layer.** Halving Count-Min's
 width survives its δ-contract test at any parameters — the bound comes through Markov

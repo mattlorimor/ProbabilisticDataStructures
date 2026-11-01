@@ -1,8 +1,7 @@
 {
   "stryker-config": {
     "project": "ProbabilisticDataStructures.csproj",
-    "coverage-analysis": "off",
-    "concurrency": 1,
+    "additional-timeout": 60000,
     "reporters": ["json", "markdown"]
   }
 }
