@@ -146,6 +146,8 @@ namespace ProbabilisticDataStructures
                     nameof(keySize), keySize, "Keys must be at least one byte wide.");
             }
 
+            ValidTableSize(cells, keySize);
+
             this.keySize = keySize;
             this.cells = cells;
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
@@ -169,7 +171,70 @@ namespace ProbabilisticDataStructures
             var small = Math.Ceiling(expectedDifferences * SmallTableCellsPerDifference)
                 + SmallTableExtraCells;
 
-            return (uint)Math.Max(asymptotic, small);
+            var cells = Math.Max(asymptotic, small);
+
+            // Checked as a double, ahead of the cast. Past what a uint holds the cast
+            // saturates instead of wrapping, so a count too large for any table comes out
+            // looking like any other cell count and is left for an allocator to refuse.
+            if (cells > MaxCells)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(expectedDifferences), expectedDifferences,
+                    $"Sizing for {expectedDifferences} differences needs {cells:F0} cells, " +
+                    $"and a table can have at most {MaxCells}: its counts and hash sums " +
+                    "each take an array with a slot per cell, and no array holds more " +
+                    $"than that. That allows {MaxExpectedDifferences} differences at " +
+                    "most, and fewer for keys wider than a byte. Size the table for fewer.");
+            }
+
+            return (uint)cells;
+        }
+
+        /// <summary>
+        /// The most cells a table can have. The counts, the hash sums and the keys are each
+        /// one array with a slot, or a key, for every cell, and an array cannot hold more
+        /// than <see cref="Array.MaxLength"/> elements, so that is the bound whatever the
+        /// key size. Keys wider than a byte reach the array's bound sooner, which
+        /// <see cref="ValidTableSize"/> checks.
+        /// </summary>
+        internal static uint MaxCells => (uint)Array.MaxLength;
+
+        /// <summary>
+        /// The most differences a table can be sized for: the largest whose cells, by the
+        /// plain rate that applies at this size, are no more than <see cref="MaxCells"/>.
+        /// </summary>
+        internal static uint MaxExpectedDifferences => (uint)(MaxCells / CellsPerDifference);
+
+        /// <summary>
+        /// Refuses a table whose arrays cannot exist. <see cref="CellsProvisionedFor"/>
+        /// bounds the cells that follow from a number of differences; this bounds the
+        /// cells themselves, for a size given outright, and the keys, which are stored in
+        /// one array of the cells times the key size and so limit the two together.
+        /// Everything the table allocates comes after it.
+        /// </summary>
+        internal static void ValidTableSize(uint cells, int keySize)
+        {
+            if (cells > MaxCells)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(cells), cells,
+                    $"A table of {cells} cells is more than one can have, which is " +
+                    $"{MaxCells}: its counts and hash sums each take an array with a " +
+                    "slot per cell, and no array holds more than that.");
+            }
+
+            var keyBytes = (long)cells * keySize;
+            if (keyBytes > Array.MaxLength)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(keySize), keySize,
+                    $"{cells} cells of {keySize}-byte keys need {keyBytes} bytes for the " +
+                    $"keys, which is more than the {Array.MaxLength} a single array can " +
+                    $"hold. With this many cells the keys can be at most " +
+                    $"{Array.MaxLength / cells} bytes wide; keys this wide fit in at most " +
+                    $"{Array.MaxLength / keySize} cells, which is a table sized for fewer " +
+                    "differences.");
+            }
         }
 
         /// <summary>

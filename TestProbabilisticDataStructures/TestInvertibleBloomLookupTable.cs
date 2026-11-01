@@ -738,6 +738,70 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The size check at both edges, asked directly because a table at the edge is
+        /// gigabytes and a test is no place to build one. Each pair is the last that
+        /// passes and the first that does not, so a limit that is one too tight or one
+        /// too loose fails on the side it moved to.
+        /// <para>
+        /// The cases that decide the keys' bound are the ones where the cells times the key
+        /// size comes to exactly what an array can hold, which is what separates "more
+        /// than" from "at least". That needs a factorisation of the array limit, so the
+        /// precondition is asserted: if the limit ever moves, this says so instead of
+        /// quietly testing nothing at the edge.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestTheSizeCheckRefusesExactlyWhatNoArrayCouldHold()
+        {
+            // Cells at the edge of the cell bound, with the narrowest keys.
+            InvertibleBloomLookupTable.ValidTableSize(MostCells, 1);
+            var tooMany = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => InvertibleBloomLookupTable.ValidTableSize(MostCells + 1u, 1));
+            Assert.AreEqual("cells", tooMany.ParamName);
+
+            // The widest key each cell count allows, and the next width. Eight cells is
+            // the one whose next width comes to exactly one byte over the limit, which a
+            // check that was one byte loose would let through.
+            Assert.AreEqual((long)Array.MaxLength + 1, 8L * (Array.MaxLength / 8 + 1),
+                "the array limit has moved, and eight cells no longer land a byte over it");
+
+            foreach (var cells in new[] { 4u, 8u, 15u, 1500u, MostCells })
+            {
+                var widest = (int)(Array.MaxLength / cells);
+
+                InvertibleBloomLookupTable.ValidTableSize(cells, widest);
+
+                var tooWide = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => InvertibleBloomLookupTable.ValidTableSize(cells, widest + 1),
+                    $"{cells} cells with keys one byte wider than they allow");
+                Assert.AreEqual("keySize", tooWide.ParamName);
+            }
+
+            // Cells times key size exactly the array limit, both ways round, and each one
+            // more.
+            const uint Factor = 11;
+            var other = (uint)(Array.MaxLength / Factor);
+            Assert.AreEqual((long)Array.MaxLength, (long)Factor * other,
+                "the array limit no longer factors this way; choose another pair");
+
+            InvertibleBloomLookupTable.ValidTableSize(other, (int)Factor);
+            InvertibleBloomLookupTable.ValidTableSize(Factor, (int)other);
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => InvertibleBloomLookupTable.ValidTableSize(other + 1u, (int)Factor));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => InvertibleBloomLookupTable.ValidTableSize(other, (int)Factor + 1));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => InvertibleBloomLookupTable.ValidTableSize(Factor, (int)other + 1));
+
+            // A product that wraps a uint to nothing, or to something small, is still far
+            // too many bytes: the multiplication has to be wide enough not to wrap.
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => InvertibleBloomLookupTable.ValidTableSize(1u << 16, 1 << 16));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => InvertibleBloomLookupTable.ValidTableSize(1u << 16, (1 << 16) + 1));
+        }
+
+        /// <summary>
         /// A table is meant to be sent somewhere, so a restored one has to subtract
         /// against a table built by whoever received it.
         /// </summary>
