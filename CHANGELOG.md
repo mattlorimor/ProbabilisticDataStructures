@@ -55,8 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#145)
 
 - **A `ThetaSketch` or `TupleSketch` read back from storage, or built by `Union`,
-  `Intersect` or `Difference`, now goes on exactly as the sketch it stands for would,
-  bar one rounding case below.**
+  `Intersect` or `Difference`, now goes on exactly as the sketch it stands for would.**
   Below a nominal size of 8 it did not. A sketch may hold twice its nominal size before
   it trims, and while it is being fed it trims only when its buffer fills, but the
   reader and the set operations gave the rebuilt sketch room for at least sixteen
@@ -70,16 +69,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Every path now sizes the buffer by one rule, capped at what the sketch may hold.
   The payload does not change: the buffer's size was never stored, so every payload
   already written reads into a sketch that carries on as if it had never been saved.
-  That is exact for a `ThetaSketch`, and for a `TupleSketch`'s keys and `Count()`. The
-  one exception is not this defect, and the fix does not touch it: a `TupleSketch`
-  folding fractional values with `Sum` can differ from the sketch it stands for in the
-  last bits of its summaries, and so of `Total()`, once its nominal size is 9 or more.
-  The sort that gathers a key's values before folding them is not stable, so a sketch
-  that was saved, or combined, compacts at different moments and can fold a key's
-  values in a different order, and floating-point addition is not associative. Every
-  summary stays within rounding of the true total; whole numbers, `Min` and `Max` are
-  exact, as is a fractional sum up to a nominal size of 8.
   The defect shipped with `ThetaSketch` in 6.0.0 and with `TupleSketch` in 6.2.0. (#147)
+
+- **A `TupleSketch` folding fractional values with `Sum` now ends on the same bits
+  whether or not it was saved or combined on the way.** Its summaries, and so `Total()`,
+  could differ in the last bits between a sketch that was saved and read back, or unioned
+  with or differenced from an empty one, and a sketch that never was, once its nominal
+  size was 9 or more. The sort that gathers a key's values before folding them was
+  `Array.Sort`, which is not stable once the buffer is past a small partition: it can
+  swap equal keys. Saving or combining makes a sketch compact at moments it otherwise
+  would not, so a key's values were folded in a different order, and floating-point
+  addition is not associative. Every summary was within rounding of the true total
+  throughout, and whole numbers, `Min` and `Max` were never affected. `TupleSketch`
+  shipped in 6.2.0, so 6.2.0 is affected.
+  <br><br>
+  The sort is now a stable merge sort over the keys and their summaries together. A
+  compaction merges the entries the last one left, which are already in order, with
+  what has arrived since, so a key's summary is the left-to-right fold of its values in
+  the order they arrived, wherever the compactions fell. A saved or combined sketch ends
+  on the same bytes as one that never was, at every nominal size. The payload does not
+  change, since only sorted, distinct keys were ever written, so every payload already
+  written reads as before. Adding the same fractional values in a *different* order
+  still rounds differently, as it must; that is floating-point addition, and no sort
+  changes it.
+  <br><br>
+  Adds are no slower. In a BenchmarkDotNet short job (new in `Benchmarks/`; fractional
+  `Sum` values in bursts of repeated keys, mean per add, two passes on one machine), a
+  sketch of 4096 went from 25.5 and 26.1 ns to 17.2 and 18.3 ns on a stream that keeps
+  its buffer refilling, because the entries a compaction left are merged rather than
+  sorted again. Everywhere else, which is the smaller sizes and every size on a stream of
+  mostly new keys that the threshold turns away, the two were within about the ten
+  percent that separates one run from the next, at 5 to 11 ns. Nothing is allocated per
+  add before or after: the merge's scratch comes from the stack, or from the shared
+  array pool for the larger sketches.
 
 - **A `VarOpt` merge no longer writes a sample its own reader refuses.** Merging a sample
   that had begun sampling into an empty one keeping the same number of items fed the
