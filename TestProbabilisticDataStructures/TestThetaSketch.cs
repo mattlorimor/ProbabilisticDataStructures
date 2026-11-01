@@ -780,6 +780,46 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The other half of the sizing rule: a sketch read back or rebuilt by a set
+        /// operation is sized by what it holds, not by the allowance it may grow into.
+        /// One holding no more than a new sketch has room for costs exactly what a new
+        /// one does. Otherwise a payload that claims a large k and holds almost
+        /// nothing would cost its whole allowance the moment it was read.
+        /// </summary>
+        [TestMethod]
+        public void TestASmallSketchReadBackOrRebuiltCostsWhatANewOneDoes()
+        {
+            const uint K = 4096;
+            var fresh = new ThetaSketch(K).SizeInBytes();
+
+            var left = new ThetaSketch(K);
+            var right = new ThetaSketch(K);
+            for (var i = 0; i < 5; i++)
+            {
+                left.Add(Item(i));
+                right.Add(Item(100 + i));
+            }
+
+            var made = new (string What, ThetaSketch Sketch)[]
+            {
+                ("an empty sketch read back",
+                    Persistence.FromByteArray<ThetaSketch>(new ThetaSketch(K).ToByteArray())),
+                ("a small sketch read back",
+                    Persistence.FromByteArray<ThetaSketch>(left.ToByteArray())),
+                ("a union", left.Union(right)),
+                ("an intersection", left.Intersect(right)),
+                ("a difference", left.Difference(right)),
+            };
+
+            foreach (var (what, sketch) in made)
+            {
+                Assert.AreEqual(fresh, sketch.SizeInBytes(),
+                    $"{what} must cost what a new sketch does, not the " +
+                    $"{2ul * K * sizeof(ulong)} bytes it may grow to.");
+            }
+        }
+
+        /// <summary>
         /// Splits each continuation stream at every point, hands the sketch built so
         /// far to <paramref name="carryOn"/>, feeds the rest of the stream to what
         /// comes back, and holds the result to a sketch that saw the whole stream

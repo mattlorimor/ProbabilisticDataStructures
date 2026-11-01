@@ -644,11 +644,12 @@ namespace TestProbabilisticDataStructures
             Encoding.UTF8.GetBytes($"t{stream}-item-{i % ContinuationKeys}");
 
         /// <summary>
-        /// Whole numbers, so that every fold is exact. Which values meet in one fold
-        /// depends on when compactions fire, which is what the buffer decides, and
-        /// floating-point addition is not associative; with whole numbers the bytes
-        /// pin which values were folded into which key and nothing about the order
-        /// they were folded in.
+        /// Whole numbers, so that every fold is exact in any order. The sort that
+        /// gathers a key's values before folding them is not stable, the order it
+        /// leaves them in depends on what else is in the buffer, and floating-point
+        /// addition is not associative -- so with fractional values the bytes could
+        /// depend on when compactions fired as well as on which values were folded.
+        /// With whole numbers they pin only the second.
         /// </summary>
         private static double ValueOf(int i) => i + 1;
 
@@ -839,6 +840,46 @@ namespace TestProbabilisticDataStructures
                 $"k = {k}, allowance {allowance} bytes: {string.Join(", ", over)}. Room " +
                 "past twice the retained size delays a sketch's trims, and every " +
                 "estimate after them moves.");
+        }
+
+        /// <summary>
+        /// The other half of the sizing rule: a sketch read back or rebuilt by a set
+        /// operation is sized by what it holds, not by the allowance it may grow into.
+        /// One holding no more than a new sketch has room for costs exactly what a new
+        /// one does. Otherwise a payload that claims a large k and holds almost
+        /// nothing would cost its whole allowance the moment it was read.
+        /// </summary>
+        [TestMethod]
+        public void TestASmallSketchReadBackOrRebuiltCostsWhatANewOneDoes()
+        {
+            const uint K = 4096;
+            var fresh = new TupleSketch(K).SizeInBytes();
+
+            var left = new TupleSketch(K);
+            var right = new TupleSketch(K);
+            for (var i = 0; i < 5; i++)
+            {
+                left.Add(Key(i), i + 1);
+                right.Add(Key(100 + i), i + 1);
+            }
+
+            var made = new (string What, TupleSketch Sketch)[]
+            {
+                ("an empty sketch read back",
+                    Persistence.FromByteArray<TupleSketch>(new TupleSketch(K).ToByteArray())),
+                ("a small sketch read back",
+                    Persistence.FromByteArray<TupleSketch>(left.ToByteArray())),
+                ("a union", left.Union(right)),
+                ("an intersection", left.Intersect(right)),
+                ("a difference", left.Difference(right)),
+            };
+
+            foreach (var (what, sketch) in made)
+            {
+                Assert.AreEqual(fresh, sketch.SizeInBytes(),
+                    $"{what} must cost what a new sketch does, not the " +
+                    $"{2ul * K * (sizeof(ulong) + sizeof(double))} bytes it may grow to.");
+            }
         }
 
         /// <summary>
