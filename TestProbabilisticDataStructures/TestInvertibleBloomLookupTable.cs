@@ -284,9 +284,10 @@ namespace TestProbabilisticDataStructures
         /// as well as their counts, and only the two keys xored together say the table is
         /// not empty.
         /// <para>
-        /// The table is sized for two, so its four cells hold every key, and the keys are 0
-        /// and -1, which differ in every bit: the residue is in every byte of every cell,
-        /// so a check that reads only some of the key sums cannot pass here by luck.
+        /// The table is sized for two, so its four cells hold every key whatever the hash,
+        /// and the keys are 0 and <see cref="long.MinValue"/>, which differ only in the top
+        /// bit of their last byte. So the residue sits at the end of every cell, where a
+        /// check that walked the key sums by cell rather than by byte would not look.
         /// </para>
         /// </summary>
         [TestMethod]
@@ -294,7 +295,7 @@ namespace TestProbabilisticDataStructures
         {
             var table = new InvertibleBloomLookupTable(2, 8, _ => 0x9E3779B97F4A7C15UL)
                 .Add(Key(0))
-                .Remove(Key(-1));
+                .Remove(Key(long.MinValue));
 
             Assert.AreEqual(4u, table.Cells(), "every key has to be in every cell");
             Assert.IsTrue(CountsAllCancel(table));
@@ -340,24 +341,32 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// And the counts are what is left when a key is added twice: xoring it in twice
-        /// takes it back out of the key and hash sums, and only the count of two says it is
-        /// there. No cell holds it exactly once, so it cannot be listed, and the decode has
-        /// to say so rather than report the table empty.
+        /// And the counts are what is left when a key is added twice, or removed twice:
+        /// xoring it in twice takes it back out of the key and hash sums, and only a count
+        /// of two says it is there. No cell holds it exactly once, so it cannot be listed,
+        /// and the decode has to say so rather than report the table empty. Both signs,
+        /// because a subtracted table holds the other side's keys as negatives.
         /// </summary>
         [TestMethod]
-        public void TestAKeyAddedTwiceIsNotReportedAsNoDifference()
+        public void TestAKeyAddedOrRemovedTwiceIsNotReportedAsNoDifference()
         {
-            var table = new InvertibleBloomLookupTable(8, 8).Add(Key(5)).Add(Key(5));
+            var cases = new (string Name, InvertibleBloomLookupTable Table)[]
+            {
+                ("added", new InvertibleBloomLookupTable(8, 8).Add(Key(5)).Add(Key(5))),
+                ("removed", new InvertibleBloomLookupTable(8, 8).Remove(Key(5)).Remove(Key(5))),
+            };
 
-            // Also the check that CountsAllCancel reads counts and not something that
-            // happens to be zero: here they are not.
-            Assert.IsFalse(CountsAllCancel(table));
+            foreach (var (name, table) in cases)
+            {
+                // Also the check that CountsAllCancel reads counts and not something that
+                // happens to be zero: here they are not.
+                Assert.IsFalse(CountsAllCancel(table), name);
 
-            Assert.IsFalse(table.TryDecode(out var added, out var removed),
-                "a key added twice decoded as an empty table");
-            Assert.HasCount(0, added);
-            Assert.HasCount(0, removed);
+                Assert.IsFalse(table.TryDecode(out var added, out var removed),
+                    $"a key {name} twice decoded as an empty table");
+                Assert.HasCount(0, added, name);
+                Assert.HasCount(0, removed, name);
+            }
         }
 
         [TestMethod]
