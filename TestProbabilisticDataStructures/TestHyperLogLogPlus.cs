@@ -204,8 +204,9 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The sparse form is only worth having if it never costs more than the registers
-        /// it stands in for, which is what decides when it gives way.
+        /// The sparse form is only worth having if it costs less than the registers it
+        /// stands in for, which is what decides when it gives way at every precision but
+        /// the smallest few; the deviation there is held further down.
         /// </summary>
         [TestMethod]
         public void TestTheSparseFormNeverCostsMoreThanTheDenseOne()
@@ -310,8 +311,8 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// Adds distinct items until the estimator goes dense, failing rather than
-        /// spinning if it never does: more hashes than there are registers cannot be the
-        /// cheaper form on any reading of the rule, so that many is the bound.
+        /// spinning if it never does: more hashes than there are registers is past both
+        /// the paper's cap and the floor below it, so that many is the bound.
         /// </summary>
         private static HyperLogLogPlus FilledUntilDense(uint precision, out int added)
         {
@@ -415,24 +416,31 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Where the sparse form gives way, restated from the paper rather than read back
-        /// from the implementation. Heule, Nunkesser and Hall, "HyperLogLog in Practice"
-        /// (EDBT 2013), section 5.3: the sparse list is kept until it "would require more
-        /// memory than the dense representation of the registers (i.e., 6m bits)", and
-        /// Figure 6 converts at line 22 when |sparse_list| &gt; m * 6 bits, measured after
-        /// the new hash has been merged into the list (lines 17 to 20). Their registers
-        /// are six bits; here a register is one byte and a held hash all eight of the
-        /// hash's bytes (section 5.3.1 allows p' up to 64, "at which points the full hash
-        /// code is kept"). So the list may hold m / 8 hashes, and the next distinct one
-        /// converts. Checked against the paper as Google Research publishes it,
-        /// 2026-11-01.
+        /// The one documented deviation from the paper's conversion rule: the sparse form
+        /// holds at least this many hashes at any precision. Restated here rather than
+        /// read from the implementation, like the rule itself.
+        /// </summary>
+        private const int ExactFloor = 16;
+
+        /// <summary>
+        /// Where the sparse form gives way, restated rather than read back from the
+        /// implementation: the paper's rule, and the one documented deviation from it.
+        /// Heule, Nunkesser and Hall, "HyperLogLog in Practice" (EDBT 2013), section 5.3:
+        /// the sparse list is kept until it "would require more memory than the dense
+        /// representation of the registers (i.e., 6m bits)", and Figure 6 converts at
+        /// line 22 when |sparse_list| &gt; m * 6 bits, measured after the new hash has
+        /// been merged into the list (lines 17 to 20). Their registers are six bits; here
+        /// a register is one byte and a held hash all eight of the hash's bytes (section
+        /// 5.3.1 allows p' up to 64, "at which points the full hash code is kept"), so
+        /// the rule is m / 8 hashes. Checked against the paper as Google Research
+        /// publishes it, 2026-11-01.
         /// <para>
-        /// At every precision, because the coarse ones are where it was wrong. The buffer
-        /// started at sixteen hashes and grows only toward the cap, never shrinks to it,
-        /// so below precision 7 the conversion came wherever that first buffer filled
-        /// rather than at the cap. The cap itself was floored at four, which precision 4
-        /// alone discriminates: m / 8 is two there, and four at precision 5, where the
-        /// floor and the rule agree.
+        /// The deviation is a floor of 16, so the smallest precisions count up to 16
+        /// exactly, as 6.0.0 through 6.2.0 did. It decides precisions 4 to 6, where m / 8
+        /// is 2, 4 and 8, and nothing from 7, where m / 8 is already 16. So 4 to 6
+        /// discriminate the floor -- against the paper's bare rule and against the old
+        /// floor of four, which gave 4, 4 and 8 -- and 8 upward discriminate the rule;
+        /// 7 is where the two agree and tells them apart from nothing.
         /// </para>
         /// <para>
         /// Every way in, because three places build a sparse buffer: a new estimator, one
@@ -441,12 +449,12 @@ namespace TestProbabilisticDataStructures
         /// </para>
         /// </summary>
         [TestMethod]
-        public void TestTheSparseFormHoldsAsManyHashesAsTheRegistersHaveBytes()
+        public void TestTheSparseFormHoldsTheRegistersWorthOfHashesAndAtLeastSixteen()
         {
             AtEveryPrecision(precision =>
             {
                 var registers = 1 << (int)precision;
-                var cap = registers / sizeof(ulong);
+                var cap = Math.Max(ExactFloor, registers / sizeof(ulong));
 
                 var part = new HyperLogLogPlus(precision);
                 for (var i = 0; i < cap / 2; i++)
@@ -472,7 +480,7 @@ namespace TestProbabilisticDataStructures
                 if (!estimator.IsSparse)
                 {
                     return $"{where}, went dense at {i + 1} distinct items, short of the " +
-                        $"{cap} hashes the registers' bytes would hold";
+                        $"{cap} it should hold";
                 }
             }
 
@@ -483,8 +491,8 @@ namespace TestProbabilisticDataStructures
 
             estimator.Add(Item(cap));
             return estimator.IsSparse
-                ? $"{where}, still sparse at {cap + 1} distinct items, more hashes than " +
-                  $"the registers' {cap * sizeof(ulong)} bytes would hold"
+                ? $"{where}, still sparse at {cap + 1} distinct items, past the {cap} it " +
+                  "should hold"
                 : null;
         }
 
@@ -494,41 +502,56 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The promise above, at every precision rather than at 14 alone, and in each of
-        /// the ways a sparse buffer gets built. At 14 it holds with room to spare. At 4 it
-        /// did not hold before anything was added: a new estimator's buffer cost 128
-        /// bytes against the 16 its registers would, so the sparse form began life eight
-        /// times the size of the thing it exists to undercut.
+        /// What the sparse form costs, at every precision and in each of the ways a sparse
+        /// buffer gets built. From precision 7 up it never costs more than the dense
+        /// registers, which is the paper's rule. At 4 to 6 it may, by exactly the
+        /// documented deviation and no more: 16 hashes, 128 bytes, against 16, 32 and 64
+        /// for the registers.
+        /// <para>
+        /// Both directions are held. The most it costs before converting must be exactly
+        /// the larger of the registers and the floor's 128 bytes -- the bound is reached
+        /// by construction, so falling short of it means the estimator is not doing what
+        /// the documentation says. A floor that crept up fails the ceiling; one dropped
+        /// back to the paper's bare rule, which is what this estimator briefly did, fails
+        /// the floor.
+        /// </para>
         /// </summary>
         [TestMethod]
-        public void TestTheSparseFormNeverCostsMoreThanTheDenseOneAtAnyPrecision()
+        public void TestTheSparseFormCostsNoMoreThanTheRegistersOrTheDocumentedFloor()
         {
             AtEveryPrecision(precision =>
             {
                 var registers = 1ul << (int)precision;
+                var allowed = Math.Max(registers, (ulong)ExactFloor * sizeof(ulong));
 
                 // One item, which is below the conversion point at any precision on any
                 // reading of the rule, so the reader's own sizing is what is measured.
                 var one = new HyperLogLogPlus(precision);
                 one.Add(Item(0));
 
-                return NeverCostsMore(new HyperLogLogPlus(precision), 0, registers, "new")
-                    ?? NeverCostsMore(Persistence.FromByteArray<HyperLogLogPlus>(one.ToByteArray()),
-                        1, registers, "read back holding one")
-                    ?? NeverCostsMore(DenseThenReset(precision), 0, registers,
+                return CostsExactlyAtMost(new HyperLogLogPlus(precision), 0, registers,
+                        allowed, "new")
+                    ?? CostsExactlyAtMost(
+                        Persistence.FromByteArray<HyperLogLogPlus>(one.ToByteArray()), 1,
+                        registers, allowed, "read back holding one")
+                    ?? CostsExactlyAtMost(DenseThenReset(precision), 0, registers, allowed,
                         "reset after going dense");
             });
         }
 
-        private static string NeverCostsMore(
-            HyperLogLogPlus estimator, int alreadyHeld, ulong registers, string where)
+        private static string CostsExactlyAtMost(
+            HyperLogLogPlus estimator, int alreadyHeld, ulong registers, ulong allowed,
+            string where)
         {
+            var most = 0ul;
+
             for (var i = alreadyHeld; estimator.IsSparse; i++)
             {
-                if (estimator.SizeInBytes() > registers)
+                var size = estimator.SizeInBytes();
+                if (size > allowed)
                 {
-                    return $"{where}, holding {i} items the sparse form cost " +
-                        $"{estimator.SizeInBytes()} bytes, against {registers} for the registers";
+                    return $"{where}, holding {i} items the sparse form cost {size} bytes, " +
+                        $"past the {allowed} allowed against {registers} for the registers";
                 }
 
                 if ((ulong)i > registers)
@@ -537,10 +560,14 @@ namespace TestProbabilisticDataStructures
                         "are registers";
                 }
 
+                most = Math.Max(most, size);
                 estimator.Add(Item(i));
             }
 
-            return null;
+            return most == allowed
+                ? null
+                : $"{where}, the sparse form never cost more than {most} bytes before " +
+                  $"converting, short of the {allowed} it is documented to reach";
         }
 
         [TestMethod]

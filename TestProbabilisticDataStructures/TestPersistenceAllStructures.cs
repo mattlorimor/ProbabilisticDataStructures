@@ -1031,11 +1031,11 @@ namespace TestProbabilisticDataStructures
 
         private static byte[] FilledHllPlus(int items, bool sparse)
         {
-            // Precision 4 gives 16 registers, one byte each, and the sparse form holds
-            // no more eight-byte hashes than fit in those: 2 items is sparse and 200
-            // comfortably dense. This said 20 was sparse, and 20 was dense, so the sweep
-            // covered the dense layout twice and the sparse one not at all; the check
-            // below is what stops that happening quietly again.
+            // Precision 4 gives 16 registers, and the sparse form there holds at most 16
+            // hashes, so 2 items is comfortably sparse and 200 comfortably dense. This
+            // said 20 was sparse, and 20 was dense, so the sweep covered the dense layout
+            // twice and the sparse one not at all; the check below is what stops that
+            // happening quietly again.
             var estimator = new HyperLogLogPlus(4);
             for (var i = 0; i < items; i++)
             {

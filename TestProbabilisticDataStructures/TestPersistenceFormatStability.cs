@@ -193,20 +193,20 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A sparse payload holding more hashes than the estimator would hold today.
-        /// Through 6.2.0 the first sparse buffer was larger than the conversion point at
-        /// the smallest precisions, so precision 4 held sixteen hashes -- 128 bytes
-        /// standing in for 16 bytes of registers -- and wrote them. These are the bytes
-        /// that writer produced (its sparse path unchanged from 6.0.0), and the writer no
-        /// longer produces them, so this is the read side's witness alone.
+        /// A sparse payload at the smallest precision, holding the most it holds there:
+        /// 16 hashes, 128 bytes standing in for 16 bytes of registers. That is the
+        /// documented deviation from the paper, whose rule would convert after 2, and it
+        /// is what 6.2.0 wrote -- these are the bytes that writer produced, its sparse
+        /// path unchanged since 6.0.0. Today's writer is pinned to the same bytes in
+        /// <see cref="TestWritingStillProducesTheStoredBytes"/>.
         /// <para>
-        /// It has to come back exactly as written, counting exactly, because converting
-        /// it on load would change a stored answer. A repeat leaves it alone like any
-        /// other, and the first new item converts it, since it is already past the cap.
+        /// It has to come back exactly as written, counting exactly. It is also full,
+        /// which is where #149 lived: a repeat must leave it alone, and the first new
+        /// item converts it.
         /// </para>
         /// </summary>
         [TestMethod]
-        public void TestStoredHyperLogLogPlusPastTheSparseCapStillReads()
+        public void TestStoredHyperLogLogPlusAtTheSmallestPrecisionStillReads()
         {
             var bytes = ReadFixture("hyperloglogplus-sparse-p4-v1.bin");
             var estimator = Persistence.FromByteArray<HyperLogLogPlus>(bytes);
@@ -227,7 +227,7 @@ namespace TestProbabilisticDataStructures
 
             estimator.Add(Key("w16"));
             Assert.IsFalse(estimator.IsSparse,
-                "a new item did not convert an estimator already past the sparse cap");
+                "a new item did not convert an estimator holding as many hashes as it may");
         }
 
         /// <summary>
@@ -837,6 +837,16 @@ namespace TestProbabilisticDataStructures
             }
 
             AssertBytes("hyperloglogplus-sparse-v1.bin", sparseHll.ToByteArray());
+
+            // Precision 4 holding the most it may. The floor that keeps small counts
+            // exact there, against the paper's rule, writes what 6.2.0 wrote.
+            var smallestHll = new HyperLogLogPlus(4);
+            for (var i = 0; i < 16; i++)
+            {
+                smallestHll.Add(Key($"w{i}"));
+            }
+
+            AssertBytes("hyperloglogplus-sparse-p4-v1.bin", smallestHll.ToByteArray());
 
             var quotient = new QuotientFilter(100, 0.01);
             foreach (var word in Words)
