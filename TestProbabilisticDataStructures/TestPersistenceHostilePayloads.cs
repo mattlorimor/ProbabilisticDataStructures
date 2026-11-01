@@ -564,6 +564,83 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// An exact sample holds everything it has seen, so one holding more items
+        /// than it claims to have seen describes items that were never added. It is
+        /// told apart from the opposite case -- fewer held than seen, which a 6.2.0
+        /// merge could write and which a stored fixture pins -- because only that one
+        /// has a history worth explaining.
+        /// </summary>
+        [TestMethod]
+        public void TestExactVarOptHoldingMoreThanItHasSeenIsRefused()
+        {
+            var sample = new VarOpt(5, seed: 7);
+            for (var i = 0; i < 4; i++)
+            {
+                sample.Add(Key($"item-{i}"), 1.0 + i);
+            }
+            var bytes = PokeUInt64(sample.ToByteArray(), 12, 2);
+            AssertRefused(
+                () => Persistence.FromByteArray<VarOpt>(bytes),
+                "more than it has seen");
+        }
+
+        /// <summary>
+        /// The other side of the same boundary, at its nearest point: an exact sample
+        /// claiming one item more than it holds. This is the shape 6.2.0's merge wrote
+        /// -- the issue's own case held eight having seen nine -- and the refusal says
+        /// so.
+        /// </summary>
+        [TestMethod]
+        public void TestExactVarOptHoldingOneFewerThanItHasSeenIsRefused()
+        {
+            var sample = new VarOpt(5, seed: 7);
+            for (var i = 0; i < 4; i++)
+            {
+                sample.Add(Key($"item-{i}"), 1.0 + i);
+            }
+            var bytes = PokeUInt64(sample.ToByteArray(), 12, 5);
+            AssertRefused(
+                () => Persistence.FromByteArray<VarOpt>(bytes), "Version 6.2.0");
+        }
+
+        /// <summary>
+        /// Once sampling, the items held at their own weights are a heap, and the
+        /// reader orders them rather than trusting the payload to: an insertion into
+        /// a heap that is not one contests the wrong item. The payload here is
+        /// written from a sample whose heap was disordered first, so the writer's own
+        /// checksum covers it.
+        /// </summary>
+        [TestMethod]
+        public void TestVarOptSamplingHeapOutOfOrderIsReorderedOnRead()
+        {
+            var sample = new VarOpt(8, seed: 7);
+            for (var i = 0; i < 6; i++)
+            {
+                sample.Add(Key($"heavy-{i}"), 100.0 * (i + 1));
+            }
+            for (var i = 0; i < 60; i++)
+            {
+                sample.Add(Key($"light-{i}"), 1.0);
+            }
+            Assert.IsTrue(sample.LightCount > 0 && sample.HeavyCount >= 2 &&
+                sample.HeavyWeights[0] < sample.HeavyWeights[1],
+                "Premise: sampling, with a strictly lighter root to swap out of place.");
+            (sample.HeavyItems[0], sample.HeavyItems[1]) =
+                (sample.HeavyItems[1], sample.HeavyItems[0]);
+            (sample.HeavyWeights[0], sample.HeavyWeights[1]) =
+                (sample.HeavyWeights[1], sample.HeavyWeights[0]);
+
+            var restored = Persistence.FromByteArray<VarOpt>(sample.ToByteArray());
+
+            for (var i = 1; i < restored.HeavyCount; i++)
+            {
+                Assert.IsTrue(
+                    restored.HeavyWeights[(i - 1) / 2] <= restored.HeavyWeights[i],
+                    $"The restored heap is out of order at slot {i}.");
+            }
+        }
+
+        /// <summary>
         /// A HeavyKeeper payload for the tests below to corrupt: k = 5, two arrays of
         /// sixteen buckets. Its payload layout is fixed, so field offsets are too:
         /// k at 0, width at 4, depth at 8, decay at 12, and -- after the 36-byte
