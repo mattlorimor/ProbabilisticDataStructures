@@ -55,10 +55,9 @@ namespace TestProbabilisticDataStructures
     /// <c>Add</c> as the subject, so a defect in <c>Add</c> itself is left to the
     /// per-structure tests for the filters whose state it alone determines. Scalable
     /// growth has no model, only the twin and the no-false-negative promise, and the
-    /// stable filter has no oracle for its answers, since it evicts. Whether the
-    /// stable filter's <c>Reset</c> should also reseed its generator is a design
-    /// question; the twin is reset the same way the subject is, so these tests hold
-    /// whichever way it is decided.
+    /// stable filter has no oracle for its answers, since it evicts. Its <c>Reset</c>
+    /// restores the generator along with the cells, so a reset filter is held to a new
+    /// one byte for byte like every other filter here, generator state included.
     /// </para>
     /// </summary>
     [TestClass]
@@ -108,13 +107,6 @@ namespace TestProbabilisticDataStructures
             /// displaces; both still promise the element just added.
             /// </summary>
             public bool NeverForgets;
-
-            /// <summary>
-            /// The stable filter's Reset clears its cells and leaves its generator where
-            /// it was, so a Reset filter matches a new one everywhere but the stored
-            /// generator state, and the twin is reset rather than replaced.
-            /// </summary>
-            public bool ResetKeepsGenerator;
 
             public Func<T, Tally, IModel> Model;
 
@@ -361,17 +353,10 @@ namespace TestProbabilisticDataStructures
                             subject = spec.Reset(subject);
                             var fresh = spec.Fresh().ToByteArray();
                             var reset = subject.ToByteArray();
-                            if (spec.ResetKeepsGenerator)
-                            {
-                                // Everything but the generator state -- the payload's
-                                // trailing u64 -- and the CRC that covers it.
-                                fresh = fresh[..^12];
-                                reset = reset[..^12];
-                            }
                             AssertSameFrame(where, fresh, reset,
                                 "Reset must return the structure to the state a new one " +
                                 "starts in, byte for byte.", recent);
-                            twin = spec.ResetKeepsGenerator ? spec.Reset(twin) : spec.Fresh();
+                            twin = spec.Fresh();
                             model?.Reset();
                             live.Clear();
                             onResetStorage = true;
@@ -871,10 +856,10 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// The stable filter forgets by design and draws which cells to decay from a
         /// seeded generator, so there is no model of its answers -- only of its
-        /// history. Its twin sees every add in order and is reset when it is, so the
-        /// two must agree byte for byte across any number of saves and loads; the
-        /// element just added must test true; and Reset must clear the cells to a new
-        /// filter's, leaving only the generator where it was.
+        /// history. Its twin sees every add in order and is replaced by a new filter
+        /// when the subject is reset, so the two must agree byte for byte across any
+        /// number of saves and loads; the element just added must test true; and Reset
+        /// must return the filter to a new one's state, generator included.
         /// </summary>
         [TestMethod]
         public void TestStableBloomFilterSequencesMatchTheirTwin()
@@ -892,7 +877,6 @@ namespace TestProbabilisticDataStructures
                     Name = nameof(StableBloomFilter),
                     Fresh = fresh,
                     Reset = f => f.Reset(),
-                    ResetKeepsGenerator = true,
                 };
                 AssertExercised(spec, config, RunAll(spec, config));
             }

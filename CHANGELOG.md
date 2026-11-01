@@ -259,6 +259,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allocated only to be thrown away, and the small-table sizing had made it larger than
   it was. The tables they return, and every byte written from them, are the same.
 
+- **`StableBloomFilter.Reset` now puts the random generator back where it began.** Its
+  documentation promised the filter's original state, and it delivered all of it but
+  one thing: the cells cleared and the generator stayed wherever the adds had left it. A
+  reset filter differed from a new one with the same seed in the generator state stored in
+  its payload, and made different random choices from then on, so the stream that took a
+  filter to some state did not take its reset self to the same state. (#144)
+  <br><br>
+  **A reset filter now repeats its original random sequence.** For a seeded filter that
+  is the sequence its seed gives. For one built without a seed it is the unpredictable
+  sequence it was built with, so resetting it again repeats that sequence rather than
+  drawing a new one; build a new filter for fresh randomness. This holds for a filter that
+  was saved and loaded in between.
+  <br><br>
+  That needed the payload to say where the generator began, and it held only where the
+  generator had got to. **`StableBloomFilter` therefore writes a new format version**,
+  which adds that starting state as one more field, so a release before this one cannot
+  read a stable filter written by this one — the compatibility this library promises runs
+  backwards, not forwards. Every other structure writes the version it always did.
+  <br><br>
+  Payloads written by earlier versions still read, and nothing in them changes. They hold
+  no starting state to go back to, and the seed is not in them, so a filter read from one
+  takes the generator position it was read at as its beginning: `Reset` returns it there,
+  emptied, and writing it out again records that same point rather than the one it has
+  reached since. A payload written before 6.0.0 holds no generator position at all, so
+  its beginning is the unpredictable one the filter was given on reading, as before. The
+  layout is in [FORMAT.md](FORMAT.md).
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

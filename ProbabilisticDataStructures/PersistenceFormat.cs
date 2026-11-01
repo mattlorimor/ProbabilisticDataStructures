@@ -119,7 +119,7 @@ namespace ProbabilisticDataStructures
         /// The highest format version this library can read. Readers refuse anything
         /// above it, since a later version may mean the payload differently.
         /// </summary>
-        internal const ushort MaxSupportedVersion = 4;
+        internal const ushort MaxSupportedVersion = 5;
 
         /// <summary>
         /// The version a payload is written at unless its structure asks for another.
@@ -146,6 +146,14 @@ namespace ProbabilisticDataStructures
         /// so that a restored filter resumes its draw sequence rather than restarting it.
         /// </summary>
         internal const ushort RandomStateVersion = 2;
+
+        /// <summary>
+        /// The version at which <see cref="StableBloomFilter"/> also stores where its
+        /// random generator began, so that <see cref="StableBloomFilter.Reset"/> can
+        /// return it there after a save and a load. Earlier payloads hold only the
+        /// position the generator had reached, which cannot say where it started.
+        /// </summary>
+        internal const ushort StableOriginalStateVersion = 5;
 
         /// <summary>
         /// The version at which <see cref="SetSketch"/> carries the construction it was

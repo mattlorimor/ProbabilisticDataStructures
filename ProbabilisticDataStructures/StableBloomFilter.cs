@@ -63,6 +63,14 @@ namespace ProbabilisticDataStructures
         private SeededRandom random;
 
         /// <summary>
+        /// Where the generator stood when the filter was built, which is what
+        /// <see cref="Reset"/> returns it to. It is stored with the filter because the
+        /// position the generator has reached cannot say where it began: a filter read
+        /// back from a payload would otherwise have nothing to return to.
+        /// </summary>
+        private ulong originalRandomState;
+
+        /// <summary>
         /// Whether any cell has been set, which is what decides if the hash can
         /// still be replaced. Derived rather than tracked, so that a filter read
         /// back from a payload answers this the way the one that wrote it would.
@@ -130,6 +138,7 @@ namespace ProbabilisticDataStructures
             this.random = seed is null
                 ? SeededRandom.Unpredictable()
                 : new SeededRandom((ulong)seed.Value);
+            this.originalRandomState = this.random.State;
             this.M = m;
             this.k = k;
             this.p = OptimalStableP(m, k, d, fpRate);
@@ -164,6 +173,9 @@ namespace ProbabilisticDataStructures
             var cells = new Buckets(m, 1);
             var k = Utils.OptimalK(fpRate);
 
+            // The generator is left at its default, zero, and so is the state it
+            // returns to on Reset. With p at zero its draws decay nothing, but they are
+            // still drawn and stored, so a reset filter has to match a new one in them.
             return new StableBloomFilter
             {
                 Hash = Defaults.GetDefaultHashFunction(),
@@ -340,13 +352,34 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Restores the Stable Bloom Filter to its original state. It returns the filter to
-        /// allow for chaining.
+        /// Restores the Stable Bloom Filter to its original state: every cell empty and
+        /// the random generator back where it stood when the filter was built. It
+        /// returns the filter to allow for chaining.
         /// </summary>
+        /// <remarks>
+        /// A reset filter is a new one, byte for byte as <see cref="WriteTo"/> writes
+        /// it, and it makes the choices a new one would: a stream added to it takes it
+        /// exactly where the same stream took the filter the first time. For a seeded
+        /// filter those are the choices its seed gives. For one built without a seed they
+        /// are the unpredictable ones it was built with, so resetting it repeatedly
+        /// repeats them rather than drawing new ones; build a new filter for that.
+        /// <para>
+        /// The starting state is stored with the filter, so this holds for one that has
+        /// been written and read back. A payload written before it was recorded has no
+        /// starting state to return to. A filter read from one takes the generator
+        /// position it was read at as its starting state, so Reset returns it there,
+        /// emptied, and writing it out and reading it back does not move that point.
+        /// </para>
+        /// <para>
+        /// Reset empties the filter and does not reconfigure it, so a hash function
+        /// supplied through <see cref="SetHash"/> stays.
+        /// </para>
+        /// </remarks>
         /// <returns>The reset bloom filter.</returns>
         public StableBloomFilter Reset()
         {
             this.cells.Reset();
+            this.random = new SeededRandom(this.originalRandomState);
             return this;
         }
 
@@ -364,13 +397,14 @@ namespace ProbabilisticDataStructures
             payload.WriteUInt32(this.p);
             PersistenceFormat.WriteBuckets(payload, this.cells);
             payload.WriteUInt64(this.random.State);
+            payload.WriteUInt64(this.originalRandomState);
 
             PersistenceFormat.Write(
                 stream,
                 StructureId.StableBloomFilter,
                 PersistenceFormat.Identify(this.Hash),
                 payload.WrittenSpan,
-                PersistenceFormat.RandomStateVersion);
+                PersistenceFormat.StableOriginalStateVersion);
         }
 
         /// <summary>
@@ -417,6 +451,14 @@ namespace ProbabilisticDataStructures
                 ? new SeededRandom(reader.ReadUInt64())
                 : SeededRandom.Unpredictable();
 
+            // Versions before the original state was recorded have none to read. Such a
+            // filter takes the position it was read at as its beginning, so Reset
+            // returns it there and writing it out again records that same point: the
+            // earliest the payload supports, rather than a seed it cannot name.
+            var originalRandomState = version >= PersistenceFormat.StableOriginalStateVersion
+                ? reader.ReadUInt64()
+                : random.State;
+
             reader.ExpectEnd();
 
             if (m == 0 || cells.count != m)
@@ -443,6 +485,7 @@ namespace ProbabilisticDataStructures
                 IndexBuffer = new uint[k],
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
                 random = random,
+                originalRandomState = originalRandomState,
             };
         }
 
