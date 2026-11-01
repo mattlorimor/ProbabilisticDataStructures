@@ -129,6 +129,140 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A version 2 payload stores the generator's position and nothing about where it
+        /// began, and what it stores is read as the position it is: a restored filter
+        /// carries on the sequence a never-saved twin is partway through, rather than
+        /// starting one of its own.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredStableBloomFilterAtVersionTwoResumesItsSequence()
+        {
+            var f = StableBloomFilter.ReadFrom(Fixture("stablebloomfilter-v2.bin"));
+            var twin = StoredStableTwin();
+
+            for (var i = 0; i < 300; i++)
+            {
+                f.Add(Key($"more{i}"));
+                twin.Add(Key($"more{i}"));
+            }
+
+            // Everything but the original state and the CRC after it, which are the part
+            // a version 2 payload never held: the twin knows where it began and the
+            // restored filter takes the position it was read at.
+            CollectionAssert.AreEqual(twin.ToByteArray()[..^12], f.ToByteArray()[..^12],
+                "the restored filter did not carry on the sequence it was stored partway through");
+        }
+
+        /// <summary>
+        /// The version 5 layout, which added where the generator began. Hand-assembled
+        /// from the version 2 fixture rather than written by the library, so reading it
+        /// is held to the layout and not to whatever the writer happens to produce: the
+        /// version 2 payload, the seed 7 as one more u64, a version of 5 and a CRC to
+        /// match.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredStableBloomFilterAtVersionFiveStillReads()
+        {
+            var f = StableBloomFilter.ReadFrom(Fixture("stablebloomfilter-v5.bin"));
+
+            Assert.AreEqual(1000u, f.Cells());
+            Assert.AreEqual(3u, f.K());
+            Assert.AreEqual(35u, f.P());
+            AssertAllPresent(f.Test);
+
+            // It resumes the sequence it was stored partway through...
+            var twin = StoredStableTwin();
+            for (var i = 0; i < 300; i++)
+            {
+                f.Add(Key($"more{i}"));
+                twin.Add(Key($"more{i}"));
+            }
+
+            CollectionAssert.AreEqual(twin.ToByteArray(), f.ToByteArray(),
+                "the restored filter did not carry on the sequence it was stored partway through");
+
+            // ...and a reset takes it back to the seed it was built with, which only the
+            // stored original state can say.
+            f.Reset();
+            CollectionAssert.AreEqual(
+                new StableBloomFilter(1000, 2, 0.01, seed: 7).ToByteArray(), f.ToByteArray(),
+                "Reset did not return the restored filter to its stored original state");
+        }
+
+        /// <summary>
+        /// A never-saved filter in the state the stable fixtures were written from.
+        /// </summary>
+        private static StableBloomFilter StoredStableTwin()
+        {
+            var twin = new StableBloomFilter(1000, 2, 0.01, seed: 7);
+            foreach (var word in Words)
+            {
+                twin.Add(Key(word));
+            }
+
+            return twin;
+        }
+
+        /// <summary>
+        /// A payload is read as the layout its version names, and refused when the bytes
+        /// are not that layout, even with a correct checksum. The version 2 fixture is
+        /// the version 5 layout without its last field, so labelled 5 it is short.
+        /// </summary>
+        [TestMethod]
+        public void TestAVersionFivePayloadMissingTheOriginalStateIsRefused()
+        {
+            var bytes = Relabeled(ReadFixture("stablebloomfilter-v2.bin"), 5);
+
+            var ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => StableBloomFilter.ReadFrom(new MemoryStream(bytes)));
+            StringAssert.Contains(ex.Message, "ended after");
+        }
+
+        /// <summary>
+        /// And the other way: the version 5 fixture labelled 2 carries a field that
+        /// version does not have, which is a payload that is not what it says, not a
+        /// version 2 payload with something extra to ignore.
+        /// </summary>
+        [TestMethod]
+        public void TestAVersionTwoPayloadWithAnOriginalStateIsRefused()
+        {
+            var bytes = Relabeled(ReadFixture("stablebloomfilter-v5.bin"), 2);
+
+            var ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => StableBloomFilter.ReadFrom(new MemoryStream(bytes)));
+            StringAssert.Contains(ex.Message, "bytes left over");
+        }
+
+        /// <summary>
+        /// The newest version this library reads is the one after which it refuses. The
+        /// general refusal test uses a version far beyond any, which cannot notice the
+        /// ceiling sitting one too high.
+        /// </summary>
+        [TestMethod]
+        public void TestTheVersionAfterTheNewestIsRefused()
+        {
+            var bytes = Relabeled(ReadFixture("stablebloomfilter-v5.bin"), 6);
+
+            var ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => StableBloomFilter.ReadFrom(new MemoryStream(bytes)));
+            StringAssert.Contains(ex.Message, "version 6");
+        }
+
+        /// <summary>
+        /// The frame with another format version in its header and the checksum repaired,
+        /// so that what refuses it is the reading and not the CRC.
+        /// </summary>
+        private static byte[] Relabeled(byte[] frame, ushort version)
+        {
+            var bytes = (byte[])frame.Clone();
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(4), version);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
+                bytes.AsSpan(bytes.Length - 4),
+                System.IO.Hashing.Crc32.HashToUInt32(bytes.AsSpan(4, bytes.Length - 8)));
+            return bytes;
+        }
+
+        /// <summary>
         /// A filter written before the fingerprints were packed. It restores at eight
         /// bits per stored byte, which is not a compatibility mode but the same filter
         /// it always was: the fingerprint value is the same low bits of the same
@@ -861,13 +995,19 @@ namespace TestProbabilisticDataStructures
             // Seeded, so the generator's stored position is fixed and the whole payload
             // is reproducible. Neither of these could be pinned before 6.0.0: their
             // generators were unseeded and nothing they did reached the payload.
+            //
+            // v5, not v2: the payload also records where the generator began, which is
+            // what lets Reset return to it. The v2 fixture stays for the read-side
+            // tests -- bytes 6.0.0 wrote must load forever -- and the v5 one was
+            // assembled from it by hand, so this holds the writer to the layout
+            // rather than to itself.
             var stable = new StableBloomFilter(1000, 2, 0.01, seed: 7);
             foreach (var word in Words)
             {
                 stable.Add(Key(word));
             }
 
-            AssertBytes("stablebloomfilter-v2.bin", stable.ToByteArray());
+            AssertBytes("stablebloomfilter-v5.bin", stable.ToByteArray());
 
             // The build is deterministic -- a fixed seed sequence over a fixed set --
             // which is what lets its bytes be pinned at all.
@@ -1082,6 +1222,7 @@ namespace TestProbabilisticDataStructures
                 ("topk-v1.bin", 12, 1),
                 ("minhashsignature-v1.bin", 13, 1),
                 ("stablebloomfilter-v2.bin", 7, 2),
+                ("stablebloomfilter-v5.bin", 7, 5),
                 ("cuckoobloomfilter-v2.bin", 9, 2),
                 ("cuckoobloomfilter-v3.bin", 9, 3),
                 ("binaryfusefilter-v1.bin", 14, 1),
@@ -1121,7 +1262,7 @@ namespace TestProbabilisticDataStructures
             // change that eleven of them did not have.
             Assert.AreEqual(1, new BloomFilter(100, 0.01).ToByteArray()[4],
                 "an unchanged structure started writing a later format version");
-            Assert.AreEqual(2, new StableBloomFilter(100, 2, 0.01).ToByteArray()[4],
+            Assert.AreEqual(5, new StableBloomFilter(100, 2, 0.01).ToByteArray()[4],
                 "the stable filter is not writing the version its layout needs");
         }
 

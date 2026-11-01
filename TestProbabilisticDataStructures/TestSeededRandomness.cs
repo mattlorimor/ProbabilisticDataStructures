@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -28,12 +29,21 @@ namespace TestProbabilisticDataStructures
         private static StableBloomFilter FilledStable(int? seed)
         {
             var f = new StableBloomFilter(1000, 2, 0.01, seed: seed);
+            Feed(f);
+
+            return f;
+        }
+
+        /// <summary>
+        /// The stream FilledStable puts through a filter, kept apart so a test can put
+        /// the same one through a filter again -- a reset one, for instance.
+        /// </summary>
+        private static void Feed(StableBloomFilter f)
+        {
             for (int i = 0; i < 3000; i++)
             {
                 f.Add(Key($"w{i}"));
             }
-
-            return f;
         }
 
         /// <summary>
@@ -247,6 +257,265 @@ namespace TestProbabilisticDataStructures
             for (int i = 0; i < 2000; i++)
             {
                 f.Add(Key($"later{i}"));
+            }
+        }
+
+        // ------------------------------------------------------------------ Reset
+
+        /// <summary>
+        /// Where a stable filter's payload says its generator is now, and where it began:
+        /// the last two u64 fields, ahead of the CRC, in the layout FORMAT.md freezes.
+        /// Read from the bytes rather than from a member that exists only for the tests,
+        /// so what is asserted is what a saved filter would carry.
+        /// </summary>
+        private static (ulong Now, ulong Began) GeneratorPositions(byte[] frame)
+        {
+            var end = frame.Length - 4;
+            return (BinaryPrimitives.ReadUInt64LittleEndian(frame.AsSpan(end - 16)),
+                BinaryPrimitives.ReadUInt64LittleEndian(frame.AsSpan(end - 8)));
+        }
+
+        /// <summary>
+        /// A new filter of the shape FilledStable builds: what a reset one has to equal.
+        /// </summary>
+        private static byte[] NewStable(int seed) =>
+            new StableBloomFilter(1000, 2, 0.01, seed: seed).ToByteArray();
+
+        private static void AddMore(StableBloomFilter f, string prefix, int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                f.Add(Key($"{prefix}{i}"));
+            }
+        }
+
+        /// <summary>
+        /// Reset restores the original state, and the generator is part of it: a reset
+        /// filter is a new one, byte for byte, for any seed. Zero and a negative seed
+        /// are rows of their own because the seed is widened to the generator's 64 bits,
+        /// and the state a seed becomes is the state Reset must return to.
+        /// </summary>
+        [TestMethod]
+        [DataRow(7)]
+        [DataRow(0)]
+        [DataRow(-1)]
+        public void TestAResetStableFilterIsANewOneByteForByte(int seed)
+        {
+            var fresh = NewStable(seed);
+            var f = FilledStable(seed);
+
+            // Without this, a filter whose adds never moved the generator would pass
+            // by doing nothing at all.
+            Assert.AreNotEqual(
+                GeneratorPositions(fresh).Now, GeneratorPositions(f.ToByteArray()).Now,
+                "the adds left the generator where it began, so a reset has nothing to undo");
+
+            Assert.AreSame(f, f.Reset());
+
+            CollectionAssert.AreEqual(fresh, f.ToByteArray(),
+                "a reset filter differs from a new one built with the same seed");
+        }
+
+        /// <summary>
+        /// What the restored generator is for, stated as behavior: the stream that took a
+        /// filter to a state takes its reset self to the same state, because the reset
+        /// filter makes the same random choices a second time.
+        /// </summary>
+        [TestMethod]
+        public void TestAResetStableFilterRepeatsItsRandomSequence()
+        {
+            var f = FilledStable(seed: 7);
+            var firstPass = f.ToByteArray();
+
+            f.Reset();
+            Feed(f);
+
+            CollectionAssert.AreEqual(firstPass, f.ToByteArray(),
+                "the same stream took the reset filter somewhere else, so it did not " +
+                "repeat the random choices it made the first time");
+        }
+
+        /// <summary>
+        /// The same property for a filter that was saved and loaded after use, where the
+        /// original state can only come from the payload: the generator's current
+        /// position is the wrong thing to write for it, and so is a reseed on read.
+        /// </summary>
+        [TestMethod]
+        [DataRow(7)]
+        [DataRow(-1)]
+        public void TestAResetStableFilterThatWasSavedAndLoadedIsANewOneByteForByte(int seed)
+        {
+            var fresh = NewStable(seed);
+
+            var loaded = Persistence.FromByteArray<StableBloomFilter>(
+                FilledStable(seed).ToByteArray());
+            loaded.Reset();
+            CollectionAssert.AreEqual(fresh, loaded.ToByteArray(),
+                "a filter used, saved, loaded and reset differs from a new one");
+
+            // Saved again and again with more use between, as a checkpointed filter is.
+            // Each write has to carry the origin forward rather than the position the
+            // generator had reached when it wrote.
+            var checkpointed = FilledStable(seed);
+            for (int round = 0; round < 5; round++)
+            {
+                checkpointed = Persistence.FromByteArray<StableBloomFilter>(
+                    checkpointed.ToByteArray());
+                AddMore(checkpointed, $"r{round}-", 200);
+            }
+
+            checkpointed.Reset();
+            CollectionAssert.AreEqual(fresh, checkpointed.ToByteArray(),
+                "a filter checkpointed repeatedly and then reset differs from a new one");
+        }
+
+        /// <summary>
+        /// And the other order: a filter reset and then saved still knows where it began,
+        /// so a second reset after more use returns to the start as well.
+        /// </summary>
+        [TestMethod]
+        public void TestAStableFilterResetBeforeBeingSavedStillKnowsWhereItBegan()
+        {
+            var f = FilledStable(seed: 7);
+            f.Reset();
+
+            var restored = Persistence.FromByteArray<StableBloomFilter>(f.ToByteArray());
+            CollectionAssert.AreEqual(NewStable(7), restored.ToByteArray());
+
+            Feed(restored);
+            restored.Reset();
+            CollectionAssert.AreEqual(NewStable(7), restored.ToByteArray(),
+                "the loaded filter was reset to somewhere other than where it began");
+        }
+
+        /// <summary>
+        /// An unseeded filter has no seed to restore, and a constant would be wrong in a
+        /// different way: its original state is whatever unpredictable one it was built
+        /// with, and Reset returns it there, not to a state any other filter shares.
+        /// </summary>
+        [TestMethod]
+        public void TestAResetUnseededStableFilterReturnsToWhereItBegan()
+        {
+            var f = new StableBloomFilter(1000, 2, 0.01);
+            var began = f.ToByteArray();
+            var (now, origin) = GeneratorPositions(began);
+            Assert.AreEqual(origin, now, "a new filter's generator is where it began");
+
+            Feed(f);
+            var used = f.ToByteArray();
+            Assert.AreNotEqual(now, GeneratorPositions(used).Now,
+                "the adds left the generator where it began, so a reset has nothing to undo");
+
+            f.Reset();
+            CollectionAssert.AreEqual(began, f.ToByteArray(),
+                "a reset unseeded filter is not back where it was built");
+
+            var restored = Persistence.FromByteArray<StableBloomFilter>(used);
+            restored.Reset();
+            CollectionAssert.AreEqual(began, restored.ToByteArray(),
+                "an unseeded filter that was saved and loaded is not back where it was built");
+        }
+
+        /// <summary>
+        /// The unstable constructor builds its filter without a seed and the generator
+        /// starts at zero, whose draws go unused because nothing is decayed. They are
+        /// still stored, so a reset one has to return to that state as well.
+        /// </summary>
+        [TestMethod]
+        public void TestAResetUnstableFilterIsANewOneByteForByte()
+        {
+            var fresh = StableBloomFilter.NewUnstableBloomFilter(200, 0.01).ToByteArray();
+            var f = StableBloomFilter.NewUnstableBloomFilter(200, 0.01);
+            AddMore(f, "u", 300);
+            Assert.AreNotEqual(
+                GeneratorPositions(fresh).Now, GeneratorPositions(f.ToByteArray()).Now,
+                "the adds left the generator where it began, so a reset has nothing to undo");
+
+            var restored = Persistence.FromByteArray<StableBloomFilter>(f.ToByteArray());
+
+            f.Reset();
+            CollectionAssert.AreEqual(fresh, f.ToByteArray());
+
+            restored.Reset();
+            CollectionAssert.AreEqual(fresh, restored.ToByteArray());
+        }
+
+        /// <summary>
+        /// A payload from before the original state was recorded has none to give back.
+        /// The filter takes the position it was read at as its beginning, so Reset
+        /// returns it there: emptied, with the generator where the payload put it. That
+        /// is the earliest position the payload tells us about, and unlike a guess at a
+        /// seed it is one the stored bytes support.
+        /// </summary>
+        [TestMethod]
+        public void TestResetOnAFilterReadFromAVersionTwoPayloadReturnsToWhereItWasRead()
+        {
+            var stored = ReadFixture("stablebloomfilter-v2.bin");
+            Assert.AreEqual(2, stored[4] | (stored[5] << 8), "fixture is no longer a version 2 payload");
+            var readAt = BinaryPrimitives.ReadUInt64LittleEndian(stored.AsSpan(stored.Length - 12));
+
+            var f = Persistence.FromByteArray<StableBloomFilter>(stored);
+            Assert.AreEqual((readAt, readAt), GeneratorPositions(f.ToByteArray()),
+                "a filter read from a version 2 payload should begin where it was read");
+
+            AddMore(f, "later", 500);
+            Assert.AreNotEqual(readAt, GeneratorPositions(f.ToByteArray()).Now,
+                "the adds left the generator where it was read, so a reset has nothing to undo");
+
+            f.Reset();
+            var reset = f.ToByteArray();
+            Assert.AreEqual((readAt, readAt), GeneratorPositions(reset));
+
+            // Emptied too: everything before the two generator fields and the CRC is
+            // what an empty filter of this shape writes.
+            var empty = NewStable(7);
+            CollectionAssert.AreEqual(empty[..^20], reset[..^20]);
+        }
+
+        /// <summary>
+        /// The same for a version 1 payload, which recorded no generator state at all and
+        /// so was given an unpredictable one on read. That one is where it begins.
+        /// </summary>
+        [TestMethod]
+        public void TestResetOnAFilterReadFromAVersionOnePayloadReturnsToWhereItWasRead()
+        {
+            var f = Persistence.FromByteArray<StableBloomFilter>(
+                ReadFixture("stablebloomfilter-v1.bin"));
+            var (readAt, began) = GeneratorPositions(f.ToByteArray());
+            Assert.AreEqual(readAt, began,
+                "a filter read from a version 1 payload should begin where it was read");
+
+            AddMore(f, "later", 500);
+            Assert.AreNotEqual(readAt, GeneratorPositions(f.ToByteArray()).Now,
+                "the adds left the generator where it was read, so a reset has nothing to undo");
+
+            f.Reset();
+            var reset = f.ToByteArray();
+            Assert.AreEqual((readAt, readAt), GeneratorPositions(reset));
+            CollectionAssert.AreEqual(NewStable(7)[..^20], reset[..^20]);
+        }
+
+        /// <summary>
+        /// Saving a filter read from an old payload must not change where it resets to.
+        /// The write has to record the position it began at, not the one it has reached
+        /// since -- otherwise a save and a load would move the target of every later Reset.
+        /// </summary>
+        [TestMethod]
+        public void TestSavingAFilterReadFromAnOldPayloadDoesNotMoveItsReset()
+        {
+            foreach (var fixture in new[] { "stablebloomfilter-v1.bin", "stablebloomfilter-v2.bin" })
+            {
+                var f = Persistence.FromByteArray<StableBloomFilter>(ReadFixture(fixture));
+                AddMore(f, "later", 500);
+
+                var saved = f.ToByteArray();
+                var reloaded = Persistence.FromByteArray<StableBloomFilter>(saved);
+
+                f.Reset();
+                reloaded.Reset();
+
+                CollectionAssert.AreEqual(f.ToByteArray(), reloaded.ToByteArray(),
+                    $"{fixture}: saving and loading moved where the filter resets to");
             }
         }
 
