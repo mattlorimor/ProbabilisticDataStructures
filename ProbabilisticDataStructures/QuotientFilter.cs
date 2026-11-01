@@ -64,18 +64,33 @@ namespace ProbabilisticDataStructures
         /// <param name="hash">The hash function to use, or null for the default.</param>
         public QuotientFilter(uint n, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
+            var (quotientBits, remainderBits) = Split(n, fpRate);
+
+            this.Shape(quotientBits, remainderBits);
+            this.Hash = hash ?? Defaults.GetDefaultHashFunction();
+        }
+
+        /// <summary>
+        /// How a fingerprint is split for a given item count and false positive rate:
+        /// the quotient bits that pick a slot, and the remainder bits stored there.
+        /// </summary>
+        /// <remarks>
+        /// The constructor's sizing, reachable on its own so that the largest sizes can
+        /// be checked without allocating the table they describe.
+        /// </remarks>
+        internal static (uint QuotientBits, uint RemainderBits) Split(uint n, double fpRate)
+        {
             Guard.ValidItemCount(n, nameof(n));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
 
             // The false positive rate is the chance two fingerprints agree in the
             // remainder, so the remainder's width sets it.
-            this.remainderBits = (uint)Math.Max(1, Math.Ceiling(Math.Log2(1.0 / fpRate)));
+            var remainderBits = (uint)Math.Max(1, Math.Ceiling(Math.Log2(1.0 / fpRate)));
 
             // Enough slots that the table stays under its load factor.
-            this.quotientBits = (uint)Math.Max(1, Math.Ceiling(Math.Log2(n / LoadFactor)));
+            var quotientBits = (uint)Math.Max(1, Math.Ceiling(Math.Log2(n / LoadFactor)));
 
-            this.Shape(this.quotientBits, this.remainderBits);
-            this.Hash = hash ?? Defaults.GetDefaultHashFunction();
+            return (quotientBits, remainderBits);
         }
 
         /// <summary>
