@@ -831,6 +831,53 @@ namespace TestProbabilisticDataStructures
             CollectionAssert.AreEquivalent(new[] { 999_002L }, onlyTheirs.Select(Value).ToArray());
         }
 
+        /// <summary>
+        /// FNV-1a, standing in for a hash function of the caller's. A method rather than a
+        /// lambda, so that two tables given it compare as using the same one.
+        /// </summary>
+        private static ulong Fnv(ReadOnlySpan<byte> key)
+        {
+            var hash = 14695981039346656037UL;
+            foreach (var b in key)
+            {
+                hash = (hash ^ b) * 1099511628211UL;
+            }
+
+            return hash;
+        }
+
+        /// <summary>
+        /// A cell holds a single key when hashing what it holds gives the hash it
+        /// recorded, so the difference of two tables built with a hash function of the
+        /// caller's has to be built with that function too. A difference that fell back to
+        /// the default would find no cell it could peel, and report an unfinished decode
+        /// of a table that holds one key on each side.
+        /// </summary>
+        [TestMethod]
+        public void TestASubtractedTableKeepsTheHashFunctionItsInputsUse()
+        {
+            var mine = new InvertibleBloomLookupTable(20, 8, Fnv);
+            var theirs = new InvertibleBloomLookupTable(20, 8, Fnv);
+
+            for (var i = 0; i < 200; i++)
+            {
+                mine.Add(Key(i));
+                theirs.Add(Key(i));
+            }
+
+            mine.Add(Key(1_001));
+            theirs.Add(Key(1_002));
+
+            var difference = mine.Subtract(theirs);
+
+            Assert.AreEqual(mine.Hash, difference.Hash);
+            Assert.IsTrue(difference.TryDecode(out var onlyMine, out var onlyTheirs),
+                "the difference could not be peeled, which is what a table hashing its " +
+                "cells with another function than the keys were placed by looks like");
+            CollectionAssert.AreEquivalent(new[] { 1_001L }, onlyMine.Select(Value).ToArray());
+            CollectionAssert.AreEquivalent(new[] { 1_002L }, onlyTheirs.Select(Value).ToArray());
+        }
+
         [TestMethod]
         public void TestAnImpossiblePayloadIsRefused()
         {

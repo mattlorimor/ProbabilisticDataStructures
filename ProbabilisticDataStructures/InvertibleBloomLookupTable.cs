@@ -138,7 +138,8 @@ namespace ProbabilisticDataStructures
         /// differences or was given outright.
         /// </summary>
         private InvertibleBloomLookupTable(
-            int keySize, Func<ReadOnlySpan<byte>, ulong>? hash, uint cells)
+            int keySize, Func<ReadOnlySpan<byte>, ulong>? hash, uint cells,
+            byte[]? keySums = null)
         {
             if (keySize <= 0)
             {
@@ -153,7 +154,10 @@ namespace ProbabilisticDataStructures
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
 
             this.counts = new long[this.cells];
-            this.keySums = new byte[(long)this.cells * keySize];
+
+            // A reader that already holds the keys, at the length its cell count implies,
+            // hands them over rather than have them allocated and then replaced.
+            this.keySums = keySums ?? new byte[(long)this.cells * keySize];
             this.hashSums = new ulong[this.cells];
         }
 
@@ -515,14 +519,7 @@ namespace ProbabilisticDataStructures
 
             Guard.SameHashFunction(this.Hash, other.Hash, nameof(other));
 
-            var result = new InvertibleBloomLookupTable(1, this.keySize)
-            {
-                cells = this.cells,
-                Hash = this.Hash,
-                counts = new long[this.cells],
-                keySums = new byte[(long)this.cells * this.keySize],
-                hashSums = new ulong[this.cells],
-            };
+            var result = new InvertibleBloomLookupTable(this.keySize, this.Hash, this.cells);
 
             for (var cell = 0; cell < this.cells; cell++)
             {
@@ -647,14 +644,8 @@ namespace ProbabilisticDataStructures
                     "keys and hashes do not come to the byte counts that implies.");
             }
 
-            var table = new InvertibleBloomLookupTable(1, keySize)
-            {
-                cells = cells,
-                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
-                counts = new long[cells],
-                keySums = keySums,
-                hashSums = new ulong[cells],
-            };
+            var table = new InvertibleBloomLookupTable(
+                keySize, PersistenceFormat.ResolveOrThrow(hashId, hash), cells, keySums);
 
             for (var cell = 0; cell < cells; cell++)
             {

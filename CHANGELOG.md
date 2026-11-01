@@ -164,6 +164,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   differences. A table that could be allocated before still can be, and the stored format
   does not change. Reading a table was already bounded, by the byte counts of the arrays
   the payload carries, and a test now holds it there.
+  <br><br>
+  `Subtract` and `ReadFrom` also build their result at its own size, where they used to
+  build a table sized for one difference and replace its arrays. That table was
+  allocated only to be thrown away, and the small-table sizing had made it larger than
+  it was. The tables they return, and every byte written from them, are the same.
 
 ## [6.2.0] - 2026-08-19
 
