@@ -55,7 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#145)
 
 - **A `ThetaSketch` or `TupleSketch` read back from storage, or built by `Union`,
-  `Intersect` or `Difference`, now goes on exactly as the sketch it stands for would.**
+  `Intersect` or `Difference`, now goes on exactly as the sketch it stands for would,
+  bar one rounding case below.**
   Below a nominal size of 8 it did not. A sketch may hold twice its nominal size before
   it trims, and while it is being fed it trims only when its buffer fills, but the
   reader and the set operations gave the rebuilt sketch room for at least sixteen
@@ -69,6 +70,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Every path now sizes the buffer by one rule, capped at what the sketch may hold.
   The payload does not change: the buffer's size was never stored, so every payload
   already written reads into a sketch that carries on as if it had never been saved.
+  That is exact for a `ThetaSketch`, and for a `TupleSketch`'s keys and `Count()`. The
+  one exception is not this defect, and the fix does not touch it: a `TupleSketch`
+  folding fractional values with `Sum` can differ from the sketch it stands for in the
+  last bits of its summaries, and so of `Total()`, once its nominal size is 9 or more.
+  The sort that gathers a key's values before folding them is not stable, so a sketch
+  that was saved, or combined, compacts at different moments and can fold a key's
+  values in a different order, and floating-point addition is not associative. Every
+  summary stays within rounding of the true total; whole numbers, `Min` and `Max` are
+  exact, as is a fractional sum up to a nominal size of 8.
   The defect shipped with `ThetaSketch` in 6.0.0 and with `TupleSketch` in 6.2.0. (#147)
 
 - **A `VarOpt` merge no longer writes a sample its own reader refuses.** Merging a sample

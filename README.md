@@ -942,7 +942,9 @@ customers in both quarters, bytes from addresses seen in either window.
 or if you need an exact total, which no sketch will give you.
 
 Which keys survive depends on the order they arrived in, exactly as it does for
-`ThetaSketch` — but a key's own summary does not.
+`ThetaSketch` — but a key's own summary does not, apart from rounding: `Min`, `Max` and
+a `Sum` of whole numbers are identical in any order, and a `Sum` of fractional values
+agrees to within floating-point rounding.
 
 The tuple sketch of [Apache DataSketches](https://datasketches.apache.org/docs/Tuple/TupleOverview.html).
 That implementation lets a caller supply the fold as code over a summary of any type;
