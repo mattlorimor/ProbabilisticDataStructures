@@ -161,7 +161,7 @@ namespace ProbabilisticDataStructures
         /// <see cref="CellsPerDifference"/>. The line is always at least HashCount, so
         /// no floor is needed beside it.
         /// </summary>
-        private static uint CellsProvisionedFor(uint expectedDifferences)
+        internal static uint CellsProvisionedFor(uint expectedDifferences)
         {
             Guard.ValidItemCount(expectedDifferences, nameof(expectedDifferences));
 
