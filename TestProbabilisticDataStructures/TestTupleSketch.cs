@@ -621,5 +621,298 @@ namespace TestProbabilisticDataStructures
                     "not a neighbor's.");
             }
         }
+
+        /// <summary>
+        /// The retained sizes the continuation tests run at: from the coarsest legal
+        /// sketch to just past k = 8, where twice the retained size reaches the sixteen
+        /// keys the reader and the set operations made room for. Below that they gave
+        /// a sketch more room than it may hold; from there on they could not.
+        /// </summary>
+        public static IEnumerable<object[]> RetainedSizesAroundTheStartingBuffer =>
+            Enumerable.Range(1, 9).Select(k => new object[] { (uint)k });
+
+        private const int ContinuationStreams = 20;
+        private const int ContinuationLength = 200;
+        private const int ContinuationKeys = 150;
+
+        /// <summary>
+        /// The streams the continuation tests split. Keys repeat, so the part of a
+        /// stream after a split folds new values into summaries the sketch was handed
+        /// as well as into ones it built itself.
+        /// </summary>
+        private static byte[] Record(int stream, int i) =>
+            Encoding.UTF8.GetBytes($"t{stream}-item-{i % ContinuationKeys}");
+
+        /// <summary>
+        /// Whole numbers, so that every fold is exact. Which values meet in one fold
+        /// depends on when compactions fire, which is what the buffer decides, and
+        /// floating-point addition is not associative; with whole numbers the bytes
+        /// pin which values were folded into which key and nothing about the order
+        /// they were folded in.
+        /// </summary>
+        private static double ValueOf(int i) => i + 1;
+
+        /// <summary>
+        /// Saving a sketch and reading it back must be invisible to everything it
+        /// does afterwards: TestThetaSketch's check, for the same defect, because this
+        /// sketch sized its buffer by its own copy of the same rules. Each stream is
+        /// split at every point, the sketch so far is written and read back, the rest
+        /// of the stream goes to what was read, and the result must match a sketch
+        /// that saw the whole stream unsaved -- in bytes, count and total.
+        /// <para>
+        /// <c>Add</c> compacts only when the buffer is full, and only a compaction
+        /// trims, so a buffer with room past twice the retained size lets the sketch
+        /// hold more than that before trimming, and it settles on a different theta
+        /// and a different sample. The reader made room for at least sixteen keys,
+        /// which is more than twice the retained size below k = 8. At k = 1 a trim
+        /// keeps exactly one key whenever it fires, so there the extra room changed
+        /// the storage and not the estimates; the storage is pinned in
+        /// <see cref="TestNoPathGivesTheBufferMoreRoomThanTheSketchMayHold"/>.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [DynamicData(nameof(RetainedSizesAroundTheStartingBuffer))]
+        public void TestASketchReadBackGoesOnAsIfItHadNeverBeenSaved(uint k)
+        {
+            AssertCarriesOnAsTheUnsplitSketch(k, "read back from its own bytes",
+                sketch => Persistence.FromByteArray<TupleSketch>(sketch.ToByteArray()));
+        }
+
+        /// <summary>
+        /// A set operation's result is rebuilt from scratch, and was rebuilt with the
+        /// same oversized buffer as a sketch read back. A union with an empty sketch
+        /// has exactly the state of the sketch it was taken from, so it is held to that
+        /// sketch's stream as it carries on. The intersection and difference tests
+        /// beside it do the same for the other two operations, which share the
+        /// rebuild but not the merge in front of it.
+        /// </summary>
+        [TestMethod]
+        [DynamicData(nameof(RetainedSizesAroundTheStartingBuffer))]
+        public void TestAUnionWithAnEmptySketchGoesOnAsTheSketchItEquals(uint k)
+        {
+            AssertCarriesOnAsTheUnsplitSketch(k, "unioned with an empty sketch",
+                sketch => sketch.Union(new TupleSketch(k)));
+        }
+
+        /// <summary>
+        /// See <see cref="TestAUnionWithAnEmptySketchGoesOnAsTheSketchItEquals"/>. Run
+        /// under <see cref="SummaryPolicy.Max"/>, which folds a key's summary with
+        /// itself into the same value, so the intersection's state is the sketch's own.
+        /// </summary>
+        [TestMethod]
+        [DynamicData(nameof(RetainedSizesAroundTheStartingBuffer))]
+        public void TestAnIntersectionWithItselfGoesOnAsTheSketchItEquals(uint k)
+        {
+            AssertCarriesOnAsTheUnsplitSketch(k, "intersected with itself",
+                sketch => sketch.Intersect(sketch), SummaryPolicy.Max);
+        }
+
+        /// <summary>
+        /// See <see cref="TestAUnionWithAnEmptySketchGoesOnAsTheSketchItEquals"/>.
+        /// </summary>
+        [TestMethod]
+        [DynamicData(nameof(RetainedSizesAroundTheStartingBuffer))]
+        public void TestADifferenceFromAnEmptySketchGoesOnAsTheSketchItEquals(uint k)
+        {
+            AssertCarriesOnAsTheUnsplitSketch(k, "less an empty sketch",
+                sketch => sketch.Difference(new TupleSketch(k)));
+        }
+
+        /// <summary>
+        /// The one set operation that trims as it rebuilds: a union of two exact
+        /// sketches of k keys each holds twice the retained size, so it trims on the
+        /// spot, and lands on exactly the state of one sketch fed both key sets. The
+        /// two are then fed the same records and must stay identical.
+        /// </summary>
+        [TestMethod]
+        [DynamicData(nameof(RetainedSizesAroundTheStartingBuffer))]
+        public void TestAUnionThatTrimsGoesOnAsTheSketchOfBothStreams(uint k)
+        {
+            const int Streams = 100;
+            var diverged = 0;
+            string first = null;
+
+            for (var t = 0; t < Streams; t++)
+            {
+                var left = new TupleSketch(k);
+                var right = new TupleSketch(k);
+                var both = new TupleSketch(k);
+                for (var i = 0; i < k; i++)
+                {
+                    left.Add(Encoding.UTF8.GetBytes($"t{t}-left-{i}"), ValueOf(i));
+                    both.Add(Encoding.UTF8.GetBytes($"t{t}-left-{i}"), ValueOf(i));
+                }
+                for (var i = 0; i < k; i++)
+                {
+                    right.Add(Encoding.UTF8.GetBytes($"t{t}-right-{i}"), ValueOf(i));
+                    both.Add(Encoding.UTF8.GetBytes($"t{t}-right-{i}"), ValueOf(i));
+                }
+
+                var union = left.Union(right);
+                Assert.AreNotEqual(ulong.MaxValue, union.ThetaValue,
+                    $"stream {t}: the union must have trimmed while rebuilding, or the " +
+                    "path this test exists for never ran.");
+                CollectionAssert.AreEqual(both.ToByteArray(), union.ToByteArray(),
+                    $"stream {t}: the union must start as the sketch of both key sets, " +
+                    "or what follows compares two different states.");
+
+                for (var i = 0; i < ContinuationLength; i++)
+                {
+                    both.Add(Record(t, i), ValueOf(i));
+                    union.Add(Record(t, i), ValueOf(i));
+                }
+
+                if (!both.ToByteArray().AsSpan().SequenceEqual(union.ToByteArray())
+                    || both.Count() != union.Count() || both.Total() != union.Total())
+                {
+                    diverged++;
+                    first ??= $"stream {t}, estimating {union.Count()} keys totalling " +
+                        $"{union.Total()} against {both.Count()} totalling {both.Total()}";
+                }
+            }
+
+            Assert.AreEqual(0, diverged,
+                $"k = {k}: {diverged} of {Streams} unions went on differently from the " +
+                $"sketch they started equal to, first {first}. A rebuilt sketch's buffer " +
+                "decides when it trims, so it must be sized as a new one's would be.");
+        }
+
+        /// <summary>
+        /// The mechanism behind the continuation tests, stated directly: no path that
+        /// makes a sketch gives it room for more than twice the retained size, because
+        /// that is the most it may hold before it trims, and room past it delays the
+        /// trim. Asserted through <see cref="TupleSketch.SizeInBytes"/>, which is the
+        /// key and summary buffers and nothing else.
+        /// <para>
+        /// This is what sees the defect at k = 1, where the continuation tests cannot.
+        /// A sketch fed past its trim threshold must have grown to exactly the full
+        /// allowance, since only a full allowance trims; at k = 9 doubling the starting
+        /// buffer passes twice the retained size, so growth that forgot its cap shows.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [DynamicData(nameof(RetainedSizesAroundTheStartingBuffer))]
+        public void TestNoPathGivesTheBufferMoreRoomThanTheSketchMayHold(uint k)
+        {
+            var allowance = 2ul * k * (sizeof(ulong) + sizeof(double));
+
+            var fed = new TupleSketch(k);
+            var other = new TupleSketch(k);
+            for (var i = 0; i < ContinuationLength; i++)
+            {
+                fed.Add(Record(0, i), ValueOf(i));
+                other.Add(Record(1, i), ValueOf(i));
+            }
+            Assert.AreNotEqual(ulong.MaxValue, fed.ThetaValue,
+                "the fed sketch must have trimmed, or it never needed its allowance.");
+            Assert.AreEqual(allowance, fed.SizeInBytes(),
+                $"k = {k}: a sketch that has trimmed must have grown to its full " +
+                "allowance and no further.");
+
+            var left = new TupleSketch(k);
+            var right = new TupleSketch(k);
+            for (var i = 0; i < k; i++)
+            {
+                left.Add(Encoding.UTF8.GetBytes($"left-{i}"), ValueOf(i));
+                right.Add(Encoding.UTF8.GetBytes($"right-{i}"), ValueOf(i));
+            }
+
+            var made = new (string What, TupleSketch Sketch)[]
+            {
+                ("a new sketch", new TupleSketch(k)),
+                ("an empty sketch read back",
+                    Persistence.FromByteArray<TupleSketch>(new TupleSketch(k).ToByteArray())),
+                ("a trimmed sketch read back",
+                    Persistence.FromByteArray<TupleSketch>(fed.ToByteArray())),
+                ("a union", fed.Union(other)),
+                ("an intersection", fed.Intersect(other)),
+                ("a difference", fed.Difference(other)),
+                ("a union that trims as it rebuilds", left.Union(right)),
+            };
+
+            var over = made
+                .Where(m => m.Sketch.SizeInBytes() > allowance)
+                .Select(m => $"{m.What} ({m.Sketch.SizeInBytes()} bytes)")
+                .ToList();
+
+            Assert.IsEmpty(over,
+                $"k = {k}, allowance {allowance} bytes: {string.Join(", ", over)}. Room " +
+                "past twice the retained size delays a sketch's trims, and every " +
+                "estimate after them moves.");
+        }
+
+        /// <summary>
+        /// Splits each continuation stream at every point, hands the sketch built so
+        /// far to <paramref name="carryOn"/>, feeds the rest of the stream to what
+        /// comes back, and holds the result to a sketch that saw the whole stream
+        /// unsplit: identical bytes, count and total.
+        /// </summary>
+        private static void AssertCarriesOnAsTheUnsplitSketch(
+            uint k, string how, Func<TupleSketch, TupleSketch> carryOn,
+            SummaryPolicy policy = SummaryPolicy.Sum)
+        {
+            int splits = 0, crossed = 0, diverged = 0;
+            string first = null;
+
+            for (var t = 0; t < ContinuationStreams; t++)
+            {
+                var unsplit = new TupleSketch(k, policy);
+                for (var i = 0; i < ContinuationLength; i++)
+                {
+                    unsplit.Add(Record(t, i), ValueOf(i));
+                }
+                var expected = unsplit.ToByteArray();
+
+                var prefix = new TupleSketch(k, policy);
+                for (var split = 0; split < ContinuationLength; split++)
+                {
+                    var before = prefix.ToByteArray();
+                    var carried = carryOn(prefix);
+                    CollectionAssert.AreEqual(before, carried.ToByteArray(),
+                        $"k = {k}, stream {t}, split {split}: a sketch {how} must start as " +
+                        "the sketch it came from, or what follows compares two states.");
+
+                    var thetaAtSplit = carried.ThetaValue;
+                    for (var i = split; i < ContinuationLength; i++)
+                    {
+                        carried.Add(Record(t, i), ValueOf(i));
+                    }
+
+                    splits++;
+                    if (thetaAtSplit != ulong.MaxValue && carried.ThetaValue < thetaAtSplit)
+                    {
+                        crossed++;
+                    }
+
+                    if (!carried.ToByteArray().AsSpan().SequenceEqual(expected)
+                        || carried.Count() != unsplit.Count()
+                        || carried.Total() != unsplit.Total())
+                    {
+                        diverged++;
+                        first ??= $"stream {t} split at record {split}, estimating " +
+                            $"{carried.Count()} keys totalling {carried.Total()} against " +
+                            $"{unsplit.Count()} totalling {unsplit.Total()}";
+                    }
+
+                    prefix.Add(Record(t, split), ValueOf(split));
+                }
+            }
+
+            Console.WriteLine($"k = {k}, {how}: {crossed} of {splits} splits fell " +
+                $"between two trims, {diverged} went on differently");
+
+            Assert.AreEqual(0, diverged,
+                $"k = {k}: {diverged} of {splits} splits went on differently once {how}, " +
+                $"first {first}. The buffer is not in the payload, so a sketch rebuilt " +
+                "without one must be sized by the rule a sketch growing its own follows.");
+
+            // The comparison can only see the buffer if the split falls between trims:
+            // after one, so the sketch handed on is already sampling, and before
+            // another, so the buffer is asked to decide when that one fires. Late
+            // splits have no trim left, so this asks for a share of them, not all.
+            Assert.IsGreaterThan(splits / 3, crossed,
+                $"k = {k}: only {crossed} of {splits} splits fell between two trims, so " +
+                "too much of this test compared sketches with no trim left to disagree on.");
+        }
     }
 }
