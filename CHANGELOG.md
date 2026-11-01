@@ -7,15 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The package's minimum `System.IO.Hashing` rises from 10.0.11 to 10.0.14.** A project
+  that pins an earlier version of that package has to raise it to restore this one. (#142)
+
 ### Fixed
 
 - **`InvertibleBloomLookupTable.TryDecode` could report success with a wrong answer.** It
   called a table empty once every count was zero, but two keys on opposite sides that land
   in the same cells cancel each other's counts while both stay in the key and hash sums.
-  The decode then returned true holding part of the difference, or none of it. In a table
-  sized for eight differences holding four each way, 89 of 5,000 decodes did, every one a
-  partial listing presented as complete; a table sized for two, whose four cells hold
-  every key, reported any difference of one key each way as no difference at all.
+  The decode then returned true holding part of the difference, or none of it. In 6.2.0, a
+  table sized for eight differences holding four each way did so in 89 of 5,000 decodes,
+  every one a partial listing presented as complete; a table sized for two had four
+  cells, which every key fills, and reported any difference of one key each way as no
+  difference at all. (Since the sizing fix below, a table sized for two has 16 cells.)
+  The check was the same from the day the type was added, so 6.0.0 through 6.2.0 are all
+  affected.
 
   A table is now empty only when every count, key sum and hash sum is zero — the rule
   Eppstein et al.'s decode uses — so those decodes return false, which is the answer the
@@ -47,20 +55,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#145)
 
 - **A `ThetaSketch` or `TupleSketch` read back from storage, or built by `Union`,
-  `Intersect` or `Difference`, now goes on exactly as the sketch it stands for would.**
+  `Intersect` or `Difference`, now goes on exactly as the sketch it stands for would,
+  bar one rounding case below.**
   Below a nominal size of 8 it did not. A sketch may hold twice its nominal size before
   it trims, and while it is being fed it trims only when its buffer fills, but the
   reader and the set operations gave the rebuilt sketch room for at least sixteen
-  values, so its later trims came at different moments. Fed the same input afterwards, a sketch saved and restored at k = 2 to 7
-  ended on a different estimate from one never saved in roughly a third to four fifths
-  of the streams measured. At k = 1 a restored sketch agreed with an unsaved one in
-  every stream measured but held eight times the buffer it needed, and from k = 8 up
-  estimates and payloads were unaffected. So was any sketch that was read or combined
-  and then given no more input.
+  values, so its later trims came at different moments. Fed the same input afterwards,
+  a sketch saved and restored at k = 2 to 7 ended on a different estimate from one never
+  saved in roughly a third to four fifths of the streams measured. At k = 1 a restored
+  sketch agreed with an unsaved one in every stream measured but held eight times the
+  buffer it needed, and from k = 8 up estimates and payloads were unaffected. So was any
+  sketch that was read or combined and then given no more input.
   <br><br>
   Every path now sizes the buffer by one rule, capped at what the sketch may hold.
   The payload does not change: the buffer's size was never stored, so every payload
   already written reads into a sketch that carries on as if it had never been saved.
+  That is exact for a `ThetaSketch`, and for a `TupleSketch`'s keys and `Count()`. The
+  one exception is not this defect, and the fix does not touch it: a `TupleSketch`
+  folding fractional values with `Sum` can differ from the sketch it stands for in the
+  last bits of its summaries, and so of `Total()`, once its nominal size is 9 or more.
+  The sort that gathers a key's values before folding them is not stable, so a sketch
+  that was saved, or combined, compacts at different moments and can fold a key's
+  values in a different order, and floating-point addition is not associative. Every
+  summary stays within rounding of the true total; whole numbers, `Min` and `Max` are
+  exact, as is a fractional sum up to a nominal size of 8.
   The defect shipped with `ThetaSketch` in 6.0.0 and with `TupleSketch` in 6.2.0. (#147)
 
 - **A `VarOpt` merge no longer writes a sample its own reader refuses.** Merging a sample
@@ -79,8 +97,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A payload 6.2.0 wrote from such a merge is still refused, now with a message naming the
   cause. It does not record which of its items stood in for dropped ones, so restoring it
   would be a guess, and 6.2.0's own reader refused it as well. Merge the original samples
-  again. A 6.2.0 sample that went on from such a merge into one keeping more items, and
-  then filled it, does read: nothing in its payload shows what happened to it. (#148)
+  again.
+  <br><br>
+  **Some damaged samples do load.** Anyone who, on 6.2.0, merged a sample that had begun
+  sampling into an empty sample keeping the same number of items is affected, and the
+  result became readable in either of two ways: it was merged into a sample keeping more
+  items (6.2.0 allowed that, because the result looked exact) which then began sampling,
+  by that merge or by later additions; or it was given one more `Add` before saving. A
+  payload written after either loads without error and cannot be told apart from a sound
+  one: nothing in it records that some of its items stood in for dropped ones and are
+  held as if their weights were their own. Whether its estimates are wrong is not
+  established, since those items carry their adjusted weights and the total is kept, but
+  they may be. Nothing can repair such a sample from its payload. Rebuild it from the
+  original data, or merge the original samples again with this version. (#148)
 
 - **A `VarOpt` sample saved before it has begun sampling comes back exactly as it was.**
   Until then it holds every item in the order it arrived, and the transition to sampling
@@ -97,30 +126,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixture. One written while sampling was already a heap and reads exactly as before.
   (#148)
 
-- **A repeated item could change `HyperLogLogPlus`'s answer**, which is
-  [#149](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/149). When the
-  sparse form was exactly full, the next add converted it to the dense one before
-  anything checked whether that hash was already held, so a repeat traded the exact count
-  for an estimate: 32 distinct items at precision 8 counted 32, and adding one of them
-  again made it 31. It happened at every precision. A repeat now leaves the estimator
-  exactly as it was, merged in or added, and only a new item converts it.
+- **A repeated item could change `HyperLogLogPlus`'s answer.** When the sparse form was
+  exactly full, the next add converted it to the dense one before anything checked
+  whether that hash was already held, so a repeat traded the exact count for an
+  estimate: 32 distinct items at precision 8 counted 32, and adding one of them again
+  made it 31. A repeat converted the estimator at every precision from 4 to 18, and
+  moved the count at every one but 9 and 17, where the estimate happened to land on the
+  exact count. A repeat now leaves the estimator exactly as it was, merged in or added,
+  and only a new item converts it.
   <br><br>
   **At precisions 4 to 6 this deliberately departs from the paper, and behaves as 6.2.0
   did.** Heule, Nunkesser and Hall (section 5.3) convert once the sparse list would need
   more than the dense registers' 6m bits, which with eight-byte hashes and one-byte
   registers is `m / 8` hashes: 2, 4 and 8 at those precisions. The estimator holds 16
   there instead, so every count up to 16 stays exact where an estimate from so few
-  registers is off by 13% to 26%. The price is at most 112 bytes over the dense registers,
-  at precision 4 (128 bytes against 16), and 96 and 64 at precisions 5 and 6. 6.2.0 held
-  16 there too, though by accident — its first buffer was 16 hashes and never shrank to
-  the cap the code declared — so the rule is now written down where it decides rather
-  than left to a buffer size. From precision 7 up the floor changes nothing and the
-  estimator follows the paper.
+  registers is off by 6% to 26%. That is the root-mean-square relative error of the
+  dense form, measured on this implementation over counts 2 to 16 with 100,000
+  deterministic trials each: 12% to 26% at precision 4, 9% to 18% at 5 and 6% to 14% at
+  6. The textbook `1.04 / sqrt(m)`, 26% down to 13% over those precisions, is about the
+  worst count at each rather than a typical one. The price is at most 112 bytes over
+  the dense registers, at precision 4 (128 bytes against 16), and 96 and 64 at
+  precisions 5 and 6. 6.2.0 held 16 there too, though by accident — its first buffer
+  was 16 hashes and never shrank to the cap the code declared — so the rule is now
+  written down where it decides rather than left to a buffer size. From precision 7 up
+  the floor changes nothing and the estimator follows the paper.
   <br><br>
   Stored estimators read exactly as before, and the layout and format version are
   unchanged. The only payload that differs is the one a repeat used to force: an
   estimator that sees a repeat at its conversion point now writes the sparse form it was
-  in, rather than a dense one.
+  in, rather than a dense one. (#149)
 
 - **A small `InvertibleBloomLookupTable` could not decode the difference it was sized for.**
   The constructor gave a table 1.5 cells per expected difference, never fewer than four,
@@ -142,9 +176,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **If you exchange tables between processes,** note that two tables must have the same
   number of cells to be subtracted, and `Subtract` refuses a pair that do not. A table built
   by an earlier version for fewer than 129 differences has fewer cells than one built now
-  for the same number, so build both sides with the same version of the library. Stored
-  tables are unaffected: the cell count is in the payload, the format does not change, and
-  a table written by any earlier version reads and decodes exactly as before. (#150)
+  for the same number, so build both sides with the same version of the library. The
+  exception `Subtract` throws for such a pair now names that as a likely cause.
+  <br><br>
+  **Stored tables still read, at the size they were written with.** The cell count is in
+  the payload and the format does not change, so a table written by any earlier version
+  reads and decodes exactly as before. That includes the shortfall: a stored table sized
+  for fewer than 129 differences keeps its old, smaller cell count, and with it the old
+  chance of failing to decode the difference it was sized for. Reading it does not
+  resize it. Only a table built by this version gets the new size, so rebuild a small
+  stored table to get it. (#150)
 
 - **An `InvertibleBloomLookupTable` too large to exist is now refused as an argument.**
   The cell count was worked out in `double` and cast to `uint`, and the three arrays were

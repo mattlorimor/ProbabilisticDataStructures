@@ -229,11 +229,14 @@ namespace ProbabilisticDataStructures
         /// <para>
         /// This deviates from the paper at precisions 4 to 6, deliberately. The rule gives
         /// 2, 4 and 8 hashes there; holding 16 instead keeps every count up to 16 exact,
-        /// where an estimate from 16 to 64 registers is off by 13% to 26%. The price is
-        /// at most 112 bytes over the dense registers, at precision 4 (128 against 16),
-        /// 96 at precision 5 and 64 at 6. It is also what 6.0.0 through 6.2.0 did, since
-        /// their first buffer was 16 hashes and only ever grew. From precision 7 the
-        /// floor changes nothing and the cap is the paper's.
+        /// where an estimate from 16 to 64 registers is off by 6% to 26%. That is the
+        /// dense form's root-mean-square relative error over counts 2 to 16, measured:
+        /// 12% to 26% at precision 4, 9% to 18% at 5 and 6% to 14% at 6, so the textbook
+        /// 1.04 / sqrt(m) is about the worst count at each rather than a typical one.
+        /// The price is at most 112 bytes over the dense registers, at precision 4 (128
+        /// against 16), 96 at precision 5 and 64 at 6. It is also what 6.0.0 through
+        /// 6.2.0 did, since their first buffer was 16 hashes and only ever grew. From
+        /// precision 7 the floor changes nothing and the cap is the paper's.
         /// </para>
         /// </remarks>
         private int MaxSparseEntries =>

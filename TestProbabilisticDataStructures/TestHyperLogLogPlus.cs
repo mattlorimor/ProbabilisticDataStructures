@@ -209,7 +209,7 @@ namespace TestProbabilisticDataStructures
         /// the smallest few; the deviation there is held further down.
         /// </summary>
         [TestMethod]
-        public void TestTheSparseFormNeverCostsMoreThanTheDenseOne()
+        public void TestTheSparseFormNeverCostsMoreThanTheDenseOneAtPrecision14()
         {
             var estimator = new HyperLogLogPlus(Precision);
 

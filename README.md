@@ -942,7 +942,9 @@ customers in both quarters, bytes from addresses seen in either window.
 or if you need an exact total, which no sketch will give you.
 
 Which keys survive depends on the order they arrived in, exactly as it does for
-`ThetaSketch` — but a key's own summary does not.
+`ThetaSketch` — but a key's own summary does not, apart from rounding: `Min`, `Max` and
+a `Sum` of whole numbers are identical in any order, and a `Sum` of fractional values
+agrees to within floating-point rounding.
 
 The tuple sketch of [Apache DataSketches](https://datasketches.apache.org/docs/Tuple/TupleOverview.html).
 That implementation lets a caller supply the fold as code over a summary of any type;
@@ -1007,6 +1009,21 @@ as an error.
 
 Keys are combined by exclusive-or, so every key must be the same width, fixed at
 construction. A key of the wrong size is refused rather than silently corrupting the table.
+
+**Add each key at most once per side.** The cells count additions rather than record
+membership, so a repeat is not absorbed. A key added twice to one table leaves a count of
+two, which peeling never takes out, and `TryDecode` returns `false`. A key added twice to
+one table and once to the other is listed as a difference although both sets hold it.
+And two different keys that share all their cells cancel completely if one is added twice
+to each table, or if one is added twice and the other removed twice in one, so `TryDecode`
+reports no difference for sets that differ. Deduplicate before adding.
+
+**Build both tables with the same version of the library.** `Subtract` needs two tables
+with the same number of cells, and for fewer than 129 expected differences that number
+changed when the sizing above was introduced: a table built by 6.2.0 or earlier has fewer
+cells than one built now for the same number, and `Subtract` refuses the pair. A table you
+stored keeps the size it was written with, and its old shortfall with it: it reads and
+decodes as before, but a small one falls short of the promise above until you rebuild it.
 
 From Goodrich and Mitzenmacher,
 [Invertible Bloom Lookup Tables](https://arxiv.org/abs/1101.2245).

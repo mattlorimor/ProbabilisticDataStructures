@@ -29,13 +29,25 @@ namespace ProbabilisticDataStructures
     /// rather than a partial answer. At the difference it was sized for it does so at
     /// most one time in a hundred.
     /// </para>
+    /// <para>
+    /// Add each key at most once per side. The cells count additions rather than record
+    /// membership, so a repeat is not absorbed. A key added twice to one table leaves a
+    /// count of two, which peeling never takes out, and <see cref="TryDecode"/> returns
+    /// false. A key added twice to one table and once to the other is listed as a
+    /// difference although both sets hold it. And two different keys that share all their
+    /// cells cancel completely if one is added twice to each table, or if one is added
+    /// twice and the other removed twice in one, leaving every field zero, so the decode
+    /// reports an empty difference for sets that differ. Deduplicate before adding.
+    /// </para>
     /// </remarks>
     public class InvertibleBloomLookupTable : IBinaryPersistable<InvertibleBloomLookupTable>
     {
         /// <summary>
-        /// How many cells each key is placed in. Four is the usual choice: peeling
-        /// succeeds below about 1.3 times the difference in cells, and more hashes buy
-        /// little beyond that.
+        /// How many cells each key is placed in. Four is the usual choice. Peeling lists
+        /// everything only when the table has more than about 1.3 cells per difference,
+        /// which is the asymptotic threshold for four hashes (see
+        /// <see cref="CellsPerDifference"/>), and more hashes would not lower that
+        /// threshold, only make each key touch more cells.
         /// </summary>
         private const int HashCount = 4;
 
@@ -498,10 +510,21 @@ namespace ProbabilisticDataStructures
         /// a cell in one and +1 in the other, so subtracting leaves 0 and its xored key
         /// cancels itself. What survives is exactly what the two disagree about --
         /// however large the sets were.
+        /// <para>
+        /// The two must have the same number of cells, and for a table sized for fewer
+        /// than 129 expected differences that number depends on the version of the
+        /// library that built it: a table built by 6.2.0 or earlier has fewer cells than
+        /// one built now for the same number of differences, because small tables were
+        /// given more cells in the release after it. Such a pair is refused. Build both
+        /// with one version, and rebuild a stored small table rather than subtracting it
+        /// from a new one.
+        /// </para>
         /// </remarks>
         /// <exception cref="ArgumentNullException">The other table is null.</exception>
         /// <exception cref="ArgumentException">
-        /// The tables have different dimensions, key sizes, or hash functions.
+        /// The tables have different dimensions, key sizes, or hash functions. Different
+        /// dimensions include a pair built by different versions of the library for
+        /// fewer than 129 expected differences.
         /// </exception>
         public InvertibleBloomLookupTable Subtract(InvertibleBloomLookupTable other)
         {
@@ -513,7 +536,10 @@ namespace ProbabilisticDataStructures
                     $"Tables must be the same shape to be subtracted: this one has " +
                     $"{this.cells} cells of {this.keySize}-byte keys and the other " +
                     $"{other.cells} of {other.keySize}. A key lands in different cells " +
-                    "under each, so nothing would cancel.",
+                    "under each, so nothing would cancel. If the two were built by " +
+                    "different versions of this library, that may be the cause: for " +
+                    "fewer than 129 expected differences the versions give different " +
+                    "cell counts, so rebuild both with one version.",
                     nameof(other));
             }
 
