@@ -366,9 +366,18 @@ audit for files whose tests have not been through the loop above, not a gate.
 Scoping trims the mutants, not the coverage pass that comes first. That pass runs the
 whole suite serially under Stryker's instrumentation, and code outside the scope slows
 with it, so its cost is set by the heaviest tests anywhere. On the frozen tree below, a
-Buckets.cs sweep took twelve minutes end to end. On the current suite the Memento tests
-dominate the pass: one that takes eight seconds normally took sixteen minutes under it,
-though the Memento filter never touches `Buckets`.
+Buckets.cs sweep took twelve minutes end to end. That figure is the frozen tree's, and
+it is not what a sweep costs now.
+
+Measured on the current tree (the tree of
+[#143](https://github.com/mattlorimor/ProbabilisticDataStructures/pull/143), then 930
+tests; one 32-thread machine, Stryker 5.0.0, the config in the repository), the same
+one-file sweep did not finish. The initial serialized run of the suite took 8 min 18 s.
+The coverage pass after it was stopped at 2 h 39 min with 373 of those tests done, and
+no mutant had been tried. The Memento tests dominate the pass, though the Memento
+filter never touches `Buckets`: one that takes 15.7 s in an ordinary parallel run took
+74 min 35 s under it, and another that takes 8.2 s took 16 min 20 s. So on today's suite
+a one-file sweep at the default settings is a matter of hours, not minutes.
 
 **Before 5.0.0, Stryker and this suite's parallelism did not mix.** The test assembly
 declares `[assembly: Parallelize(Scope = ExecutionScope.MethodLevel)]`, and Stryker
@@ -447,12 +456,25 @@ does not.
 
 **Survivors are leads, not verdicts — and so are Timeouts.** Hand-apply each and run
 the suite before believing either. The residue that survives adjudication here is
-real and accepted: exception-message strings (tests assert exception types,
-deliberately not wording — the one asserted fragment, "at most 8 bits", is the
-exception that proves it), internal guards reachable by no public path (closed with
-direct internal tests in `TestBuckets.cs`), and equivalent mutants (`>`→`>=` where
-both arms write the same value, `>>`→`>>>` on an unsigned operand). Document these
-rather than contorting a test to kill them.
+real and accepted: exception-message wording (below), internal guards reachable by no
+public path (closed with direct internal tests in `TestBuckets.cs`: the length check
+on restore, the zero-width constructor, the geometry guards on `Union` and `Add`, and
+the wide-bucket union beside them), and equivalent mutants (`>`→`>=` where both arms
+write the same value, `>>`→`>>>` on an unsigned operand). Document these rather than
+contorting a test to kill them.
+
+**What is asserted about an exception.** In general its type, and not its wording: a
+test that pins a sentence breaks when someone improves the sentence and proves nothing
+about the guard. A fragment of the message is asserted where one type stands for
+several guards, so that the type alone cannot say which of them fired. The
+hostile-payload refusals are the clearest case. Every one is an `InvalidDataException`,
+a payload can be absurd in more than one way, and a test that checked only the type
+would pass when a different guard caught the payload first, or when a later, incidental
+check did. So each names the reason by a short phrase (`AssertRefused(..., expected)`
+in `TestPersistenceHostilePayloads.cs`) to tell the refusals apart. The merge
+mismatches do the same where the exception names which parameter differed. The fragment
+is the condition, not the sentence around it, which is why a mutant that rewords the
+rest of a message survives, as it should, and one that deletes the guard does not.
 
 ## Persistence
 
