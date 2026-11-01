@@ -278,13 +278,15 @@ namespace ProbabilisticDataStructures
         /// <remarks>
         /// This is the paper's recurrence for distributed sampling: each of the
         /// other sample's items is fed through the ordinary insertion path at its
-        /// adjusted weight, exactly as if the adjusted weights were original ones.
-        /// The recurrence's condition is that every input's k is at least the k of
-        /// the result, so the other sample may keep as many items as this one or
-        /// more. A sample that has not begun sampling holds nothing but original
-        /// weights and so imposes no condition at all, whatever its k -- the
-        /// paper's Lemma 5 makes that case trivial by giving such an input a
-        /// threshold of zero.
+        /// adjusted weight, exactly as if the adjusted weights were original ones. The
+        /// one exception is the paper's Lemma 4 case, described below, where everything
+        /// the other sample holds fits: the result is then that sample itself, and
+        /// nothing goes through insertion. The recurrence's condition is that every
+        /// input's k is at least the k of the result, so the other sample may keep as
+        /// many items as this one or more. A sample that has not begun sampling holds
+        /// nothing but original weights and so imposes no condition at all, whatever
+        /// its k -- the paper's Lemma 5 makes that case trivial by giving such an input
+        /// a threshold of zero.
         /// <para>
         /// The refused direction is a sample that has begun sampling being merged
         /// into one that keeps more items. Its items were chosen by chance and

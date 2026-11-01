@@ -466,10 +466,19 @@ namespace TestProbabilisticDataStructures
         /// "When deleting a key y, Memento filter removes a memento equal to m(y) from
         /// the keepsake box with the longest matching fingerprint. The reason is that
         /// deleting a memento with a shorter associated fingerprint may cause false
-        /// negatives." The authors' reference implementation does the same: its
-        /// <c>qf_delete_single</c> collects the matching boxes in run order and tries
-        /// them from the last backwards (n3slami/Memento_Filter, src/memento.c, checked
-        /// 2026-11-01).
+        /// negatives." The authors' reference implementation (n3slami/Memento_Filter,
+        /// checked 2026-11-01) states the same rule in include/memento.h, in the comment
+        /// above <c>qf_delete_single</c>: "the keepsake box with the longest matching
+        /// fingerprint". What its code does depends on the branch. On <c>master</c>
+        /// (ded520c), the dynamic-only filter, fingerprints have one fixed width and
+        /// <c>next_matching_fingerprint_in_run</c> tests them for equality, so the
+        /// backwards walk over the matching boxes in <c>qf_delete_single</c>
+        /// (src/memento.c) chooses among boxes with equal fingerprints and does not
+        /// exercise longest-match. On <c>expandable</c> (797a382), where each expansion
+        /// shortens a fingerprint by a bit and a length marker is stored with it, the
+        /// same function matches a stored fingerprint over its own length and a run is
+        /// sorted shorter before longer, so the same backwards walk reaches the longest
+        /// matching box first, which is the rule this test holds.
         /// <para>
         /// These are the keys #145 was reported with. Four slots and two-bit
         /// fingerprints put the first expansion at the fourth add. Key 0 arrives before
