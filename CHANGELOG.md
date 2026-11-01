@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A repeated item could change `HyperLogLogPlus`'s answer**, which is
+  [#149](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/149). When the
+  sparse form was exactly full, the next add converted it to the dense one before
+  anything checked whether that hash was already held, so a repeat traded the exact count
+  for an estimate: 32 distinct items at precision 8 counted 32, and adding one of them
+  again made it 31. It happened at every precision. A repeat now leaves the estimator
+  exactly as it was, merged in or added, and only a new item converts it.
+  <br><br>
+  **The sparse form now gives way where the paper says, at every precision.** Heule,
+  Nunkesser and Hall keep the hashes until they would cost more than the registers do,
+  which with eight-byte hashes and one-byte registers is `m / 8` of them. Below precision
+  7 the first buffer was larger than that and the buffer never shrinks, so the estimator
+  held 16 hashes at precisions 4 to 6 — at precision 4, 128 bytes standing in for 16 —
+  and an empty one cost 128 bytes at all three. It now holds 2, 4 and 8 there, and
+  costs no more than its registers from the start. The cap had also been floored at four,
+  which only precision 4 ever reached; it is two there now, as the rule gives.
+  <br><br>
+  Stored estimators read exactly as before. The layout is unchanged and no format version
+  moves; what changes is which of its two forms gets written for some states — sparse
+  where a repeat used to force dense, and dense from 3, 5 and 9 distinct items at
+  precisions 4, 5 and 6, which used to stay sparse to 16. Every release since 6.0.0 reads
+  both. A sparse payload holding more hashes than the cap, as those earlier releases
+  wrote, comes back sparse and exact, and converts on its first new item.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

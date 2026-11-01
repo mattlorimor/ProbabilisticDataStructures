@@ -303,19 +303,30 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         private static int MostHeldSparsely(uint precision)
         {
-            var probe = new HyperLogLogPlus(precision);
-            var held = 0;
+            var probe = FilledUntilDense(precision, out var added);
+            Assert.IsFalse(probe.IsSparse);
+            return added - 1;
+        }
 
-            while (true)
+        /// <summary>
+        /// Adds distinct items until the estimator goes dense, failing rather than
+        /// spinning if it never does: more hashes than there are registers cannot be the
+        /// cheaper form on any reading of the rule, so that many is the bound.
+        /// </summary>
+        private static HyperLogLogPlus FilledUntilDense(uint precision, out int added)
+        {
+            var estimator = new HyperLogLogPlus(precision);
+            var registers = 1 << (int)precision;
+
+            for (added = 0; estimator.IsSparse; added++)
             {
-                probe.Add(Item(held));
-                if (!probe.IsSparse)
-                {
-                    return held;
-                }
-
-                held++;
+                Assert.IsLessThanOrEqualTo(registers, added,
+                    $"precision {precision}: still sparse after {added} distinct items, " +
+                    $"more than its {registers} registers");
+                estimator.Add(Item(added));
             }
+
+            return estimator;
         }
 
         /// <summary>
@@ -424,9 +435,9 @@ namespace TestProbabilisticDataStructures
         /// floor and the rule agree.
         /// </para>
         /// <para>
-        /// Three ways in, because three places build a sparse buffer: a new estimator,
-        /// one read back part-filled, whose buffer the reader sizes, and one reset after
-        /// going dense.
+        /// Every way in, because three places build a sparse buffer: a new estimator, one
+        /// read back -- empty and part-filled, since the reader sizes its buffer from
+        /// what the payload holds -- and one reset after going dense.
         /// </para>
         /// </summary>
         [TestMethod]
@@ -444,6 +455,8 @@ namespace TestProbabilisticDataStructures
                 }
 
                 return ConvertsAt(new HyperLogLogPlus(precision), 0, cap, "new")
+                    ?? ConvertsAt(Persistence.FromByteArray<HyperLogLogPlus>(
+                        new HyperLogLogPlus(precision).ToByteArray()), 0, cap, "read back empty")
                     ?? ConvertsAt(Persistence.FromByteArray<HyperLogLogPlus>(part.ToByteArray()),
                         cap / 2, cap, $"read back holding {cap / 2}")
                     ?? ConvertsAt(DenseThenReset(precision), 0, cap, "reset after going dense");
@@ -477,13 +490,7 @@ namespace TestProbabilisticDataStructures
 
         private static HyperLogLogPlus DenseThenReset(uint precision)
         {
-            var estimator = new HyperLogLogPlus(precision);
-            for (var i = 0; estimator.IsSparse; i++)
-            {
-                estimator.Add(Item(i));
-            }
-
-            return estimator.Reset();
+            return FilledUntilDense(precision, out _).Reset();
         }
 
         /// <summary>

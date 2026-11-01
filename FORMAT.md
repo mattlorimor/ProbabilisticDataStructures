@@ -411,7 +411,7 @@ and when dense,
 bytes   the registers, one byte each
 ```
 
-The estimator holds hashes while there are few enough of them for that to cost less
+The estimator holds hashes while there are few enough of them for that to cost no more
 than the registers would, so the payload has to say which it holds. Always writing the
 dense form would make a payload of a nearly-empty estimator as large as a full one,
 which is the thing the sparse form exists to avoid: ten items take 107 bytes rather than
@@ -420,6 +420,12 @@ which is the thing the sparse form exists to avoid: ten items take 107 bytes rat
 The sparse hashes are written strictly increasing, and a payload where they are not is
 refused. They are the estimator's count as well as its contents — a repeated or
 unordered run would report more distinct items than it holds.
+
+How many hashes a sparse payload holds is not bounded by where the estimator converts,
+which is once it would hold more than `2^precision / 8` of them — eight bytes each,
+against a byte per register. Through 6.2.0 the first sparse buffer was larger than that
+at precisions 4 to 6, so payloads from those releases can hold more. They read as
+written, sparse and exact.
 
 The register count is not stored: it is `2^precision`, and a payload whose registers do
 not come to that is refused. Registers above `64 - precision + 1` are refused too, since
