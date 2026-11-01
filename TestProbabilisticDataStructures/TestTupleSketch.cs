@@ -991,11 +991,11 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// The retained sizes the fractional tests run at: the same as the continuation
-        /// tests, less the largest, whose streams would take minutes to replay from
-        /// every split. They cover the sizes whose buffer is small enough for any sort
-        /// to treat as one run, where an unstable sort could not tell, and ones past it,
-        /// where the buffer doubles more than once on the way to its full size and an
-        /// unstable sort partitions. See <see cref="TestStableSort"/> for the sort.
+        /// tests, less the largest, whose stream grows with the size and is replayed
+        /// from every split. They include the small sizes, where even an unstable sort
+        /// happens to leave equal keys as it found them, and sizes well past them, where
+        /// it does not and the buffer doubles more than once on the way to its full
+        /// size. See <see cref="TestStableSort"/> for the sort.
         /// </summary>
         public static IEnumerable<object[]> RetainedSizesForFractionalSums =>
             Enumerable.Range(1, 9).Concat(new[] { 12, 33 }).Select(k => new object[] { (uint)k });
