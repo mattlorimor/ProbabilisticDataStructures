@@ -759,9 +759,9 @@ namespace TestProbabilisticDataStructures
         /// sample, threshold and all. The full version of the paper (arXiv:0803.0473v2,
         /// section 3, Lemma 4, checked 2026-11-01) treats exactly this case: when the
         /// inner samples together hold at most k items while the inputs held more, "m =
-        /// 1, x = 1, and k_1 = k ... The resulting sample is then identical to that of
-        /// the single inner subcall on I_1". Its items stand in for the ones it
-        /// dropped, so the result is sampling too.
+        /// 1, x = 1, and k_1 = k", and the resulting sample is "identical to that of the
+        /// single inner subcall on I_1". Its items stand in for the ones it dropped, so
+        /// the result is sampling too.
         /// </summary>
         /// <remarks>
         /// Through 6.2.0 the items were fed one at a time into the room the empty
@@ -777,11 +777,20 @@ namespace TestProbabilisticDataStructures
             sampled.Add(Key("whale"), 100.0);
             for (var i = 0; i < 40; i++)
             {
-                sampled.Add(Key($"flow-{i}"), 0.5 + ((i % 7) * 0.25));
+                sampled.Add(Key($"flow-{i}"), 0.5 + ((i % 7) * (10.0 / 97.0)));
             }
             Assert.IsTrue(sampled.HeavyCount > 0 && sampled.LightCount > 0,
                 "Premise: the input holds items in both regions, so a result that " +
                 "mixed them up, or put everything in one, is visible below.");
+            // The weights are chosen so the threshold times the region's size is not
+            // the region's total in floating point (31.855670103092784 against
+            // 31.85567010309278). For most weights tried, including steps of 0.25
+            // or 0.1, the two round to the same double, and a merge that rebuilt the
+            // total from the threshold would pass the exact comparisons below.
+            Assert.AreNotEqual(
+                BitConverter.DoubleToInt64Bits(sampled.LightWeight),
+                BitConverter.DoubleToInt64Bits(sampled.Tau * sampled.LightCount),
+                "Premise: rebuilding the threshold region's total would round.");
 
             var merged = new VarOpt(8, seed: 109).Merge(sampled);
 
@@ -794,6 +803,11 @@ namespace TestProbabilisticDataStructures
                 BitConverter.DoubleToInt64Bits(sampled.Tau),
                 BitConverter.DoubleToInt64Bits(merged.Tau),
                 "The result's threshold is the input's, exactly.");
+            Assert.AreEqual(
+                BitConverter.DoubleToInt64Bits(sampled.LightWeight),
+                BitConverter.DoubleToInt64Bits(merged.LightWeight),
+                "The threshold region's total is carried over, not rebuilt from the " +
+                "threshold; it is what keeps the total exact.");
             Assert.AreEqual(
                 BitConverter.DoubleToInt64Bits(sampled.TotalWeight),
                 BitConverter.DoubleToInt64Bits(merged.TotalWeight),

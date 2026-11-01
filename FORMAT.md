@@ -582,10 +582,23 @@ sampling has begun, so the reader requires the two regions together to fill `k`
 exactly, `n` to exceed `k`, and the region weight to be a positive finite number.
 Neither state can be forged into the other without failing one of those.
 
-The items held at their own weights are re-heaped on read rather than being trusted to
-arrive in heap order, for the same reason `TopK`'s and `HeavyKeeper`'s are. The
-generator's state is stored so a reloaded sample resumes its eviction sequence rather
-than replaying it; see below.
+Version 6.2.0 could write a payload that fails the first reading. Merging a sample
+that had begun sampling into one with room for everything it held recorded the
+result as exact, holding fewer items than the `n` it counted. Such a payload is
+refused, and the refusal says where it came from: it does not record which of its
+items were held at the threshold, so it cannot be restored without guessing. The
+6.2.0 reader refused it too, so no payload that ever loaded stops loading.
+
+Once sampling has begun, the items held at their own weights are re-heaped on read
+rather than being trusted to arrive in heap order, for the same reason `TopK`'s and
+`HeavyKeeper`'s are; a heap this library wrote comes through unchanged. Before
+sampling begins they are not a heap but every item seen, in the order it arrived, and
+that order is read back as written. It is what the transition to sampling heaps from,
+so re-heaping it changes which of two tied items is contested first, and with it what
+is sampled later. The 6.2.0 reader re-heaped it.
+
+The generator's state is stored so a reloaded sample resumes its eviction sequence
+rather than replaying it; see below.
 
 ### `UltraLogLog` (id 25)
 
