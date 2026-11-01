@@ -559,7 +559,9 @@ namespace TestProbabilisticDataStructures
 
                 (StructureId.InvertibleBloomLookupTable, () =>
                 {
-                    var emptyTable = RoundTrip(new InvertibleBloomLookupTable(10, 8));
+                    // Fifteen cells stated outright: what comes back is the count that went
+                    // in, whatever the sizing rule would choose.
+                    var emptyTable = RoundTrip(InvertibleBloomLookupTable.WithCells(15, 8));
                     Assert.AreEqual(15u, emptyTable.Cells());
                     Assert.AreEqual(8, emptyTable.KeySize());
                     Assert.IsTrue(emptyTable.TryDecode(out var nothing, out _));

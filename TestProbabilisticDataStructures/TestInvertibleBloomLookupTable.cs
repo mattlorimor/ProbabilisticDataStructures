@@ -146,6 +146,160 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Reconciles <paramref name="trials"/> pairs of tables sized for
+        /// <paramref name="differences"/> keys, with that many keys in the difference, and
+        /// counts the ones that listed the whole of it.
+        /// <para>
+        /// Both tables hold a few keys the other has too, so the subtraction has something
+        /// to cancel. The rest of the difference is split between the two sides as evenly
+        /// as it divides, or all on the first side. The keys are keyed by trial, so every
+        /// count reproduces exactly.
+        /// </para>
+        /// </summary>
+        private static (int Complete, int Failed, int WrongSuccesses, long KeysListed)
+            ReconcileAtTheSizedDifference(uint differences, int trials, bool allOnOneSide)
+        {
+            const int Shared = 8;
+
+            var onlyMineCount = allOnOneSide ? (int)differences : (int)((differences + 1) / 2);
+            var onlyTheirsCount = (int)differences - onlyMineCount;
+
+            var complete = 0;
+            var wrongSuccesses = 0;
+            long keysListed = 0;
+
+            for (var t = 0; t < trials; t++)
+            {
+                var mine = new InvertibleBloomLookupTable(differences, 8);
+                var theirs = new InvertibleBloomLookupTable(differences, 8);
+
+                for (var j = 0; j < Shared; j++)
+                {
+                    var both = Key(t * 1_000_000L + 900_000 + j);
+                    mine.Add(both);
+                    theirs.Add(both);
+                }
+
+                var onlyMine = new HashSet<long>();
+                for (var i = 0; i < onlyMineCount; i++)
+                {
+                    var x = t * 1_000_000L + i;
+                    mine.Add(Key(x));
+                    onlyMine.Add(x);
+                }
+
+                var onlyTheirs = new HashSet<long>();
+                for (var i = 0; i < onlyTheirsCount; i++)
+                {
+                    var y = t * 1_000_000L + 500_000 + i;
+                    theirs.Add(Key(y));
+                    onlyTheirs.Add(y);
+                }
+
+                var decoded = mine.Subtract(theirs).TryDecode(out var added, out var removed);
+
+                var gotMine = added.Select(Value).ToHashSet();
+                var gotTheirs = removed.Select(Value).ToHashSet();
+                var whole = gotMine.Count == added.Count && gotTheirs.Count == removed.Count
+                    && gotMine.SetEquals(onlyMine) && gotTheirs.SetEquals(onlyTheirs);
+
+                if (decoded && whole)
+                {
+                    complete++;
+                    keysListed += added.Count + removed.Count;
+                }
+                else if (decoded)
+                {
+                    wrongSuccesses++;
+                }
+            }
+
+            return (complete, trials - complete, wrongSuccesses, keysListed);
+        }
+
+        /// <summary>
+        /// A table sized for a number of differences lists that many, completely, with
+        /// probability at least 0.99 -- at every size, the smallest included (#150).
+        /// <para>
+        /// The 0.99 is the figure Eppstein, Goodrich, Uyeda and Varghese, "What's the
+        /// Difference?" (SIGCOMM 2011), section 6.1 and Figure 7, use for the overhead a
+        /// table needs: "the minimum space overhead (IBF cells/delta) required to
+        /// completely recover the set difference with 99% certainty". Their section 6.1
+        /// adds that "Deltas below 200 all require at least 50% overhead" and that "beyond
+        /// deltas of 1000, the memory overhead reaches an asymptote". Goodrich and
+        /// Mitzenmacher (arXiv:1101.2245v3), section 2.4, give that asymptote -- c4 =
+        /// 1.295 cells per entry for four hashes, with a failure probability that is
+        /// asymptotic too -- and section 5 says that bounds for specific numbers of
+        /// entries and cells are the "finite-length analysis" problem, which they did not
+        /// attempt. So the small cases are measured, here and in the rule's own
+        /// documentation, rather than derived. Checked against both papers' text,
+        /// November 2026; the figure's values were read off the plot by eye.
+        /// </para>
+        /// <para>
+        /// Each row is a difference to be sized for, how many reconciliations to run, and
+        /// whether the whole difference is on one side. The rows are the coarsest legal
+        /// corner (one difference), the sizes where a table of the old size could not
+        /// list the difference at all (two to four), a size in the middle where it
+        /// managed two in three (twenty), one just under the promise where it was about
+        /// to reach it (a hundred), the last size the small-table allowance applies to
+        /// and the first it does not, and a large one. The fourth column is a floor on
+        /// failures, below.
+        /// </para>
+        /// <para>
+        /// The promise is the floor: 0.99 of the trials. Probed on these keys, every row
+        /// clears it by more than six standard errors of its own rate, so a change that
+        /// redraws the keys still clears it; the rows are not tuned to it. Beside it, three
+        /// guards against passing without testing. <b>Every success listed exactly the
+        /// difference</b>: the keys listed across the successes add up to the size of the
+        /// difference times their number, so no row passed on empty differences. <b>No
+        /// success was wrong</b>, the property of #146 held inside the promise. And <b>a
+        /// table that is not too big</b>: where the probe has failures to spare, at least
+        /// ten must still happen, which is the fewest probed less four standard errors. A
+        /// table sized past its promise would clear the floor with room to spare and give
+        /// nothing away, so this is the half of the bound that notices.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [DataRow(1u, 20000, false, 0)]
+        [DataRow(2u, 20000, false, 0)]
+        [DataRow(3u, 20000, false, 0)]
+        [DataRow(3u, 20000, true, 0)]
+        [DataRow(4u, 20000, false, 0)]
+        [DataRow(4u, 20000, true, 0)]
+        [DataRow(20u, 10000, false, 10)]
+        [DataRow(20u, 10000, true, 10)]
+        [DataRow(100u, 10000, false, 10)]
+        [DataRow(128u, 10000, false, 10)]
+        [DataRow(129u, 10000, false, 10)]
+        [DataRow(1000u, 1000, false, 0)]
+        public void TestATableSizedForADifferenceListsItAtLeastNinetyNinePercentOfTheTime(
+            uint differences, int trials, bool allOnOneSide, int minFailures)
+        {
+            const double Promise = 0.99;
+
+            var (complete, failed, wrongSuccesses, keysListed) =
+                ReconcileAtTheSizedDifference(differences, trials, allOnOneSide);
+
+            var where = $"a difference of {differences}" + (allOnOneSide ? " all on one side" : "");
+
+            Assert.IsGreaterThanOrEqualTo((int)Math.Ceiling(Promise * trials), complete,
+                $"{where}, from tables sized for {differences}: only {complete} of {trials} " +
+                $"reconciliations listed all of it, where the promise is {Promise}");
+
+            Assert.AreEqual(0, wrongSuccesses,
+                $"{where}: {wrongSuccesses} decodes reported success with the wrong listing");
+
+            Assert.AreEqual((long)complete * differences, keysListed,
+                $"{where}: the successes did not each list {differences} keys, so they were " +
+                "not reconciling the difference this test thinks it is");
+
+            Assert.IsGreaterThanOrEqualTo(minFailures, failed,
+                $"{where}: only {failed} of {trials} reconciliations failed, so a table " +
+                "sized for this many differences is bigger than the promise needs, and the " +
+                "floor above would have passed whatever its size");
+        }
+
+        /// <summary>
         /// Two keys on opposite sides that land in the same cells cancel each other's
         /// counts in every one of them, and leave both keys xored together in the key and
         /// hash sums. Read by its counts alone, that table is empty, and two sets that
@@ -165,8 +319,11 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestKeysCancellingInEveryCountAreNotReportedAsNoDifference()
         {
-            var mine = new InvertibleBloomLookupTable(8, 8).Add(Encoding.ASCII.GetBytes("k0000000"));
-            var theirs = new InvertibleBloomLookupTable(8, 8).Add(Encoding.ASCII.GetBytes("k0000307"));
+            // Twelve cells, stated outright rather than as a number of differences so
+            // the geometry holds when the sizing rule changes (#150): the pair below was
+            // found by search against it.
+            var mine = InvertibleBloomLookupTable.WithCells(12, 8).Add(Encoding.ASCII.GetBytes("k0000000"));
+            var theirs = InvertibleBloomLookupTable.WithCells(12, 8).Add(Encoding.ASCII.GetBytes("k0000307"));
             var difference = mine.Subtract(theirs);
 
             // This pair was found by search because the two keys share all four of their
@@ -198,8 +355,11 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestADecodeThatSucceedsHasTheWholeDifference()
         {
-            // Four keys each way in a table sized for eight: inside the sizing, and small
-            // enough that keys sharing their cells is common.
+            // Four keys each way in twelve cells: small enough that keys sharing their
+            // cells is common, which is what this test is about. Stated outright rather
+            // than as a number of differences so the geometry holds when the sizing rule
+            // changes (#150); a table sized for eight now would have room to spare and
+            // meet the case far less often.
             const int Trials = 5000;
             const int PerSide = 4;
 
@@ -208,8 +368,8 @@ namespace TestProbabilisticDataStructures
 
             for (var t = 0; t < Trials; t++)
             {
-                var mine = new InvertibleBloomLookupTable(8, 8);
-                var theirs = new InvertibleBloomLookupTable(8, 8);
+                var mine = InvertibleBloomLookupTable.WithCells(12, 8);
+                var theirs = InvertibleBloomLookupTable.WithCells(12, 8);
                 var onlyMine = new HashSet<long>();
                 var onlyTheirs = new HashSet<long>();
 
@@ -246,7 +406,7 @@ namespace TestProbabilisticDataStructures
                 // decode was left holding: all zero is the case that used to pass.
                 if (!whole && gotMine.Count + gotTheirs.Count > 0)
                 {
-                    var left = new InvertibleBloomLookupTable(8, 8);
+                    var left = InvertibleBloomLookupTable.WithCells(12, 8);
                     foreach (var x in onlyMine.Except(gotMine))
                     {
                         left.Add(Key(x));
@@ -284,7 +444,7 @@ namespace TestProbabilisticDataStructures
         /// as well as their counts, and only the two keys xored together say the table is
         /// not empty.
         /// <para>
-        /// The table is sized for two, so its four cells hold every key whatever the hash,
+        /// The table has four cells, so a key occupies every one of them whatever the hash,
         /// and the keys are 0 and <see cref="long.MinValue"/>, which differ only in the top
         /// bit of their last byte. So the residue sits at the end of every cell, where a
         /// check that walked the key sums by cell rather than by byte would not look.
@@ -293,7 +453,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestKeysWhoseHashesCollideAreNotReportedAsNoDifference()
         {
-            var table = new InvertibleBloomLookupTable(2, 8, _ => 0x9E3779B97F4A7C15UL)
+            var table = InvertibleBloomLookupTable.WithCells(4, 8, _ => 0x9E3779B97F4A7C15UL)
                 .Add(Key(0))
                 .Remove(Key(long.MinValue));
 
@@ -307,10 +467,10 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The hash sums are what is left when the keys themselves cancel. A table sized
-        /// for two differences has four cells and every key occupies all four, so 1 and 2
-        /// against 4 and 7 -- which xor to zero -- leave every count and every key sum at
-        /// zero, and only the hashes say anything is there.
+        /// The hash sums are what is left when the keys themselves cancel. A table of four
+        /// cells has every key occupying all four, so 1 and 2 against 4 and 7 -- which xor
+        /// to zero -- leave every count and every key sum at zero, and only the hashes say
+        /// anything is there.
         /// </summary>
         [TestMethod]
         public void TestKeysWhoseBytesCancelAreNotReportedAsNoDifference()
@@ -318,7 +478,7 @@ namespace TestProbabilisticDataStructures
             long[] mine = [1, 2];
             long[] theirs = [4, 7];
 
-            var table = new InvertibleBloomLookupTable(2, 8);
+            var table = InvertibleBloomLookupTable.WithCells(4, 8);
             foreach (var x in mine)
             {
                 table.Add(Key(x));

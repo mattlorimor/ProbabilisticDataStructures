@@ -973,9 +973,31 @@ if (mine.Subtract(theirs).TryDecode(out var onlyMine, out var onlyTheirs))
 }
 ```
 
-Two sets of **100,000 keys differing by ten**, reconciled by a table of **360 bytes**.
+Two sets of **100,000 keys differing by ten**, reconciled by a table of **648 bytes**.
 That is the whole idea: sizing is against the expected *difference*, and sizing it against
 the set size would waste almost all of it.
+
+**What the sizing promises.** A table sized for *d* differences lists all of them, whichever
+sides they fall on, with probability **at least 0.99**, for every *d* from one up. Small
+tables need far more cells per difference than large ones, so they get them:
+
+| sized for | cells | per difference |
+|---:|---:|---:|
+| 1 | 15 | 15 |
+| 2 | 16 | 8 |
+| 4 | 19 | 4.75 |
+| 20 | 41 | 2.05 |
+| 100 | 153 | 1.53 |
+| 1,000 | 1,500 | 1.5 |
+
+From 129 differences up it is 1.5 cells per difference. The 0.99 is the figure Eppstein,
+Goodrich, Uyeda and Varghese use for the same question in
+[What's the Difference?](https://ics.uci.edu/~eppstein/pubs/EppGooUye-SIGCOMM-11.pdf) (SIGCOMM 2011,
+§6.1 and Figure 7), and the cell counts are measured, not derived: the asymptotic
+threshold of 1.295 cells per difference for four hashes says nothing about small tables, and
+neither paper analyses them. Measured on this implementation, the worst case from one
+difference to 260 was a complete listing 99.5% of the time. The rest of the time the decode
+returns `false`.
 
 **It can fail, and says so.** If the difference is larger than the table was sized for,
 peeling stalls and `TryDecode` returns `false` rather than a partial answer — a partial

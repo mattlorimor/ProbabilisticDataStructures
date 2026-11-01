@@ -398,9 +398,11 @@ namespace TestProbabilisticDataStructures
         /// An invertible Bloom lookup table can only list its contents while it has
         /// more than c4 = 1.295 cells per entry -- the 2-core threshold for four
         /// hashes, Table 1 of Goodrich and Mitzenmacher, "Invertible Bloom Lookup
-        /// Tables" (2011). The 1.5 the sizing uses is that threshold plus margin.
-        /// Nothing else fails fast if the margin is edited away: listing degrades
-        /// probabilistically, at scale, in someone else's diff.
+        /// Tables" (2011). The 1.5 the sizing uses from the point where a small table's
+        /// extra allowance has run out is that threshold plus margin, and tables sized
+        /// for that many differences are exactly the size they were before the
+        /// allowance was added (#150). Nothing else fails fast if the margin is edited
+        /// away: listing degrades probabilistically, at scale, in someone else's diff.
         /// </summary>
         [TestMethod]
         public void TestIbltProvisioningClearsThePeelingThreshold()
@@ -410,16 +412,99 @@ namespace TestProbabilisticDataStructures
                 "c4 = 1.295, below which listEntries stops succeeding with high " +
                 "probability.");
 
-            foreach (var d in new uint[] { 3, 50, 1000 })
+            // 129 is the first size the allowance below does not reach, and 130 the next.
+            // 1.5d lands on a half at the odd ones, so they round up: 193.5 at 129.
+            foreach (var d in new uint[] { 129, 130, 1000, 100_000 })
             {
                 var t = new InvertibleBloomLookupTable(d, 8);
                 Assert.AreEqual((uint)Math.Ceiling(d * 1.5), t.CellCount,
-                    $"d={d}: the table must provision ceil(1.5d) cells.");
+                    $"d={d}: from here up the table must provision ceil(1.5d) cells, " +
+                    "as it always has.");
+            }
+        }
+
+        /// <summary>
+        /// Small tables need more than the asymptote. Eppstein, Goodrich, Uyeda and
+        /// Varghese, "What's the Difference? Efficient Set Reconciliation without Prior
+        /// Context" (SIGCOMM 2011), Figure 7, plot the cells per difference four hashes
+        /// need for a 99% chance of listing it, and section 6.1 says "Deltas below 200
+        /// all require at least 50% overhead". Goodrich and Mitzenmacher say only that
+        /// the asymptote is c4 = 1.295 and that finite sizes were not analysed, so the
+        /// allowance is this repository's own measurement and the figure is the one
+        /// outside check on it.
+        /// <para>
+        /// First the figure. Its values for four hashes were read off the plot by eye,
+        /// to the nearest tenth, in November 2026: about 2.3 cells per difference at ten,
+        /// 1.9 at twenty, 1.6 at forty, 1.5 at a hundred and 1.4 at a thousand. A table
+        /// may not give fewer cells than those, nor fewer than c4 per difference. Then
+        /// the rule, restated by hand rather than read back from the code: below 129 it
+        /// is the larger of ceil(1.5d) and ceil(1.4d) + 13, and from 129 up the two meet
+        /// and it is ceil(1.5d) alone. Evaluated at the sizes that round differently,
+        /// with the results by hand:
+        /// <list type="table">
+        /// <item><term>1</term><description>ceil(1.4) + 13 = 15, over ceil(1.5) = 2</description></item>
+        /// <item><term>2</term><description>ceil(2.8) + 13 = 16, over 3</description></item>
+        /// <item><term>3</term><description>ceil(4.2) + 13 = 18, over ceil(4.5) = 5</description></item>
+        /// <item><term>4</term><description>ceil(5.6) + 13 = 19, over 6</description></item>
+        /// <item><term>5</term><description>1.4 * 5 = 7 exactly, so 7 + 13 = 20, over ceil(7.5) = 8</description></item>
+        /// <item><term>10</term><description>1.4 * 10 = 14 exactly, so 14 + 13 = 27, over 15: the 648 bytes the README quotes, at 24 a cell</description></item>
+        /// <item><term>20</term><description>28 + 13 = 41, over 30</description></item>
+        /// <item><term>100</term><description>140 + 13 = 153, over 150</description></item>
+        /// <item><term>128</term><description>ceil(179.2) + 13 = 193, over 192: the last the allowance decides</description></item>
+        /// </list>
+        /// </para>
+        /// <para>
+        /// The measurement that chose 1.4 and 13 is in the constructor's documentation.
+        /// What pins them here is that the promise test alone cannot: an allowance of
+        /// twelve cells where the rule has thirteen still keeps the promise at every size
+        /// measured, with a margin a fraction of a percent thinner, which no affordable
+        /// number of trials can tell apart from the rule's own.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestIbltProvisioningCoversWhatSmallTablesNeed()
+        {
+            (uint Differences, double Overhead)[] figure7 =
+                [(10, 2.3), (20, 1.9), (40, 1.6), (100, 1.5), (1000, 1.4)];
+
+            foreach (var (d, overhead) in figure7)
+            {
+                var cells = new InvertibleBloomLookupTable(d, 8).CellCount;
+
+                Assert.IsGreaterThanOrEqualTo((uint)Math.Ceiling(overhead * d), cells,
+                    $"d={d}: the paper's Figure 7 needs {overhead} cells per difference " +
+                    "for four hashes to list it 99% of the time.");
+                Assert.IsGreaterThan((uint)Math.Ceiling(1.295 * d), cells,
+                    $"d={d}: no more cells than the asymptote asks for.");
             }
 
-            Assert.AreEqual(4u, new InvertibleBloomLookupTable(2, 8).CellCount,
-                "two differences ask for three cells, but four hashes need four " +
-                "distinct cells to land in, so the hash count is the floor.");
+            (uint Differences, uint Cells)[] byHand =
+                [(1, 15), (2, 16), (3, 18), (4, 19), (5, 20), (10, 27), (20, 41), (100, 153), (128, 193)];
+
+            foreach (var (d, cells) in byHand)
+            {
+                Assert.AreEqual(cells, new InvertibleBloomLookupTable(d, 8).CellCount,
+                    $"d={d}: the rule is the larger of ceil(1.5d) and ceil(1.4d) + 13.");
+            }
+
+            Assert.AreEqual(648ul, new InvertibleBloomLookupTable(10, 8).SizeInBytes(),
+                "27 cells of an 8-byte count, an 8-byte key sum and an 8-byte hash sum; " +
+                "the README quotes the figure.");
+
+            // Tables only ever grew: nothing is sized below what the 1.5 rule alone gave.
+            // And from 129 up, which is where the allowance stops, the table is the size
+            // it was before it, so one built then and one built now can still be subtracted.
+            for (uint d = 1; d <= 400; d++)
+            {
+                var cells = new InvertibleBloomLookupTable(d, 8).CellCount;
+                var before = Math.Max(4u, (uint)Math.Ceiling(d * 1.5));
+
+                Assert.IsGreaterThanOrEqualTo(before, cells, $"d={d}");
+                if (d >= 129)
+                {
+                    Assert.AreEqual(before, cells, $"d={d}: the allowance should have ended");
+                }
+            }
         }
     }
 }
