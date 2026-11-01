@@ -452,5 +452,272 @@ namespace TestProbabilisticDataStructures
             Assert.IsFalse(filter.TestRange(42, 199));
             Assert.IsFalse(filter.TestRange(201, 254));
         }
+
+        private static ulong LowHashBits(ulong prefix, int bits) =>
+            MementoFilter.HashPrefix(prefix) & ((1UL << bits) - 1);
+
+        /// <summary>
+        /// Removing a key takes the matching box with the longest fingerprint, so a key
+        /// added before an expansion keeps its only record when a key added after it is
+        /// removed.
+        /// </summary>
+        /// <remarks>
+        /// The rule is the paper's, not this implementation's. Section 5, "Deletions":
+        /// "When deleting a key y, Memento filter removes a memento equal to m(y) from
+        /// the keepsake box with the longest matching fingerprint. The reason is that
+        /// deleting a memento with a shorter associated fingerprint may cause false
+        /// negatives." The authors' reference implementation does the same: its
+        /// <c>qf_delete_single</c> collects the matching boxes in run order and tries
+        /// them from the last backwards (n3slami/Memento_Filter, src/memento.c, checked
+        /// 2026-11-01).
+        /// <para>
+        /// These are the keys #145 was reported with. Four slots and two-bit
+        /// fingerprints put the first expansion at the fourth add. Key 0 arrives before
+        /// it, and its box remembers four bits of its block's hash; key 26 arrives
+        /// after, and its box remembers five. The two blocks agree on the first four
+        /// bits and not on the fifth, and both keys sit at memento zero. So removing 26
+        /// matches both boxes, and only the younger one is 26's alone. The older box
+        /// comes first in the run, and taking it leaves key 0 with nothing to answer
+        /// for it.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestRemovalTakesTheLongestMatchingFingerprint()
+        {
+            // One memento bit, so key k is at position k & 1 of block k >> 1.
+            var filter = new MementoFilter(
+                maxRangeSize: 2, fingerprintBits: 2, initialCapacity: 1);
+            Assert.AreEqual(4UL, filter.Capacity(), "Premise: four slots.");
+            Assert.AreEqual(LowHashBits(0, 4), LowHashBits(13, 4),
+                "Premise: blocks 0 and 13 agree on four bits of hash.");
+            Assert.AreNotEqual(LowHashBits(0, 5), LowHashBits(13, 5),
+                "Premise: blocks 0 and 13 differ in the fifth bit.");
+
+            filter.Add(0);
+            filter.Add(2);
+            filter.Add(4);
+            Assert.AreEqual(0u, filter.ExpansionCount(), "Premise: no expansion yet.");
+            filter.Add(26);
+            Assert.AreEqual(1u, filter.ExpansionCount(),
+                "Premise: key 26 arrived after the first expansion.");
+            Assert.IsTrue(filter.Test(0), "Premise: key 0 is present before any removal.");
+
+            Assert.IsTrue(filter.TestAndRemove(26),
+                "Key 26 was added, so removing it succeeds.");
+            Assert.IsTrue(filter.Test(0),
+                "Key 0 was never removed and now tests absent. Removing 26 took the " +
+                "older, shorter box, which was 0's only record, instead of the younger " +
+                "box that was 26's alone.");
+        }
+
+        /// <summary>
+        /// Across the chain of tables, removal takes the newest table's match, because it
+        /// remembers more of the hash than any match in a later table -- even when its
+        /// own fingerprint has run out.
+        /// </summary>
+        /// <remarks>
+        /// The paper says only that deletions "must probe all the filters" (section 5,
+        /// "Unbounded Expansions"). Which match to take across them follows from its
+        /// deletion rule once "longest" counts everything a match remembers: address and
+        /// fingerprint together, since the tables have different address widths. An
+        /// entry reaches a later table by going void, and then it remembers no more of
+        /// its hash than the address of the table it left, which has doubled since.
+        /// Everything still in that table remembers more. InfiniFilter's reference
+        /// implementation, whose chaining Memento borrows, deletes in this order: the
+        /// main filter, then the secondary, then the chain newest first
+        /// (nivdayan/FilterLibrary, filters/ChainedInfiniFilter.java, <c>delete</c>,
+        /// checked 2026-11-01).
+        /// <para>
+        /// The scenario sets the two readings of "longest" against each other. Key j
+        /// arrives first and goes void at the third expansion. In the second table it
+        /// is its block's only record, with a full two-bit fingerprint over a two-bit
+        /// address: four bits of hash. Key k arrives after the first expansion. By the
+        /// third it has spent its whole fingerprint, but over a five-bit address: five
+        /// bits. The two blocks agree on the four bits j's entry remembers, and both
+        /// keys sit at memento zero, so removing k matches both. Taking the second
+        /// table's entry, by asking the tables oldest first or by comparing fingerprint
+        /// lengths alone, removes j's only record.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestRemovalAcrossTheChainTakesTheNewerTablesMatch()
+        {
+            var prefixes = Enumerable.Range(0, 4096).Select(p => (ulong)p).ToArray();
+            var j = prefixes[0];
+            var k = prefixes.First(
+                p => p != j && LowHashBits(p, 4) == LowHashBits(j, 4));
+
+            // Fillers drive the expansions. They never share a quotient with j or k at
+            // any table size, and no two share a box, so each costs one slot and the
+            // expansions come where the premises below say.
+            var fillers = prefixes
+                .Where(p => LowHashBits(p, 2) != LowHashBits(j, 2))
+                .GroupBy(p => LowHashBits(p, 7))
+                .Select(g => g.First())
+                .Take(11)
+                .ToArray();
+            Assert.HasCount(11, fillers, "Premise: eleven fillers.");
+
+            // One memento bit, so block p's key at memento zero is p << 1.
+            var filter = new MementoFilter(
+                maxRangeSize: 2, fingerprintBits: 2, initialCapacity: 1);
+            filter.Add(j << 1);
+            filter.Add(fillers[0] << 1);
+            filter.Add(fillers[1] << 1);
+            Assert.AreEqual(0u, filter.ExpansionCount(),
+                "Premise: j arrived before any expansion.");
+            filter.Add(k << 1);
+            Assert.AreEqual(1u, filter.ExpansionCount(),
+                "Premise: k arrived after the first.");
+            for (var i = 2; i < fillers.Length; i++)
+            {
+                filter.Add(fillers[i] << 1);
+            }
+            Assert.AreEqual(3u, filter.ExpansionCount(), "Premise: three expansions.");
+            Assert.AreEqual(2, filter.ChainLength(),
+                "Premise: j's box went void into a second table.");
+
+            var hj = MementoFilter.HashPrefix(j);
+            var hk = MementoFilter.HashPrefix(k);
+            var newer = filter.Segments[0];
+            var older = filter.Segments[1];
+            Assert.IsFalse(newer.HasMementoBetween(hj, 0, 0),
+                "Premise: j has no record in the first table.");
+            Assert.IsTrue(older.HasMementoBetween(hj, 0, 0),
+                "Premise: j's only record is in the second table.");
+            Assert.IsTrue(older.HasMementoBetween(hk, 0, 0),
+                "Premise: k matches j's entry in the second table.");
+            Assert.AreEqual(newer.FingerprintBits, MatchingAges(newer, hk, 0).Single(),
+                "Premise: k's box in the first table has spent its whole fingerprint.");
+            Assert.AreEqual(0, MatchingAges(older, hk, 0).Single(),
+                "Premise: the second table's match carries a full fingerprint, so " +
+                "comparing fingerprint lengths alone would choose it.");
+
+            Assert.IsTrue(filter.TestAndRemove(k << 1),
+                "k was added, so removing it succeeds.");
+            Assert.IsTrue(filter.Test(j << 1),
+                "j was never removed and now tests absent. Removing k took j's only " +
+                "record from the second table instead of k's own box in the first, " +
+                "which remembers five bits of hash to the second table's four.");
+        }
+
+        /// <summary>
+        /// The ages of the boxes in a table that could answer for a key: those whose
+        /// fingerprint matches its block's hash and that hold its memento.
+        /// </summary>
+        private static List<int> MatchingAges(
+            MementoSegment segment, ulong hash, ulong memento)
+        {
+            var (quotient, _) = segment.Split(hash);
+            return segment.Codec.Decode(segment.ReadRun(quotient))
+                .Where(b => segment.FingerprintMatches(b.Fingerprint, hash) &&
+                            b.Mementos.Contains(memento))
+                .Select(b => segment.AgeOfFluid(b.Fingerprint))
+                .ToList();
+        }
+
+        /// <summary>
+        /// Long churn on small filters, through expansions and down the chain, never
+        /// loses a key that is still held.
+        /// </summary>
+        /// <remarks>
+        /// The two tests above are the shortest case of each rule. This runs them where
+        /// they meet everything else: boxes of several keys, removals that empty a box,
+        /// and voids shed into tables that expand in turn. The key universe is small, so
+        /// blocks are shared and mementos repeat, which is what lets one removal match
+        /// more than one entry. The run counts the removals that did, within one table
+        /// and across tables, and refuses to pass if either kind never came up.
+        /// </remarks>
+        [TestMethod]
+        public void TestChurnThroughExpansionsNeverLosesAHeldKey()
+        {
+            // Adds are this many in eight steps, the rest removals. A filter whose
+            // fingerprints last four expansions needs its early keys to outlive four
+            // doublings before anything goes void, so the last case adds faster.
+            var cases = new (ulong Range, int Bits, uint Initial, long Universe, int Adds,
+                int Seed)[]
+            {
+                (2, 2, 1, 256, 5, 1451),
+                (4, 3, 4, 1024, 5, 1452),
+                (16, 4, 4, 8192, 6, 1453),
+            };
+            const int Steps = 3000;
+
+            foreach (var (range, bits, initial, universe, adds, seed) in cases)
+            {
+                var filter = new MementoFilter(range, bits, initial);
+                var mementoBits = filter.MementoBits;
+                var mementoMask = (1UL << mementoBits) - 1;
+                var held = new List<ulong>();
+                var schedule = new Random(seed);
+                var longestChain = 1;
+                var contestedInOneTable = 0;
+                var contestedAcrossTables = 0;
+
+                for (var step = 0; step < Steps; step++)
+                {
+                    if (held.Count == 0 || schedule.Next(8) < adds)
+                    {
+                        var added = (ulong)schedule.NextInt64(universe);
+                        filter.Add(added);
+                        held.Add(added);
+                        longestChain = Math.Max(longestChain, filter.ChainLength());
+                        continue;
+                    }
+
+                    var index = schedule.Next(held.Count);
+                    var removed = held[index];
+                    held[index] = held[^1];
+                    held.RemoveAt(held.Count - 1);
+
+                    var hash = MementoFilter.HashPrefix(removed >> mementoBits);
+                    var tablesMatching = 0;
+                    foreach (var segment in filter.Segments)
+                    {
+                        var matches =
+                            MatchingAges(segment, hash, removed & mementoMask).Count;
+                        if (matches > 1)
+                        {
+                            contestedInOneTable++;
+                        }
+                        if (matches > 0)
+                        {
+                            tablesMatching++;
+                        }
+                    }
+                    if (tablesMatching > 1)
+                    {
+                        contestedAcrossTables++;
+                    }
+
+                    var what =
+                        $"range {range}, {bits}-bit fingerprints, seed {seed}, step {step}";
+                    Assert.IsTrue(filter.TestAndRemove(removed),
+                        $"{what}: key {removed} is held, so removing it succeeds.");
+
+                    foreach (var key in new HashSet<ulong>(held))
+                    {
+                        Assert.IsTrue(filter.Test(key),
+                            $"{what}: removing {removed} left key {key} testing absent, " +
+                            "though it is still held.");
+                    }
+                }
+
+                Assert.AreEqual((ulong)held.Count, filter.Count(),
+                    $"range {range}: the count drifted from the keys held.");
+                Console.WriteLine($"range {range}, {bits}-bit: {filter.ExpansionCount()} " +
+                    $"expansions, longest chain {longestChain}, {held.Count} held; " +
+                    $"removals matching several boxes in a table {contestedInOneTable}, " +
+                    $"in several tables {contestedAcrossTables}");
+                Assert.IsGreaterThanOrEqualTo(2u, filter.ExpansionCount(),
+                    $"Premise: the range {range} filter expanded.");
+                Assert.IsGreaterThanOrEqualTo(2, longestChain,
+                    $"Premise: the range {range} filter shed into a second table.");
+                Assert.IsGreaterThan(0, contestedInOneTable,
+                    $"Premise: some range {range} removal matched two boxes in a table.");
+                Assert.IsGreaterThan(0, contestedAcrossTables,
+                    $"Premise: some range {range} removal matched in several tables.");
+            }
+        }
     }
 }
