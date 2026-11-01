@@ -46,6 +46,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record this way cannot get it back: the fix prevents further loss and nothing more.
   (#145)
 
+- **A `ThetaSketch` or `TupleSketch` read back from storage, or built by `Union`,
+  `Intersect` or `Difference`, now goes on exactly as the sketch it stands for would.**
+  Below a nominal size of 8 it did not. A sketch may hold twice its nominal size before
+  it trims, and while it is being fed it trims only when its buffer fills, but the
+  reader and the set operations gave the rebuilt sketch room for at least sixteen
+  values, so its later trims came at different moments. Fed the same input afterwards, a sketch saved and restored at k = 2 to 7
+  ended on a different estimate from one never saved in roughly a third to four fifths
+  of the streams measured. At k = 1 a restored sketch agreed with an unsaved one in
+  every stream measured but held eight times the buffer it needed, and from k = 8 up
+  estimates and payloads were unaffected. So was any sketch that was read or combined
+  and then given no more input.
+  <br><br>
+  Every path now sizes the buffer by one rule, capped at what the sketch may hold.
+  The payload does not change: the buffer's size was never stored, so every payload
+  already written reads into a sketch that carries on as if it had never been saved.
+  The defect shipped with `ThetaSketch` in 6.0.0 and with `TupleSketch` in 6.2.0. (#147)
+
 ## [6.2.0] - 2026-08-19
 
 ### Added
