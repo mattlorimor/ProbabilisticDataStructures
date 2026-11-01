@@ -666,9 +666,10 @@ namespace TestProbabilisticDataStructures
         /// Whole numbers, so that every fold is exact in any order. The sort that
         /// gathers a key's values before folding them is not stable, the order it
         /// leaves them in depends on what else is in the buffer, and floating-point
-        /// addition is not associative -- so with fractional values the bytes could
+        /// addition is not associative -- so with fractional values the bytes can
         /// depend on when compactions fired as well as on which values were folded.
-        /// With whole numbers they pin only the second.
+        /// With whole numbers they pin only the second. What fractional values do
+        /// is measured in the tests that begin <c>TestFractional</c>.
         /// </summary>
         private static double ValueOf(int i) => i + 1;
 
@@ -982,6 +983,399 @@ namespace TestProbabilisticDataStructures
             Assert.IsGreaterThan(splits / 3, crossed,
                 $"k = {k}: only {crossed} of {splits} splits fell between two trims, so " +
                 "too much of this test compared sketches with no trim left to disagree on.");
+        }
+
+        // ------------------------------------------------------------------------
+        // Fractional values. The continuation tests above use whole numbers on
+        // purpose; these say what happens when the values are not.
+        // ------------------------------------------------------------------------
+
+        /// <summary>
+        /// The largest partition <c>Array.Sort</c> hands to insertion sort, which is
+        /// stable, before it starts partitioning, which is not. It is the runtime's
+        /// choice and not a documented one -- the documentation says only that the
+        /// sort is unstable -- so tests that depend on it say so, and name what to
+        /// look at when one fails.
+        /// </summary>
+        private const int InsertionSortSize = 16;
+
+        /// <summary>
+        /// The retained sizes whose buffer can never exceed the insertion sort's
+        /// partition: twice the retained size is the most a sketch holds.
+        /// </summary>
+        public static IEnumerable<object[]> RetainedSizesWhoseBufferIsSortedStably =>
+            Enumerable.Range(1, InsertionSortSize / 2).Select(k => new object[] { (uint)k });
+
+        /// <summary>
+        /// The retained sizes whose buffer can be larger: the first one that is, and two
+        /// where it is well past it.
+        /// </summary>
+        public static IEnumerable<object[]> RetainedSizesWhoseBufferIsNotSortedStably =>
+            new[] { InsertionSortSize / 2 + 1, 12, 33 }.Select(k => new object[] { (uint)k });
+
+        private const int BurstLength = 4;
+
+        /// <summary>
+        /// Keys per fractional stream: enough that every size trims, and several
+        /// passes of them.
+        /// </summary>
+        private static int FractionalKeys(uint k) => Math.Max(40, 6 * (int)k);
+
+        /// <summary>
+        /// Three passes over the keys, each arriving in a burst of four. A key's four
+        /// arrivals sit together in the buffer, beside whatever its earlier arrivals
+        /// folded to, so there are always three or more equal keys to put in some order
+        /// -- with fewer the fold is a single commutative addition and cannot tell.
+        /// </summary>
+        private static int FractionalLength(uint k) => FractionalKeys(k) * BurstLength * 3;
+
+        private static byte[] FractionalRecord(uint k, int stream, int i) =>
+            Encoding.UTF8.GetBytes($"t{stream}-item-{(i / BurstLength) % FractionalKeys(k)}");
+
+        /// <summary>
+        /// Irrational, and so different in the last bits from one record to the next.
+        /// Square root is correctly rounded on every platform, which the logarithm
+        /// and the power function are not, so these are the same numbers everywhere.
+        /// </summary>
+        private static double FractionalValueOf(int i) => Math.Sqrt(i + 1);
+
+        private static readonly double UnitRoundoff = Math.ScaleB(1.0, -53);
+
+        /// <summary>
+        /// The bound on how far a left-to-right sum of <paramref name="n"/> positive
+        /// numbers can be from the true sum, as a fraction of it: n u / (1 - n u),
+        /// Higham, <i>Accuracy and Stability of Numerical Algorithms</i>, section 4.2.
+        /// It holds for any order of the terms, so two orders are within twice it of
+        /// each other. One more term than there are is allowed for, so that a
+        /// compensated reference that is itself a rounding off is inside it.
+        /// </summary>
+        private static double RoundingBound(int n)
+        {
+            var nu = (n + 1) * UnitRoundoff;
+            return nu / (1 - nu);
+        }
+
+        /// <summary>
+        /// The reference a sum is held to: compensated, so within a rounding or so of
+        /// the true sum whatever the order.
+        /// </summary>
+        private static double CompensatedSum(IEnumerable<double> values)
+        {
+            double sum = 0, compensation = 0;
+            foreach (var x in values)
+            {
+                var t = sum + x;
+                compensation += Math.Abs(sum) >= Math.Abs(x) ? (sum - t) + x : (x - t) + sum;
+                sum = t;
+            }
+            return sum + compensation;
+        }
+
+        /// <summary>
+        /// Each retained key's summary against the true total of every value its key
+        /// arrived with, within the rounding bound; returns how many were outside it.
+        /// A retained key was below theta at every arrival, since theta only falls, so
+        /// its summary covers its whole stream.
+        /// </summary>
+        private static int SummariesOutsideRounding(
+            TupleSketch sketch, Dictionary<ulong, (int N, double Total)> truth, out string first)
+        {
+            var outside = 0;
+            first = null;
+            var keys = sketch.KeysHeld;
+            var summaries = sketch.SummariesHeld;
+            for (var j = 0; j < keys.Length; j++)
+            {
+                var (n, total) = truth[keys[j]];
+                var error = Math.Abs(summaries[j] - total);
+                if (error > RoundingBound(n) * total)
+                {
+                    outside++;
+                    first ??= $"key {j} of {keys.Length} summed {n} values to {summaries[j]:R}, " +
+                        $"{error:R} from {total:R}, past the {RoundingBound(n) * total:R} " +
+                        "that rounding allows";
+                }
+            }
+            return outside;
+        }
+
+        private static Dictionary<ulong, List<double>> ValuesByKey(
+            TupleSketch like, byte[][] records, Func<int, double> value)
+        {
+            var values = new Dictionary<ulong, List<double>>();
+            for (var i = 0; i < records.Length; i++)
+            {
+                var hash = like.Hash(records[i]);
+                if (!values.TryGetValue(hash, out var list))
+                {
+                    values[hash] = list = new List<double>();
+                }
+                list.Add(value(i));
+            }
+            return values;
+        }
+
+        private static Dictionary<ulong, (int N, double Total)> TruthOf(
+            TupleSketch like, byte[][] records, Func<int, double> value) =>
+            ValuesByKey(like, records, value).ToDictionary(
+                kv => kv.Key, kv => (kv.Value.Count, CompensatedSum(kv.Value)));
+
+        /// <summary>
+        /// Whether the values some key arrives with add up to different bits in
+        /// different orders. Without one the fractional tests are whole-number tests
+        /// in a costume: any order would be exact, and nothing here could tell.
+        /// </summary>
+        private static bool SomeKeyIsOrderSensitive(
+            TupleSketch like, byte[][] records, Func<int, double> value) =>
+            ValuesByKey(like, records, value).Values.Any(list =>
+                list.Aggregate(0.0, (a, x) => a + x)
+                    != Enumerable.Reverse(list).Aggregate(0.0, (a, x) => a + x));
+
+        /// <summary>
+        /// Splits fractional streams at every point, as the continuation tests do, and
+        /// returns how many splits there were, how many went on to different bytes, how
+        /// many summaries were outside rounding of the true total, and the first of
+        /// those. Keys and counts are asserted equal to the unsplit sketch's on the
+        /// way: they are exact whatever the values are.
+        /// </summary>
+        private static (int Splits, int Differ, int Outside, string First) CarryOnWithFractionalSums(
+            uint k, int streams)
+        {
+            var length = FractionalLength(k);
+            int splits = 0, differ = 0, outside = 0;
+            string first = null;
+
+            for (var t = 0; t < streams; t++)
+            {
+                var records = Enumerable.Range(0, length)
+                    .Select(i => FractionalRecord(k, t, i))
+                    .ToArray();
+
+                var unsplit = new TupleSketch(k);
+                for (var i = 0; i < length; i++)
+                {
+                    unsplit.Add(records[i], FractionalValueOf(i));
+                }
+                var expected = unsplit.ToByteArray();
+                var expectedKeys = unsplit.KeysHeld;
+                var truth = TruthOf(unsplit, records, FractionalValueOf);
+
+                Assert.IsTrue(SomeKeyIsOrderSensitive(unsplit, records, FractionalValueOf),
+                    $"k = {k}, stream {t}: no key's values add up differently in a " +
+                    "different order, so this stream cannot tell an exact fold from a " +
+                    "rounded one.");
+
+                var prefix = new TupleSketch(k);
+                for (var split = 0; split < length; split++)
+                {
+                    var carried = Persistence.FromByteArray<TupleSketch>(prefix.ToByteArray());
+                    for (var i = split; i < length; i++)
+                    {
+                        carried.Add(records[i], FractionalValueOf(i));
+                    }
+
+                    splits++;
+                    CollectionAssert.AreEqual(expectedKeys, carried.KeysHeld,
+                        $"k = {k}, stream {t}, split {split}: the keys held are not " +
+                        "values, so whatever the summaries do they must be the same.");
+                    Assert.AreEqual(unsplit.Count(), carried.Count());
+
+                    if (!carried.ToByteArray().AsSpan().SequenceEqual(expected))
+                    {
+                        differ++;
+                    }
+
+                    var bad = SummariesOutsideRounding(carried, truth, out var why);
+                    if (bad > 0)
+                    {
+                        outside += bad;
+                        first ??= $"stream {t} split at record {split}: {why}";
+                    }
+
+                    prefix.Add(records[split], FractionalValueOf(split));
+                }
+            }
+
+            return (splits, differ, outside, first);
+        }
+
+        /// <summary>
+        /// Saving a sketch and carrying on is bit-for-bit invisible with fractional
+        /// summed values too, wherever the buffer is sorted stably.
+        /// </summary>
+        /// <remarks>
+        /// The continuation tests use whole numbers because a sum of them is exact in
+        /// any order, and the sort that gathers a key's values before folding them is
+        /// documented unstable. This is the same comparison with values that are not
+        /// exact. It holds while the buffer is small enough for the runtime's sort to
+        /// treat as one partition (see <see cref="InsertionSortSize"/>): the sort is
+        /// then an insertion sort, a key's values are folded in the order they
+        /// arrived, the earlier arrivals' folded entry sitting ahead of the later
+        /// ones, and that order does not depend on when compactions fire.
+        /// <para>
+        /// It is a fact about the runtime and not a guarantee of the sketch, and the
+        /// sketch's own contract does not lean on it: see
+        /// <see cref="TestFractionalSumsCarryOnToWithinRoundingBeyondTheStableSort"/>.
+        /// If this fails and nothing here changed, look at <c>Array.Sort</c> first.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        [DynamicData(nameof(RetainedSizesWhoseBufferIsSortedStably))]
+        public void TestFractionalSumsCarryOnExactlyWhereTheBufferSortsStably(uint k)
+        {
+            var (splits, differ, outside, first) = CarryOnWithFractionalSums(k, streams: 6);
+
+            Assert.AreEqual(0, outside,
+                $"k = {k}: {outside} summaries were further from the true total than " +
+                $"rounding allows, first {first}.");
+            Assert.AreEqual(0, differ,
+                $"k = {k}: {differ} of {splits} splits went on to different bytes with " +
+                "fractional values. The buffer is small enough to be sorted by insertion, " +
+                "which is stable, so a key's values should fold in arrival order whatever " +
+                "the compactions do; if the runtime's sort has changed, this is where it " +
+                "shows.");
+        }
+
+        /// <summary>
+        /// KNOWN LIMITATION, pinned as it is. Past the sizes where the buffer is
+        /// sorted stably, saving a sketch and carrying on can change the last bits of
+        /// a fractional Sum summary. Keys and counts never change, and every summary
+        /// stays within the rounding of its true total.
+        /// </summary>
+        /// <remarks>
+        /// A buffer of more than <see cref="InsertionSortSize"/> entries is sorted by
+        /// partitioning, which may swap equal keys. When a key has three or more
+        /// entries in the buffer -- its earlier arrivals folded to one, and two or more
+        /// since -- the swap changes the order they are added in, and floating-point
+        /// addition is not associative. Saving writes a compaction into the sketch
+        /// that would not otherwise have happened, which changes which entries share a
+        /// buffer, and with it which keys are swapped: so the bytes of a sketch that
+        /// was saved and continued differ from those of one that was not, in the last
+        /// bits of some summaries and nowhere else.
+        /// <para>
+        /// Nothing is wrong with the totals. Each summary is within the bound for
+        /// summing its values in any order, which is what this holds them to, against
+        /// a compensated sum of the same values. What does not hold is the stronger
+        /// statement the continuation tests make, that a save is invisible, and the
+        /// README's that a key's own summary does not depend on arrival order. Both
+        /// are exact for whole numbers and for Min and Max, and true to within
+        /// rounding for fractional Sum.
+        /// </para>
+        /// <para>
+        /// The guard on <c>differ</c> is the pin: it fails if the bytes stop
+        /// differing, which would mean the fold had been made independent of the
+        /// buffer (a stable sort, or a canonical order) and the sizes here should move
+        /// to <see cref="TestFractionalSumsCarryOnExactlyWhereTheBufferSortsStably"/>.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        [DynamicData(nameof(RetainedSizesWhoseBufferIsNotSortedStably))]
+        public void TestFractionalSumsCarryOnToWithinRoundingBeyondTheStableSort(uint k)
+        {
+            var (splits, differ, outside, first) = CarryOnWithFractionalSums(k, streams: 4);
+
+            Console.WriteLine($"k = {k}: {differ} of {splits} splits went on to different bytes");
+
+            Assert.AreEqual(0, outside,
+                $"k = {k}: {outside} summaries were further from the true total than " +
+                $"rounding allows, first {first}. That is more than a different order " +
+                "of addition can explain.");
+            Assert.IsGreaterThan(0, differ,
+                $"k = {k}: no split went on to different bytes. The limitation this " +
+                "test pins has gone: the fold no longer depends on the buffer. Move " +
+                "this size to the exact test, and the README's statement that a key's " +
+                "own summary does not depend on arrival order can be stated without " +
+                "the qualification about rounding.");
+        }
+
+        private const int OrderKeys = 100;
+        private const int OrderRecords = 3_000;
+
+        private static List<(int Key, double Value)> OrderRecordsWithFractionalValues()
+        {
+            var records = new List<(int, double)>();
+            var random = new Random(4);
+            for (var i = 0; i < OrderRecords; i++)
+            {
+                records.Add((random.Next(OrderKeys), FractionalValueOf(i)));
+            }
+            return records;
+        }
+
+        private static TupleSketch FoldedInOrder(
+            IEnumerable<(int Key, double Value)> records, SummaryPolicy policy)
+        {
+            var sketch = new TupleSketch(4096, policy);
+            foreach (var (key, value) in records)
+            {
+                sketch.Add(Key(key), value);
+            }
+            return sketch;
+        }
+
+        /// <summary>
+        /// A key's summary does not depend on the order its values arrived in, to within
+        /// the rounding of the addition: the same records forwards and backwards give
+        /// the same keys, and every summary within the bound of the true total, but not
+        /// always the same bits.
+        /// </summary>
+        /// <remarks>
+        /// The whole-number version of this test is
+        /// <see cref="TestAKeysSummaryDoesNotDependOnOrder"/>, and it is exact. This
+        /// is the qualification the README's "a key's own summary does not" needs for
+        /// Sum: floating-point addition is not associative, so summing the same
+        /// fractional values in the opposite order is a different calculation, and no
+        /// sort, stable or not, can make it the same one. The guard on the count of
+        /// summaries that differ is the pin, as in
+        /// <see cref="TestFractionalSumsCarryOnToWithinRoundingBeyondTheStableSort"/>.
+        /// </remarks>
+        [TestMethod]
+        public void TestAKeysFractionalSumDependsOnArrivalOrderOnlyThroughRounding()
+        {
+            var records = OrderRecordsWithFractionalValues();
+            var forwards = FoldedInOrder(records, SummaryPolicy.Sum);
+            var backwards = FoldedInOrder(Enumerable.Reverse(records), SummaryPolicy.Sum);
+
+            CollectionAssert.AreEqual(forwards.KeysHeld, backwards.KeysHeld);
+            Assert.AreEqual(OrderKeys, forwards.KeysHeld.Length,
+                "Premise: every key is held, so the sample does not depend on order and " +
+                "the summaries are comparable one for one.");
+
+            var recordsOf = records
+                .Select(r => Key(r.Key))
+                .ToArray();
+            var truth = TruthOf(forwards, recordsOf, i => records[i].Value);
+
+            Assert.AreEqual(0, SummariesOutsideRounding(forwards, truth, out var f), f);
+            Assert.AreEqual(0, SummariesOutsideRounding(backwards, truth, out var b), b);
+
+            var f1 = forwards.SummariesHeld;
+            var b1 = backwards.SummariesHeld;
+            var differing = Enumerable.Range(0, f1.Length).Count(j => f1[j] != b1[j]);
+            Assert.IsGreaterThan(0, differing,
+                "No key's summary differs between the two orders, so this stream cannot " +
+                "tell an order-independent fold from a rounded one -- or the fold is " +
+                "now exact in any order, and the README's claim holds without " +
+                "qualification.");
+        }
+
+        /// <summary>
+        /// Min and Max do not round, so with fractional values a key's summary is
+        /// exactly the same in either order. This is the part of the README's claim
+        /// that holds without qualification, along with whole-number Sum.
+        /// </summary>
+        [TestMethod]
+        [DataRow(SummaryPolicy.Min)]
+        [DataRow(SummaryPolicy.Max)]
+        public void TestAKeysFractionalMinAndMaxDoNotDependOnOrderAtAll(SummaryPolicy policy)
+        {
+            var records = OrderRecordsWithFractionalValues();
+            var forwards = FoldedInOrder(records, policy);
+            var backwards = FoldedInOrder(Enumerable.Reverse(records), policy);
+
+            CollectionAssert.AreEqual(forwards.ToByteArray(), backwards.ToByteArray(),
+                $"{policy} of the same fractional values gave different bytes in the " +
+                "opposite order, but taking a minimum or maximum does not round.");
         }
     }
 }
