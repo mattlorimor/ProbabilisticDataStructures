@@ -313,8 +313,9 @@ namespace ProbabilisticDataStructures
         /// in use when it was written.
         /// </summary>
         /// <exception cref="InvalidDataException">
-        /// The stream does not hold a payload of this format, holds a later version of
-        /// it, holds a different structure, or has been corrupted.
+        /// The stream does not hold a payload of this format, holds a format version
+        /// the structure never defined (a later one included), holds a different
+        /// structure, or has been corrupted.
         /// </exception>
         internal static byte[] Read(Stream stream, StructureId expected, out HashId hash)
         {
@@ -326,8 +327,9 @@ namespace ProbabilisticDataStructures
         /// written at, for structures whose payload layout depends on it.
         /// </summary>
         /// <exception cref="InvalidDataException">
-        /// The stream does not hold a payload of this format, holds a later version of
-        /// it, holds a different structure, or has been corrupted.
+        /// The stream does not hold a payload of this format, holds a format version
+        /// the structure never defined (a later one included), holds a different
+        /// structure, or has been corrupted.
         /// </exception>
         internal static byte[] Read(
             Stream stream, StructureId expected, out HashId hash, out ushort version)
@@ -342,11 +344,13 @@ namespace ProbabilisticDataStructures
             }
 
             version = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(4));
+
+            // Before the structure is compared, as it always was: a version this library
+            // has never heard of may lay the header out differently, and then there is
+            // no structure id to trust.
             if (version == 0 || version > MaxSupportedVersion)
             {
-                throw new InvalidDataException(
-                    $"Payload is format version {version}, and this library reads up to " +
-                    $"version {MaxSupportedVersion}. It was written by a later version.");
+                throw RefuseVersion(expected, version);
             }
 
             var structure = (StructureId)BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(6));
@@ -355,6 +359,14 @@ namespace ProbabilisticDataStructures
                 throw new InvalidDataException(
                     $"Payload holds a {Describe(structure)} and was read as a " +
                     $"{Describe(expected)}.");
+            }
+
+            // After it, because which versions are acceptable depends on which structure
+            // this is. A version some other structure defined is not an older or newer
+            // layout of this one, and reading it as one is a guess.
+            if (!ReadableVersions(expected).Contains(version))
+            {
+                throw RefuseVersion(expected, version);
             }
 
             hash = (HashId)BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(8));
@@ -384,6 +396,27 @@ namespace ProbabilisticDataStructures
             }
 
             return payload;
+        }
+
+        /// <summary>
+        /// The refusal for a format version the structure being read does not define,
+        /// which names the structure, the version it was handed and the versions it
+        /// does read.
+        /// </summary>
+        private static InvalidDataException RefuseVersion(StructureId expected, ushort version)
+        {
+            var reads = DescribeVersions(ReadableVersions(expected));
+
+            var why = version == 0
+                ? "Version 0 is reserved and never written."
+                : version > MaxSupportedVersion
+                    ? "It was written by a later version of this library."
+                    : $"{expected} has never been written at that version, so the " +
+                      "header does not describe a payload this library produced.";
+
+            return new InvalidDataException(
+                $"Payload is format version {version}, and {expected} is read at " +
+                $"{reads}. {why}");
         }
 
         /// <summary>

@@ -286,6 +286,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its beginning is the unpredictable one the filter was given on reading, as before. The
   layout is in [FORMAT.md](FORMAT.md).
 
+- **Every structure now refuses a format version it never defined, and says so.** A
+  payload's version belongs to the structure that wrote it: the stable filter has a
+  version 5 and the Bloom filter has only ever written 1. The readers did not hold to
+  that. They checked one library-wide ceiling, so a `BloomFilter` payload labelled 2, 3,
+  4 or 5 was accepted, and each structure's reader accepted every version up to the
+  highest any structure had defined. FORMAT.md promised a payload is "refused with an
+  explanation" otherwise.
+  <br><br>
+  **What actually happened, measured by relabelling.** A valid payload of every structure,
+  and of each older layout of the three that have them, was given each version from 1
+  to 5 that its structure never wrote, with the checksum repaired so the version was the
+  only difference. Nothing crashed. For every structure except the stable filter, the
+  cuckoo filter and `SetSketch`, no reader looks at the version at all, so the payload
+  was read as exactly the structure it always was, with no complaint: that is most of
+  them. The three that do branch on the version read the layout nearest below the
+  version they were handed, and were refused only when that layout happened not to fit
+  the bytes (a field short or left over, a fingerprint or register out of range), never
+  because of the version, and without saying anything about it. One case fitted: a
+  version 2 cuckoo filter holding nothing, labelled 4 or 5, loaded as a filter with
+  2-bit fingerprints in place of its 16-bit ones, because with no entries the packed
+  layout has nothing to disagree with.
+  <br><br>
+  **Who is affected.** No payload this library wrote, since it never writes a version its
+  structure did not define, and every stored fixture still reads. A payload has to have
+  its header rewritten with the checksum recomputed to carry such a version, or to come
+  from something that is not this library, so the exposure is narrow; it is still a
+  guess where the format promised none.
+  <br><br>
+  Each structure now reads the versions it has defined and no others. The refusal is an
+  `InvalidDataException` that names the structure, the version it was handed and the
+  versions it does read. Version 0 and versions above the highest were already refused;
+  their message changed too, since version 0 used to be described as written by a later
+  version. The versions each structure reads are in one table, which FORMAT.md's table of
+  versions is held to. Adding a version to a structure is one new constant and one more
+  entry in that table, and the highest supported version follows from it.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added
