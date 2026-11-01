@@ -23,6 +23,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recovering everything leaves every field at zero. The stored format does not change.
   (#146)
 
+- **`MementoFilter.TestAndRemove` could remove the only record of a different key**, which
+  then tested absent though it had been added and never removed: a false negative, which
+  a filter must never produce. A box that has lived through an expansion has given up
+  fingerprint bits, so it stands for more blocks than a younger box does, and one removal
+  can match several boxes. The removal took the first match in its run, which is the
+  oldest and shortest, and that could be another key's only record. It now takes the
+  longest matching fingerprint, which is what the Memento paper specifies for deletion.
+  Across the chain of tables the newest is still asked first. That order already took the
+  longest match, because a match remembers its address as well as its fingerprint, and a
+  test now holds it there.
+  <br><br>
+  It is rare at the default parameters, but it does happen. Measured over five
+  deterministic sequences of 3,000,000 adds and removals at each of three key densities,
+  growing a default filter through eight or nine expansions, 6.2.0 lost 39 records and the
+  fix lost none. Some of those keys tested absent at the end, and for the rest a later
+  removal of the key found nothing. Short fingerprints lose far sooner: the two-bit filter
+  in the regression test loses a key after four adds and one removal.
+  <br><br>
+  `MementoFilter` shipped in 6.2.0, so 6.2.0 is affected. The persistence format does not
+  change, and payloads written by 6.2.0 load as before. A filter that has already lost a
+  record this way cannot get it back: the fix prevents further loss and nothing more.
+  (#145)
+
 ## [6.2.0] - 2026-08-19
 
 ### Added
