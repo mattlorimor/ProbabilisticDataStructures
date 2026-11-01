@@ -2,6 +2,7 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Hashing;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -30,6 +31,21 @@ namespace TestProbabilisticDataStructures
     public class TestPersistenceFormatVersions
     {
         private const string FixturePrefix = "TestProbabilisticDataStructures.fixtures.";
+
+        /// <summary>
+        /// The frame with another format version in its header and the checksum
+        /// repaired, so that the only thing wrong with it is the version, and what
+        /// refuses it is the reader's rule about versions and not the CRC.
+        /// </summary>
+        private static byte[] Relabeled(byte[] frame, ushort version)
+        {
+            var bytes = (byte[])frame.Clone();
+            BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(4), version);
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                bytes.AsSpan(bytes.Length - 4),
+                Crc32.HashToUInt32(bytes.AsSpan(4, bytes.Length - 8)));
+            return bytes;
+        }
 
         private static ushort VersionOf(byte[] frame) =>
             BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(4));
@@ -95,6 +111,111 @@ namespace TestProbabilisticDataStructures
                 CollectionAssert.AreEqual(versions, said,
                     $"describing {{{string.Join(", ", versions)}}} named other versions");
             }
+        }
+
+        /// <summary>
+        /// Every structure refuses every version it never defined, for each of: zero,
+        /// each version up to the library's highest, the one after it, and the largest
+        /// a header can hold. Only the version is wrong -- the checksum is repaired --
+        /// so a reader that ignores the version reads the payload, and fails here.
+        /// </summary>
+        /// <remarks>
+        /// The message has to name the structure, the version it was handed and the
+        /// versions it does read. That is what separates this refusal from the layout
+        /// checks further down, which refuse some of these payloads by accident: a
+        /// stable filter labelled 3 is short by a field and dies on its length, which
+        /// would pass a test that only asked for an exception.
+        /// </remarks>
+        [TestMethod]
+        public void TestEveryStructureRefusesEveryVersionItNeverDefined()
+        {
+            var swept = new List<StructureId>();
+            var ceiling = (ushort)(PersistenceFormat.MaxSupportedVersion + 1);
+
+            foreach (var (id, read, clean) in TestPersistenceAllStructures.SamplePayloads())
+            {
+                var readable = PersistenceFormat.ReadableVersions(id);
+                var explanation = PersistenceFormat.DescribeVersions(readable);
+
+                // The payload itself is valid and at a version the structure defines, or
+                // refusing the relabelled copies would prove nothing about them.
+                CollectionAssert.Contains(readable.ToList(), VersionOf(clean),
+                    $"the sample {id} payload is not at a version {id} defines");
+                Assert.IsNotNull(read(clean), $"the sample {id} payload does not read");
+
+                var refusedBetween = 0;
+                var tried = Enumerable.Range(0, ceiling + 1)
+                    .Select(v => (ushort)v)
+                    .Append(ushort.MaxValue)
+                    .Where(v => !readable.Contains(v));
+
+                foreach (var version in tried)
+                {
+                    var ex = Assert.ThrowsExactly<InvalidDataException>(
+                        () => read(Relabeled(clean, version)),
+                        $"{id} read a payload labelled version {version}, which it never defined");
+
+                    StringAssert.Contains(ex.Message, id.ToString(),
+                        $"the refusal of {id} at version {version} does not name the structure");
+                    StringAssert.Contains(ex.Message, $"version {version}",
+                        $"the refusal of {id} at version {version} does not name the version");
+                    StringAssert.Contains(ex.Message, explanation,
+                        $"the refusal of {id} at version {version} does not say which versions it reads");
+
+                    if (version >= 1 && version <= PersistenceFormat.MaxSupportedVersion)
+                    {
+                        refusedBetween++;
+                    }
+                }
+
+                // Zero and the versions above are refused by the library-wide bound as
+                // well, so only the band between them says the per-structure rule
+                // fired. Every structure has a version in it that it never defined.
+                Assert.IsGreaterThan(0, refusedBetween,
+                    $"nothing between 1 and the highest version was refused for {id}, so " +
+                    "this sweep did not exercise the per-structure rule on it");
+
+                swept.Add(id);
+            }
+
+            StructureRoster.AssertCoversEveryStructure("undefined format versions", swept);
+        }
+
+        /// <summary>
+        /// The refusal reaches a structure read from inside another, since a nested
+        /// structure is read by the same code as one on its own.
+        /// </summary>
+        [TestMethod]
+        public void TestANestedStructureAtAnUndefinedVersionIsRefused()
+        {
+            var outer = new ScalableBloomFilter(100, 0.01, 0.8);
+            for (var i = 0; i < 500; i++)
+            {
+                outer.Add(System.Text.Encoding.ASCII.GetBytes($"w{i}"));
+            }
+
+            var bytes = outer.ToByteArray();
+
+            // The first nested envelope begins after f64 r, f64 fp, f64 p, u32 hint, u32
+            // filter count, then the u32 length that precedes it.
+            const int Nested = 14 + 8 + 8 + 8 + 4 + 4 + 4;
+            Assert.IsTrue(bytes.AsSpan(Nested, 4).SequenceEqual(PersistenceFormat.Magic),
+                "the nested envelope is not where this test expects it");
+
+            var inner = bytes.AsSpan(Nested, (int)BinaryPrimitives.ReadUInt32LittleEndian(
+                bytes.AsSpan(Nested - 4))).ToArray();
+            Relabeled(inner, 2).CopyTo(bytes, Nested);
+
+            // The outer checksum covers the nested bytes, so it is repaired too: what is
+            // left wrong is the inner structure's version and nothing else.
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                bytes.AsSpan(bytes.Length - 4),
+                Crc32.HashToUInt32(bytes.AsSpan(4, bytes.Length - 8)));
+
+            var ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<ScalableBloomFilter>(bytes));
+            StringAssert.Contains(ex.Message, nameof(StructureId.PartitionedBloomFilter));
+            StringAssert.Contains(ex.Message, "version 2");
         }
 
         /// <summary>
