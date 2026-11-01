@@ -9,6 +9,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`InvertibleBloomLookupTable.TryDecode` could report success with a wrong answer.** It
+  called a table empty once every count was zero, but two keys on opposite sides that land
+  in the same cells cancel each other's counts while both stay in the key and hash sums.
+  The decode then returned true holding part of the difference, or none of it. In a table
+  sized for eight differences holding four each way, 89 of 5,000 decodes did, every one a
+  partial listing presented as complete; a table sized for two, whose four cells hold
+  every key, reported any difference of one key each way as no difference at all.
+
+  A table is now empty only when every count, key sum and hash sum is zero — the rule
+  Eppstein et al.'s decode uses — so those decodes return false, which is the answer the
+  structure promises when it cannot finish. A decode that was right before is unchanged:
+  recovering everything leaves every field at zero. The stored format does not change.
+  (#146)
+
+- **`MementoFilter.TestAndRemove` could remove the only record of a different key**, which
+  then tested absent though it had been added and never removed: a false negative, which
+  a filter must never produce. A box that has lived through an expansion has given up
+  fingerprint bits, so it stands for more blocks than a younger box does, and one removal
+  can match several boxes. The removal took the first match in its run, which is the
+  oldest and shortest, and that could be another key's only record. It now takes the
+  longest matching fingerprint, which is what the Memento paper specifies for deletion.
+  Across the chain of tables the newest is still asked first. That order already took the
+  longest match, because a match remembers its address as well as its fingerprint, and a
+  test now holds it there.
+  <br><br>
+  It is rare at the default parameters, but it does happen. Measured over five
+  deterministic sequences of 3,000,000 adds and removals at each of three key densities,
+  growing a default filter through eight or nine expansions, 6.2.0 lost 39 records and the
+  fix lost none. Some of those keys tested absent at the end, and for the rest a later
+  removal of the key found nothing. Short fingerprints lose far sooner: the two-bit filter
+  in the regression test loses a key after four adds and one removal.
+  <br><br>
+  `MementoFilter` shipped in 6.2.0, so 6.2.0 is affected. The persistence format does not
+  change, and payloads written by 6.2.0 load as before. A filter that has already lost a
+  record this way cannot get it back: the fix prevents further loss and nothing more.
+  (#145)
+
+- **A `ThetaSketch` or `TupleSketch` read back from storage, or built by `Union`,
+  `Intersect` or `Difference`, now goes on exactly as the sketch it stands for would.**
+  Below a nominal size of 8 it did not. A sketch may hold twice its nominal size before
+  it trims, and while it is being fed it trims only when its buffer fills, but the
+  reader and the set operations gave the rebuilt sketch room for at least sixteen
+  values, so its later trims came at different moments. Fed the same input afterwards, a sketch saved and restored at k = 2 to 7
+  ended on a different estimate from one never saved in roughly a third to four fifths
+  of the streams measured. At k = 1 a restored sketch agreed with an unsaved one in
+  every stream measured but held eight times the buffer it needed, and from k = 8 up
+  estimates and payloads were unaffected. So was any sketch that was read or combined
+  and then given no more input.
+  <br><br>
+  Every path now sizes the buffer by one rule, capped at what the sketch may hold.
+  The payload does not change: the buffer's size was never stored, so every payload
+  already written reads into a sketch that carries on as if it had never been saved.
+  The defect shipped with `ThetaSketch` in 6.0.0 and with `TupleSketch` in 6.2.0. (#147)
+
 - **A `VarOpt` merge no longer writes a sample its own reader refuses.** Merging a sample
   that had begun sampling into an empty one keeping the same number of items fed the
   other's items in one at a time. All of them fit, so the result never started sampling,
