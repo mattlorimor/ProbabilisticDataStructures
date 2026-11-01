@@ -30,6 +30,54 @@ namespace TestProbabilisticDataStructures
         private static string Name(ReadOnlyMemory<byte> data) =>
             Encoding.ASCII.GetString(data.Span);
 
+        private static VarOpt RoundTrip(VarOpt sample) =>
+            VarOpt.ReadFrom(new MemoryStream(sample.ToByteArray()));
+
+        /// <summary>
+        /// A fixed scatter of (trial, index), for choosing weights: the same pair gives
+        /// the same number on every run and every platform, and neighbouring pairs give
+        /// unrelated ones.
+        /// </summary>
+        private static ulong Scatter(int trial, int index)
+        {
+            var z = ((ulong)trial * 0x9E3779B97F4A7C15UL) ^
+                ((ulong)(index + 1) * 0xBF58476D1CE4E5B9UL);
+            z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL;
+            z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL;
+            return z ^ (z >> 31);
+        }
+
+        /// <summary>
+        /// Whether the items held at their own weights are in min-heap order, which
+        /// the exact phase does not keep and the sampling phase does.
+        /// </summary>
+        private static bool HeldInHeapOrder(VarOpt sample)
+        {
+            for (var i = 1; i < sample.HeavyCount; i++)
+            {
+                if (sample.HeavyWeights[(i - 1) / 2] > sample.HeavyWeights[i])
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// The weight streams the persistence tests below run. Unit weights are the
+        /// case where re-ordering tied items can change nothing, because every item is
+        /// tied with every other; distinct weights the case where nothing is tied at
+        /// all. Only the mixed, tied streams between them can tell two orders of the
+        /// same items apart by what gets sampled.
+        /// </summary>
+        private static readonly (string Name, Func<int, int, double> Weight)[] WeightStreams =
+        {
+            ("unit weights", (t, i) => 1.0),
+            ("distinct weights", (t, i) => 0.5 + ((Scatter(t, i) % 1000000) / 100000.0) + (i * 1e-9)),
+            ("weights tied among 1, 2 and 3", (t, i) => 1.0 + (Scatter(t, i) % 3)),
+            ("weight 1 tied, one in four at 100", (t, i) => Scatter(t, i) % 4 == 0 ? 100.0 : 1.0),
+        };
+
         /// <summary>
         /// A sample that keeps nothing answers nothing.
         /// </summary>
@@ -706,6 +754,169 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A sample that has begun sampling, merged into an empty one keeping the same
+        /// number of items, fits with no room to spare -- and the result is that
+        /// sample, threshold and all. The full version of the paper (arXiv:0803.0473v2,
+        /// section 3, Lemma 4, checked 2026-11-01) treats exactly this case: when the
+        /// inner samples together hold at most k items while the inputs held more, "m =
+        /// 1, x = 1, and k_1 = k ... The resulting sample is then identical to that of
+        /// the single inner subcall on I_1". Its items stand in for the ones it
+        /// dropped, so the result is sampling too.
+        /// </summary>
+        /// <remarks>
+        /// Through 6.2.0 the items were fed one at a time into the room the empty
+        /// sample had, so the threshold items arrived as exact ones and the result
+        /// claimed to be exact while counting more items than it held. Apache
+        /// DataSketches calls the same state "pseudo-exact" and resolves it the same
+        /// way: the items that were sampled are moved into the result's reservoir.
+        /// </remarks>
+        [TestMethod]
+        public void TestMergingASampledInputIntoAnEmptySampleGivesThatSample()
+        {
+            var sampled = new VarOpt(8, seed: 107);
+            sampled.Add(Key("whale"), 100.0);
+            for (var i = 0; i < 40; i++)
+            {
+                sampled.Add(Key($"flow-{i}"), 0.5 + ((i % 7) * 0.25));
+            }
+            Assert.IsTrue(sampled.HeavyCount > 0 && sampled.LightCount > 0,
+                "Premise: the input holds items in both regions, so a result that " +
+                "mixed them up, or put everything in one, is visible below.");
+
+            var merged = new VarOpt(8, seed: 109).Merge(sampled);
+
+            Assert.AreEqual(sampled.N, merged.N);
+            Assert.AreEqual(sampled.LightCount, merged.LightCount,
+                "The input's threshold items stand in for items it dropped, so they " +
+                "are threshold items in the result too, not exact ones.");
+            Assert.AreEqual(sampled.HeavyCount, merged.HeavyCount);
+            Assert.AreEqual(
+                BitConverter.DoubleToInt64Bits(sampled.Tau),
+                BitConverter.DoubleToInt64Bits(merged.Tau),
+                "The result's threshold is the input's, exactly.");
+            Assert.AreEqual(
+                BitConverter.DoubleToInt64Bits(sampled.TotalWeight),
+                BitConverter.DoubleToInt64Bits(merged.TotalWeight),
+                "The total is the one number this structure promises exactly.");
+            CollectionAssert.AreEqual(
+                sampled.Samples().Select(e => $"{Name(e.Data)}@{e.Weight:R}").ToArray(),
+                merged.Samples().Select(e => $"{Name(e.Data)}@{e.Weight:R}").ToArray(),
+                "Lemma 4: the resulting sample is identical to the input's.");
+        }
+
+        /// <summary>
+        /// Whatever a merge is given, it leaves a state its own reader accepts, holding
+        /// exactly min(k, n) items -- the paper's property (ii) -- and sampling exactly
+        /// when it has seen more than it keeps: the threshold is zero for k at least n
+        /// and positive otherwise (equation 3 and the sentence after it). Every
+        /// combination of empty, part-filled, full and sampling on each side is tried,
+        /// across an input keeping fewer, the same and more items than the result,
+        /// together with every state merged into itself.
+        /// </summary>
+        [TestMethod]
+        public void TestEveryMergeLeavesAStateItsReaderAccepts()
+        {
+            const uint k = 6;
+
+            static VarOpt Build(uint keep, int count, ulong seed)
+            {
+                var sample = new VarOpt(keep, seed);
+                for (var i = 0; i < count; i++)
+                {
+                    sample.Add(Key($"s{seed}-{i}"), i == 0 ? 50.0 : 1.0 + (i % 3));
+                }
+                return sample;
+            }
+
+            static int[] States(uint keep) => new[] { 0, (int)(keep / 2), (int)keep, (int)(3 * keep) };
+
+            // Every combination is checked before anything is asserted, so a failure
+            // names all the merges that went wrong rather than the first.
+            var problems = new List<string>();
+            void Check(VarOpt merged, string described)
+            {
+                if ((merged.N > k) != (merged.Tau > 0.0))
+                {
+                    problems.Add($"{described}: seen {merged.N} and kept {k}, yet " +
+                        $"{(merged.Tau > 0.0 ? "sampling" : "not sampling")}");
+                }
+                if (merged.SampleCount != Math.Min(k, merged.N))
+                {
+                    problems.Add($"{described}: holds {merged.SampleCount} items, not " +
+                        "min(k, n)");
+                }
+                try
+                {
+                    if (!merged.ToByteArray().SequenceEqual(RoundTrip(merged).ToByteArray()))
+                    {
+                        problems.Add($"{described}: reading back changed the bytes");
+                    }
+                }
+                catch (InvalidDataException e)
+                {
+                    problems.Add($"{described}: the reader refuses what the merge " +
+                        $"wrote -- {e.Message}");
+                }
+            }
+
+            var merges = 0;
+            foreach (var mine in States(k))
+            {
+                foreach (var otherK in new[] { k / 2, k, 2 * k })
+                {
+                    foreach (var theirs in States(otherK))
+                    {
+                        var described = $"{mine} items into k = {k}, merged with " +
+                            $"{theirs} items at k = {otherK}";
+                        var result = Build(k, mine, 1);
+                        var other = Build(otherK, theirs, 2);
+                        if (other.Tau > 0.0 && otherK < k)
+                        {
+                            Assert.ThrowsExactly<ArgumentException>(() => result.Merge(other),
+                                $"{described}: the direction the recurrence forbids.");
+                            continue;
+                        }
+
+                        Check(result.Merge(other), described);
+                        merges++;
+                    }
+                }
+
+                var self = Build(k, mine, 3);
+                Check(self.Merge(self), $"{mine} items into k = {k}, merged with itself");
+                merges++;
+            }
+
+            Assert.IsTrue(merges > 0, "Premise: some merges were allowed and checked.");
+            Assert.AreEqual(0, problems.Count, string.Join("\n", problems));
+        }
+
+        /// <summary>
+        /// The result of merging a sampled input is itself sampled, so the merge rule
+        /// applies to it in turn: it cannot be merged into a sample keeping more items.
+        /// Through 6.2.0 the result of a merge into an empty sample claimed to be
+        /// exact, so this refusal never saw it, and its threshold items went on to be
+        /// held as exact ones in a sample with room for all of them.
+        /// </summary>
+        [TestMethod]
+        public void TestASampleMergedFromASampledInputCannotThenBeMergedIntoALargerOne()
+        {
+            var sampled = new VarOpt(8, seed: 113);
+            for (var i = 0; i < 9; i++)
+            {
+                sampled.Add(Key($"item{i}"));
+            }
+            Assert.IsTrue(sampled.Tau > 0.0, "Premise: the input has begun sampling.");
+
+            var merged = new VarOpt(8, seed: 127).Merge(sampled);
+
+            Assert.ThrowsExactly<ArgumentException>(
+                () => new VarOpt(16, seed: 131).Merge(merged),
+                "The merged sample holds items chosen by chance; a sample with room " +
+                "for twice as many would report them as exact.");
+        }
+
+        /// <summary>
         /// The generator's position is part of the state. A sample written and read
         /// back continues its sequence; one that restarted would make the same drop
         /// decisions after every load, and a sample checkpointed on a schedule would
@@ -756,6 +967,146 @@ namespace TestProbabilisticDataStructures
             CollectionAssert.AreEqual(
                 sample.Samples().Select(s => Name(s.Data)).OrderBy(n => n).ToArray(),
                 restored.Samples().Select(s => Name(s.Data)).OrderBy(n => n).ToArray());
+        }
+
+        /// <summary>
+        /// Write, read and write again gives the same bytes at every length, before
+        /// sampling begins as well as after. The two phases hold their exact items
+        /// differently: once sampling, as a heap; before it, in the order they arrived,
+        /// which is the order the transition heaps them from. A reader that re-heaped
+        /// the exact phase changed that order -- two items added as weight 2 then
+        /// weight 1 came back the other way round.
+        /// </summary>
+        [TestMethod]
+        public void TestWriteReadWriteIsByteStableInBothPhases()
+        {
+            var pair = new VarOpt(8, seed: 1).Add(Key("a"), 2.0).Add(Key("b"), 1.0);
+            CollectionAssert.AreEqual(pair.ToByteArray(), RoundTrip(pair).ToByteArray(),
+                "Two exact items, heavier first: the smallest case that is not a heap.");
+
+            var exactOutOfOrder = 0;
+            var sampling = 0;
+            foreach (var k in new uint[] { 4, 8 })
+            {
+                foreach (var (name, weight) in WeightStreams)
+                {
+                    for (var t = 0; t < 10; t++)
+                    {
+                        var sample = new VarOpt(k, seed: (ulong)(t + 1));
+                        for (var i = 0; i < 3 * k; i++)
+                        {
+                            sample.Add(Key($"t{t}-item-{i}"), weight(t, i));
+                            if (sample.LightCount == 0 && !HeldInHeapOrder(sample))
+                            {
+                                exactOutOfOrder++;
+                            }
+                            if (sample.LightCount > 0)
+                            {
+                                sampling++;
+                            }
+
+                            var written = sample.ToByteArray();
+                            CollectionAssert.AreEqual(written,
+                                VarOpt.ReadFrom(new MemoryStream(written)).ToByteArray(),
+                                $"k = {k}, {name}, trial {t}, after {i + 1} items " +
+                                $"({(sample.LightCount == 0 ? "exact" : "sampling")}): " +
+                                "reading back changed what is written.");
+                        }
+                    }
+                }
+            }
+
+            Assert.IsTrue(exactOutOfOrder > 0,
+                "Premise: some exact-phase states held their items out of heap order, " +
+                "the only ones a re-heaping reader would change.");
+            Assert.IsTrue(sampling > 0, "Premise: the sampling phase was reached too.");
+        }
+
+        /// <summary>
+        /// A sample saved partway through its stream and read back goes on exactly as
+        /// a twin that was never saved: same bytes after every later item. This is
+        /// what persistence promises a sample checkpointed on a schedule. Saves are
+        /// taken at every point through the exact phase, the transition and into
+        /// sampling, against each of the weight streams above.
+        /// </summary>
+        /// <remarks>
+        /// Through 6.2.0 the reader re-heaped the exact phase, which changed which of
+        /// two tied items the transition to sampling met first, and so which one a
+        /// later drop removed. It never mattered for unit weights, whose re-heap is a
+        /// no-op because every item ties with every other, and never changed what was
+        /// sampled for distinct weights, whose heap order is decided by weight alone --
+        /// only the order the arrays held it in. Mixed weights with ties are where the
+        /// sample itself diverged.
+        /// </remarks>
+        [TestMethod]
+        public void TestASampleSavedMidStreamGoesOnExactlyAsOneNeverSaved()
+        {
+            const int trials = 40;
+            var failures = new List<string>();
+            var exactOutOfOrderSaves = 0;
+
+            foreach (var k in new uint[] { 4, 8 })
+            {
+                foreach (var (name, weight) in WeightStreams)
+                {
+                    var sampledDifferently = 0;
+                    var heldDifferently = 0;
+                    for (var t = 0; t < trials; t++)
+                    {
+                        for (var save = 1; save <= 2 * k; save++)
+                        {
+                            var never = new VarOpt(k, seed: (ulong)(t + 1));
+                            var saved = new VarOpt(k, seed: (ulong)(t + 1));
+                            for (var i = 0; i < save; i++)
+                            {
+                                never.Add(Key($"t{t}-item-{i}"), weight(t, i));
+                                saved.Add(Key($"t{t}-item-{i}"), weight(t, i));
+                            }
+                            if (saved.LightCount == 0 && !HeldInHeapOrder(saved))
+                            {
+                                exactOutOfOrderSaves++;
+                            }
+                            saved = RoundTrip(saved);
+
+                            var differentItems = false;
+                            var differentBytes = false;
+                            for (var i = save; i < 4 * k; i++)
+                            {
+                                never.Add(Key($"t{t}-item-{i}"), weight(t, i));
+                                saved.Add(Key($"t{t}-item-{i}"), weight(t, i));
+                                differentBytes |= !never.ToByteArray()
+                                    .SequenceEqual(saved.ToByteArray());
+                                differentItems |= !never.Samples().Select(e => Name(e.Data))
+                                    .OrderBy(n => n, StringComparer.Ordinal)
+                                    .SequenceEqual(saved.Samples().Select(e => Name(e.Data))
+                                        .OrderBy(n => n, StringComparer.Ordinal));
+                            }
+                            if (differentItems)
+                            {
+                                sampledDifferently++;
+                            }
+                            else if (differentBytes)
+                            {
+                                heldDifferently++;
+                            }
+                        }
+                    }
+
+                    if (sampledDifferently + heldDifferently > 0)
+                    {
+                        failures.Add($"k = {k}, {name}: of {trials * 2 * k} saves, " +
+                            $"{sampledDifferently} went on to sample different items " +
+                            $"and {heldDifferently} more the same items held differently");
+                    }
+                }
+            }
+
+            Assert.IsTrue(exactOutOfOrderSaves > 0,
+                "Premise: some saves were taken in the exact phase with the items out " +
+                "of heap order, the only saves a re-heaping reader changes.");
+            Assert.AreEqual(0, failures.Count,
+                "A restored sample diverged from its never-saved twin. " +
+                string.Join("; ", failures));
         }
 
         /// <summary>

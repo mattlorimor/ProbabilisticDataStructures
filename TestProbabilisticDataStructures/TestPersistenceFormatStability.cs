@@ -563,6 +563,58 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(150.0, byName["flow-10"], 0.0);
         }
 
+        /// <summary>
+        /// A VarOpt sample that 6.2.0 wrote before it had begun sampling: six items
+        /// with weights 3, 1, 2, 1, 3 and 2, held in the order they arrived, which is
+        /// not a heap. The transition to sampling heaps them from that order, so the
+        /// reader restores it as written rather than re-heaping it -- the 6.2.0 reader
+        /// re-heaped it, and both the bytes and what was later sampled could change.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredExactVarOptStillReadsInArrivalOrder()
+        {
+            var stored = ReadFixture("varopt-exact-v1.bin");
+            var sample = VarOpt.ReadFrom(new MemoryStream(stored));
+
+            Assert.AreEqual(6UL, sample.N);
+            Assert.AreEqual(6u, sample.SampleCount);
+            Assert.AreEqual(12.0, sample.TotalWeight, 0.0);
+            CollectionAssert.AreEqual(stored, sample.ToByteArray(),
+                "the stored exact sample did not come back as it was written");
+
+            // And it goes on as a sample that was never written out. The exact phase
+            // draws nothing, so the same seed and the same six items rebuild the
+            // state 6.2.0 saved, and the two must agree item by item from there.
+            var neverSaved = ExactVarOpt();
+            for (var i = 0; i < 30; i++)
+            {
+                var weight = 1.0 + (i % 3);
+                sample.Add(Key($"later-{i}"), weight);
+                neverSaved.Add(Key($"later-{i}"), weight);
+                CollectionAssert.AreEqual(neverSaved.ToByteArray(), sample.ToByteArray(),
+                    $"the stored sample diverged from one never written, {i + 1} items on");
+            }
+        }
+
+        /// <summary>
+        /// 6.2.0 could write a VarOpt payload its own reader refused: a sample that had
+        /// begun sampling, merged into an empty one keeping the same number of items,
+        /// was recorded as an exact sample of eight items that had seen twelve. The
+        /// payload does not say which of its items stood in for dropped ones, so it
+        /// cannot be restored without guessing -- the input it came from even held an
+        /// item at exactly the threshold weight. It is refused, and the refusal says
+        /// where the payload came from.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredVarOptFromA620MergeIsRefusedWithItsCause()
+        {
+            var ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => VarOpt.ReadFrom(Fixture("varopt-badmerge-v1.bin")));
+
+            StringAssert.Contains(ex.Message, "6.2.0",
+                "a refusal of a payload this library wrote should say why it exists");
+        }
+
         [TestMethod]
         public void TestStoredSimHashSignatureStillReads()
         {
@@ -906,6 +958,7 @@ namespace TestProbabilisticDataStructures
             varopt.Add(Key("kraken"), 250.0);
 
             AssertBytes("varopt-v1.bin", varopt.ToByteArray());
+            AssertBytes("varopt-exact-v1.bin", ExactVarOpt().ToByteArray());
 
             var iblt = new InvertibleBloomLookupTable(10, 8);
             for (var i = 0; i < 6; i++)
@@ -993,6 +1046,8 @@ namespace TestProbabilisticDataStructures
                 ("bloomierfilter-v1.bin", 22, 1),
                 ("heavykeeper-v1.bin", 23, 1),
                 ("varopt-v1.bin", 24, 1),
+                ("varopt-exact-v1.bin", 24, 1),
+                ("varopt-badmerge-v1.bin", 24, 1),
                 ("ultraloglog-v1.bin", 25, 1),
                 ("grafite-v1.bin", 26, 1),
                 ("infinifilter-v1.bin", 27, 1),
@@ -1016,6 +1071,20 @@ namespace TestProbabilisticDataStructures
                 "an unchanged structure started writing a later format version");
             Assert.AreEqual(2, new StableBloomFilter(100, 2, 0.01).ToByteArray()[4],
                 "the stable filter is not writing the version its layout needs");
+        }
+
+        /// <summary>
+        /// The sample stored as varopt-exact-v1.bin, built the way 6.2.0 built it.
+        /// </summary>
+        private static VarOpt ExactVarOpt()
+        {
+            var sample = new VarOpt(8, seed: 148);
+            var weights = new[] { 3.0, 1.0, 2.0, 1.0, 3.0, 2.0 };
+            for (var i = 0; i < weights.Length; i++)
+            {
+                sample.Add(Key($"early-{i}"), weights[i]);
+            }
+            return sample;
         }
 
         private static void AssertAllPresent(Func<byte[], bool> test)

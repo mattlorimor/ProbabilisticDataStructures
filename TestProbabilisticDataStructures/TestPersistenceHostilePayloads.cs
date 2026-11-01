@@ -564,6 +564,27 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// An exact sample holds everything it has seen, so one holding more items
+        /// than it claims to have seen describes items that were never added. It is
+        /// told apart from the opposite case -- fewer held than seen, which a 6.2.0
+        /// merge could write and which a stored fixture pins -- because only that one
+        /// has a history worth explaining.
+        /// </summary>
+        [TestMethod]
+        public void TestExactVarOptHoldingMoreThanItHasSeenIsRefused()
+        {
+            var sample = new VarOpt(5, seed: 7);
+            for (var i = 0; i < 4; i++)
+            {
+                sample.Add(Key($"item-{i}"), 1.0 + i);
+            }
+            var bytes = PokeUInt64(sample.ToByteArray(), 12, 2);
+            AssertRefused(
+                () => Persistence.FromByteArray<VarOpt>(bytes),
+                "more than it has seen");
+        }
+
+        /// <summary>
         /// A HeavyKeeper payload for the tests below to corrupt: k = 5, two arrays of
         /// sixteen buckets. Its payload layout is fixed, so field offsets are too:
         /// k at 0, width at 4, depth at 8, decay at 12, and -- after the 36-byte
