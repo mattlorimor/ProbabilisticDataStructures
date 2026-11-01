@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -15,13 +16,14 @@ namespace TestProbabilisticDataStructures
     /// question. Most of the defects this family has shipped needed a particular
     /// sequence instead: counts that survived a Reset, a scalable filter's Reset that
     /// dropped its hash, removals that hid elements still present, a restored stable
-    /// filter that restarted its random sequence. And one defect is live as this is
-    /// written: <c>Buckets.Reset()</c> can allocate a different length than the
-    /// constructor does without failing a single test, because no test resets a
-    /// filter and then saves, loads or merges it.
+    /// filter that restarted its random sequence. And one gap the suite had until this
+    /// file: <c>Buckets.Reset()</c> sizes its storage on its own, apart from the
+    /// constructor, and an error there fails no test that reads buckets
+    /// <c>0..count-1</c>, because nothing reset a filter and then saved, loaded or
+    /// merged it.
     /// </para>
     /// <para>
-    /// Three oracles, each exact:
+    /// The oracles, each exact:
     /// </para>
     /// <list type="bullet">
     /// <item><b>The twin.</b> A second instance is given the sequence's canonical
@@ -45,6 +47,18 @@ namespace TestProbabilisticDataStructures
     /// hashing <c>"{structure}/t{t}/s{s}"</c>, so every failure names the step it
     /// happened at and reproduces from that name alone. No generator is shared across
     /// steps. Every run is a fixed number of steps; nothing here reads a clock.
+    /// </para>
+    /// <para>
+    /// What this does not anchor. The models restate the index rule and the papers as
+    /// this repository's author read them, so a misreading would be shared; no
+    /// reference outside the repository stands behind them. The twin calls the same
+    /// <c>Add</c> as the subject, so a defect in <c>Add</c> itself is left to the
+    /// per-structure tests for the filters whose state it alone determines. Scalable
+    /// growth has no model, only the twin and the no-false-negative promise, and the
+    /// stable filter has no oracle for its answers, since it evicts. Whether the
+    /// stable filter's <c>Reset</c> should also reseed its generator is a design
+    /// question; the twin is reset the same way the subject is, so these tests hold
+    /// whichever way it is decided.
     /// </para>
     /// </summary>
     [TestClass]
@@ -414,9 +428,42 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// A spec runs exactly the operations its type offers. Derived from the public
+        /// surface by reflection, so a structure that gains one fails here until its
+        /// spec runs it, and a spec cannot quietly stop running one it still has.
+        /// </summary>
+        private static void AssertSpecRunsWhatTheTypeOffers<T>(Spec<T> spec)
+            where T : class, IFilter, IBinaryPersistable<T>
+        {
+            var offered = typeof(T).GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .Select(m => m.Name)
+                .ToHashSet(StringComparer.Ordinal);
+
+            foreach (var (name, runs) in new[]
+            {
+                ("Reset", spec.Reset is not null),
+                ("Merge", spec.Merge is not null),
+                ("TestAndRemove", spec.TestAndRemove is not null),
+            })
+            {
+                Assert.AreEqual(offered.Contains(name), runs,
+                    offered.Contains(name)
+                        ? $"{typeof(T).Name} offers {name} and its sequence spec does not run it."
+                        : $"{typeof(T).Name} has no {name} and its sequence spec runs one.");
+            }
+
+            // The only removal the sequences know how to run is TestAndRemove.
+            Assert.IsFalse(offered.Contains("Remove"),
+                $"{typeof(T).Name} offers Remove, which no sequence runs. Teach the " +
+                "schedule about it.");
+        }
+
         private static Tally RunAll<T>(Spec<T> spec, string config)
             where T : class, IFilter, IBinaryPersistable<T>
         {
+            AssertSpecRunsWhatTheTypeOffers(spec);
+
             var tally = new Tally();
             for (int t = 0; t < Trials; t++)
             {
@@ -624,12 +671,13 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The counting filter at three widths. Four bits never saturate at this load,
-        /// so every removal is an exact inverse; two bits saturate constantly, so the
-        /// rule that a full counter is never decremented is exercised under churn,
-        /// merge and reload; eight bits are the only width where a merge's sum can
-        /// pass the byte a counter is cast to, which takes two counters (n = 1, k = 1)
-        /// and merge partners of hundreds of adds to reach between resets.
+        /// The counting filter at the widths that behave differently. Four bits never
+        /// saturate at this load, so every removal is an exact inverse; two bits
+        /// saturate constantly, so the rule that a full counter is never decremented is
+        /// exercised under churn, merge and reload; eight bits are the only width where
+        /// a merge's sum can pass the byte a counter is cast to, which takes the
+        /// smallest table (n = 1, k = 1) and merge partners of hundreds of adds to
+        /// reach between resets.
         /// </summary>
         [TestMethod]
         public void TestCountingBloomFilterSequencesMatchTheirModel()
