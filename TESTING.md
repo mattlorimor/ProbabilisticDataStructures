@@ -364,11 +364,11 @@ thousand mutants, and the output needs human adjudication anyway. It is a period
 audit for files whose tests have not been through the loop above, not a gate.
 
 Scoping trims the mutants, not the coverage pass that comes first. That pass runs the
-whole suite serially with every mutation point in the library instrumented, whichever
-file `--mutate` names, so its cost is set by the heaviest tests anywhere. On the frozen
-tree below, a Buckets.cs sweep took twelve minutes end to end. On the current suite
-the Memento tests dominate the pass: one that takes eight seconds normally took
-sixteen minutes under it, though the Memento filter never touches `Buckets`.
+whole suite serially under Stryker's instrumentation, and code outside the scope slows
+with it, so its cost is set by the heaviest tests anywhere. On the frozen tree below, a
+Buckets.cs sweep took twelve minutes end to end. On the current suite the Memento tests
+dominate the pass: one that takes eight seconds normally took sixteen minutes under it,
+though the Memento filter never touches `Buckets`.
 
 **Before 5.0.0, Stryker and this suite's parallelism did not mix.** The test assembly
 declares `[assembly: Parallelize(Scope = ExecutionScope.MethodLevel)]`, and Stryker
