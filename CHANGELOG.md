@@ -276,7 +276,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generator had got to. **`StableBloomFilter` therefore writes a new format version**,
   which adds that starting state as one more field, so a release before this one cannot
   read a stable filter written by this one — the compatibility this library promises runs
-  backwards, not forwards. Every other structure writes the version it always did.
+  backwards, not forwards. `CuckooBloomFilter` makes the same change, next, and every
+  other structure writes the version it always did.
   <br><br>
   Payloads written by earlier versions still read, and nothing in them changes. They hold
   no starting state to go back to, and the seed is not in them, so a filter read from one
@@ -285,6 +286,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reached since. A payload written before 6.0.0 holds no generator position at all, so
   its beginning is the unpredictable one the filter was given on reading, as before. The
   layout is in [FORMAT.md](FORMAT.md).
+
+- **`CuckooBloomFilter.Reset` now puts the random generator back where it began.** It had
+  the same gap `StableBloomFilter.Reset` had, with the same documentation promising the
+  filter's original state: the entries cleared and the generator stayed wherever the adds
+  had left it. A reset filter differed from a new one with the same seed in the generator
+  state stored in its payload, and chose different entries to evict from then on, so the
+  stream that took a filter to some state did not take its reset self to the same state.
+  (#144)
+  <br><br>
+  **A reset filter now repeats its original random sequence.** For a seeded filter that
+  is the sequence its seed gives. For one built without a seed it is the unpredictable
+  sequence it was built with, so resetting it again repeats that sequence rather than
+  drawing a new one; build a new filter for fresh randomness. This holds for a filter that
+  was saved and loaded in between.
+  <br><br>
+  The payload held only where the generator had got to, so **`CuckooBloomFilter` writes a
+  new format version too**: it adds the starting state as one more field, and a release
+  before this one cannot read a cuckoo filter written by this one — the compatibility this
+  library promises runs backwards, not forwards. Every structure but the stable and cuckoo
+  filters writes the version it always did.
+  <br><br>
+  Payloads written by earlier versions still read, in every format version the cuckoo
+  filter has written, and nothing in them changes. As for the stable filter, a filter read
+  from one takes the generator position it was read at as its beginning: `Reset` returns
+  it there, emptied, and writing it out again records that same point rather than the one
+  it has reached since. A payload written before 6.0.0 holds no generator position at all,
+  so its beginning is the unpredictable one the filter was given on reading, as before.
+  The layout is in [FORMAT.md](FORMAT.md), whose cuckoo section had also still described
+  fingerprints written as whole bytes, which stopped being true when 6.1.0 packed them at
+  their exact bit width; it now describes every version the reader accepts.
 
 ## [6.2.0] - 2026-08-19
 

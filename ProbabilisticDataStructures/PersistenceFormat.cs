@@ -119,7 +119,7 @@ namespace ProbabilisticDataStructures
         /// The highest format version this library can read. Readers refuse anything
         /// above it, since a later version may mean the payload differently.
         /// </summary>
-        internal const ushort MaxSupportedVersion = 5;
+        internal const ushort MaxSupportedVersion = 6;
 
         /// <summary>
         /// The version a payload is written at unless its structure asks for another.
@@ -170,6 +170,14 @@ namespace ProbabilisticDataStructures
         /// the same filter they always were.
         /// </summary>
         internal const ushort CuckooPackedVersion = 3;
+
+        /// <summary>
+        /// The version at which <see cref="CuckooBloomFilter"/> also stores where its
+        /// random generator began, so that <see cref="CuckooBloomFilter.Reset"/> can
+        /// return it there after a save and a load. Earlier payloads hold only the
+        /// position the generator had reached, which cannot say where it started.
+        /// </summary>
+        internal const ushort CuckooOriginalStateVersion = 6;
 
         private const int MagicLength = 4;
         private const int HeaderLength = 14;
