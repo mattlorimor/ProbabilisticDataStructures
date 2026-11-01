@@ -50,8 +50,13 @@ namespace ProbabilisticDataStructures
 
         private int held;
 
-        /// <summary>Whether the values are sorted, distinct, and their summaries folded.</summary>
-        private bool compact = true;
+        /// <summary>
+        /// How many of the leading values are what the last compaction left: ascending,
+        /// distinct, their summaries folded. Whatever follows them is arrivals, in the
+        /// order they came, which is the order <see cref="Compact"/> folds a key's
+        /// values in. The sketch is compact when that is all of them.
+        /// </summary>
+        private int ordered;
 
         /// <summary>
         /// The threshold below which a hash is kept, and so also the sampling rate.
@@ -167,7 +172,6 @@ namespace ProbabilisticDataStructures
             this.values[this.held] = hash;
             this.summaries[this.held] = value;
             this.held++;
-            this.compact = false;
 
             return this;
         }
@@ -442,7 +446,7 @@ namespace ProbabilisticDataStructures
 
         private void EnsureCompact()
         {
-            if (!this.compact)
+            if (this.ordered != this.held)
             {
                 this.Compact();
             }
@@ -456,10 +460,19 @@ namespace ProbabilisticDataStructures
         /// drops a repeated hash, because one is as good as another; here the repeats
         /// carry values that have to be folded together, and dropping one would lose an
         /// amount rather than a duplicate.
+        /// <para>
+        /// The order a key's values are folded in is part of the answer, because
+        /// floating-point addition is not associative, so the sort is stable: the entry
+        /// an earlier compaction left for the key goes first, then its later arrivals in
+        /// the order they came. That makes a key's summary the left-to-right fold of
+        /// everything it was ever given, wherever the compactions fell between them. A
+        /// sketch that is saved, or combined with an empty one, compacts at moments an
+        /// unsaved one would not, and ends on the same bits all the same.
+        /// </para>
         /// </remarks>
         private void Compact()
         {
-            Array.Sort(this.values, this.summaries, 0, this.held);
+            StableSort.Sort(this.values, this.summaries, this.ordered, this.held);
 
             var distinct = 0;
             for (var i = 0; i < this.held; i++)
@@ -477,7 +490,6 @@ namespace ProbabilisticDataStructures
             }
 
             this.held = distinct;
-            this.compact = true;
 
             if (distinct >= this.Limit)
             {
@@ -485,8 +497,11 @@ namespace ProbabilisticDataStructures
                 // below it and the sampling rate is exactly what was applied.
                 this.theta = this.values[this.nominalEntries];
                 this.held = (int)this.nominalEntries;
+                this.ordered = this.held;
                 return;
             }
+
+            this.ordered = distinct;
 
             if (distinct > this.values.Length / 2 && this.values.Length < this.Limit)
             {
@@ -521,7 +536,7 @@ namespace ProbabilisticDataStructures
             Array.Copy(keys, sketch.values, count);
             Array.Copy(folded, sketch.summaries, count);
             sketch.held = count;
-            sketch.compact = true;
+            sketch.ordered = count;
 
             return sketch;
         }
@@ -668,7 +683,7 @@ namespace ProbabilisticDataStructures
             reader.ExpectEnd();
 
             sketch.held = (int)held;
-            sketch.compact = true;
+            sketch.ordered = sketch.held;
             return sketch;
         }
     }

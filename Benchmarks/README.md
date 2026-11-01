@@ -27,6 +27,7 @@ Results are written to `BenchmarkDotNet.Artifacts/` (git-ignored).
 | `HashKernelBenchmarks` | `Utils.HashKernel` / `HashKernel128` in isolation, across input sizes |
 | `FilterTestBenchmarks` | `Test` across every filter type — read-only, so state does not drift |
 | `FilterAddBenchmarks` | `Add` / `TestAndAdd` throughput, batched with `OperationsPerInvoke` |
+| `TupleSketchAddBenchmarks` | `TupleSketch.Add` with fractional `Sum` values across nominal sizes, so the sort in each compaction is what moves it |
 
 `Add` mutates the filter, so those benchmarks rebuild it in `[IterationSetup]` and
 insert a fixed batch per invocation. `OperationsPerInvoke` reports per-item cost and
