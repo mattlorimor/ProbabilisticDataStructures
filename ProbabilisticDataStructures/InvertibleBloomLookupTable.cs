@@ -71,9 +71,17 @@ namespace ProbabilisticDataStructures
         /// <param name="hash">The hash function to use, or null for the default.</param>
         public InvertibleBloomLookupTable(
             uint expectedDifferences, int keySize, Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            : this(keySize, hash, CellsProvisionedFor(expectedDifferences))
         {
-            Guard.ValidItemCount(expectedDifferences, nameof(expectedDifferences));
+        }
 
+        /// <summary>
+        /// The one place a table is allocated, whether its size came from a number of
+        /// differences or was given outright.
+        /// </summary>
+        private InvertibleBloomLookupTable(
+            int keySize, Func<ReadOnlySpan<byte>, ulong>? hash, uint cells)
+        {
             if (keySize <= 0)
             {
                 throw new ArgumentOutOfRangeException(
@@ -81,12 +89,39 @@ namespace ProbabilisticDataStructures
             }
 
             this.keySize = keySize;
-            this.cells = (uint)Math.Max(HashCount, Math.Ceiling(expectedDifferences * CellsPerDifference));
+            this.cells = cells;
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
 
             this.counts = new long[this.cells];
             this.keySums = new byte[(long)this.cells * keySize];
             this.hashSums = new ulong[this.cells];
+        }
+
+        /// <summary>How many cells a table sized for a number of differences gets.</summary>
+        private static uint CellsProvisionedFor(uint expectedDifferences)
+        {
+            Guard.ValidItemCount(expectedDifferences, nameof(expectedDifferences));
+
+            return (uint)Math.Max(HashCount, Math.Ceiling(expectedDifferences * CellsPerDifference));
+        }
+
+        /// <summary>
+        /// A table with exactly this many cells, for tests that need one of a size the
+        /// sizing rule would not choose -- the four cells every key fills, or the size
+        /// an earlier version gave for a number of differences. It allocates through the
+        /// same constructor as the public one.
+        /// </summary>
+        internal static InvertibleBloomLookupTable WithCells(
+            uint cells, int keySize, Func<ReadOnlySpan<byte>, ulong>? hash = null)
+        {
+            if (cells < HashCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(cells), cells,
+                    $"A key occupies {HashCount} cells, so a table needs at least that many.");
+            }
+
+            return new InvertibleBloomLookupTable(keySize, hash, cells);
         }
 
         /// <summary>

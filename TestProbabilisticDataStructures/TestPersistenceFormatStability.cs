@@ -907,7 +907,10 @@ namespace TestProbabilisticDataStructures
 
             AssertBytes("varopt-v1.bin", varopt.ToByteArray());
 
-            var iblt = new InvertibleBloomLookupTable(10, 8);
+            // Fifteen cells, stated outright: it is what ten differences were provisioned
+            // when this fixture was written, and the fixture pins the writer's bytes at
+            // that size whatever the sizing rule gives for ten today (#150).
+            var iblt = InvertibleBloomLookupTable.WithCells(15, 8);
             for (var i = 0; i < 6; i++)
             {
                 var key = new byte[8];
