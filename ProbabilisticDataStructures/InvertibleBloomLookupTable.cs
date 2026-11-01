@@ -213,9 +213,11 @@ namespace ProbabilisticDataStructures
         /// </param>
         /// <param name="removed">Keys present a net negative number of times.</param>
         /// <returns>
-        /// Whether everything was recovered. False means the table held more than it was
-        /// sized for and peeling stalled, in which case the two lists are the part that
-        /// came out before it did, which is not an answer.
+        /// Whether everything was recovered: true only when, with the listed keys taken
+        /// out, nothing at all is left in the table. False means peeling stalled with keys
+        /// still in it -- likely once it holds more than it was sized for, and seen at or
+        /// below that too, more often the smaller the table -- in which case the two lists
+        /// are the part that came out before it did, which is not an answer.
         /// </returns>
         public bool TryDecode(out IReadOnlyList<byte[]> added, out IReadOnlyList<byte[]> removed)
         {
@@ -266,14 +268,29 @@ namespace ProbabilisticDataStructures
             added = positive;
             removed = negative;
 
-            // Anything left means peeling ran out of cells holding exactly one key while
-            // keys remained, which is the failure this structure is honest about.
-            foreach (var count in counts)
+            // Peeling stops when no cell holds exactly one key, which is success only if
+            // nothing at all is left. Empty means every field, not only the counts: two
+            // keys on opposite sides that share their cells cancel each other's counts and
+            // leave both of themselves in the sums, so a table still holding keys can have
+            // every count at zero. Eppstein et al., "What's the Difference?" (2011),
+            // Algorithm 3, fails the decode on any cell whose idSum, hashSum or count is
+            // non-zero.
+            for (var cell = 0; cell < this.cells; cell++)
             {
-                if (count != 0)
+                if (counts[cell] != 0)
                 {
                     return false;
                 }
+
+                if (hashSums[cell] != 0)
+                {
+                    return false;
+                }
+            }
+
+            if (keySums.AsSpan().ContainsAnyExcept((byte)0))
+            {
+                return false;
             }
 
             return true;
