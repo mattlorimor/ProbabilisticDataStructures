@@ -99,17 +99,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would be a guess, and 6.2.0's own reader refused it as well. Merge the original samples
   again.
   <br><br>
-  **Some damaged samples do load.** Anyone who, on 6.2.0, merged a sample that had begun
-  sampling into an empty sample keeping the same number of items is affected, and the
-  result became readable in either of two ways: it was merged into a sample keeping more
-  items (6.2.0 allowed that, because the result looked exact) which then began sampling,
-  by that merge or by later additions; or it was given one more `Add` before saving. A
-  payload written after either loads without error and cannot be told apart from a sound
-  one: nothing in it records that some of its items stood in for dropped ones and are
-  held as if their weights were their own. Whether its estimates are wrong is not
-  established, since those items carry their adjusted weights and the total is kept, but
-  they may be. Nothing can repair such a sample from its payload. Rebuild it from the
-  original data, or merge the original samples again with this version. (#148)
+  **Samples that went on from such a merge do load, and their estimates are unbiased.**
+  The merged result held exactly the input's items at exactly their adjusted weights, so
+  it gave the input's own estimates. What was wrong was its count of items seen, which no
+  estimate reads, and its record of which items stood at the threshold. Its payload
+  became loadable once it, or a sample it was merged into, began sampling. Every step
+  that can do that treats adjusted weights as weights, and an unbiased estimate of an
+  unbiased estimate is unbiased, as the paper's §3 notes. Measured on 6.2.0 over
+  4,000,000 seeded trials per route at each of four weight mixes, every subset sum and
+  every item averaged to its true weight within sampling error. The worst was 3.5
+  standard errors, against 4.0 on master's own correct paths, and the weights summed to
+  the true total within rounding.
+  <br><br>
+  Every route but one leaves a sound sample. One more `Add`, a merge into a sample keeping
+  the same number of items or fewer, or another sample merged into it: each is the
+  paper's recurrence with every input keeping at least as many items as the result. The
+  sample is then distributed as if the merge had never happened, and its variances
+  matched master's.
+  <br><br>
+  **One route can cost precision: merging the result into a sample keeping more items**,
+  which 6.2.0 allowed because the result looked exact. That sample holds the input's
+  threshold items as exact ones, at the input's threshold. While its own threshold is
+  below the input's, which the weights decide rather than chance, it keeps the input
+  whole and samples everything else with the slots left over. Across three weight mixes,
+  its summed per-item variance was 15%, 22% and 30% above that of a same-size sample
+  rebuilt from the original data, and the average variance over subsets of any size is
+  higher by the same factor. Single subsets measured 10% to 53% worse. The exception was
+  the input's own stream, whose total such a sample holds exactly. Later additions that
+  lift its threshold past the input's make it sound again.
+  <br><br>
+  Anyone who, on 6.2.0, merged a sample that had begun sampling into an empty sample
+  keeping the same number of items, then merged the result into one keeping more, is
+  affected. Such a payload cannot be told from a sound one by its bytes. Where the items'
+  original weights are known, it can: a sound sample reports each item at its own weight
+  or at one shared threshold, and this one also reports some at a second, higher value,
+  the input's threshold. That showed in every damaged trial and in no sound one. To
+  recover the lost precision, rebuild the sample from the original data, or merge the
+  original samples again with this version. (#148)
 
 - **A `VarOpt` sample saved before it has begun sampling comes back exactly as it was.**
   Until then it holds every item in the order it arrived, and the transition to sampling

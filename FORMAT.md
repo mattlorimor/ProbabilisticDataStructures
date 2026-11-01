@@ -598,15 +598,25 @@ refused, and the refusal says where it came from: it does not record which of it
 items were held at the threshold, so it cannot be restored without guessing. The
 6.2.0 reader refused it too, so no payload that ever loaded stops loading.
 
-That refusal is not a complete screen. A 6.2.0 sample merged that way could go on before
-it was saved, either by being merged into a sample keeping more items that then began
-sampling, or by one more `Add`, and the payload it then writes satisfies every rule
-above: it is sampling, its two regions fill `k`, and `n` exceeds `k`. It loads without
-error and cannot be told apart from a sound sample, because nothing in it records that
-some of the items held at their own weights stood in for dropped ones. They carry their
-adjusted weights, so whether the sample's estimates are wrong is not established, but
-they may be. The remedy is outside the format: rebuild the sample from the original
-data, or merge the original samples again with this version.
+That refusal is not a complete screen, but what passes it gives unbiased estimates. The
+6.2.0 merged result held exactly the input's items at exactly their adjusted weights.
+Only `n`, which no estimate reads, and its record of which items stood at the threshold
+were wrong. If it, or a sample it was merged into, began sampling before being saved,
+the payload satisfies every rule above and loads. Each step that can do that treats
+adjusted weights as weights, which keeps every estimate unbiased; measured on 6.2.0 over
+4,000,000 trials per route, every subset sum averaged to its true weight within sampling
+error. One more `Add`, a merge into a sample keeping the same number of items or fewer,
+or another sample merged into it, leaves a sound sample, distributed as if the merge had
+never happened.
+
+Merging it into a sample keeping more items can cost precision. That sample holds the
+input's threshold items as exact ones, at the input's threshold. While its own threshold
+is lower than the input's, it keeps the input whole and samples the rest with the slots
+left over, and its summed variance measured 15–30% above that of a sample of its size
+built from the original data. Nothing in the payload records this. Where the original
+weights are known, it shows as items reported at a second value above the threshold.
+The remedy is outside the format: rebuild the sample from the original data, or merge
+the original samples again with this version.
 
 Once sampling has begun, the items held at their own weights are re-heaped on read
 rather than being trusted to arrive in heap order, for the same reason `TopK`'s and
