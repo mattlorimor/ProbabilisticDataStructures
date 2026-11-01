@@ -193,6 +193,44 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A sparse payload holding more hashes than the estimator would hold today.
+        /// Through 6.2.0 the first sparse buffer was larger than the conversion point at
+        /// the smallest precisions, so precision 4 held sixteen hashes -- 128 bytes
+        /// standing in for 16 bytes of registers -- and wrote them. These are the bytes
+        /// that writer produced (its sparse path unchanged from 6.0.0), and the writer no
+        /// longer produces them, so this is the read side's witness alone.
+        /// <para>
+        /// It has to come back exactly as written, counting exactly, because converting
+        /// it on load would change a stored answer. A repeat leaves it alone like any
+        /// other, and the first new item converts it, since it is already past the cap.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestStoredHyperLogLogPlusPastTheSparseCapStillReads()
+        {
+            var bytes = ReadFixture("hyperloglogplus-sparse-p4-v1.bin");
+            var estimator = Persistence.FromByteArray<HyperLogLogPlus>(bytes);
+
+            Assert.AreEqual(4u, estimator.Precision());
+            Assert.IsTrue(estimator.IsSparse, "a stored sparse payload came back dense");
+            Assert.AreEqual(16ul, estimator.Count(), "the stored sparse form counts exactly");
+
+            for (var i = 0; i < 16; i++)
+            {
+                estimator.Add(Key($"w{i}"));
+                Assert.IsTrue(estimator.IsSparse,
+                    $"repeating stored item w{i} converted the estimator to dense");
+            }
+
+            CollectionAssert.AreEqual(bytes, estimator.ToByteArray(),
+                "repeating the stored items changed the stored estimator");
+
+            estimator.Add(Key("w16"));
+            Assert.IsFalse(estimator.IsSparse,
+                "a new item did not convert an estimator already past the sparse cap");
+        }
+
+        /// <summary>
         /// Loaded past its retained size, so the fixture pins the sampled case rather
         /// than the exact one -- theta itself has to come back, or every later estimate
         /// is scaled wrongly.
@@ -984,6 +1022,7 @@ namespace TestProbabilisticDataStructures
                 ("ddsketch-v1.bin", 15, 1),
                 ("hyperloglogplus-sparse-v1.bin", 16, 1),
                 ("hyperloglogplus-dense-v1.bin", 16, 1),
+                ("hyperloglogplus-sparse-p4-v1.bin", 16, 1),
                 ("quotientfilter-v1.bin", 17, 1),
                 ("thetasketch-v1.bin", 18, 1),
                 ("thetasketch-v1b.bin", 18, 1),
