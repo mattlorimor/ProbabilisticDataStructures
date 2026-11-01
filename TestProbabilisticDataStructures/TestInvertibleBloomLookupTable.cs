@@ -84,9 +84,11 @@ namespace TestProbabilisticDataStructures
         public void TestTwoLargeSetsDifferingSlightlyAreReconciledCheaply()
         {
             const int Shared = 100_000;
+            const uint SizedFor = 20;
+            const int KeySize = 8;
 
-            var mine = new InvertibleBloomLookupTable(expectedDifferences: 20, keySize: 8);
-            var theirs = new InvertibleBloomLookupTable(expectedDifferences: 20, keySize: 8);
+            var mine = new InvertibleBloomLookupTable(SizedFor, KeySize);
+            var theirs = new InvertibleBloomLookupTable(SizedFor, KeySize);
 
             for (var i = 0; i < Shared; i++)
             {
@@ -113,11 +115,39 @@ namespace TestProbabilisticDataStructures
                 Enumerable.Range(0, 5).Select(i => 2_000_000L + i).ToArray(),
                 onlyTheirs.Select(Value).ToArray());
 
-            // And the table that carried the answer is tiny next to the sets it came
-            // from -- which is the property, not a nicety.
-            Assert.IsLessThan(1000ul, difference.SizeInBytes(),
-                $"the table took {difference.SizeInBytes()} bytes to reconcile two sets " +
-                $"of {Shared}");
+            // The table that carried the answer is tiny next to the sets it came from,
+            // which is the property and not a nicety: what it costs follows the
+            // difference, not the sets. So the assertions are stated against the
+            // difference, and say nothing about how many cells a table is given. That
+            // rule is pinned, from the paper and exactly, in TestStructureGeometry.
+            //
+            // This used to be a flat bound of a thousand bytes, which was comfortable
+            // when written and sat just under the table's size once the sizing rule
+            // changed (#156): a test about reconciliation that failed on a one-cell
+            // edit to a constant it was never about.
+            //
+            // First: none of the shared keys changed what the table costs. It is
+            // exactly the size of an empty one sized for the same difference. Nothing
+            // in the structure grows, so this is cheap, but it is the claim itself,
+            // and it would be the first thing to notice a table that came to scale
+            // with what was put in it.
+            Assert.AreEqual(
+                new InvertibleBloomLookupTable(SizedFor, KeySize).SizeInBytes(),
+                difference.SizeInBytes(),
+                $"reconciling two sets of {Shared} changed the size of the table that " +
+                "carried the answer, so its cost no longer comes from the difference.");
+
+            // Second: that size is small, as a ceiling per difference it was sized
+            // for. Three cells each. The most any table needs at these sizes is about
+            // two and a half cells per difference (2.4 at ten, falling from there;
+            // the measurements are beside CellsPerDifference), so three leaves the
+            // sizing rule room to move inside what it can justify, and still fails a
+            // table several times larger than the problem. The cell is the unit
+            // because its width follows the key size, and so the bytes follow.
+            Assert.IsLessThanOrEqualTo(3u * SizedFor, difference.CellCount,
+                $"the table took {difference.CellCount} cells ({difference.SizeInBytes()} " +
+                $"bytes) to reconcile two sets of {Shared} that differ by ten, sized for " +
+                $"{SizedFor}: more than three cells for every difference it was sized for.");
         }
 
         /// <summary>
