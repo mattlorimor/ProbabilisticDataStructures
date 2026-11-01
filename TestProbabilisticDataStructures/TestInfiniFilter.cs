@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -496,6 +497,129 @@ namespace TestProbabilisticDataStructures
             Assert.IsTrue(filter.TestAndRemove(Key(1)));
             Assert.IsTrue(filter.Test(Key(1)),
                 "One of the two copies remains, so the item is still present.");
+        }
+
+        /// <summary>
+        /// A key whose hash is the key itself, so a test can say which bits of hash two
+        /// keys share instead of searching for keys that happen to.
+        /// </summary>
+        private static byte[] HashKey(ulong hash)
+        {
+            var bytes = new byte[sizeof(ulong)];
+            BinaryPrimitives.WriteUInt64LittleEndian(bytes, hash);
+            return bytes;
+        }
+
+        private static ulong HashOfKey(ReadOnlySpan<byte> key) =>
+            BinaryPrimitives.ReadUInt64LittleEndian(key);
+
+        /// <summary>
+        /// The ages of the entries a table holds at a hash's quotient, which are the
+        /// entries that could answer for it.
+        /// </summary>
+        private static int[] AgesAtTheQuotientOf(InfiniSegment segment, ulong hash)
+        {
+            var (quotient, _) = segment.Split(hash);
+            return segment.Entries()
+                .Where(e => e.Quotient == quotient)
+                .Select(e => segment.AgeOf(e.Field))
+                .ToArray();
+        }
+
+        /// <summary>
+        /// Across the chain of tables, removal takes the newest table's match, because
+        /// it remembers more of the hash than any match in a later table -- even when
+        /// its own fingerprint has run out.
+        /// </summary>
+        /// <remarks>
+        /// Within one table <c>InfiniSegment.Remove</c> takes the match with the
+        /// longest fingerprint, for the reason it documents: a shorter one stands for
+        /// more keys, and removing it could take the only record of one that was never
+        /// deleted. Across tables the filter asks them newest first, and "longest" has
+        /// to count everything a match remembers -- address and fingerprint together,
+        /// since the tables have different address widths. An entry reaches a later
+        /// table by going void, and then it remembers no more of its hash than the
+        /// address of the table it left, which has doubled since. Everything still in
+        /// that table remembers more. <see cref="MementoFilter"/> chains its tables the
+        /// same way and has the same test, for the same reason.
+        /// <para>
+        /// The scenario sets the two readings of "longest" against each other, with
+        /// the hash as the key so the bits are chosen rather than found. Key j arrives
+        /// first and goes void at the third expansion. In the second table it is its
+        /// run's only record, with a full two-bit fingerprint over a two-bit address:
+        /// four bits of hash. Key k arrives after the first expansion. By the third it
+        /// has spent its whole fingerprint, but over a five-bit address: five bits. The
+        /// two agree on the four bits j's entry remembers, so removing k matches both.
+        /// Taking the second table's entry, by asking the tables oldest first or by
+        /// comparing fingerprint lengths alone, removes j's only record. The keys
+        /// differ at the fifth bit, so k's own entry in the first table does not also
+        /// answer for j and hide the loss.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestRemovalAcrossTheChainTakesTheNewerTablesMatch()
+        {
+            const ulong J = 0b00000;
+            const ulong K = 0b10000;
+
+            // Fillers drive the expansions. None shares a quotient with j or k at any
+            // table size, because their two lowest bits differ from theirs, so nothing
+            // but j's and k's own entries is in the way of the premises below, and
+            // the expansions come where they say.
+            var fillers = Enumerable.Range(1, 63)
+                .Select(h => (ulong)h)
+                .Where(h => (h & 3) != (J & 3))
+                .Take(11)
+                .ToArray();
+            Assert.HasCount(11, fillers, "Premise: eleven fillers.");
+
+            var filter = new InfiniFilter(
+                initialCapacity: 1, fingerprintBits: 2, hash: HashOfKey);
+            filter.Add(HashKey(J));
+            filter.Add(HashKey(fillers[0]));
+            filter.Add(HashKey(fillers[1]));
+            Assert.AreEqual(0u, filter.ExpansionCount(),
+                "Premise: j arrived before any expansion.");
+            filter.Add(HashKey(K));
+            Assert.AreEqual(1u, filter.ExpansionCount(),
+                "Premise: k arrived after the first.");
+            for (var i = 2; i < fillers.Length; i++)
+            {
+                filter.Add(HashKey(fillers[i]));
+            }
+            Assert.AreEqual(3u, filter.ExpansionCount(), "Premise: three expansions.");
+            Assert.AreEqual(2, filter.ChainLength(),
+                "Premise: j went void into a second table.");
+
+            var newer = filter.Segments[0];
+            var older = filter.Segments[1];
+            Assert.IsFalse(newer.Holds(J),
+                "Premise: j has no record in the first table.");
+            Assert.IsTrue(older.Holds(J),
+                "Premise: j's only record is in the second table.");
+            Assert.IsTrue(older.Holds(K),
+                "Premise: k matches j's entry in the second table.");
+            Assert.AreEqual(newer.FingerprintBits, AgesAtTheQuotientOf(newer, K).Single(),
+                "Premise: k's entry in the first table has spent its whole fingerprint.");
+            Assert.AreEqual(0, AgesAtTheQuotientOf(older, K).Single(),
+                "Premise: the second table's match carries a full fingerprint, so " +
+                "comparing fingerprint lengths alone would choose it.");
+            Assert.IsGreaterThan(older.QuotientBits + older.FingerprintBits,
+                newer.QuotientBits,
+                "Premise: the first table's address is longer than everything the " +
+                "second table's match remembers, which is the whole case for it.");
+
+            var held = filter.Count();
+            Assert.IsTrue(filter.TestAndRemove(HashKey(K)),
+                "k was added, so removing it succeeds.");
+
+            Assert.AreEqual(held - 1, filter.Count(), "Removing k removes one entry.");
+            Assert.IsFalse(newer.Holds(K),
+                "k's own entry, in the first table, must be the one that went.");
+            Assert.IsTrue(filter.Test(HashKey(J)),
+                "j was never removed and now tests absent. Removing k took j's only " +
+                "record from the second table instead of k's own entry in the first, " +
+                "which remembers five bits of hash to the second table's four.");
         }
     }
 }
