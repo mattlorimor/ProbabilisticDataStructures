@@ -258,10 +258,32 @@ namespace ProbabilisticDataStructures
         /// <param name="key">The key to remove.</param>
         /// <returns>Whether the key was present, and so was removed.</returns>
         /// <remarks>
-        /// A memento is a piece of the key rather than a hash of it, so a match on
-        /// both fingerprint and memento is a much stronger statement than a
-        /// fingerprint match alone. That is what makes removing sound here: the entry
-        /// taken away stood for a key at exactly this position in exactly this block.
+        /// A memento is a piece of the key rather than a hash of it, so a matching
+        /// memento means a key at exactly this position within its block. Which block
+        /// is only as certain as the fingerprint. A box that has lived through
+        /// expansions has given up fingerprint bits, and it stands for every block
+        /// whose hash agrees with it on the bits it has left. So one removal can match
+        /// several boxes, and they are nested: each remembers a longer stretch of the
+        /// same hash than the last, so every block a longer match stands for, a shorter
+        /// one stands for too.
+        /// <para>
+        /// The entry removed is therefore the longest match, the one that remembers the
+        /// most of its hash, as Eslami and Dayan specify for deletion. Removing a
+        /// shorter match could take away the only record of a key that was never
+        /// removed, which is a false negative. The shorter matches left behind go on
+        /// answering for whatever else they stood for.
+        /// </para>
+        /// <para>
+        /// What a match remembers is its address and its fingerprint together. Within
+        /// one table every box at a quotient has the same address, so the youngest
+        /// box is the longest. Across the chain the tables are asked newest first,
+        /// and that order is itself longest first. An entry reaches a later table only
+        /// by going void, and then it remembers no more of its hash than the address of
+        /// the table it left, which has doubled since. Everything still in that table
+        /// remembers at least the table's current address, which is longer. So the
+        /// first table with a match holds the longest one, even when its fingerprint
+        /// is shorter than a later table's.
+        /// </para>
         /// </remarks>
         public bool TestAndRemove(ulong key)
         {
@@ -274,29 +296,39 @@ namespace ProbabilisticDataStructures
                 var codec = segment.Codec;
                 var boxes = codec.Decode(segment.ReadRun(quotient));
 
+                var longest = -1;
+                var youngest = int.MaxValue;
                 for (var i = 0; i < boxes.Count; i++)
                 {
-                    if (!segment.FingerprintMatches(boxes[i].Fingerprint, hash))
+                    if (!segment.FingerprintMatches(boxes[i].Fingerprint, hash) ||
+                        !boxes[i].Mementos.Contains(memento))
                     {
                         continue;
                     }
 
-                    var at = boxes[i].Mementos.IndexOf(memento);
-                    if (at < 0)
+                    var age = segment.AgeOfFluid(boxes[i].Fingerprint);
+                    if (age < youngest)
                     {
-                        continue;
+                        youngest = age;
+                        longest = i;
                     }
-
-                    boxes[i].Mementos.RemoveAt(at);
-                    if (boxes[i].Mementos.Count == 0)
-                    {
-                        boxes.RemoveAt(i);
-                    }
-
-                    segment.RewriteRun(quotient, codec.Encode(boxes));
-                    this.Added--;
-                    return true;
                 }
+
+                if (longest < 0)
+                {
+                    continue;
+                }
+
+                var mementos = boxes[longest].Mementos;
+                mementos.RemoveAt(mementos.IndexOf(memento));
+                if (mementos.Count == 0)
+                {
+                    boxes.RemoveAt(longest);
+                }
+
+                segment.RewriteRun(quotient, codec.Encode(boxes));
+                this.Added--;
+                return true;
             }
             return false;
         }

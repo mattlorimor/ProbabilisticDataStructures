@@ -79,7 +79,7 @@ namespace ProbabilisticDataStructures
 
             this.nominalEntries = nominalEntries;
             this.policy = policy;
-            this.values = new ulong[Math.Min(16, this.Limit)];
+            this.values = new ulong[this.Capacity(0)];
             this.summaries = new double[this.values.Length];
             this.Hash = Defaults.GetDefaultHashFunction();
         }
@@ -424,6 +424,22 @@ namespace ProbabilisticDataStructures
 
         private int Limit => (int)(2 * this.nominalEntries);
 
+        /// <summary>
+        /// The buffers to give a sketch that is to hold <paramref name="count"/> keys,
+        /// on every path that makes one: room for sixteen to start with, never less
+        /// than the keys themselves, and never more than <see cref="Limit"/>.
+        /// </summary>
+        /// <remarks>
+        /// The same rule as <see cref="ThetaSketch"/>'s, for the same reason. A sketch
+        /// compacts only when its buffers are full, and only a compaction trims, so
+        /// room past the limit delays the trim and changes every estimate after it.
+        /// The reader and the set operations used to size without the cap, so below
+        /// k = 8 a sketch read back or rebuilt went on differently from the sketch it
+        /// was a copy of. Sizing by what is held rather than by the limit keeps a
+        /// payload that claims a large k from costing its whole allowance when read.
+        /// </remarks>
+        private int Capacity(int count) => Math.Min(Math.Max(16, count), this.Limit);
+
         private void EnsureCompact()
         {
             if (!this.compact)
@@ -499,7 +515,7 @@ namespace ProbabilisticDataStructures
                 count = (int)like.nominalEntries;
             }
 
-            var size = Math.Max(16, count);
+            var size = sketch.Capacity(count);
             sketch.values = new ulong[size];
             sketch.summaries = new double[size];
             Array.Copy(keys, sketch.values, count);
@@ -602,14 +618,14 @@ namespace ProbabilisticDataStructures
                     "never holds more than twice what it retains.");
             }
 
-            var size = Math.Max(16, (int)held);
             var sketch = new TupleSketch(nominalEntries, policy)
             {
                 theta = theta,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
-                values = new ulong[size],
-                summaries = new double[size],
             };
+            var size = sketch.Capacity((int)held);
+            sketch.values = new ulong[size];
+            sketch.summaries = new double[size];
 
             var previous = 0UL;
             for (var i = 0u; i < held; i++)

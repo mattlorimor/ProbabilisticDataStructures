@@ -30,8 +30,12 @@ namespace ProbabilisticDataStructures
     /// <b>Small cardinalities are stored sparsely and counted exactly.</b> An estimator
     /// holding a few thousand items keeps the hashes themselves rather than a register
     /// array, which is both smaller and exact. It switches to registers once the hashes
-    /// would take more room than the registers do, so the sparse form never costs more
-    /// than the dense one.
+    /// would take more room than the registers do, which is Heule, Nunkesser and Hall's
+    /// rule (section 5.3), with one deliberate exception: it always holds at least 16
+    /// hashes first. At precisions 4 to 6 the paper's rule would switch after 2, 4 or 8
+    /// distinct items; holding 16 keeps every count up to 16 exact there, at a cost of at
+    /// most 112 bytes more than the registers (at precision 4; 96 at 5 and 64 at 6). From
+    /// precision 7 up, the sparse form never costs more than the dense one.
     /// </para>
     /// <para>
     /// <b>The dense estimate uses Ertl's estimator</b> rather than the raw estimate with
@@ -124,10 +128,20 @@ namespace ProbabilisticDataStructures
             this.precision = precision;
             this.m = 1u << (int)precision;
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
-            this.sparse = new ulong[InitialSparseCapacity];
+            this.sparse = new ulong[this.InitialSparseEntries];
         }
 
         private const int InitialSparseCapacity = 16;
+
+        /// <summary>
+        /// The size of a freshly built sparse buffer: small, so an estimator that sees a
+        /// handful of items costs a handful of bytes, and never past the cap. The buffer
+        /// only grows toward the cap, so one that started above it would convert wherever
+        /// it happened to fill rather than at the cap, which is how the two once came to
+        /// disagree. The cap is floored at this size, so the minimum changes nothing
+        /// today; it is here so the cap stays the one thing that decides.
+        /// </summary>
+        private int InitialSparseEntries => Math.Min(InitialSparseCapacity, this.MaxSparseEntries);
 
         /// <summary>
         /// Creates an estimator whose relative error is about the one given.
@@ -179,11 +193,19 @@ namespace ProbabilisticDataStructures
                 this.CompactSparse();
 
                 // Still full after compaction means the distinct items themselves fill
-                // the largest buffer allowed, so the representation has to change. This
-                // is the only place that happens: converting is what costs the exact
-                // count, so adding an item is the only thing entitled to force it.
+                // the largest buffer allowed. Only a hash not already among them can
+                // push the sparse form past it: the paper decides on the list with the
+                // new hash merged in, and a repeat merges to nothing, so it never
+                // converts. This is the only place converting happens: it is what
+                // costs the exact count, so a new item is the only thing entitled to
+                // force it.
                 if (this.sparseCount == this.sparse.Length)
                 {
+                    if (Array.BinarySearch(this.sparse, 0, this.sparseCount, hash) >= 0)
+                    {
+                        return;
+                    }
+
                     this.ConvertToDense();
                     this.SetRegister(hash);
                     return;
@@ -195,10 +217,27 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The most hashes the sparse form may hold. Chosen so the hashes never take
-        /// more room than the registers they are standing in for.
+        /// The most hashes the sparse form may hold: as many as fit in the bytes the
+        /// registers would take, and never fewer than <see cref="InitialSparseCapacity"/>.
         /// </summary>
-        private int MaxSparseEntries => Math.Max(4, (int)(this.m / sizeof(ulong)));
+        /// <remarks>
+        /// Heule, Nunkesser and Hall keep the sparse list until it "would require more
+        /// memory than the dense representation of the registers (i.e., 6m bits)"
+        /// (section 5.3), and their Figure 6 converts when |sparse_list| &gt; m * 6 bits.
+        /// A register here is a byte and a held hash all eight bytes of it, so their rule
+        /// is m / 8 hashes.
+        /// <para>
+        /// This deviates from the paper at precisions 4 to 6, deliberately. The rule gives
+        /// 2, 4 and 8 hashes there; holding 16 instead keeps every count up to 16 exact,
+        /// where an estimate from 16 to 64 registers is off by 13% to 26%. The price is
+        /// at most 112 bytes over the dense registers, at precision 4 (128 against 16),
+        /// 96 at precision 5 and 64 at 6. It is also what 6.0.0 through 6.2.0 did, since
+        /// their first buffer was 16 hashes and only ever grew. From precision 7 the
+        /// floor changes nothing and the cap is the paper's.
+        /// </para>
+        /// </remarks>
+        private int MaxSparseEntries =>
+            Math.Max(InitialSparseCapacity, (int)(this.m / sizeof(ulong)));
 
         /// <summary>
         /// Sorts and deduplicates the sparse buffer, growing it if the distinct items
@@ -479,7 +518,7 @@ namespace ProbabilisticDataStructures
         public HyperLogLogPlus Reset()
         {
             this.registers = null;
-            this.sparse = new ulong[InitialSparseCapacity];
+            this.sparse = new ulong[this.InitialSparseEntries];
             this.sparseCount = 0;
             this.sparseIsCompact = true;
             return this;
@@ -651,7 +690,11 @@ namespace ProbabilisticDataStructures
                         "library builds.");
                 }
 
-                var buffer = new ulong[Math.Max(InitialSparseCapacity, (int)held)];
+                // Room for what was written, and at least a fresh buffer's worth, which
+                // never exceeds the cap -- a buffer above it with room to spare would
+                // move the conversion point. A payload holding exactly the cap comes back
+                // full, so its first new item converts it and a repeat does not.
+                var buffer = new ulong[Math.Max(estimator.InitialSparseEntries, (int)held)];
                 var previous = 0UL;
 
                 for (var i = 0; i < held; i++)

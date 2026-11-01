@@ -33,10 +33,11 @@ namespace ProbabilisticDataStructures
     /// <para>
     /// Samples merge by feeding one sample's items, at their adjusted weights,
     /// through the other's ordinary insertion path -- the paper's own recurrence
-    /// for distributed sampling. The recurrence holds when every input's k is at
-    /// least the k of the result, so a sample may be merged into one that keeps
-    /// the same number of items or fewer, and a sample that has not yet begun
-    /// sampling is plain data that merges into anything. What it forbids is a
+    /// for distributed sampling -- unless a sampled input fits outright, when the
+    /// result is that input (Lemma 4). The recurrence holds when every input's k
+    /// is at least the k of the result, so a sample may be merged into one that
+    /// keeps the same number of items or fewer, and a sample that has not yet
+    /// begun sampling is plain data that merges into anything. What it forbids is a
     /// result that keeps more items than an input that has sampled: the result
     /// would hold items already chosen by chance as though they were exact.
     /// DataSketches instead lets k float and resolves it afterwards, which is
@@ -48,9 +49,11 @@ namespace ProbabilisticDataStructures
     public class VarOpt : IBinaryPersistable<VarOpt>
     {
         /// <summary>
-        /// Items heavier than the threshold, held with exact weights. A binary
-        /// min-heap on the weights, so the lightest heavy item is always at index
-        /// zero, ready to be contested.
+        /// Items heavier than the threshold, held with exact weights. Once sampling
+        /// has begun, a binary min-heap on the weights, so the lightest heavy item
+        /// is always at index zero, ready to be contested. Before then, every item
+        /// seen, in the order it arrived: that order is what the transition to
+        /// sampling heaps from, so it is part of the state.
         /// </summary>
         internal byte[][] HeavyItems { get; set; }
         /// <summary>
@@ -289,6 +292,14 @@ namespace ProbabilisticDataStructures
         /// with room to hold them all would report them as exact, which is a claim
         /// no one measured.
         /// </para>
+        /// <para>
+        /// The same reasoning covers the one permitted merge whose inputs fit in
+        /// the result outright: a sample that has begun sampling, merged into an
+        /// empty one keeping the same number of items. The result is the other
+        /// sample, threshold and all, which is the paper's Lemma 4 -- when the
+        /// inner samples together hold at most k items, there is a single input,
+        /// it keeps exactly k, and the resulting sample is identical to it.
+        /// </para>
         /// </remarks>
         /// <param name="other">The sample to merge into this one.</param>
         /// <exception cref="ArgumentException">
@@ -332,9 +343,36 @@ namespace ProbabilisticDataStructures
             }
             var otherN = other.N;
 
-            for (var i = 0; i < count; i++)
+            if (other.LightCount > 0 && this.SampleCount + count <= this.k)
             {
-                Insert(items[i], weights[i]);
+                // Everything the other sample holds fits, though it has dropped
+                // items. The rule above leaves one way for that to happen: this
+                // sample is empty and the other keeps exactly as many items. The
+                // paper's Lemma 4 settles it -- the result is the other sample,
+                // threshold region and all. Feeding the threshold items through
+                // insertion here would hold them as exact items, in a sample that
+                // claimed to be exact while counting more items than it holds.
+                for (var i = 0; i < other.HeavyCount; i++)
+                {
+                    this.HeavyItems[i] = items[i];
+                    this.HeavyWeights[i] = weights[i];
+                }
+                this.HeavyCount = other.HeavyCount;
+                for (var i = 0; i < other.LightCount; i++)
+                {
+                    this.LightItems[i] = items[other.HeavyCount + i];
+                }
+                this.LightCount = other.LightCount;
+                // The region's total, not the threshold times its size: the total
+                // is the number kept exact.
+                this.LightWeight = other.LightWeight;
+            }
+            else
+            {
+                for (var i = 0; i < count; i++)
+                {
+                    Insert(items[i], weights[i]);
+                }
             }
             this.N += otherN;
             return this;
@@ -724,12 +762,28 @@ namespace ProbabilisticDataStructures
             {
                 // Still exact: every item seen is still held, and no threshold
                 // weight can exist because there is no threshold.
-                if (heavyCount != n)
+                if (heavyCount > n)
                 {
+                    throw new InvalidDataException(
+                        $"Structure claims {n} items seen but holds {heavyCount}, " +
+                        "more than it has seen.");
+                }
+                if (heavyCount < n)
+                {
+                    // Fewer held than seen, with no threshold to account for the
+                    // rest. Version 6.2.0 wrote this after merging a sample that
+                    // had begun sampling into one with room for everything it
+                    // held. Which items stood in for dropped ones is not in the
+                    // payload, so restoring it would be a guess.
                     throw new InvalidDataException(
                         $"Structure claims {n} items seen but holds {heavyCount} " +
                         "without having started sampling, and an exact sample " +
-                        "holds everything it has seen.");
+                        "holds everything it has seen. Version 6.2.0 wrote this " +
+                        "state after merging a sample that had begun sampling " +
+                        "into one with room for everything it held. The payload " +
+                        "does not record which items were held at the threshold, " +
+                        "so it cannot be restored without guessing; merge the " +
+                        "original samples again with this version.");
                 }
                 if (BitConverter.DoubleToInt64Bits(lightWeight) != 0)
                 {
@@ -784,8 +838,16 @@ namespace ProbabilisticDataStructures
                 restored.HeavyWeights[restored.HeavyCount] = weight;
                 restored.HeavyCount++;
             }
-            // Ordered here rather than trusted from the payload.
-            restored.Heapify();
+            if (lightCount > 0)
+            {
+                // A sampling heap is ordered here rather than trusted from the
+                // payload; one this library wrote is a heap already, and comes
+                // through unchanged. An exact sample is not a heap but its arrival
+                // order, which any order can be and which the transition to
+                // sampling heaps from, so it is kept as written: re-heaping it
+                // changes which of two tied items is contested first.
+                restored.Heapify();
+            }
 
             for (uint i = 0; i < lightCount; i++)
             {

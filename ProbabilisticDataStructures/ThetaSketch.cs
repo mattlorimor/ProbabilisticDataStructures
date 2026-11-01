@@ -77,7 +77,7 @@ namespace ProbabilisticDataStructures
         {
             Guard.ValidItemCount(nominalEntries, nameof(nominalEntries));
             this.nominalEntries = nominalEntries;
-            this.values = new ulong[Math.Min(16, this.Limit)];
+            this.values = new ulong[this.Capacity(0)];
             this.Hash = Defaults.GetDefaultHashFunction();
         }
 
@@ -420,8 +420,8 @@ namespace ProbabilisticDataStructures
             {
                 theta = theta,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
-                values = new ulong[Math.Max(16, (int)held)],
             };
+            sketch.values = new ulong[sketch.Capacity((int)held)];
 
             var previous = 0UL;
             for (var i = 0u; i < held; i++)
@@ -475,6 +475,27 @@ namespace ProbabilisticDataStructures
 
         /// <summary>The most values the sketch ever holds before trimming.</summary>
         private int Limit => (int)(2 * this.nominalEntries);
+
+        /// <summary>
+        /// The buffer to give a sketch that is to hold <paramref name="count"/>
+        /// values, on every path that makes one: room for sixteen to start with, never
+        /// less than the values themselves, and never more than <see cref="Limit"/>.
+        /// </summary>
+        /// <remarks>
+        /// The cap is what the estimates depend on. <see cref="Add(ReadOnlySpan{byte})"/>
+        /// compacts only when the buffer is full, and only a compaction trims, so a
+        /// buffer with room past the limit lets the sketch hold more than that before
+        /// it trims. It then trims later, lands on a different theta, and estimates
+        /// differently from then on. The reader and the set operations used to size
+        /// without the cap, so below k = 8 a sketch read back or rebuilt went on
+        /// differently from the sketch it was a copy of.
+        /// <para>
+        /// Sizing by what is held rather than by the limit is what keeps a payload
+        /// that claims a large k, and holds little, from costing its whole allowance
+        /// the moment it is read. The buffer grows to the limit as values arrive.
+        /// </para>
+        /// </remarks>
+        private int Capacity(int count) => Math.Min(Math.Max(16, count), this.Limit);
 
         private void EnsureCompact()
         {
@@ -535,7 +556,7 @@ namespace ProbabilisticDataStructures
                 count = (int)nominalEntries;
             }
 
-            sketch.values = new ulong[Math.Max(16, count)];
+            sketch.values = new ulong[sketch.Capacity(count)];
             Array.Copy(sorted, sketch.values, count);
             sketch.held = count;
             sketch.compact = true;

@@ -1,5 +1,6 @@
 using System;
 using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -203,8 +204,9 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The sparse form is only worth having if it never costs more than the registers
-        /// it stands in for, which is what decides when it gives way.
+        /// The sparse form is only worth having if it costs less than the registers it
+        /// stands in for, which is what decides when it gives way at every precision but
+        /// the smallest few; the deviation there is held further down.
         /// </summary>
         [TestMethod]
         public void TestTheSparseFormNeverCostsMoreThanTheDenseOne()
@@ -249,6 +251,323 @@ namespace TestProbabilisticDataStructures
 
                 previous = current;
             }
+        }
+
+        /// <summary>
+        /// Every precision the constructor accepts, asked of the constructor rather than
+        /// typed out, so the coarsest corner is wherever its guard puts it.
+        /// </summary>
+        private static List<uint> LegalPrecisions()
+        {
+            var legal = new List<uint>();
+            for (uint precision = 0; precision <= 64; precision++)
+            {
+                try
+                {
+                    _ = new HyperLogLogPlus(precision);
+                    legal.Add(precision);
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    // Not one it builds.
+                }
+            }
+
+            Assert.Contains(4u, legal,
+                "precision 4 is the coarsest corner these sweeps exist to reach, and the " +
+                "constructor no longer accepts it");
+            return legal;
+        }
+
+        /// <summary>
+        /// Runs a check at every legal precision and fails once, naming every precision
+        /// it failed at, so a defect confined to the coarse corner reads as one.
+        /// </summary>
+        private static void AtEveryPrecision(Func<uint, string> check)
+        {
+            var failures = new List<string>();
+            foreach (var precision in LegalPrecisions())
+            {
+                var failure = check(precision);
+                if (failure is not null)
+                {
+                    failures.Add($"precision {precision}: {failure}");
+                }
+            }
+
+            Assert.IsEmpty(failures, string.Join(Environment.NewLine, failures));
+        }
+
+        /// <summary>
+        /// The most distinct items a new estimator holds before it goes dense, read from
+        /// the estimator itself rather than from any rule about where that should be.
+        /// </summary>
+        private static int MostHeldSparsely(uint precision)
+        {
+            var probe = FilledUntilDense(precision, out var added);
+            Assert.IsFalse(probe.IsSparse);
+            return added - 1;
+        }
+
+        /// <summary>
+        /// Adds distinct items until the estimator goes dense, failing rather than
+        /// spinning if it never does: more hashes than there are registers is past both
+        /// the paper's cap and the floor below it, so that many is the bound.
+        /// </summary>
+        private static HyperLogLogPlus FilledUntilDense(uint precision, out int added)
+        {
+            var estimator = new HyperLogLogPlus(precision);
+            var registers = 1 << (int)precision;
+
+            for (added = 0; estimator.IsSparse; added++)
+            {
+                Assert.IsLessThanOrEqualTo(registers, added,
+                    $"precision {precision}: still sparse after {added} distinct items, " +
+                    $"more than its {registers} registers");
+                estimator.Add(Item(added));
+            }
+
+            return estimator;
+        }
+
+        /// <summary>
+        /// A distinct count is blind to repetition, so an item the estimator already
+        /// holds changes nothing -- including when it arrives with the sparse form
+        /// exactly full, the one moment a new item would change the representation.
+        /// It did not used to be blind there: a full buffer converted on any further add,
+        /// before anything asked whether the hash was already held, so a repeat traded
+        /// the exact count for an estimate. That is #149, where 32 became 31 at
+        /// precision 8.
+        /// <para>
+        /// The conversion point comes from the estimator itself, so this fails for a
+        /// repeat and not for where the point sits, which the next test owns. The count
+        /// alone does not see it everywhere: probed before the fix, a repeat at the point
+        /// converted at every precision but at some left the estimate equal to the exact
+        /// count it replaced. So the representation and the bytes are what is held, with
+        /// the count beside them. Every held item is repeated, the smallest and largest
+        /// hashes included, because a membership check that misses one end of the sorted
+        /// buffer converts on exactly one of them.
+        /// </para>
+        /// <para>
+        /// Merging in a sparse estimator of items already held is the same repeat by the
+        /// other path that adds hashes one at a time.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestARepeatAtTheConversionPointChangesNothing()
+        {
+            AtEveryPrecision(precision =>
+            {
+                var held = MostHeldSparsely(precision);
+
+                var full = new HyperLogLogPlus(precision);
+                for (var i = 0; i < held; i++)
+                {
+                    full.Add(Item(i));
+                }
+
+                var before = full.ToByteArray();
+
+                for (var i = 0; i < held; i++)
+                {
+                    full.Add(Item(i));
+
+                    if (!full.IsSparse)
+                    {
+                        return $"repeating item {i} of the {held} held converted the " +
+                            $"estimator to dense, and the count went from {held} to " +
+                            $"{full.Count()}";
+                    }
+
+                    if (full.Count() != (ulong)held)
+                    {
+                        return $"repeating item {i} moved the count from {held} to " +
+                            $"{full.Count()}";
+                    }
+                }
+
+                if (!before.AsSpan().SequenceEqual(full.ToByteArray()))
+                {
+                    return "repeating every held item changed the state";
+                }
+
+                var same = new HyperLogLogPlus(precision);
+                for (var i = held - 1; i >= 0; i--)
+                {
+                    same.Add(Item(i));
+                }
+
+                full.Merge(same);
+
+                if (!full.IsSparse || !before.AsSpan().SequenceEqual(full.ToByteArray()))
+                {
+                    return "merging in only items already held changed the state";
+                }
+
+                // And it really was the conversion point: one item it does not hold is
+                // enough. Without this, a point found too early would let every repeat
+                // above pass without ever arriving at a full buffer.
+                full.Add(Item(held));
+                return full.IsSparse
+                    ? $"the state the repeats were tested in, holding {held}, was not the " +
+                      "conversion point"
+                    : null;
+            });
+        }
+
+        /// <summary>
+        /// The one documented deviation from the paper's conversion rule: the sparse form
+        /// holds at least this many hashes at any precision. Restated here rather than
+        /// read from the implementation, like the rule itself.
+        /// </summary>
+        private const int ExactFloor = 16;
+
+        /// <summary>
+        /// Where the sparse form gives way, restated rather than read back from the
+        /// implementation: the paper's rule, and the one documented deviation from it.
+        /// Heule, Nunkesser and Hall, "HyperLogLog in Practice" (EDBT 2013), section 5.3:
+        /// the sparse list is kept until it "would require more memory than the dense
+        /// representation of the registers (i.e., 6m bits)", and Figure 6 converts at
+        /// line 22 when |sparse_list| &gt; m * 6 bits, measured after the new hash has
+        /// been merged into the list (lines 17 to 20). Their registers are six bits; here
+        /// a register is one byte and a held hash all eight of the hash's bytes (section
+        /// 5.3.1 allows p' up to 64, "at which points the full hash code is kept"), so
+        /// the rule is m / 8 hashes. Checked against the paper as Google Research
+        /// publishes it, 2026-11-01.
+        /// <para>
+        /// The deviation is a floor of 16, so the smallest precisions count up to 16
+        /// exactly, as 6.0.0 through 6.2.0 did. It decides precisions 4 to 6, where m / 8
+        /// is 2, 4 and 8, and nothing from 7, where m / 8 is already 16. So 4 to 6
+        /// discriminate the floor -- against the paper's bare rule and against the old
+        /// floor of four, which gave 4, 4 and 8 -- and 8 upward discriminate the rule;
+        /// 7 is where the two agree and tells them apart from nothing.
+        /// </para>
+        /// <para>
+        /// Every way in, because three places build a sparse buffer: a new estimator, one
+        /// read back -- empty and part-filled, since the reader sizes its buffer from
+        /// what the payload holds -- and one reset after going dense.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestTheSparseFormHoldsTheRegistersWorthOfHashesAndAtLeastSixteen()
+        {
+            AtEveryPrecision(precision =>
+            {
+                var registers = 1 << (int)precision;
+                var cap = Math.Max(ExactFloor, registers / sizeof(ulong));
+
+                var part = new HyperLogLogPlus(precision);
+                for (var i = 0; i < cap / 2; i++)
+                {
+                    part.Add(Item(i));
+                }
+
+                return ConvertsAt(new HyperLogLogPlus(precision), 0, cap, "new")
+                    ?? ConvertsAt(Persistence.FromByteArray<HyperLogLogPlus>(
+                        new HyperLogLogPlus(precision).ToByteArray()), 0, cap, "read back empty")
+                    ?? ConvertsAt(Persistence.FromByteArray<HyperLogLogPlus>(part.ToByteArray()),
+                        cap / 2, cap, $"read back holding {cap / 2}")
+                    ?? ConvertsAt(DenseThenReset(precision), 0, cap, "reset after going dense");
+            });
+        }
+
+        private static string ConvertsAt(
+            HyperLogLogPlus estimator, int alreadyHeld, int cap, string where)
+        {
+            for (var i = alreadyHeld; i < cap; i++)
+            {
+                estimator.Add(Item(i));
+                if (!estimator.IsSparse)
+                {
+                    return $"{where}, went dense at {i + 1} distinct items, short of the " +
+                        $"{cap} it should hold";
+                }
+            }
+
+            if (estimator.Count() != (ulong)cap)
+            {
+                return $"{where}, holding {cap} items counted {estimator.Count()}";
+            }
+
+            estimator.Add(Item(cap));
+            return estimator.IsSparse
+                ? $"{where}, still sparse at {cap + 1} distinct items, past the {cap} it " +
+                  "should hold"
+                : null;
+        }
+
+        private static HyperLogLogPlus DenseThenReset(uint precision)
+        {
+            return FilledUntilDense(precision, out _).Reset();
+        }
+
+        /// <summary>
+        /// What the sparse form costs, at every precision and in each of the ways a sparse
+        /// buffer gets built. From precision 7 up it never costs more than the dense
+        /// registers, which is the paper's rule. At 4 to 6 it may, by exactly the
+        /// documented deviation and no more: 16 hashes, 128 bytes, against 16, 32 and 64
+        /// for the registers.
+        /// <para>
+        /// Both directions are held. The most it costs before converting must be exactly
+        /// the larger of the registers and the floor's 128 bytes -- the bound is reached
+        /// by construction, so falling short of it means the estimator is not doing what
+        /// the documentation says. A floor that crept up fails the ceiling; one dropped
+        /// back to the paper's bare rule, which is what this estimator briefly did, fails
+        /// the floor.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestTheSparseFormCostsNoMoreThanTheRegistersOrTheDocumentedFloor()
+        {
+            AtEveryPrecision(precision =>
+            {
+                var registers = 1ul << (int)precision;
+                var allowed = Math.Max(registers, (ulong)ExactFloor * sizeof(ulong));
+
+                // One item, which is below the conversion point at any precision on any
+                // reading of the rule, so the reader's own sizing is what is measured.
+                var one = new HyperLogLogPlus(precision);
+                one.Add(Item(0));
+
+                return CostsExactlyAtMost(new HyperLogLogPlus(precision), 0, registers,
+                        allowed, "new")
+                    ?? CostsExactlyAtMost(
+                        Persistence.FromByteArray<HyperLogLogPlus>(one.ToByteArray()), 1,
+                        registers, allowed, "read back holding one")
+                    ?? CostsExactlyAtMost(DenseThenReset(precision), 0, registers, allowed,
+                        "reset after going dense");
+            });
+        }
+
+        private static string CostsExactlyAtMost(
+            HyperLogLogPlus estimator, int alreadyHeld, ulong registers, ulong allowed,
+            string where)
+        {
+            var most = 0ul;
+
+            for (var i = alreadyHeld; estimator.IsSparse; i++)
+            {
+                var size = estimator.SizeInBytes();
+                if (size > allowed)
+                {
+                    return $"{where}, holding {i} items the sparse form cost {size} bytes, " +
+                        $"past the {allowed} allowed against {registers} for the registers";
+                }
+
+                if ((ulong)i > registers)
+                {
+                    return $"{where}, still sparse after more distinct items than there " +
+                        "are registers";
+                }
+
+                most = Math.Max(most, size);
+                estimator.Add(Item(i));
+            }
+
+            return most == allowed
+                ? null
+                : $"{where}, the sparse form never cost more than {most} bytes before " +
+                  $"converting, short of the {allowed} it is documented to reach";
         }
 
         [TestMethod]
