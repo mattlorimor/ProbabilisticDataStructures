@@ -598,6 +598,16 @@ refused, and the refusal says where it came from: it does not record which of it
 items were held at the threshold, so it cannot be restored without guessing. The
 6.2.0 reader refused it too, so no payload that ever loaded stops loading.
 
+That refusal is not a complete screen. A 6.2.0 sample merged that way could go on before
+it was saved, either by being merged into a sample keeping more items that then began
+sampling, or by one more `Add`, and the payload it then writes satisfies every rule
+above: it is sampling, its two regions fill `k`, and `n` exceeds `k`. It loads without
+error and cannot be told apart from a sound sample, because nothing in it records that
+some of the items held at their own weights stood in for dropped ones. They carry their
+adjusted weights, so whether the sample's estimates are wrong is not established, but
+they may be. The remedy is outside the format: rebuild the sample from the original
+data, or merge the original samples again with this version.
+
 Once sampling has begun, the items held at their own weights are re-heaped on read
 rather than being trusted to arrive in heap order, for the same reason `TopK`'s and
 `HeavyKeeper`'s are; a heap this library wrote comes through unchanged. Before
