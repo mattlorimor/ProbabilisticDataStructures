@@ -627,21 +627,40 @@ namespace TestProbabilisticDataStructures
         /// sketch to just past k = 8, where twice the retained size reaches the sixteen
         /// keys the reader and the set operations made room for. Below that they gave
         /// a sketch more room than it may hold; from there on they could not.
+        /// <para>
+        /// And three sizes beyond it, for the reason <see cref="TestThetaSketch"/>
+        /// gives: from k = 8 on, that the buffer's route to its full size cannot matter
+        /// was an argument and not a measurement. They are the sizes where the buffer
+        /// doubles more than once (k = 33 goes 16, 32, 64, then stops at 66; k = 100
+        /// goes up to 128, then stops at 200) and one where it takes a single cut-short
+        /// step (k = 12, from 16 to 24).
+        /// </para>
         /// </summary>
         public static IEnumerable<object[]> RetainedSizesAroundTheStartingBuffer =>
-            Enumerable.Range(1, 9).Select(k => new object[] { (uint)k });
+            Enumerable.Range(1, 9).Concat(new[] { 12, 33, 100 })
+                .Select(k => new object[] { (uint)k });
 
         private const int ContinuationStreams = 20;
-        private const int ContinuationLength = 200;
-        private const int ContinuationKeys = 150;
+
+        /// <summary>
+        /// How many distinct keys a continuation stream draws on: enough that a sketch
+        /// of this size trims more than once, and that a trim is still to come after
+        /// most splits. See <see cref="TestThetaSketch"/>.
+        /// </summary>
+        private static int ContinuationKeys(uint k) => Math.Max(150, 12 * (int)k);
+
+        /// <summary>
+        /// Records per stream: every key once, and then the first few again.
+        /// </summary>
+        private static int ContinuationLength(uint k) => ContinuationKeys(k) + 50;
 
         /// <summary>
         /// The streams the continuation tests split. Keys repeat, so the part of a
         /// stream after a split folds new values into summaries the sketch was handed
         /// as well as into ones it built itself.
         /// </summary>
-        private static byte[] Record(int stream, int i) =>
-            Encoding.UTF8.GetBytes($"t{stream}-item-{i % ContinuationKeys}");
+        private static byte[] Record(uint k, int stream, int i) =>
+            Encoding.UTF8.GetBytes($"t{stream}-item-{i % ContinuationKeys(k)}");
 
         /// <summary>
         /// Whole numbers, so that every fold is exact in any order. The sort that
@@ -757,10 +776,10 @@ namespace TestProbabilisticDataStructures
                     $"stream {t}: the union must start as the sketch of both key sets, " +
                     "or what follows compares two different states.");
 
-                for (var i = 0; i < ContinuationLength; i++)
+                for (var i = 0; i < ContinuationLength(k); i++)
                 {
-                    both.Add(Record(t, i), ValueOf(i));
-                    union.Add(Record(t, i), ValueOf(i));
+                    both.Add(Record(k, t, i), ValueOf(i));
+                    union.Add(Record(k, t, i), ValueOf(i));
                 }
 
                 if (!both.ToByteArray().AsSpan().SequenceEqual(union.ToByteArray())
@@ -789,6 +808,7 @@ namespace TestProbabilisticDataStructures
         /// A sketch fed past its trim threshold must have grown to exactly the full
         /// allowance, since only a full allowance trims; at k = 9 doubling the starting
         /// buffer passes twice the retained size, so growth that forgot its cap shows.
+        /// The larger sizes are where growth has to keep going past its first step.
         /// </para>
         /// </summary>
         [TestMethod]
@@ -799,10 +819,10 @@ namespace TestProbabilisticDataStructures
 
             var fed = new TupleSketch(k);
             var other = new TupleSketch(k);
-            for (var i = 0; i < ContinuationLength; i++)
+            for (var i = 0; i < ContinuationLength(k); i++)
             {
-                fed.Add(Record(0, i), ValueOf(i));
-                other.Add(Record(1, i), ValueOf(i));
+                fed.Add(Record(k, 0, i), ValueOf(i));
+                other.Add(Record(k, 1, i), ValueOf(i));
             }
             Assert.AreNotEqual(ulong.MaxValue, fed.ThetaValue,
                 "the fed sketch must have trimmed, or it never needed its allowance.");
@@ -895,17 +915,25 @@ namespace TestProbabilisticDataStructures
             int splits = 0, crossed = 0, diverged = 0;
             string first = null;
 
+            var length = ContinuationLength(k);
+
             for (var t = 0; t < ContinuationStreams; t++)
             {
+                // Built once per stream: the larger sizes replay a long stream from
+                // every split, and the keys are the same each time.
+                var records = Enumerable.Range(0, length)
+                    .Select(i => Record(k, t, i))
+                    .ToArray();
+
                 var unsplit = new TupleSketch(k, policy);
-                for (var i = 0; i < ContinuationLength; i++)
+                for (var i = 0; i < length; i++)
                 {
-                    unsplit.Add(Record(t, i), ValueOf(i));
+                    unsplit.Add(records[i], ValueOf(i));
                 }
                 var expected = unsplit.ToByteArray();
 
                 var prefix = new TupleSketch(k, policy);
-                for (var split = 0; split < ContinuationLength; split++)
+                for (var split = 0; split < length; split++)
                 {
                     var before = prefix.ToByteArray();
                     var carried = carryOn(prefix);
@@ -914,9 +942,9 @@ namespace TestProbabilisticDataStructures
                         "the sketch it came from, or what follows compares two states.");
 
                     var thetaAtSplit = carried.ThetaValue;
-                    for (var i = split; i < ContinuationLength; i++)
+                    for (var i = split; i < length; i++)
                     {
-                        carried.Add(Record(t, i), ValueOf(i));
+                        carried.Add(records[i], ValueOf(i));
                     }
 
                     splits++;
@@ -935,7 +963,7 @@ namespace TestProbabilisticDataStructures
                             $"{unsplit.Count()} totalling {unsplit.Total()}";
                     }
 
-                    prefix.Add(Record(t, split), ValueOf(split));
+                    prefix.Add(records[split], ValueOf(split));
                 }
             }
 

@@ -565,13 +565,38 @@ namespace TestProbabilisticDataStructures
         /// sketch to just past k = 8, where twice the retained size reaches the sixteen
         /// values the reader and the set operations made room for. Below that they
         /// gave a sketch more room than it may hold; from there on they could not.
+        /// <para>
+        /// And three sizes beyond it, because from k = 8 on that was an argument and
+        /// not a measurement. The buffer starts at sixteen and doubles up to twice the
+        /// retained size, so a larger k is where it doubles more than once and where
+        /// the cap cuts the last step short: k = 12 grows 16 to 24 in one step, k = 33
+        /// goes 16, 32, 64 and then stops at 66, and k = 100 goes 16, 32, 64, 128 and
+        /// stops at 200. The sizing rule says none of it can matter once the cap no
+        /// longer binds, since the sketch trims only when a full buffer holds twice
+        /// the retained size in distinct values, whatever route the buffer took to
+        /// that size. These rows hold the rule to that.
+        /// </para>
         /// </summary>
         public static IEnumerable<object[]> RetainedSizesAroundTheStartingBuffer =>
-            Enumerable.Range(1, 9).Select(k => new object[] { (uint)k });
+            Enumerable.Range(1, 9).Concat(new[] { 12, 33, 100 })
+                .Select(k => new object[] { (uint)k });
 
         private const int ContinuationStreams = 20;
-        private const int ContinuationLength = 200;
-        private const int ContinuationKeys = 150;
+
+        /// <summary>
+        /// How many distinct keys a continuation stream draws on. At the coarse sizes
+        /// the same hundred and fifty keys serve, and they still trim more than once.
+        /// A sketch trims each time it has seen twice as many distinct keys as it last
+        /// did, starting from twice its retained size, so a larger k needs
+        /// proportionally more keys to reach its later trims -- and the comparison
+        /// can only see the buffer if a trim is still to come after the split.
+        /// </summary>
+        private static int ContinuationKeys(uint k) => Math.Max(150, 12 * (int)k);
+
+        /// <summary>
+        /// Records per stream: every key once, and then the first few again.
+        /// </summary>
+        private static int ContinuationLength(uint k) => ContinuationKeys(k) + 50;
 
         /// <summary>
         /// The streams the continuation tests split. Keys repeat, so the part of a
@@ -579,8 +604,8 @@ namespace TestProbabilisticDataStructures
         /// carries on from a split has to recognise repeats of values it was handed
         /// as well as of values it saw arrive.
         /// </summary>
-        private static byte[] Record(int stream, int i) =>
-            Encoding.UTF8.GetBytes($"t{stream}-item-{i % ContinuationKeys}");
+        private static byte[] Record(uint k, int stream, int i) =>
+            Encoding.UTF8.GetBytes($"t{stream}-item-{i % ContinuationKeys(k)}");
 
         /// <summary>
         /// Saving a sketch and reading it back must be invisible to everything it
@@ -693,10 +718,10 @@ namespace TestProbabilisticDataStructures
                     $"stream {t}: the union must start as the sketch of both key sets, " +
                     "or what follows compares two different states.");
 
-                for (var i = 0; i < ContinuationLength; i++)
+                for (var i = 0; i < ContinuationLength(k); i++)
                 {
-                    both.Add(Record(t, i));
-                    union.Add(Record(t, i));
+                    both.Add(Record(k, t, i));
+                    union.Add(Record(k, t, i));
                 }
 
                 if (!both.ToByteArray().AsSpan().SequenceEqual(union.ToByteArray())
@@ -725,7 +750,9 @@ namespace TestProbabilisticDataStructures
         /// full allowance, since only a full allowance trims, so growth that stops
         /// short or overshoots fails here too. k = 9 straddles the growth step: there,
         /// doubling the starting buffer passes twice the retained size, so a growth
-        /// rule that forgot its cap would show.
+        /// rule that forgot its cap would show. The larger sizes are where growth has
+        /// to keep going past its first step, and where a rule that stopped doubling
+        /// early would leave the buffer short of the allowance.
         /// </para>
         /// </summary>
         [TestMethod]
@@ -736,10 +763,10 @@ namespace TestProbabilisticDataStructures
 
             var fed = new ThetaSketch(k);
             var other = new ThetaSketch(k);
-            for (var i = 0; i < ContinuationLength; i++)
+            for (var i = 0; i < ContinuationLength(k); i++)
             {
-                fed.Add(Record(0, i));
-                other.Add(Record(1, i));
+                fed.Add(Record(k, 0, i));
+                other.Add(Record(k, 1, i));
             }
             Assert.AreNotEqual(ulong.MaxValue, fed.ThetaValue,
                 "the fed sketch must have trimmed, or it never needed its allowance.");
@@ -831,17 +858,25 @@ namespace TestProbabilisticDataStructures
             int splits = 0, crossed = 0, diverged = 0;
             string first = null;
 
+            var length = ContinuationLength(k);
+
             for (var t = 0; t < ContinuationStreams; t++)
             {
+                // Built once per stream: the larger sizes replay a long stream from
+                // every split, and the keys are the same each time.
+                var records = Enumerable.Range(0, length)
+                    .Select(i => Record(k, t, i))
+                    .ToArray();
+
                 var unsplit = new ThetaSketch(k);
-                for (var i = 0; i < ContinuationLength; i++)
+                for (var i = 0; i < length; i++)
                 {
-                    unsplit.Add(Record(t, i));
+                    unsplit.Add(records[i]);
                 }
                 var expected = unsplit.ToByteArray();
 
                 var prefix = new ThetaSketch(k);
-                for (var split = 0; split < ContinuationLength; split++)
+                for (var split = 0; split < length; split++)
                 {
                     var before = prefix.ToByteArray();
                     var carried = carryOn(prefix);
@@ -850,9 +885,9 @@ namespace TestProbabilisticDataStructures
                         "the sketch it came from, or what follows compares two states.");
 
                     var thetaAtSplit = carried.ThetaValue;
-                    for (var i = split; i < ContinuationLength; i++)
+                    for (var i = split; i < length; i++)
                     {
-                        carried.Add(Record(t, i));
+                        carried.Add(records[i]);
                     }
 
                     splits++;
@@ -869,7 +904,7 @@ namespace TestProbabilisticDataStructures
                             $"{carried.Count()} against {unsplit.Count()}";
                     }
 
-                    prefix.Add(Record(t, split));
+                    prefix.Add(records[split]);
                 }
             }
 
