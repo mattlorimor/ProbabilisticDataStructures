@@ -35,19 +35,38 @@ nothing to checksum.
 The version travels in each payload rather than being a property of the library, so a
 structure whose layout changes bumps only its own.
 
-| Version | Written by | Structures |
-| --- | --- | --- |
-| 1 | 3.1.0 onwards | every structure except the two below |
-| 2 | 6.0.0 onwards | `StableBloomFilter`, `CuckooBloomFilter` |
+| Version | First written by | Structures | Added |
+| --- | --- | --- | --- |
+| 1 | 3.1.0 | every structure | the layouts below, without the fields marked as later |
+| 2 | 6.0.0 | `StableBloomFilter`, `CuckooBloomFilter` | the random generator's state |
+| 3 | 6.1.0 | `CuckooBloomFilter` | fingerprints packed at their exact bit width |
+| 4 | 6.2.0 | `SetSketch` | the construction, written only for the second one |
+| 5 | the release after 6.2.0 | `StableBloomFilter` | the state the random generator began in |
 
-Version 2 exists because those two gained a stored random-generator state in 6.0.0.
-Raising every structure's version together would have made every payload unreadable to
-5.x in order to record a change that eleven of them did not have.
+A structure writes the version its own layout needs, and the rest go on writing the
+version they always did. Version 2 exists because the stable and cuckoo filters
+gained a stored random-generator state in 6.0.0. Raising every structure's version
+together would have made every payload unreadable to 5.x in order to record a change
+that most of them did not have.
 
 A version 1 payload of either filter still reads. It carries no generator state, so the
 restored filter resumes with an unpredictable one: its cells or fingerprints are exactly
 right, and only the sequence of choices it will make next is unrecoverable, because it
 was never written down.
+
+Version 5 exists because `StableBloomFilter.Reset` returns the filter to its original
+state, and the generator is part of that. A version 2 payload holds where the generator
+had got to, which cannot say where it started, so version 5 adds a second `u64` holding
+where it began. A reader older than version 5 refuses such a payload as written by a
+later version: the compatibility this format promises runs backwards, not forwards.
+
+A version 1 or 2 payload of the stable filter still reads, and it has no original state
+to give. Such a filter takes the generator position it was read at as its original
+state, so a `Reset` returns it there: emptied, with the generator where the payload put
+it. For version 1 that position is the unpredictable one the filter was given on
+reading. Writing the filter out records that same point, not the position it has reached
+since, so a save and a load never moves where a `Reset` goes. What the payload cannot
+say is the seed the filter was built with, and nothing is guessed at to replace it.
 
 A reader refuses a payload whose magic does not match, whose version is `0` or greater
 than the version it knows, whose structure id is not the type being read, or whose
@@ -251,12 +270,15 @@ u32     k
 u32     p, the number of cells decremented per add
 Buckets the cells
 u64     the random generator's state    (version 2 onwards)
+u64     the state it began in           (version 5 onwards)
 ```
 
 The maximum cell value follows from the cell width the cells carry.
 
-The generator's state is the last field, and version 1 payloads simply end before it.
-See [The random generator's state](#the-random-generators-state).
+The state the generator began in is the last field, and payloads before version 5 simply
+end before it; version 1 payloads end a field earlier still, before the generator's
+state. What a reader does for a field the payload lacks is described in
+[The random generator's state](#the-random-generators-state).
 
 ### `InverseBloomFilter` (id 8)
 
@@ -938,6 +960,20 @@ That is also why the generator is this library's own SplitMix64 rather than
 `System.Random`, which will not say where it is. The sequence for a given seed therefore
 changed in 6.0.0 — the seed parameter arrived in 4.0.0, and this is the only breaking
 part of the change.
+
+The stable filter stores a second number, the state its generator began in, because its
+`Reset` returns it to its original state and the generator is part of that. Where the
+generator has got to is no help: it moves with every add, and a filter read back from a
+payload would have nothing to return to. The beginning is the seed, widened to 64 bits,
+for a filter given one; the unpredictable state it was built with for one that was not;
+and zero for one made by `NewUnstableBloomFilter`.
+
+A payload that predates the field, at version 1 or 2, does not hold it. The reader sets
+the beginning to the position it read the generator at — for version 1, which holds no
+position, the unpredictable one it gave the filter — so the filter resets to the point it
+was read at and records that point when written out again. This is a definition and not a
+recovery: the seed such a filter was built with is not in its payload, and a reader that
+invented one would hand back a sequence the filter never followed.
 
 ## What is not stored
 
