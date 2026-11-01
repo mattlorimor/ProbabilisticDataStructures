@@ -187,6 +187,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resize it. Only a table built by this version gets the new size, so rebuild a small
   stored table to get it. (#150)
 
+- **An `InvertibleBloomLookupTable` too large to exist is now refused as an argument.**
+  The cell count was worked out in `double` and cast to `uint`, and the three arrays were
+  allocated from it unchecked. Nothing was ever sized too small, because on .NET 10 the
+  cast saturates instead of wrapping. But a table that could not exist failed wherever
+  the allocator happened to refuse it: an `OverflowException` for a length past an `int`,
+  an `OutOfMemoryException` for the band below it, and neither named `expectedDifferences`
+  or `keySize`. The counts are allocated first, so they had taken their memory by then:
+  300 million differences with 8-byte keys held 3.6 GB for a moment before failing on the
+  keys.
+  <br><br>
+  The constructor now throws `ArgumentOutOfRangeException`, before allocating anything,
+  when an array of the table could not exist: when `expectedDifferences` needs more cells
+  than an array has elements (more than 1,431,655,727 differences), or when the cells
+  times `keySize` come to more bytes than an array holds (2,147,483,591). The message
+  names the limit and how far to come down; with 8-byte keys it is 178,956,965
+  differences. A table that could be allocated before still can be, and the stored format
+  does not change. Reading a table was already bounded, by the byte counts of the arrays
+  the payload carries, and a test now holds it there.
+  <br><br>
+  `Subtract` and `ReadFrom` also build their result at its own size, where they used to
+  build a table sized for one difference and replace its arrays. That table was
+  allocated only to be thrown away, and the small-table sizing had made it larger than
+  it was. The tables they return, and every byte written from them, are the same.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

@@ -1438,6 +1438,87 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A table's arrays are stored whole, each with a length of its own, and the cell
+        /// count and key size are claims about them. The claims are what the reader would
+        /// size a table from, so they are checked against the arrays actually present
+        /// before anything is allocated from them: a payload cannot make the reader build
+        /// a table bigger than the bytes it carries.
+        /// </summary>
+        [TestMethod]
+        public void TestIbltClaimingMoreThanItHoldsIsRefused()
+        {
+            const int KeySizeOffset = 4;
+
+            var table = new InvertibleBloomLookupTable(8, 8);
+            table.Add(new byte[8]);
+            var bytes = table.ToByteArray();
+
+            // One cell too many, then counts no array could hold, then the largest a uint
+            // can say.
+            foreach (var claimed in new[] { table.Cells() + 1, 0x10000000u, 0x80000000u, uint.MaxValue })
+            {
+                AssertRefused(
+                    () => Persistence.FromByteArray<InvertibleBloomLookupTable>(
+                        PokeUInt32(bytes, 0, claimed)),
+                    "byte counts");
+            }
+
+            foreach (var claimed in new[] { 9u, 0x10000000u, 0x7FFFFFFFu })
+            {
+                AssertRefused(
+                    () => Persistence.FromByteArray<InvertibleBloomLookupTable>(
+                        PokeUInt32(bytes, KeySizeOffset, claimed)),
+                    "byte counts");
+            }
+        }
+
+        /// <summary>
+        /// Each of the three arrays is checked against the cell count by itself, so a
+        /// payload whose other two arrays are exactly right is still refused for the one
+        /// that is not.
+        /// </summary>
+        [TestMethod]
+        [DataRow(1, 0, 0)]
+        [DataRow(-1, 0, 0)]
+        [DataRow(0, 1, 0)]
+        [DataRow(0, -1, 0)]
+        [DataRow(0, 0, 1)]
+        [DataRow(0, 0, -1)]
+        public void TestIbltWithAnArrayThatDisagreesWithItsCellCountIsRefused(
+            int countsOff, int keysOff, int hashesOff)
+        {
+            const int Cells = 15;
+            const int KeySize = 8;
+
+            byte[] Craft(int counts, int keys, int hashes)
+            {
+                var payload = new PayloadWriter();
+                payload.WriteUInt32(Cells);
+                payload.WriteUInt32(KeySize);
+                payload.WriteBytes(new byte[Cells * sizeof(long) + counts]);
+                payload.WriteBytes(new byte[Cells * KeySize + keys]);
+                payload.WriteBytes(new byte[Cells * sizeof(ulong) + hashes]);
+
+                var stream = new MemoryStream();
+                PersistenceFormat.Write(
+                    stream, StructureId.InvertibleBloomLookupTable, HashId.XxHash3_64,
+                    payload.WrittenSpan);
+                return stream.ToArray();
+            }
+
+            // The same layout with every array the right length reads, so what refuses
+            // the others is the one length that is wrong.
+            Assert.AreEqual(
+                (uint)Cells,
+                Persistence.FromByteArray<InvertibleBloomLookupTable>(Craft(0, 0, 0)).Cells());
+
+            AssertRefused(
+                () => Persistence.FromByteArray<InvertibleBloomLookupTable>(
+                    Craft(countsOff, keysOff, hashesOff)),
+                "byte counts");
+        }
+
+        /// <summary>
         /// The value width decides how wide each cell is, so one this library does not
         /// build would be read at the wrong stride.
         /// </summary>

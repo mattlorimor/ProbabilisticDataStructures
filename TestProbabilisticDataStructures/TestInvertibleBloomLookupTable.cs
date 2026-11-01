@@ -624,6 +624,214 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The most cells a table can have, restated here rather than read back from the
+        /// table. The counts, the hash sums and the keys are each one array with a slot
+        /// for every cell, and no array holds more elements than <c>Array.MaxLength</c>.
+        /// </summary>
+        private static readonly uint MostCells = (uint)Array.MaxLength;
+
+        /// <summary>
+        /// The most differences a table can be sized for: the largest d whose cells,
+        /// rounded up, are no more than that. At this size the rule is a plain 1.5 cells
+        /// a difference, so d is two thirds of the cells, rounded down.
+        /// </summary>
+        private static readonly uint MostDifferences = (uint)((ulong)MostCells * 2 / 3);
+
+        /// <summary>
+        /// Differences past what a table can be sized for, each a different way the old
+        /// arithmetic went wrong. The cell count was worked out as a double and cast to a
+        /// uint, and then each array was allocated from it. On .NET 10 the cast saturates
+        /// rather than wraps, so nothing was sized too small, but the failure was whatever
+        /// the allocator made of a count nobody had checked.
+        /// </summary>
+        private static (uint Differences, string Why)[] TooManyDifferences() => new[]
+        {
+            (MostDifferences + 1u, "the first count past the largest table"),
+            (1_431_655_765u, "the first count whose cells no longer fit an int"),
+            (2_863_311_530u, "the last count whose cells fit a uint exactly"),
+            (2_863_311_531u, "the first whose cells overflow a uint, which the cast saturates"),
+            (uint.MaxValue, "the largest count there is"),
+        };
+
+        /// <summary>
+        /// The cell count of the largest table, and the count of differences that gives
+        /// it, are accepted. This is the half of the bound that stops a guard from
+        /// refusing too much, and it pins the two constants above to the sizing rule: one
+        /// more difference needs a cell more than the table can have.
+        /// </summary>
+        [TestMethod]
+        public void TestTheLargestTableThatCanBeSizedForIsAccepted()
+        {
+            Assert.AreEqual(
+                MostCells, InvertibleBloomLookupTable.CellsProvisionedFor(MostDifferences));
+
+            Assert.AreEqual(
+                (double)MostCells + 1,
+                Math.Ceiling((MostDifferences + 1L) * InvertibleBloomLookupTable.CellsPerDifference),
+                "the largest count of differences is not the last one whose cells fit");
+        }
+
+        /// <summary>
+        /// A number of differences that needs more cells than a table can have is refused
+        /// as the argument it is, rather than saturated into a cell count and left for the
+        /// allocator to refuse.
+        /// </summary>
+        [TestMethod]
+        public void TestSizingForMoreDifferencesThanATableCanHoldIsRefused()
+        {
+            foreach (var (differences, why) in TooManyDifferences())
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => InvertibleBloomLookupTable.CellsProvisionedFor(differences),
+                    $"{differences} differences, {why}");
+
+                Assert.AreEqual("expectedDifferences", ex.ParamName, why);
+                Assert.AreEqual(differences, ex.ActualValue, why);
+
+                // The message names the limit, in cells and in the differences it comes to,
+                // so that whoever reads it knows how far to come down.
+                StringAssert.Contains(ex.Message, $"{MostCells}", why);
+                StringAssert.Contains(ex.Message, $"{MostDifferences}", why);
+            }
+        }
+
+        /// <summary>
+        /// The same refusal reaches the public constructor, and is the same exception
+        /// whichever way the count overflowed.
+        /// </summary>
+        [TestMethod]
+        public void TestAConstructorGivenTooManyDifferencesIsRefused()
+        {
+            foreach (var (differences, why) in TooManyDifferences())
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => new InvertibleBloomLookupTable(differences, 8),
+                    $"{differences} differences, {why}");
+
+                Assert.AreEqual("expectedDifferences", ex.ParamName, why);
+            }
+        }
+
+        /// <summary>
+        /// The keys are stored in a single array of the cells times the key size, so a key
+        /// width that is fine for a small table is too much for a large one. The refusal
+        /// names the key size, and says both how wide a key could be for these cells and
+        /// how many cells keys this wide allow.
+        /// <para>
+        /// The first case is the ordinary one: eight-byte keys and a few hundred million
+        /// differences, whose counts and hash sums are an array each that an allocator
+        /// would give, and whose keys are not. The others make the keys the only thing
+        /// wrong with a small table. Before the check the keys' array was the one that
+        /// failed, as an OverflowException or an OutOfMemoryException depending on which
+        /// side of an int the byte count fell, and only after the counts had been
+        /// allocated.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [DataRow(300_000_000u, 8)]
+        [DataRow(1000u, 1_431_656)]
+        [DataRow(1u, 143_165_573)]
+        [DataRow(1u, int.MaxValue)]
+        public void TestKeysTooWideForTheCellsAreRefused(uint differences, int keySize)
+        {
+            var cells = InvertibleBloomLookupTable.CellsProvisionedFor(differences);
+
+            var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new InvertibleBloomLookupTable(differences, keySize));
+
+            Assert.AreEqual("keySize", ex.ParamName);
+            Assert.AreEqual(keySize, ex.ActualValue);
+            StringAssert.Contains(ex.Message, $"{Array.MaxLength}");
+            StringAssert.Contains(ex.Message, $"{Array.MaxLength / cells}",
+                "the message should say how wide a key can be for this many cells");
+            StringAssert.Contains(ex.Message, $"{Array.MaxLength / keySize}",
+                "the message should say how many cells keys this wide allow");
+
+            // The hook that builds a table of an exact size goes through the same check.
+            var hooked = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => InvertibleBloomLookupTable.WithCells(cells, keySize));
+            Assert.AreEqual("keySize", hooked.ParamName);
+        }
+
+        /// <summary>
+        /// The hook that builds a table of an exact size is bounded as the constructor is,
+        /// so a test cannot reach a size the library itself refuses.
+        /// </summary>
+        [TestMethod]
+        public void TestAnExactSizeBeyondWhatATableCanHaveIsRefused()
+        {
+            var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => InvertibleBloomLookupTable.WithCells(uint.MaxValue, 1));
+
+            Assert.AreEqual("cells", ex.ParamName);
+            StringAssert.Contains(ex.Message, $"{MostCells}");
+        }
+
+        /// <summary>
+        /// The size check at both edges, asked directly because a table at the edge is
+        /// gigabytes and a test is no place to build one. Each pair is the last that
+        /// passes and the first that does not, so a limit that is one too tight or one
+        /// too loose fails on the side it moved to.
+        /// <para>
+        /// The cases that decide the keys' bound are the ones where the cells times the key
+        /// size comes to exactly what an array can hold, which is what separates "more
+        /// than" from "at least". That needs a factorisation of the array limit, so the
+        /// precondition is asserted: if the limit ever moves, this says so instead of
+        /// quietly testing nothing at the edge.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestTheSizeCheckRefusesExactlyWhatNoArrayCouldHold()
+        {
+            // Cells at the edge of the cell bound, with the narrowest keys.
+            InvertibleBloomLookupTable.ValidTableSize(MostCells, 1);
+            var tooMany = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => InvertibleBloomLookupTable.ValidTableSize(MostCells + 1u, 1));
+            Assert.AreEqual("cells", tooMany.ParamName);
+
+            // The widest key each cell count allows, and the next width. Eight cells is
+            // the one whose next width comes to exactly one byte over the limit, which a
+            // check that was one byte loose would let through.
+            Assert.AreEqual((long)Array.MaxLength + 1, 8L * (Array.MaxLength / 8 + 1),
+                "the array limit has moved, and eight cells no longer land a byte over it");
+
+            foreach (var cells in new[] { 4u, 8u, 15u, 1500u, MostCells })
+            {
+                var widest = (int)(Array.MaxLength / cells);
+
+                InvertibleBloomLookupTable.ValidTableSize(cells, widest);
+
+                var tooWide = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => InvertibleBloomLookupTable.ValidTableSize(cells, widest + 1),
+                    $"{cells} cells with keys one byte wider than they allow");
+                Assert.AreEqual("keySize", tooWide.ParamName);
+            }
+
+            // Cells times key size exactly the array limit, both ways round, and each one
+            // more.
+            const uint Factor = 11;
+            var other = (uint)(Array.MaxLength / Factor);
+            Assert.AreEqual((long)Array.MaxLength, (long)Factor * other,
+                "the array limit no longer factors this way; choose another pair");
+
+            InvertibleBloomLookupTable.ValidTableSize(other, (int)Factor);
+            InvertibleBloomLookupTable.ValidTableSize(Factor, (int)other);
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => InvertibleBloomLookupTable.ValidTableSize(other + 1u, (int)Factor));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => InvertibleBloomLookupTable.ValidTableSize(other, (int)Factor + 1));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => InvertibleBloomLookupTable.ValidTableSize(Factor, (int)other + 1));
+
+            // A product that wraps a uint to nothing, or to something small, is still far
+            // too many bytes: the multiplication has to be wide enough not to wrap.
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => InvertibleBloomLookupTable.ValidTableSize(1u << 16, 1 << 16));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => InvertibleBloomLookupTable.ValidTableSize(1u << 16, (1 << 16) + 1));
+        }
+
+        /// <summary>
         /// A table is meant to be sent somewhere, so a restored one has to subtract
         /// against a table built by whoever received it.
         /// </summary>
@@ -651,6 +859,53 @@ namespace TestProbabilisticDataStructures
                 "a restored table would not reconcile");
             CollectionAssert.AreEquivalent(new[] { 999_001L }, onlyMine.Select(Value).ToArray());
             CollectionAssert.AreEquivalent(new[] { 999_002L }, onlyTheirs.Select(Value).ToArray());
+        }
+
+        /// <summary>
+        /// FNV-1a, standing in for a hash function of the caller's. A method rather than a
+        /// lambda, so that two tables given it compare as using the same one.
+        /// </summary>
+        private static ulong Fnv(ReadOnlySpan<byte> key)
+        {
+            var hash = 14695981039346656037UL;
+            foreach (var b in key)
+            {
+                hash = (hash ^ b) * 1099511628211UL;
+            }
+
+            return hash;
+        }
+
+        /// <summary>
+        /// A cell holds a single key when hashing what it holds gives the hash it
+        /// recorded, so the difference of two tables built with a hash function of the
+        /// caller's has to be built with that function too. A difference that fell back to
+        /// the default would find no cell it could peel, and report an unfinished decode
+        /// of a table that holds one key on each side.
+        /// </summary>
+        [TestMethod]
+        public void TestASubtractedTableKeepsTheHashFunctionItsInputsUse()
+        {
+            var mine = new InvertibleBloomLookupTable(20, 8, Fnv);
+            var theirs = new InvertibleBloomLookupTable(20, 8, Fnv);
+
+            for (var i = 0; i < 200; i++)
+            {
+                mine.Add(Key(i));
+                theirs.Add(Key(i));
+            }
+
+            mine.Add(Key(1_001));
+            theirs.Add(Key(1_002));
+
+            var difference = mine.Subtract(theirs);
+
+            Assert.AreEqual(mine.Hash, difference.Hash);
+            Assert.IsTrue(difference.TryDecode(out var onlyMine, out var onlyTheirs),
+                "the difference could not be peeled, which is what a table hashing its " +
+                "cells with another function than the keys were placed by looks like");
+            CollectionAssert.AreEquivalent(new[] { 1_001L }, onlyMine.Select(Value).ToArray());
+            CollectionAssert.AreEquivalent(new[] { 1_002L }, onlyTheirs.Select(Value).ToArray());
         }
 
         [TestMethod]
