@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`InvertibleBloomLookupTable.TryDecode` could report success with a wrong answer.** It
+  called a table empty once every count was zero, but two keys on opposite sides that land
+  in the same cells cancel each other's counts while both stay in the key and hash sums.
+  The decode then returned true holding part of the difference, or none of it. In a table
+  sized for eight differences holding four each way, 89 of 5,000 decodes did, every one a
+  partial listing presented as complete; a table sized for two, whose four cells hold
+  every key, reported any difference of one key each way as no difference at all.
+
+  A table is now empty only when every count, key sum and hash sum is zero — the rule
+  Eppstein et al.'s decode uses — so those decodes return false, which is the answer the
+  structure promises when it cannot finish. A decode that was right before is unchanged:
+  recovering everything leaves every field at zero. The stored format does not change.
+  (#146)
+
 ## [6.2.0] - 2026-08-19
 
 ### Added
