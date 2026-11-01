@@ -447,6 +447,7 @@ namespace TestProbabilisticDataStructures
         /// <item><term>3</term><description>ceil(4.2) + 13 = 18, over ceil(4.5) = 5</description></item>
         /// <item><term>4</term><description>ceil(5.6) + 13 = 19, over 6</description></item>
         /// <item><term>5</term><description>1.4 * 5 = 7 exactly, so 7 + 13 = 20, over ceil(7.5) = 8</description></item>
+        /// <item><term>10</term><description>1.4 * 10 = 14 exactly, so 14 + 13 = 27, over 15: the 648 bytes the README quotes, at 24 a cell</description></item>
         /// <item><term>20</term><description>28 + 13 = 41, over 30</description></item>
         /// <item><term>100</term><description>140 + 13 = 153, over 150</description></item>
         /// <item><term>128</term><description>ceil(179.2) + 13 = 193, over 192: the last the allowance decides</description></item>
@@ -478,13 +479,17 @@ namespace TestProbabilisticDataStructures
             }
 
             (uint Differences, uint Cells)[] byHand =
-                [(1, 15), (2, 16), (3, 18), (4, 19), (5, 20), (20, 41), (100, 153), (128, 193)];
+                [(1, 15), (2, 16), (3, 18), (4, 19), (5, 20), (10, 27), (20, 41), (100, 153), (128, 193)];
 
             foreach (var (d, cells) in byHand)
             {
                 Assert.AreEqual(cells, new InvertibleBloomLookupTable(d, 8).CellCount,
                     $"d={d}: the rule is the larger of ceil(1.5d) and ceil(1.4d) + 13.");
             }
+
+            Assert.AreEqual(648ul, new InvertibleBloomLookupTable(10, 8).SizeInBytes(),
+                "27 cells of an 8-byte count, an 8-byte key sum and an 8-byte hash sum; " +
+                "the README quotes the figure.");
 
             // Tables only ever grew: nothing is sized below what the 1.5 rule alone gave.
             // And from 129 up, which is where the allowance stops, the table is the size

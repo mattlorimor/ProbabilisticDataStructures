@@ -23,6 +23,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recovering everything leaves every field at zero. The stored format does not change.
   (#146)
 
+- **A small `InvertibleBloomLookupTable` could not decode the difference it was sized for.**
+  The constructor gave a table 1.5 cells per expected difference, never fewer than four,
+  on the strength of an asymptotic threshold that says nothing about small tables. Sized
+  for two, three or four differences, a table never decoded them, in none of 20,000 trials
+  each; sized for twenty it decoded them two times in three, and for a hundred, 98.9% of
+  the time. Before the #146 fix those failures often passed for success; after it they
+  returned false, which is what made the shortfall visible.
+
+  A table sized for *d* differences now lists all of them with probability at least 0.99,
+  at every *d* from one up. It gets the larger of 1.5*d* cells and 1.4*d* + 13, so a table
+  sized for one difference has 15 cells, for ten 27, and for a hundred 153. From 129
+  differences up that is 1.5*d*, which is what it always was, and nothing gets fewer cells
+  than before. The 0.99 is the figure Eppstein, Goodrich, Uyeda and Varghese use for the
+  same question (SIGCOMM 2011, section 6.1, Figure 7); the sizes are measured on this
+  implementation, because neither it nor Goodrich and Mitzenmacher's paper analyses small
+  tables. The lowest rate measured at any size from 1 to 260 differences was 99.5%.
+
+  **If you exchange tables between processes,** note that two tables must have the same
+  number of cells to be subtracted, and `Subtract` refuses a pair that do not. A table built
+  by an earlier version for fewer than 129 differences has fewer cells than one built now
+  for the same number, so build both sides with the same version of the library. Stored
+  tables are unaffected: the cell count is in the payload, the format does not change, and
+  a table written by any earlier version reads and decodes exactly as before. (#150)
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

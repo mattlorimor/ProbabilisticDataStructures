@@ -26,7 +26,8 @@ namespace ProbabilisticDataStructures
     /// <para>
     /// It can fail, and says so. If the difference is larger than the table was sized
     /// for, peeling stalls with keys left over and <see cref="TryDecode"/> returns false
-    /// rather than a partial answer.
+    /// rather than a partial answer. At the difference it was sized for it does so at
+    /// most one time in a hundred.
     /// </para>
     /// </remarks>
     public class InvertibleBloomLookupTable : IBinaryPersistable<InvertibleBloomLookupTable>
@@ -39,11 +40,59 @@ namespace ProbabilisticDataStructures
         private const int HashCount = 4;
 
         /// <summary>
-        /// Cells per expected difference. Complete listing needs more than c4 = 1.295
-        /// cells per entry -- the 2-core threshold for four hashes, Table 1 of the
-        /// paper (1.222 is the three-hash figure); 1.5 leaves room.
+        /// Cells per expected difference once a table is big enough for the asymptote to
+        /// be the whole story. Complete listing needs more than c4 = 1.295 cells per
+        /// entry -- the 2-core threshold for four hashes, Table 1 of the paper (1.222 is
+        /// the three-hash figure); 1.5 leaves room.
         /// </summary>
+        /// <remarks>
+        /// <b>What sizing promises (#150).</b> A table sized for d differences lists all
+        /// of them, whichever sides they fall on, with probability at least 0.99, at
+        /// every d. The 0.99 is the figure Eppstein, Goodrich, Uyeda and Varghese,
+        /// "What's the Difference?" (SIGCOMM 2011), section 6.1 and Figure 7, use for the
+        /// overhead a table needs.
+        /// <para>
+        /// The threshold is asymptotic -- so is Goodrich and Mitzenmacher's failure
+        /// probability, and their section 5 leaves finite sizes as an open "finite-length
+        /// analysis" -- and small tables need well over it. Measured here, with the cell
+        /// placement below and four hashes, the cells needed for 0.99 are about 2.4 per
+        /// difference at ten differences, 1.7 at forty, 1.5 at a hundred, and 1.36 at a
+        /// thousand, settling towards the threshold beyond. Figure 7 has the same curve
+        /// for four hashes, read off by eye: 2.3, 1.6, 1.5 and 1.4. Its text says "Deltas
+        /// below 200 all require at least 50% overhead", which is to say this 1.5 alone
+        /// is a floor for small differences, not what they need.
+        /// </para>
+        /// <para>
+        /// Between sixteen and a hundred differences the measured need stays within about
+        /// a cell of 1.4 d + 12. A table below 129 differences therefore gets 1.4 d + 13
+        /// cells, rounded up, wherever that is more than 1.5 d; from 129 differences up
+        /// the two meet and it is 1.5 d, as it always was. The extra cell is margin.
+        /// Measured at that size, the lowest rate of complete listing at any d from 1 to
+        /// 260 was 0.9948, for a difference split between the sides and, over the first
+        /// sixty-four, for one all on a side as well. With the allowance a cell smaller
+        /// the lowest is 0.9927, and with two cells fewer 0.989, under the promise.
+        /// Beyond a thousand the sampled sizes listed every time, as the asymptotic
+        /// analysis says they should.
+        /// </para>
+        /// <para>
+        /// So a table sized for one difference has fifteen cells, where four would do: a
+        /// single line cannot follow the curve at both ends, and the cost at the small end
+        /// is a few hundred bytes. Nothing gets fewer cells than it did before, and a
+        /// table sized for 129 differences or more is the size it always was.
+        /// </para>
+        /// </remarks>
         internal const double CellsPerDifference = 1.5;
+
+        /// <summary>
+        /// The slope of the line small tables follow, in cells per difference. See
+        /// <see cref="CellsPerDifference"/> for what it was fitted to.
+        /// </summary>
+        private const double SmallTableCellsPerDifference = 1.4;
+
+        /// <summary>
+        /// The cells added to that line: its intercept, plus a cell of margin.
+        /// </summary>
+        private const int SmallTableExtraCells = 13;
 
         private uint cells;
 
@@ -63,6 +112,15 @@ namespace ProbabilisticDataStructures
         /// How many keys the two sets are expected to differ by. <b>Not</b> how many keys
         /// they hold -- that is the point of the structure, and sizing it against the set
         /// size would waste almost all of it.
+        /// <para>
+        /// A table sized for this many lists a difference of this many completely, on
+        /// whichever sides it falls, with probability at least 0.99, however small the
+        /// number; a smaller difference only helps, since keys that peel completely still
+        /// do with some of them gone. The rest of the time <see cref="TryDecode"/>
+        /// returns false. Small numbers get disproportionately many cells to keep that
+        /// promise -- a table sized for one difference has fifteen -- and from 129 up it
+        /// is 1.5 cells per difference.
+        /// </para>
         /// </param>
         /// <param name="keySize">
         /// The size of every key in bytes. Keys are combined by exclusive-or, so they all
@@ -97,12 +155,21 @@ namespace ProbabilisticDataStructures
             this.hashSums = new ulong[this.cells];
         }
 
-        /// <summary>How many cells a table sized for a number of differences gets.</summary>
+        /// <summary>
+        /// How many cells a table sized for a number of differences gets: the larger of
+        /// the asymptotic rule and the small-table line, both described at
+        /// <see cref="CellsPerDifference"/>. The line is always at least HashCount, so
+        /// no floor is needed beside it.
+        /// </summary>
         private static uint CellsProvisionedFor(uint expectedDifferences)
         {
             Guard.ValidItemCount(expectedDifferences, nameof(expectedDifferences));
 
-            return (uint)Math.Max(HashCount, Math.Ceiling(expectedDifferences * CellsPerDifference));
+            var asymptotic = Math.Ceiling(expectedDifferences * CellsPerDifference);
+            var small = Math.Ceiling(expectedDifferences * SmallTableCellsPerDifference)
+                + SmallTableExtraCells;
+
+            return (uint)Math.Max(asymptotic, small);
         }
 
         /// <summary>
@@ -250,9 +317,9 @@ namespace ProbabilisticDataStructures
         /// <returns>
         /// Whether everything was recovered: true only when, with the listed keys taken
         /// out, nothing at all is left in the table. False means peeling stalled with keys
-        /// still in it -- likely once it holds more than it was sized for, and seen at or
-        /// below that too, more often the smaller the table -- in which case the two lists
-        /// are the part that came out before it did, which is not an answer.
+        /// still in it -- likely once it holds more than it was sized for, and at most one
+        /// time in a hundred at the difference it was sized for -- in which case the two
+        /// lists are the part that came out before it did, which is not an answer.
         /// </returns>
         public bool TryDecode(out IReadOnlyList<byte[]> added, out IReadOnlyList<byte[]> removed)
         {
