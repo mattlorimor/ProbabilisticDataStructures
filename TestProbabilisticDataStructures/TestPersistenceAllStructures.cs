@@ -804,7 +804,36 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestCorruptionIsCaughtInEveryStructure()
         {
-            var payloads = new (StructureId Id, Func<byte[], object> Read, byte[] Bytes)[]
+            var payloads = SamplePayloads();
+
+            foreach (var (id, read, clean) in payloads)
+            {
+                for (int i = 4; i < clean.Length; i++)
+                {
+                    var corrupted = (byte[])clean.Clone();
+                    corrupted[i] ^= 0x01;
+
+                    Assert.ThrowsExactly<InvalidDataException>(() => read(corrupted),
+                        $"{id}: a flipped bit at offset {i} was not caught");
+                }
+            }
+
+            StructureRoster.AssertCoversEveryStructure("corruption", payloads.Select(pl => pl.Id));
+        }
+
+        /// <summary>
+        /// A valid payload of every structure, with the call that reads it back. Both
+        /// layouts of the structure that has two are present, since one id covers them.
+        /// </summary>
+        /// <remarks>
+        /// Shared by the sweeps that need a real payload of each structure to do
+        /// something to: the corruption sweep flips its bits, and the format-version
+        /// sweep changes the version in its header. Each checks its own coverage against
+        /// <see cref="StructureId"/>.
+        /// </remarks>
+        internal static (StructureId Id, Func<byte[], object> Read, byte[] Bytes)[] SamplePayloads()
+        {
+            return new (StructureId Id, Func<byte[], object> Read, byte[] Bytes)[]
             {
                 (StructureId.BloomFilter64, b => Persistence.FromByteArray<BloomFilter64>(b), Filled(new BloomFilter64(200, 0.01))),
                 (StructureId.CountingBloomFilter, b => Persistence.FromByteArray<CountingBloomFilter>(b), Filled(new CountingBloomFilter(200, 4, 0.01))),
@@ -845,20 +874,6 @@ namespace TestProbabilisticDataStructures
                 (StructureId.SetSketch, b => Persistence.FromByteArray<SetSketch>(b), FilledSetSketch()),
                 (StructureId.TupleSketch, b => Persistence.FromByteArray<TupleSketch>(b), FilledTuple()),
             };
-
-            foreach (var (id, read, clean) in payloads)
-            {
-                for (int i = 4; i < clean.Length; i++)
-                {
-                    var corrupted = (byte[])clean.Clone();
-                    corrupted[i] ^= 0x01;
-
-                    Assert.ThrowsExactly<InvalidDataException>(() => read(corrupted),
-                        $"{id}: a flipped bit at offset {i} was not caught");
-                }
-            }
-
-            StructureRoster.AssertCoversEveryStructure("corruption", payloads.Select(pl => pl.Id));
         }
 
         // Small on purpose, as with the other payloads here: the sweep above flips a

@@ -276,7 +276,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generator had got to. **`StableBloomFilter` therefore writes a new format version**,
   which adds that starting state as one more field, so a release before this one cannot
   read a stable filter written by this one — the compatibility this library promises runs
-  backwards, not forwards. Every other structure writes the version it always did.
+  backwards, not forwards. `CuckooBloomFilter` makes the same change, next, and every
+  other structure writes the version it always did.
   <br><br>
   Payloads written by earlier versions still read, and nothing in them changes. They hold
   no starting state to go back to, and the seed is not in them, so a filter read from one
@@ -285,6 +286,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reached since. A payload written before 6.0.0 holds no generator position at all, so
   its beginning is the unpredictable one the filter was given on reading, as before. The
   layout is in [FORMAT.md](FORMAT.md).
+
+- **Every structure now refuses a format version it never defined, and says so.** A
+  payload's version belongs to the structure that wrote it: the stable filter has a
+  version 5 and the Bloom filter has only ever written 1. The readers did not hold to
+  that. They checked one library-wide ceiling, so a `BloomFilter` payload labelled 2, 3,
+  4 or 5 was accepted, and each structure's reader accepted every version up to the
+  highest any structure had defined. FORMAT.md promised a payload is "refused with an
+  explanation" otherwise.
+  <br><br>
+  **What actually happened, measured by relabelling.** A valid payload of every structure,
+  and of each older layout of the three that have them, was given each version from 1
+  to 5 that its structure never wrote, with the checksum repaired so the version was the
+  only difference. Nothing crashed. For every structure except the stable filter, the
+  cuckoo filter and `SetSketch`, no reader looks at the version at all, so the payload
+  was read as exactly the structure it always was, with no complaint: that is most of
+  them. The three that do branch on the version read the layout nearest below the
+  version they were handed, and were refused only when that layout happened not to fit
+  the bytes (a field short or left over, a fingerprint or register out of range), never
+  because of the version, and without saying anything about it. One case fitted: a
+  version 2 cuckoo filter holding nothing, labelled 4 or 5, loaded as a filter with
+  2-bit fingerprints in place of its 16-bit ones, because with no entries the packed
+  layout has nothing to disagree with.
+  <br><br>
+  **Who is affected.** No payload this library wrote, since it never writes a version its
+  structure did not define, and every stored fixture still reads. A payload has to have
+  its header rewritten with the checksum recomputed to carry such a version, or to come
+  from something that is not this library, so the exposure is narrow; it is still a
+  guess where the format promised none.
+  <br><br>
+  Each structure now reads the versions it has defined and no others. The refusal is an
+  `InvalidDataException` that names the structure, the version it was handed and the
+  versions it does read. Version 0 and versions above the highest were already refused;
+  their message changed too, since version 0 used to be described as written by a later
+  version. The versions each structure reads are in one table, which FORMAT.md's table of
+  versions is held to. Adding a version to a structure is one new constant and one more
+  entry in that table, and the highest supported version follows from it.
+
+- **`CuckooBloomFilter.Reset` now puts the random generator back where it began.** It had
+  the same gap `StableBloomFilter.Reset` had, with the same documentation promising the
+  filter's original state: the entries cleared and the generator stayed wherever the adds
+  had left it. A reset filter differed from a new one with the same seed in the generator
+  state stored in its payload, and chose different entries to evict from then on, so the
+  stream that took a filter to some state did not take its reset self to the same state.
+  (#144)
+  <br><br>
+  **A reset filter now repeats its original random sequence.** For a seeded filter that
+  is the sequence its seed gives. For one built without a seed it is the unpredictable
+  sequence it was built with, so resetting it again repeats that sequence rather than
+  drawing a new one; build a new filter for fresh randomness. This holds for a filter that
+  was saved and loaded in between.
+  <br><br>
+  The payload held only where the generator had got to, so **`CuckooBloomFilter` writes a
+  new format version too**: it adds the starting state as one more field, and a release
+  before this one cannot read a cuckoo filter written by this one — the compatibility this
+  library promises runs backwards, not forwards. Every structure but the stable and cuckoo
+  filters writes the version it always did.
+  <br><br>
+  Payloads written by earlier versions still read, in every format version the cuckoo
+  filter has written, and nothing in them changes. As for the stable filter, a filter read
+  from one takes the generator position it was read at as its beginning: `Reset` returns
+  it there, emptied, and writing it out again records that same point rather than the one
+  it has reached since. A payload written before 6.0.0 holds no generator position at all,
+  so its beginning is the unpredictable one the filter was given on reading, as before.
+  The layout is in [FORMAT.md](FORMAT.md), whose cuckoo section had also still described
+  fingerprints written as whole bytes, which stopped being true when 6.1.0 packed them at
+  their exact bit width; it now describes every version the reader accepts.
 
 - **The `QuotientFilter` constructor now refuses sizes that cannot work, where it used to
   build a filter that answered wrongly.** Three limits went unchecked, and past any of them

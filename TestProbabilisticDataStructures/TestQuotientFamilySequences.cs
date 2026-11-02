@@ -515,6 +515,12 @@ namespace TestProbabilisticDataStructures
                     {
                         filter.Reset();
                         twin.Reset();
+                        // A reset filter is a new one, generator included, however
+                        // many times it has been saved and loaded on the way here.
+                        Assert.IsTrue(
+                            Same(new CuckooBloomFilter(n, rate, seed: seed).ToByteArray(),
+                                filter.ToByteArray()),
+                            $"{what}: a reset filter must be a new one, byte for byte.");
                         model.Clear();
                         live.Clear();
                         Count("reset");
@@ -652,6 +658,7 @@ namespace TestProbabilisticDataStructures
             };
 
             var root = new CuckooBloomFilter(5, 0.5, hash, seed: 7);
+            var rootBytes = root.ToByteArray();
             Assert.AreEqual(2u, root.M, "premise: two buckets.");
             Assert.AreEqual(4u, root.FingerprintBits, "premise: four-bit fingerprints.");
             var placements = Enumerable.Range(0, alphabet)
@@ -702,6 +709,10 @@ namespace TestProbabilisticDataStructures
                 {
                     filter.Reset();
                     Array.Clear(model);
+                    // Every state here was read from bytes, so this is a reset after a
+                    // save and a load: it has to be the root, generator and all.
+                    Assert.IsTrue(Same(rootBytes, filter.ToByteArray()),
+                        $"{what}: a reset filter must be the filter it began as.");
                 }
 
                 var contents = QuotientFamilyInvariants.CheckCuckooFilter(filter, hash);

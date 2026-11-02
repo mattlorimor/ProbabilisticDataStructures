@@ -114,6 +114,14 @@ namespace ProbabilisticDataStructures
         private SeededRandom random;
 
         /// <summary>
+        /// Where the generator stood when the filter was built, which is what
+        /// <see cref="Reset"/> returns it to. It is stored with the filter because the
+        /// position the generator has reached cannot say where it began: a filter read
+        /// back from a payload would otherwise have nothing to return to.
+        /// </summary>
+        private ulong originalRandomState;
+
+        /// <summary>
         /// Creates a new Cuckoo Bloom filter optimized to store n items with a specified
         /// target false-positive rate.
         /// </summary>
@@ -166,6 +174,7 @@ namespace ProbabilisticDataStructures
             this.random = seed is null
                 ? SeededRandom.Unpredictable()
                 : new SeededRandom((ulong)seed.Value);
+            this.originalRandomState = this.random.State;
             this.M = m;
             this.B = b;
             this.FingerprintBits = bits;
@@ -348,9 +357,30 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Restores the Bloom filter to its original state. It returns the filter to
-        /// allow for chaining.
+        /// Restores the Cuckoo Bloom filter to its original state: every entry empty and
+        /// the random generator back where it stood when the filter was built. It
+        /// returns the filter to allow for chaining.
         /// </summary>
+        /// <remarks>
+        /// A reset filter is a new one, byte for byte as <see cref="WriteTo"/> writes
+        /// it, and it makes the choices a new one would: a stream added to it takes it
+        /// exactly where the same stream took the filter the first time, evictions
+        /// included. For a seeded filter those are the choices its seed gives. For one
+        /// built without a seed they are the unpredictable ones it was built with, so
+        /// resetting it repeatedly repeats them rather than drawing new ones; build a
+        /// new filter for that.
+        /// <para>
+        /// The starting state is stored with the filter, so this holds for one that has
+        /// been written and read back. A payload written before it was recorded has no
+        /// starting state to return to. A filter read from one takes the generator
+        /// position it was read at as its starting state, so Reset returns it there,
+        /// emptied, and writing it out and reading it back does not move that point.
+        /// </para>
+        /// <para>
+        /// Reset empties the filter and does not reconfigure it, so a hash function
+        /// supplied through <see cref="SetHash"/> stays.
+        /// </para>
+        /// </remarks>
         /// <returns>The CuckooBloomFilter</returns>
         public CuckooBloomFilter Reset()
         {
@@ -358,6 +388,7 @@ namespace ProbabilisticDataStructures
             // read, so the fingerprint bytes left behind are unreachable.
             this.Occupied.Reset();
             this.count = 0;
+            this.random = new SeededRandom(this.originalRandomState);
             return this;
         }
 
@@ -411,13 +442,14 @@ namespace ProbabilisticDataStructures
             }
 
             payload.WriteUInt64(this.random.State);
+            payload.WriteUInt64(this.originalRandomState);
 
             PersistenceFormat.Write(
                 stream,
                 StructureId.CuckooBloomFilter,
                 PersistenceFormat.Identify(this.Hash),
                 payload.WrittenSpan,
-                PersistenceFormat.CuckooPackedVersion);
+                PersistenceFormat.CuckooOriginalStateVersion);
         }
 
         /// <summary>
@@ -573,6 +605,14 @@ namespace ProbabilisticDataStructures
                 ? new SeededRandom(reader.ReadUInt64())
                 : SeededRandom.Unpredictable();
 
+            // Versions before the original state was recorded have none to read. Such a
+            // filter takes the position it was read at as its beginning, so Reset
+            // returns it there and writing it out again records that same point: the
+            // earliest the payload supports, rather than a seed it cannot name.
+            var originalRandomState = version >= PersistenceFormat.CuckooOriginalStateVersion
+                ? reader.ReadUInt64()
+                : random.State;
+
             reader.ExpectEnd();
 
             return new CuckooBloomFilter
@@ -586,6 +626,7 @@ namespace ProbabilisticDataStructures
                 N = n,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
                 random = random,
+                originalRandomState = originalRandomState,
             };
         }
 

@@ -55,12 +55,21 @@ namespace TestProbabilisticDataStructures
         private static CuckooBloomFilter FilledCuckoo(int? seed)
         {
             var f = new CuckooBloomFilter(100, 0.01, seed: seed);
+            FeedCuckoo(f);
+
+            return f;
+        }
+
+        /// <summary>
+        /// The stream FilledCuckoo puts through a filter, kept apart so a test can put
+        /// the same one through a filter again -- a reset one, for instance.
+        /// </summary>
+        private static void FeedCuckoo(CuckooBloomFilter f)
+        {
             for (int i = 0; i < 3000; i++)
             {
                 f.Add(Key($"w{i}"));
             }
-
-            return f;
         }
 
         [TestMethod]
@@ -263,8 +272,9 @@ namespace TestProbabilisticDataStructures
         // ------------------------------------------------------------------ Reset
 
         /// <summary>
-        /// Where a stable filter's payload says its generator is now, and where it began:
-        /// the last two u64 fields, ahead of the CRC, in the layout FORMAT.md freezes.
+        /// Where a stable or cuckoo filter's payload says its generator is now, and where
+        /// it began: the last two u64 fields, ahead of the CRC, in the layout FORMAT.md
+        /// freezes.
         /// Read from the bytes rather than from a member that exists only for the tests,
         /// so what is asserted is what a saved filter would carry.
         /// </summary>
@@ -510,6 +520,286 @@ namespace TestProbabilisticDataStructures
 
                 var saved = f.ToByteArray();
                 var reloaded = Persistence.FromByteArray<StableBloomFilter>(saved);
+
+                f.Reset();
+                reloaded.Reset();
+
+                CollectionAssert.AreEqual(f.ToByteArray(), reloaded.ToByteArray(),
+                    $"{fixture}: saving and loading moved where the filter resets to");
+            }
+        }
+
+        // --------------------------------------------------------- Reset, cuckoo
+
+        /// <summary>
+        /// A new filter of the shape FilledCuckoo builds: what a reset one has to equal.
+        /// </summary>
+        private static byte[] NewCuckoo(int seed) =>
+            new CuckooBloomFilter(100, 0.01, seed: seed).ToByteArray();
+
+        private static void AddMore(CuckooBloomFilter f, string prefix, int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                f.Add(Key($"{prefix}{i}"));
+            }
+        }
+
+        /// <summary>
+        /// Adds until the filter has refused a few inserts, which is the point at which
+        /// its generator has certainly moved: the generator is drawn from only when both
+        /// of an item's buckets are full, and a refusal has spent a whole eviction budget
+        /// of draws. A fixed count of adds would depend on how oversized the filter in
+        /// hand is -- the oldest stored payloads are far larger than their capacity.
+        /// </summary>
+        private static void Saturate(CuckooBloomFilter f, string prefix)
+        {
+            var refused = 0;
+            for (int i = 0; i < 200_000 && refused < 3; i++)
+            {
+                if (!f.Add(Key($"{prefix}{i}")))
+                {
+                    refused++;
+                }
+            }
+
+            Assert.AreEqual(3, refused, "the filter never filled, so its generator was never drawn");
+        }
+
+        /// <summary>
+        /// The six u32 fields that open a cuckoo payload: buckets, entries per bucket,
+        /// the fingerprint width, the count, the capacity and the number of occupied
+        /// entries. Read from the frame rather than from the filter, as the stored
+        /// bytes would be.
+        /// </summary>
+        private static uint[] CuckooHeader(byte[] frame) =>
+            Enumerable.Range(0, 6)
+                .Select(i => BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(14 + 4 * i)))
+                .ToArray();
+
+        /// <summary>
+        /// Everything about a cuckoo filter's shape is unchanged by a reset, and the
+        /// count and the occupied entries are gone.
+        /// </summary>
+        private static void AssertEmptiedKeepingShape(byte[] before, byte[] after, string fixture)
+        {
+            var was = CuckooHeader(before);
+            CollectionAssert.AreEqual(
+                new[] { was[0], was[1], was[2], 0u, was[4], 0u }, CuckooHeader(after),
+                $"{fixture}: Reset must empty the filter and leave its shape alone");
+        }
+
+        /// <summary>
+        /// The payload says where the generator is and where it began, in that order,
+        /// and a new filter has both at the seed -- widened to 64 bits, so that a
+        /// negative seed becomes all the high bits set and not a small number.
+        /// </summary>
+        [TestMethod]
+        [DataRow(7, 7UL)]
+        [DataRow(0, 0UL)]
+        [DataRow(-1, ulong.MaxValue)]
+        public void TestACuckooPayloadEndsWithWhereTheGeneratorIsAndWhereItBegan(int seed, ulong began)
+        {
+            var fresh = NewCuckoo(seed);
+            Assert.AreEqual(6, fresh[4] | (fresh[5] << 8), "a cuckoo filter should write version 6");
+            Assert.AreEqual((began, began), GeneratorPositions(fresh));
+
+            var used = FilledCuckoo(seed).ToByteArray();
+            var (now, origin) = GeneratorPositions(used);
+            Assert.AreEqual(began, origin, "the adds moved where the generator began");
+            Assert.AreNotEqual(began, now, "the adds left the generator where it began");
+        }
+
+        /// <summary>
+        /// Reset restores the original state, and the generator is part of it: a reset
+        /// filter is a new one, byte for byte, for any seed. Zero and a negative seed
+        /// are rows of their own because the seed is widened to the generator's 64 bits,
+        /// and the state a seed becomes is the state Reset must return to.
+        /// </summary>
+        [TestMethod]
+        [DataRow(7)]
+        [DataRow(0)]
+        [DataRow(-1)]
+        public void TestAResetCuckooFilterIsANewOneByteForByte(int seed)
+        {
+            var fresh = NewCuckoo(seed);
+            var f = FilledCuckoo(seed);
+
+            // Without this, a filter whose adds never drew from the generator would pass
+            // by doing nothing at all.
+            Assert.AreNotEqual(
+                GeneratorPositions(fresh).Now, GeneratorPositions(f.ToByteArray()).Now,
+                "the adds left the generator where it began, so a reset has nothing to undo");
+            Assert.IsGreaterThan(0u, f.Count());
+
+            Assert.AreSame(f, f.Reset());
+
+            Assert.AreEqual(0u, f.Count());
+            CollectionAssert.AreEqual(fresh, f.ToByteArray(),
+                "a reset filter differs from a new one built with the same seed");
+        }
+
+        /// <summary>
+        /// What the restored generator is for, stated as behavior: the stream that took a
+        /// filter to a state takes its reset self to the same state, because the reset
+        /// filter makes the same eviction choices a second time.
+        /// </summary>
+        [TestMethod]
+        public void TestAResetCuckooFilterRepeatsItsRandomSequence()
+        {
+            var f = FilledCuckoo(seed: 7);
+            var firstPass = f.ToByteArray();
+
+            f.Reset();
+            FeedCuckoo(f);
+
+            CollectionAssert.AreEqual(firstPass, f.ToByteArray(),
+                "the same stream took the reset filter somewhere else, so it did not " +
+                "repeat the eviction choices it made the first time");
+        }
+
+        /// <summary>
+        /// The same property for a filter that was saved and loaded after use, where the
+        /// original state can only come from the payload: the generator's current
+        /// position is the wrong thing to write for it, and so is a reseed on read.
+        /// </summary>
+        [TestMethod]
+        [DataRow(7)]
+        [DataRow(-1)]
+        public void TestAResetCuckooFilterThatWasSavedAndLoadedIsANewOneByteForByte(int seed)
+        {
+            var fresh = NewCuckoo(seed);
+
+            var loaded = Persistence.FromByteArray<CuckooBloomFilter>(
+                FilledCuckoo(seed).ToByteArray());
+            loaded.Reset();
+            CollectionAssert.AreEqual(fresh, loaded.ToByteArray(),
+                "a filter used, saved, loaded and reset differs from a new one");
+
+            // Saved again and again with more use between, as a checkpointed filter is.
+            // Each write has to carry the origin forward rather than the position the
+            // generator had reached when it wrote.
+            var checkpointed = FilledCuckoo(seed);
+            for (int round = 0; round < 5; round++)
+            {
+                checkpointed = Persistence.FromByteArray<CuckooBloomFilter>(
+                    checkpointed.ToByteArray());
+                AddMore(checkpointed, $"r{round}-", 200);
+            }
+
+            checkpointed.Reset();
+            CollectionAssert.AreEqual(fresh, checkpointed.ToByteArray(),
+                "a filter checkpointed repeatedly and then reset differs from a new one");
+        }
+
+        /// <summary>
+        /// And the other order: a filter reset and then saved still knows where it began,
+        /// so a second reset after more use returns to the start as well.
+        /// </summary>
+        [TestMethod]
+        public void TestACuckooFilterResetBeforeBeingSavedStillKnowsWhereItBegan()
+        {
+            var f = FilledCuckoo(seed: 7);
+            f.Reset();
+
+            var restored = Persistence.FromByteArray<CuckooBloomFilter>(f.ToByteArray());
+            CollectionAssert.AreEqual(NewCuckoo(7), restored.ToByteArray());
+
+            FeedCuckoo(restored);
+            restored.Reset();
+            CollectionAssert.AreEqual(NewCuckoo(7), restored.ToByteArray(),
+                "the loaded filter was reset to somewhere other than where it began");
+        }
+
+        /// <summary>
+        /// An unseeded filter has no seed to restore, and a constant would be wrong in a
+        /// different way: its original state is whatever unpredictable one it was built
+        /// with, and Reset returns it there, not to a state any other filter shares.
+        /// </summary>
+        [TestMethod]
+        public void TestAResetUnseededCuckooFilterReturnsToWhereItBegan()
+        {
+            var f = new CuckooBloomFilter(100, 0.01);
+            var began = f.ToByteArray();
+            var (now, origin) = GeneratorPositions(began);
+            Assert.AreEqual(origin, now, "a new filter's generator is where it began");
+
+            FeedCuckoo(f);
+            var used = f.ToByteArray();
+            Assert.AreNotEqual(now, GeneratorPositions(used).Now,
+                "the adds left the generator where it began, so a reset has nothing to undo");
+
+            f.Reset();
+            CollectionAssert.AreEqual(began, f.ToByteArray(),
+                "a reset unseeded filter is not back where it was built");
+
+            var restored = Persistence.FromByteArray<CuckooBloomFilter>(used);
+            restored.Reset();
+            CollectionAssert.AreEqual(began, restored.ToByteArray(),
+                "an unseeded filter that was saved and loaded is not back where it was built");
+        }
+
+        /// <summary>
+        /// A payload from before the original state was recorded has none to give back.
+        /// The filter takes the position it was read at as its beginning, so Reset
+        /// returns it there: emptied, with the generator where the payload put it. That
+        /// is the earliest position the payload tells us about, and unlike a guess at a
+        /// seed it is one the stored bytes support. Version 1 holds no position at all,
+        /// so the one it was given on reading, which is unpredictable, is its beginning.
+        /// </summary>
+        [TestMethod]
+        [DataRow("cuckoobloomfilter-v1.bin", 1)]
+        [DataRow("cuckoobloomfilter-v2.bin", 2)]
+        [DataRow("cuckoobloomfilter-v3.bin", 3)]
+        public void TestResetOnACuckooFilterReadFromAnOldPayloadReturnsToWhereItWasRead(
+            string fixture, int version)
+        {
+            var stored = ReadFixture(fixture);
+            Assert.AreEqual(version, stored[4] | (stored[5] << 8),
+                $"{fixture} is no longer a version {version} payload");
+
+            var f = Persistence.FromByteArray<CuckooBloomFilter>(stored);
+            var asRead = f.ToByteArray();
+            var (readAt, began) = GeneratorPositions(asRead);
+            Assert.AreEqual(readAt, began,
+                $"a filter read from a version {version} payload should begin where it was read");
+            if (version >= 2)
+            {
+                // The positions the payload held are the ones the filter carries, and
+                // not a fresh draw.
+                Assert.AreEqual(
+                    BinaryPrimitives.ReadUInt64LittleEndian(stored.AsSpan(stored.Length - 12)),
+                    readAt, "the generator was not read as stored");
+            }
+
+            Saturate(f, "later");
+            Assert.AreNotEqual(readAt, GeneratorPositions(f.ToByteArray()).Now,
+                "the adds left the generator where it was read, so a reset has nothing to undo");
+
+            f.Reset();
+            var reset = f.ToByteArray();
+            Assert.AreEqual((readAt, readAt), GeneratorPositions(reset));
+            AssertEmptiedKeepingShape(asRead, reset, fixture);
+        }
+
+        /// <summary>
+        /// Saving a filter read from an old payload must not change where it resets to.
+        /// The write has to record the position it began at, not the one it has reached
+        /// since -- otherwise a save and a load would move the target of every later Reset.
+        /// </summary>
+        [TestMethod]
+        public void TestSavingACuckooFilterReadFromAnOldPayloadDoesNotMoveItsReset()
+        {
+            foreach (var fixture in new[]
+            {
+                "cuckoobloomfilter-v1.bin", "cuckoobloomfilter-v2.bin", "cuckoobloomfilter-v3.bin",
+            })
+            {
+                var f = Persistence.FromByteArray<CuckooBloomFilter>(ReadFixture(fixture));
+                Saturate(f, "later");
+
+                var saved = f.ToByteArray();
+                var reloaded = Persistence.FromByteArray<CuckooBloomFilter>(saved);
 
                 f.Reset();
                 reloaded.Reset();

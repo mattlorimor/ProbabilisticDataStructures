@@ -320,7 +320,7 @@ choices after every load. The sequence a given seed produces changed in 6.0.0, w
 filters moved off `System.Random` — which will not report its position and so cannot be
 stored.
 
-`StableBloomFilter.Reset()` puts the generator back where the filter began, along with the
+`Reset()` on either filter puts the generator back where the filter began, along with the
 cells, so a reset filter is a new one and makes the choices its first pass made. That holds
 for a filter that was saved and loaded in between, because the payload also records where
 the generator began. A filter read from a payload written before that was recorded has no
