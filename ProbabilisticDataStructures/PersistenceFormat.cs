@@ -177,6 +177,15 @@ namespace ProbabilisticDataStructures
         internal const ushort CuckooOriginalStateVersion = 6;
 
         /// <summary>
+        /// The version at which <see cref="ScalableBloomFilter"/> stores its growth factor,
+        /// so that a restored filter sizes the filters it adds next as it would have. Each
+        /// contained filter already records its own size; what an earlier payload cannot
+        /// say is how large the next one should be. Written only by a filter that grows:
+        /// one that adds every filter at its hint writes the layout it always wrote.
+        /// </summary>
+        internal const ushort ScalableGrowthVersion = 7;
+
+        /// <summary>
         /// The version at which a filter in the Bloom family records that its bits were
         /// placed with 64-bit values, as <see cref="BloomFilter64"/> places them, rather
         /// than with the 32-bit scheme every earlier payload used. The layout is the one
@@ -185,10 +194,6 @@ namespace ProbabilisticDataStructures
         /// <see cref="BitPlacement.WideFrom"/>): every smaller one writes the version it
         /// always did, which libraries from before this one read.
         /// </summary>
-        /// <remarks>
-        /// Version 7 is not skipped here by accident. It was given to another change, and a
-        /// number names one change, shared by every structure it applies to.
-        /// </remarks>
         internal const ushort WidePlacementVersion = 8;
 
         /// <summary>
@@ -218,7 +223,7 @@ namespace ProbabilisticDataStructures
             [StructureId.CountingBloomFilter] = [DefaultVersion, WidePlacementVersion],
             [StructureId.DeletableBloomFilter] = [DefaultVersion, WidePlacementVersion],
             [StructureId.PartitionedBloomFilter] = [DefaultVersion, WidePlacementVersion],
-            [StructureId.ScalableBloomFilter] = [DefaultVersion],
+            [StructureId.ScalableBloomFilter] = [DefaultVersion, ScalableGrowthVersion],
             [StructureId.StableBloomFilter] =
                 [DefaultVersion, RandomStateVersion, StableOriginalStateVersion,
                  WidePlacementVersion],

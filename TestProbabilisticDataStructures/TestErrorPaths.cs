@@ -133,6 +133,8 @@ namespace TestProbabilisticDataStructures
             Assert.Throws<ArgumentOutOfRangeException>(() => new DeletableBloomFilter(0, 10, 0.01));
             Assert.Throws<ArgumentOutOfRangeException>(() => new StableBloomFilter(0, 1, 0.01));
             Assert.Throws<ArgumentOutOfRangeException>(() => new ScalableBloomFilter(0, 0.01, 0.8));
+            // Nor is any filter after the first, if the growth factor is zero.
+            Assert.Throws<ArgumentOutOfRangeException>(() => new ScalableBloomFilter(100, 0.01, 0.8, 0));
             // A capacity of zero left nowhere to put anything and divided by it.
             Assert.Throws<ArgumentOutOfRangeException>(() => new InverseBloomFilter(0));
             // A top-0 has no room for anything and indexed its empty heap.
@@ -200,6 +202,10 @@ namespace TestProbabilisticDataStructures
                 ("CountingBloomFilter", () => new CountingBloomFilter(1_000_000_000, 4, 0.01)),
                 ("PartitionedBloomFilter", () => new PartitionedBloomFilter(1_000_000_000, 0.01)),
                 ("DeletableBloomFilter", () => new DeletableBloomFilter(1_000_000_000, 10, 0.01)),
+                // The scalable filter's first filter is its constructor's arguments, so a
+                // hint too large to build is refused as one, and not as the ceiling an
+                // add reaches later.
+                ("ScalableBloomFilter", () => new ScalableBloomFilter(1_000_000_000, 0.01, 0.8)),
             })
             {
                 var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(

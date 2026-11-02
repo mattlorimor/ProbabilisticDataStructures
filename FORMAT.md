@@ -43,6 +43,7 @@ structure whose layout changes bumps only its own.
 | 4 | 6.2.0 | `SetSketch` | the construction, written only for the second one |
 | 5 | the release after 6.2.0 | `StableBloomFilter` | the state the random generator began in |
 | 6 | the release after 6.2.0 | `CuckooBloomFilter` | the state the random generator began in |
+| 7 | the release after 6.2.0 | `ScalableBloomFilter` | the growth factor, written only by a filter that grows |
 | 8 | the release after 6.2.0 | `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter`, `StableBloomFilter` | bits placed with 64-bit values, written only for a filter of 2^27 positions or more |
 
 The table is also the list of what each structure reads. A version belongs to the
@@ -87,6 +88,17 @@ payload of the cuckoo filter still reads, and its filter takes the generator pos
 was read at as its original state, exactly as the stable filter's does; the details are
 in [The random generator's state](#the-random-generators-state).
 
+Version 7 exists because a `ScalableBloomFilter` can grow its contained filters: the
+i-th is built for hint × sⁱ items rather than for the hint every time. Each nested filter
+already records its own size, so filters of mixed sizes read back at any version; what a
+payload without the factor cannot say is how large the *next* filter should be. Only a
+filter that grows writes version 7. One with a growth factor of 1 — every filter built
+for the hint, as every scalable filter was before the factor existed — still writes
+version 1, so libraries that predate the choice still read it. A version 1 payload is a
+filter with a growth factor of 1 by definition, and goes on adding filters for its hint
+after it is read; a reader older than version 7 refuses a version 7 payload as written by
+a later version.
+
 Version 8 changes what a filter's bits stand for, not where they are written. Each of
 the five structures named on it writes, at version 8, exactly the layout it wrote before
 -- version 5's for the stable filter, version 1's for the rest -- and the version says
@@ -101,7 +113,9 @@ version 8 was placed with 32-bit values whatever its size, and reads back that w
 large filter written by an earlier release is the filter it was, including the false
 positive rate it had; a version 8 payload is placed with 64-bit values whatever its
 size. Two filters of the same size placed differently set different bits for the same
-item, so the filters that merge refuse to merge them.
+item, so the filters that merge refuse to merge them. A `ScalableBloomFilter` holds
+partitioned filters, each in its own envelope, so a contained filter whose partitions are
+large enough is written at version 8 inside a scalable filter at version 1 or 7.
 
 A reader refuses a payload whose magic does not match, whose version is not one its
 structure has defined, whose structure id is not the type being read, or whose
@@ -377,13 +391,21 @@ depends on the version: see [Bit placement](#bit-placement), with `m` the partit
 f64     r, the tightening ratio
 f64     fp, the target false positive rate
 f64     p, the fill ratio at which a new filter is added
-u32     hint
+u32     hint, the items the first contained filter is built for
+u32     s, the growth factor, at format version 7 only
 u32     filter count
 nested  PartitionedBloomFilter, one per contained filter, in order
 ```
 
 Order matters: each contained filter targets a rate tightened from the last, and the
 final one is the one additions go to.
+
+Filter i is built for hint × sⁱ items at fp × rⁱ, and s is 1 in a payload without it.
+A reader takes each filter's size from its nested payload and does not recompute it:
+the sizing goes through floating point that is not bit-identical across platforms, and
+the filters are what they were built as. The factor is stored for the filters still to
+come. A reader at version 7 rejects a growth factor below 2, since a filter growing by 1
+writes version 1, and every reader rejects a payload holding no filters.
 
 ### `StableBloomFilter` (id 7)
 
