@@ -839,8 +839,10 @@ namespace ProbabilisticDataStructures
         /// taken off once.
         /// <para>
         /// A counter can end up below where it started, since deletions are what brings
-        /// a sketch here in the first place, so the arithmetic is done signed and
-        /// nothing is allowed to fall below nought.
+        /// a sketch here in the first place, so nothing is allowed to fall below nought.
+        /// Nor past the largest count a counter holds, which the sum of two halves can
+        /// reach. The sum is taken in 128 bits, unsigned: in signed longs, as it once was,
+        /// a counter of 2^63 or more came out negative and was folded to nought.
         /// </para>
         /// </remarks>
         private void Contract()
@@ -855,10 +857,10 @@ namespace ProbabilisticDataStructures
                 folded[i] = new ulong[halved];
                 for (var j = 0; j < halved; j++)
                 {
-                    var kept = (long)this.rows[i].Get(j)
-                        + (long)this.rows[i].Get(j + halved)
-                        - (long)record[i].Get(j);
-                    folded[i][j] = kept > 0 ? (ulong)kept : 0;
+                    var gathered = (UInt128)this.rows[i].Get(j) + this.rows[i].Get(j + halved);
+                    var started = (UInt128)record[i].Get(j);
+                    var kept = gathered > started ? gathered - started : UInt128.Zero;
+                    folded[i][j] = kept > ulong.MaxValue ? ulong.MaxValue : (ulong)kept;
                 }
             }
 
