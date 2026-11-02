@@ -717,7 +717,10 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestHeavyKeeperHoldingMoreThanItsRoomIsRefused()
         {
-            var bytes = PokeUInt32(HeavyKeeperPayload(), 356, 200);
+            // u32 k, u32 width, u32 depth, u8 placement, f64 decay, u64 generator, u64 n,
+            // 37 bytes; 2 x 16 fingerprints of 2 bytes and counters of 8, 320 more; then
+            // the element count at 357.
+            var bytes = PokeUInt32(HeavyKeeperPayload(), 357, 200);
             AssertRefused(
                 () => Persistence.FromByteArray<HeavyKeeper>(bytes), "with room for");
         }
@@ -730,7 +733,8 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestHeavyKeeperWithFlatDecayIsRefused()
         {
-            var bytes = PokeUInt64(HeavyKeeperPayload(), 12,
+            // u32 k, u32 width, u32 depth, the placement byte, then f64 decay at 13.
+            var bytes = PokeUInt64(HeavyKeeperPayload(), 13,
                 BitConverter.DoubleToUInt64Bits(1.0));
             AssertRefused(
                 () => Persistence.FromByteArray<HeavyKeeper>(bytes), "decay base");
@@ -995,8 +999,9 @@ namespace TestProbabilisticDataStructures
 
             var bytes = sketch.ToByteArray();
 
-            // Shape is four u32/u64 fields: width, depth, rho, count.
-            const int CountersAt = 4 + 4 + 8 + 8;
+            // Shape is width and depth (u32 each), the placement byte, rho and count (u64
+            // each).
+            const int CountersAt = 4 + 4 + 1 + 8 + 8;
             for (var i = 0; i < 16 * 3; i++)
             {
                 var at = PayloadStart + CountersAt + (i * 8);
@@ -1050,7 +1055,7 @@ namespace TestProbabilisticDataStructures
                 {
                     var width = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at));
                     var depth = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at + 4));
-                    at += 24;  // width(4) depth(4) rho(8) count(8)
+                    at += 25;  // width(4) depth(4) placement(1) rho(8) count(8)
 
                     for (var c = 0; c < width * depth; c++)
                     {
@@ -1148,11 +1153,11 @@ namespace TestProbabilisticDataStructures
             /// Header is window(8) rho(8) alpha(8) substreamSize(4) width(4) depth(4)
             /// position(8), then the substream count; each substream is start(8)
             /// held(4) followed by its plan's sketches, each of which is width(4)
-            /// depth(4) rho(8) count(8) and then its counters.
+            /// depth(4) placement(1) rho(8) count(8) and then its counters.
             /// </summary>
             internal int SubstreamAt(int index) =>
                 PayloadStart + 48
-                + (index * (12 + (PlanLength * (24 + ((int)(Width * Depth) * 8)))));
+                + (index * (12 + (PlanLength * (25 + ((int)(Width * Depth) * 8)))));
         }
 
         /// <summary>
@@ -1261,8 +1266,9 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestInverseFilterHoldingAnEntryPastItsCapacityIsRefused()
         {
-            // u32 capacity, u32 occupied, then the first entry's slot index.
-            const int FirstSlotOffset = 8;
+            // u32 capacity, the placement byte, u32 occupied, then the first entry's slot
+            // index.
+            const int FirstSlotOffset = 9;
 
             var bytes = Filled(new InverseBloomFilter(64)).ToByteArray();
 

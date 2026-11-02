@@ -82,14 +82,14 @@ namespace TestProbabilisticDataStructures
 
             // u32 k, u32 n, then the sketch as a length-prefixed envelope of its own: a
             // 14-byte header, and in its payload f64 epsilon, f64 delta, u32 width, u32
-            // depth and the u64 count.
+            // depth, the placement byte and the u64 count.
             System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
                 bytes.AsSpan(PayloadStart + 4), stored);
             var nestedLength = (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
                 bytes.AsSpan(PayloadStart + 8));
             var nested = PayloadStart + 12;
             System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
-                bytes.AsSpan(nested + PayloadStart + 8 + 8 + 4 + 4), sketchCount);
+                bytes.AsSpan(nested + PayloadStart + 8 + 8 + 4 + 4 + 1), sketchCount);
 
             RepairChecksum(bytes.AsSpan(nested, nestedLength));
             RepairChecksum(bytes);

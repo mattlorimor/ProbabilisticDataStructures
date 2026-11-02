@@ -40,6 +40,13 @@ namespace ProbabilisticDataStructures
     /// nothing about a system that also publishes the exact stream length, or the same
     /// stream sketched again under a fresh seed.
     /// </para>
+    /// <para>
+    /// <b>Where an item is counted.</b> A sketch 2^27 columns wide or wider places its
+    /// counts with 64-bit hash values, and a narrower one with 32-bit values, exactly as a
+    /// <see cref="CountMinSketch"/> does and for the same reason. Every save is format
+    /// version 9, which records the placement; a sketch read back keeps the scheme its
+    /// payload was placed with.
+    /// </para>
     /// </remarks>
     public class PrivateCountMinSketch : IBinaryPersistable<PrivateCountMinSketch>
     {
@@ -319,11 +326,11 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <remarks>
         /// The constructor's choice, reachable on its own so that the widths at which it
-        /// changes can be checked without drawing the noise for sketches of those widths.
-        /// Nothing chooses the 64-bit scheme for a sketch yet: every sketch places with
-        /// 32-bit values, as every sketch always has.
+        /// changes can be checked without drawing the noise for sketches of those widths:
+        /// 64-bit values from <see cref="BitPlacement.WideFrom"/> columns, and 32-bit ones,
+        /// as every sketch always had, below it.
         /// </remarks>
-        internal static Placement PlacementFor(uint width) => Placement.Narrow;
+        internal static Placement PlacementFor(uint width) => BitPlacement.For(width);
 
         /// <summary>
         /// The columns <paramref name="data"/> is counted in under
@@ -364,7 +371,8 @@ namespace ProbabilisticDataStructures
                 stream,
                 StructureId.PrivateCountMinSketch,
                 PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+                payload.WrittenSpan,
+                PersistenceFormat.ColumnPlacementVersion);
         }
 
         /// <summary>
@@ -439,11 +447,11 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.PrivateCountMinSketch);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.PrivateCountMinSketch, out var hashId, budget, Price,
+                stream, StructureId.PrivateCountMinSketch, out var hashId, out var version, budget, Price,
                 hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
-            return ReadBody(ref reader, PersistenceFormat.ResolveOrThrow(hashId, hash));
+            return ReadBody(ref reader, PersistenceFormat.ResolveOrThrow(hashId, hash), version);
         }
 
         /// <summary>
@@ -452,18 +460,19 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
-            PriceBody(ref reader);
+            PriceBody(ref reader, version);
         }
 
         /// <summary>
         /// Prices what <see cref="ReadBody"/> allocates, the matrix, and moves past the
-        /// body. Returns the shape it claims, for a price that checks it as its reader
-        /// does.
+        /// body, laid out as format version <paramref name="version"/> lays it out. Returns
+        /// the shape it claims, for a price that checks it as its reader does.
         /// </summary>
-        internal static (uint Width, uint Depth) PriceBody(ref PayloadReader reader)
+        internal static (uint Width, uint Depth) PriceBody(ref PayloadReader reader, ushort version)
         {
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
+            BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             var rho = reader.ReadDouble();
             reader.ReadUInt64();
             CheckShape(width, depth, rho);
@@ -512,15 +521,22 @@ namespace ProbabilisticDataStructures
             ReadBudget.SmallObject);
 
         /// <summary>
-        /// Reads the body of a sketch from a payload already positioned at one, so that
+        /// Reads the body of a sketch from a payload already positioned at one, laid out as
+        /// format version <paramref name="version"/> lays it out, so that
         /// <see cref="DpswSketch"/> can read the sketches it holds without each one
         /// carrying its own frame.
         /// </summary>
+        /// <remarks>
+        /// The placement comes from the body, never from the width: a body before version 9
+        /// was placed with 32-bit values whatever its width, and one at version 9 says how
+        /// it was placed, so each of a window's sketches reads as it was written.
+        /// </remarks>
         internal static PrivateCountMinSketch ReadBody(
-            ref PayloadReader reader, Func<ReadOnlySpan<byte>, ulong> hash)
+            ref PayloadReader reader, Func<ReadOnlySpan<byte>, ulong> hash, ushort version)
         {
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
+            var placement = BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             var rho = reader.ReadDouble();
             var count = reader.ReadUInt64();
             CheckShape(width, depth, rho);
@@ -566,7 +582,7 @@ namespace ProbabilisticDataStructures
                     "rather than handing back a sketch that guarantees nothing.");
             }
 
-            return new PrivateCountMinSketch(width, depth, rho, count, matrix, hash, Placement.Narrow);
+            return new PrivateCountMinSketch(width, depth, rho, count, matrix, hash, placement);
         }
 
         /// <summary>
@@ -591,11 +607,14 @@ namespace ProbabilisticDataStructures
         /// Writes the body of this sketch into a payload already being written, so that
         /// <see cref="DpswSketch"/> can hold sketches without each carrying its own
         /// frame. The seed is no more written here than it is by <see cref="WriteTo"/>.
+        /// The layout is format version 9's, with the placement byte, so whatever holds it
+        /// is written at version 9 too.
         /// </summary>
         internal void WriteBody(PayloadWriter payload)
         {
             payload.WriteUInt32(this.width);
             payload.WriteUInt32(this.depth);
+            BitPlacement.Write(payload, this.placement);
             payload.WriteDouble(this.rho);
             payload.WriteUInt64(this.count);
 

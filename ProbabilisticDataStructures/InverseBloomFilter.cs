@@ -58,6 +58,13 @@ namespace ProbabilisticDataStructures
     /// own copy on <see cref="Add(byte[])"/> so that a caller reusing their buffer cannot
     /// change what it holds. It is not thread-safe: the original swaps the stored
     /// value atomically, and this reads and writes the slot in two steps.
+    ///
+    /// A filter of 2^27 slots or more places an item with its whole 64-bit hash, reduced
+    /// modulo the capacity; a smaller one with the hash's low 32 bits, as it always did.
+    /// Before this every filter used the low 32 bits, and a large one sent more items to
+    /// its first <c>2^32 mod capacity</c> slots, which it then overwrote sooner. Every save
+    /// is format version 9, which records the placement; a filter read back keeps the
+    /// scheme its payload was placed with.
     /// </summary>
     public class InverseBloomFilter : IFilter, IBinaryPersistable<InverseBloomFilter>
     {
@@ -151,11 +158,11 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <remarks>
         /// The constructor's choice, reachable on its own so that the capacities at which
-        /// it changes can be checked without allocating filters of those capacities.
-        /// Nothing chooses the 64-bit scheme for this filter yet: every one places with
-        /// 32-bit values, as every one always has.
+        /// it changes can be checked without allocating filters of those capacities: 64-bit
+        /// values from <see cref="BitPlacement.WideFrom"/> slots, and 32-bit ones, as every
+        /// one always had, below it.
         /// </remarks>
-        internal static Placement PlacementFor(uint capacity) => Placement.Narrow;
+        internal static Placement PlacementFor(uint capacity) => BitPlacement.For(capacity);
 
         /// <summary>
         /// The slot an item whose hash is <paramref name="hash"/> is held in under
@@ -328,6 +335,7 @@ namespace ProbabilisticDataStructures
 
             var payload = new PayloadWriter();
             payload.WriteUInt32(this.capacity);
+            BitPlacement.Write(payload, this.Placement);
 
             // Only the occupied slots, each with its index. This filter is the one that
             // stores the data rather than hashing it, so a full-length run of empties
@@ -356,7 +364,8 @@ namespace ProbabilisticDataStructures
                 stream,
                 StructureId.InverseBloomFilter,
                 PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+                payload.WrittenSpan,
+                PersistenceFormat.ColumnPlacementVersion);
         }
 
         /// <summary>
@@ -430,11 +439,16 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.InverseBloomFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.InverseBloomFilter, out var hashId, budget, Price,
+                stream, StructureId.InverseBloomFilter, out var hashId, out var version, budget, Price,
                 hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var capacity = reader.ReadUInt32();
+            // From the payload, never from the capacity: a version 1 payload of any capacity
+            // was placed with 32-bit values, and a version 9 one says how it was placed. The
+            // slots carry their indexes, so this decides where the filter looks, not where
+            // what it holds is put back.
+            var placement = BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             var occupied = ReadOccupied(ref reader, capacity);
 
             // Every slot is allocated, occupied or not; the occupied ones' data are
@@ -455,7 +469,7 @@ namespace ProbabilisticDataStructures
                 Array = slots,
                 capacity = capacity,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
-                Placement = Placement.Narrow,
+                Placement = placement,
             };
         }
 
@@ -466,6 +480,7 @@ namespace ProbabilisticDataStructures
         internal static void Price(ref PayloadReader reader, ushort version)
         {
             var capacity = reader.ReadUInt32();
+            BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             var occupied = ReadOccupied(ref reader, capacity);
 
             reader.Budget.Price(SlotsCost(capacity));

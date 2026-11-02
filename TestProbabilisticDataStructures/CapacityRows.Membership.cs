@@ -45,8 +45,9 @@ namespace TestProbabilisticDataStructures
 
         // ---- InverseBloomFilter ----------------------------------------------------------
 
+        // The occupied count follows the u32 capacity and the placement byte.
         private static long Occupied(byte[] inverse) =>
-            BinaryPrimitives.ReadUInt32LittleEndian(inverse.AsSpan(14 + sizeof(uint)));
+            BinaryPrimitives.ReadUInt32LittleEndian(inverse.AsSpan(14 + sizeof(uint) + 1));
 
         /// <summary>
         /// The slots are an array of references, so the capacity is the longest array.

@@ -236,6 +236,24 @@ namespace ProbabilisticDataStructures
         internal const ushort PlacementVersion = 8;
 
         /// <summary>
+        /// The version at which <see cref="CountMinSketch"/>, <see cref="PrivateCountMinSketch"/>,
+        /// <see cref="HeavyKeeper"/> and <see cref="InverseBloomFilter"/> record how they placed
+        /// items among their columns, buckets or slots, in a byte of their own after the
+        /// fields that size them, and <see cref="DpswSketch"/>, whose private sketches carry
+        /// that byte in the bodies it holds inline. The layout is the one each wrote at
+        /// version 1 with that byte added; every save of these is written at it, whatever its
+        /// width or placement.
+        /// </summary>
+        /// <remarks>
+        /// The same change <see cref="PlacementVersion"/> made for the Bloom filters, for the
+        /// same reason, made later and so given the next number: a version names one change
+        /// to the structures it names. A <see cref="TopK"/> holds its sketch in an envelope of
+        /// its own, which carries this version, so the top-k's own layout is unchanged. See
+        /// <see cref="BitPlacement"/>.
+        /// </remarks>
+        internal const ushort ColumnPlacementVersion = 9;
+
+        /// <summary>
         /// The format versions each structure has defined, which are exactly the ones its
         /// reader reads. This is the one place that says so.
         /// </summary>
@@ -266,11 +284,11 @@ namespace ProbabilisticDataStructures
             [StructureId.StableBloomFilter] =
                 [DefaultVersion, RandomStateVersion, StableOriginalStateVersion,
                  PlacementVersion],
-            [StructureId.InverseBloomFilter] = [DefaultVersion],
+            [StructureId.InverseBloomFilter] = [DefaultVersion, ColumnPlacementVersion],
             [StructureId.CuckooBloomFilter] =
                 [DefaultVersion, RandomStateVersion, CuckooPackedVersion,
                  CuckooOriginalStateVersion],
-            [StructureId.CountMinSketch] = [DefaultVersion],
+            [StructureId.CountMinSketch] = [DefaultVersion, ColumnPlacementVersion],
             [StructureId.HyperLogLog] = [DefaultVersion],
             [StructureId.TopK] = [DefaultVersion],
             [StructureId.MinHashSignature] = [DefaultVersion],
@@ -283,7 +301,7 @@ namespace ProbabilisticDataStructures
             [StructureId.CountSketch] = [DefaultVersion],
             [StructureId.InvertibleBloomLookupTable] = [DefaultVersion],
             [StructureId.BloomierFilter] = [DefaultVersion],
-            [StructureId.HeavyKeeper] = [DefaultVersion],
+            [StructureId.HeavyKeeper] = [DefaultVersion, ColumnPlacementVersion],
             [StructureId.VarOpt] = [DefaultVersion],
             [StructureId.UltraLogLog] = [DefaultVersion],
             [StructureId.Grafite] = [DefaultVersion],
@@ -292,8 +310,8 @@ namespace ProbabilisticDataStructures
             [StructureId.SublimeCountMinSketch] = [DefaultVersion],
             [StructureId.SetSketch] = [DefaultVersion, SetSketchVariantVersion],
             [StructureId.TupleSketch] = [DefaultVersion],
-            [StructureId.PrivateCountMinSketch] = [DefaultVersion],
-            [StructureId.DpswSketch] = [DefaultVersion],
+            [StructureId.PrivateCountMinSketch] = [DefaultVersion, ColumnPlacementVersion],
+            [StructureId.DpswSketch] = [DefaultVersion, ColumnPlacementVersion],
         };
 
         /// <summary>

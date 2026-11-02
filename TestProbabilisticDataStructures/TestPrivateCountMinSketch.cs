@@ -564,8 +564,9 @@ namespace TestProbabilisticDataStructures
             sketch.Add(Key("one"));
 
             // Envelope is 14 bytes of header and 4 of checksum; the body is
-            // width, depth (4 each), rho, count (8 each), then the counters.
-            var expected = 14 + 4 + 4 + 4 + 8 + 8 + (32 * 3 * 8);
+            // width, depth (4 each), the placement byte, rho, count (8 each), then the
+            // counters.
+            var expected = 14 + 4 + 4 + 4 + 1 + 8 + 8 + (32 * 3 * 8);
 
             Assert.HasCount(expected, sketch.ToByteArray(),
                 "the payload is not exactly its header, shape and counters, which " +

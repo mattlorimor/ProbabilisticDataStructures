@@ -27,6 +27,14 @@ namespace ProbabilisticDataStructures
     /// exceed it. The authors' reference implementation uses C &lt;= nmin, the only
     /// reading consistent with the paper's own Theorem 1, and so does this one.
     /// </para>
+    /// <para>
+    /// Arrays of 2^27 buckets or more place their elements with 64-bit hash values, and
+    /// narrower ones with 32-bit values, as they always did: before this, every structure
+    /// placed with 32-bit values, and a wide one sent the first <c>2^32 mod width</c>
+    /// buckets of each array more of the stream to contest. Every save is format version
+    /// 9, which records the placement; a structure read back keeps the scheme its payload
+    /// was placed with. The fingerprint is the hash's top sixteen bits either way.
+    /// </para>
     /// </remarks>
     public class HeavyKeeper : IBinaryPersistable<HeavyKeeper>
     {
@@ -193,11 +201,11 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <remarks>
         /// The constructor's choice, reachable on its own so that the widths at which it
-        /// changes can be checked without allocating arrays of those widths. Nothing
-        /// chooses the 64-bit scheme for a HeavyKeeper yet: every one places with 32-bit
-        /// values, as every one always has.
+        /// changes can be checked without allocating arrays of those widths: 64-bit values
+        /// from <see cref="BitPlacement.WideFrom"/> buckets, and 32-bit ones, as every one
+        /// always had, below it.
         /// </remarks>
-        internal static Placement PlacementFor(uint width) => Placement.Narrow;
+        internal static Placement PlacementFor(uint width) => BitPlacement.For(width);
 
         /// <summary>
         /// The buckets an element whose hash is <paramref name="hash"/> contests under
@@ -451,6 +459,7 @@ namespace ProbabilisticDataStructures
             payload.WriteUInt32(this.k);
             payload.WriteUInt32(this.Width);
             payload.WriteUInt32(this.Depth);
+            BitPlacement.Write(payload, this.Placement);
             payload.WriteDouble(this.decay);
             payload.WriteUInt64(this.random.State);
             payload.WriteUInt64(this.N);
@@ -482,7 +491,8 @@ namespace ProbabilisticDataStructures
                 stream,
                 StructureId.HeavyKeeper,
                 PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+                payload.WrittenSpan,
+                PersistenceFormat.ColumnPlacementVersion);
         }
 
         /// <summary>
@@ -556,13 +566,16 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.HeavyKeeper);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.HeavyKeeper, out var hashId, budget, Price,
+                stream, StructureId.HeavyKeeper, out var hashId, out var version, budget, Price,
                 hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var k = reader.ReadUInt32();
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
+            // From the payload, never from the width: a version 1 payload of any width was
+            // placed with 32-bit values, and a version 9 one says how it was placed.
+            var placement = BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             var decay = reader.ReadDouble();
             var randomState = reader.ReadUInt64();
             var n = reader.ReadUInt64();
@@ -570,7 +583,7 @@ namespace ProbabilisticDataStructures
 
             budget.Charge(ArraysCost(width, depth));
             var restored = new HeavyKeeper(PersistenceFormat.ResolveOrThrow(hashId, hash),
-                k, width, depth, decay, randomState, Placement.Narrow)
+                k, width, depth, decay, randomState, placement)
             {
                 N = n,
             };
@@ -619,6 +632,7 @@ namespace ProbabilisticDataStructures
             var k = reader.ReadUInt32();
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
+            BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             var decay = reader.ReadDouble();
             reader.ReadUInt64();
             reader.ReadUInt64();

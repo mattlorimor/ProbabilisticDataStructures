@@ -653,11 +653,14 @@ namespace ProbabilisticDataStructures
                 }
             }
 
+            // Version 9, because each body is the private sketch's version 9 body, with the
+            // byte that says how that sketch was placed.
             PersistenceFormat.Write(
                 stream,
                 StructureId.DpswSketch,
                 PersistenceFormat.Identify(this.hash ?? Defaults.GetDefaultHashFunction()),
-                payload.WrittenSpan);
+                payload.WrittenSpan,
+                PersistenceFormat.ColumnPlacementVersion);
         }
 
         /// <summary>
@@ -751,7 +754,7 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.DpswSketch);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.DpswSketch, out var hashId, budget, Price,
+                stream, StructureId.DpswSketch, out var hashId, out var version, budget, Price,
                 hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
@@ -801,7 +804,9 @@ namespace ProbabilisticDataStructures
                 var substream = new Substream(start) { Held = held };
                 foreach (var planned in plan)
                 {
-                    var heldSketch = PrivateCountMinSketch.ReadBody(ref reader, resolved);
+                    // Laid out as the window's version lays its bodies out, each with its
+                    // own placement from version 9.
+                    var heldSketch = PrivateCountMinSketch.ReadBody(ref reader, resolved, version);
                     CheckSegment(s, heldSketch.Width, heldSketch.Depth, width, depth);
 
                     substream.Segments.Add(new Segment(
@@ -854,7 +859,7 @@ namespace ProbabilisticDataStructures
                 reader.Budget.Price(SubstreamCost(segments));
                 for (var i = 0UL; i < segments; i++)
                 {
-                    var (heldWidth, heldDepth) = PrivateCountMinSketch.PriceBody(ref reader);
+                    var (heldWidth, heldDepth) = PrivateCountMinSketch.PriceBody(ref reader, version);
                     CheckSegment(s, heldWidth, heldDepth, width, depth);
                 }
             }
