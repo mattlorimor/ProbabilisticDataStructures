@@ -172,6 +172,12 @@ namespace TestProbabilisticDataStructures
         /// It is next to the claims above because it is the other side of the same
         /// <c>int.MaxValue</c>.
         /// </summary>
+        /// <remarks>
+        /// The reason is asserted, not only the type. Cast to an <c>int</c> the claim is
+        /// negative, which the bounds check refuses too, as the payload ending; so with the
+        /// guard for this removed the exception is the same type and only the reason
+        /// tells the two apart. That mutation survived the type alone.
+        /// </remarks>
         [TestMethod]
         [DataRow(0x8000_0000L)]
         [DataRow(0xFFFF_FFFFL)]
@@ -179,7 +185,8 @@ namespace TestProbabilisticDataStructures
         {
             var payload = Payload(0, (uint)claim, 8);
 
-            Assert.ThrowsExactly<InvalidDataException>(() => ReadRunAfter(payload, 0));
+            var ex = Assert.ThrowsExactly<InvalidDataException>(() => ReadRunAfter(payload, 0));
+            StringAssert.Contains(ex.Message, "cannot be read into a single array");
         }
 
         /// <summary>
