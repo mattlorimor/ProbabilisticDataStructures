@@ -584,6 +584,16 @@ namespace TestProbabilisticDataStructures
                 PokeUInt32(bytes, LowWordsOffset, Grafite.MaxLowWords));
             AssertRefusedOnlyForMissingBytes<Grafite>(
                 PokeUInt32(bytes, highWordsOffset, Grafite.MaxHighWords));
+
+            // The reduced universe, a u64 at 0, is at most the hash's modulus less one. The
+            // builder refuses a request that wants more (TestGrafite holds the edge), the
+            // reader a payload that carries more, and a payload at the limit, which is what
+            // earlier releases wrote when they capped, reads. (A constant, so its value is
+            // pinned by the FORMAT.md table and not by an assertion the compiler evaluates.)
+            var past = PokeUInt32(PokeUInt32(bytes, 0, 0xFFFFFFFF), 4, 0x1FFFFFFF);
+            AssertRefused<Grafite>(past, PastTheLimit);
+            var atTheLimit = PokeUInt32(PokeUInt32(bytes, 0, 0xFFFFFFFE), 4, 0x1FFFFFFF);
+            Assert.AreEqual(Grafite.MaxUniverse, Persistence.FromByteArray<Grafite>(atTheLimit).R);
         }
 
         /// <summary>
@@ -1486,6 +1496,7 @@ namespace TestProbabilisticDataStructures
                 [("InverseBloomFilter", "capacity")] = InverseBloomFilter.MaxCapacity,
                 [("DpswSketch", "items in a substream")] = (ulong)DpswSketch.MaxSubstreamSize,
                 [("VarOpt", "`k`")] = VarOpt.MaxK,
+                [("Grafite", "reduced universe `r`")] = Grafite.MaxUniverse,
                 [("Grafite", "words of low bits")] = Grafite.MaxLowWords,
                 [("Grafite", "words of high bits")] = Grafite.MaxHighWords,
                 [("SetSketch", "`m`")] = (ulong)SetSketch.MaxRegisters,

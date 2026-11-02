@@ -803,16 +803,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   widening, so a filter of 2 GiB reported a size near 2^64 and one of 4 GiB reported none.
   It is 64-bit throughout now. The signature is unchanged.
   <br><br>
-  `Grafite.Build` is documented where it cannot hold the rate it was asked for, which it
-  never said. The keys are hashed into a universe of `n × maxRangeSize / falsePositiveRate`,
-  and the hash works modulo 2^61 − 1, so a request that wants a wider universe is built at
-  2^61 − 2 and delivers a weaker rate for ranges of `maxRangeSize` than the one asked for:
-  four keys at 1% for ranges of 2^60 deliver 1, which `FalsePositiveRate` has always
-  reported. It is not refused. Measured on 3,000 keys over all 64 bits, a filter built that
-  way had no false negative and no point false positive, because its bound for a range of
-  `l` is `n × l / (2^61 − 2)`, and a caller who passes a very large range to mean "any" and
-  asks about short ones is served by it. The remarks on `Build` and `FalsePositiveRate`,
-  the README and CAPACITY.md now say so.
+  `Grafite.Build` built a filter at a weaker rate than it was asked for, and said nothing.
+  The keys are hashed into a universe of `n × maxRangeSize / falsePositiveRate`, and the
+  hash works modulo 2^61 − 1, so a request that wanted a wider universe was built at
+  2^61 − 2: four keys at 1% for ranges of 2^60 delivered 1, as `FalsePositiveRate` reported
+  and nothing else did. It now refuses, with an `ArgumentOutOfRangeException` naming
+  `maxRangeSize` and the largest range that works for that many keys at that rate (about
+  5.8e15 for four keys at 1%, 2.3e10 for a million), or, when not even a range of one key
+  fits, naming `falsePositiveRate` and the finest rate those keys can have, a little over
+  `n / 2^61`. This is the rule `QuotientFilter` follows for a rate finer than it can
+  deliver. Requests under the limit build as they did, to the same filter for a given seed.
+  <br><br>
+  A payload an earlier release wrote for a request that is now refused carries a universe
+  of exactly 2^61 − 2 and still reads, and answers as it did: measured on 300 keys over all
+  64 bits, no false negative and no point false positive. A payload with a universe past
+  that, which no release wrote, is refused. FORMAT.md's table of sizes has the row.
 
 - **`CountMinSketch`, `CountSketch` and `PrivateCountMinSketch` failed inside the
   allocation of a row instead of refusing a size they could not build.** A row is one
