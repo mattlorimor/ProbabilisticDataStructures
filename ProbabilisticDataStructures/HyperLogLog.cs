@@ -332,6 +332,13 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// STUB, so that the tests that name the member compile and fail on what they
+        /// assert. The next commit replaces it.
+        /// </summary>
+        /// <returns>Always false.</returns>
+        public bool IsSaturated() => false;
+
+        /// <summary>
         /// Combines this HyperLogLog with another. Returns an error if the number of
         /// registers in the two HyperLogLogs are not equal.
         /// </summary>
