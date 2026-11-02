@@ -952,6 +952,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other arithmetic in the payload reader and writer was audited for the same pattern and
   holds: the writer's growth was already worked out in 64 bits.
 
+- **`SublimeCountMinSketch` could not read, widen or fold back a row holding counters of
+  2^63 or more, and some rows of large counters could not be read at all.** Three separate
+  defects, all in 6.2.0, and none reachable by a stream: a counter of 2^63 takes 2^63 adds.
+  A payload can hold one, though, since the writer writes every `u64` and the reader checks
+  no counter against the total, and a sketch holding one wrote a payload that its own
+  reader could not read.
+  <br><br>
+  Choosing how to pack counters starts by tallying how many have each bit length, and the
+  tally had slots for lengths 0 to 63. A counter of 2^63 or more is 64 bits long, so
+  reading a payload with one, the `Add` that doubled the rows, and the retune of a crowded
+  sketch threw `IndexOutOfRangeException`. The tally has a slot for 64.
+  <br><br>
+  When no tuning met the search's bound it ended on 16 counters of 32 bits, which no
+  512-bit chunk holds, and the array refused it with an `ArgumentOutOfRangeException` naming
+  `countersPerChunk`. A row of 1,024 counters reached it with every counter at 2^27 or
+  more, and with sixteen of them at 2^54, which take on the order of 10^11 and 10^16 adds
+  to a row that narrow. It now ends on the widest stub a chunk
+  of 16 counters can keep a pool beside, 27 bits, and the tails arrays hold the rest. Such
+  a sketch is slow to add to, since it lays itself out again on every add, but it is no
+  longer a payload that cannot be read.
+  <br><br>
+  The fold back after removals added a counter to its copy and took off the record in signed
+  `long`s, so a counter that came out at 2^63 or more was negative and folded to nought:
+  no exception, but a key counted 2^63 times reported as not counted. It now sums in 128
+  bits and stops at the largest count rather than wrapping.
+  <br><br>
+  A sketch with no counter that large is unchanged, in memory and on the wire: nothing the
+  reader took before is refused, the payload holds counts rather than their packing, and
+  the format is as it was.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added
