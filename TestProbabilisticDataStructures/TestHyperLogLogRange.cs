@@ -387,6 +387,216 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(before, full.Count(), $"m={m}: nothing added to a full sketch moves it");
         }
 
+        // ---- Telling that a sketch is full --------------------------------------------
+
+        /// <summary>
+        /// Caps register <paramref name="j"/> through the update Add goes through, by the
+        /// one hash that gives it the longest run there is: its index, then zeros to the
+        /// end of the 32 bits.
+        /// </summary>
+        private static void Cap(HyperLogLog hll, uint j) =>
+            hll.AddHash(hll.M == 1 ? 0u : j << Q(hll.M));
+
+        /// <summary>
+        /// The ceiling of a full sketch, from the closed form
+        /// <see cref="TestAFullSketchReportsItsCeiling"/> holds the estimate to.
+        /// </summary>
+        private static double Ceiling(uint m) =>
+            Alpha(m) * m * m * Math.Pow(2, Q(m)) / (1 + (m * SaturatedContribution(1.0 / m)));
+
+        /// <summary>
+        /// A sketch that has seen nothing, and one that has seen a few hundred items, has
+        /// no register at the cap: the chance that any of 200 hashes gives a register the
+        /// longest run there is, is about one in twenty million at any size.
+        /// </summary>
+        [TestMethod]
+        [DataRow(1u)]
+        [DataRow(2u)]
+        [DataRow(16u)]
+        [DataRow(1024u)]
+        [DataRow(65536u)]
+        public void TestASketchWithNothingCappedIsNotSaturated(uint m)
+        {
+            var hll = new HyperLogLog(m);
+            Assert.IsFalse(hll.IsSaturated(), $"m={m}: an empty sketch has no register at the cap");
+
+            for (var i = 0; i < 200; i++)
+            {
+                hll.Add(Encoding.UTF8.GetBytes($"item-{i}"));
+            }
+
+            Assert.IsTrue(hll.RegisterState.Any(r => r != 0),
+                $"m={m}: the row must hold something, or it is the empty row again");
+            Assert.IsFalse(hll.RegisterState.Any(r => r > Q(m)),
+                $"m={m}: none of these items may have reached the cap, or the row is not the one it names");
+            Assert.IsFalse(hll.IsSaturated(), $"m={m}: a sketch of 200 items has no register at the cap");
+        }
+
+        /// <summary>
+        /// Registers are capped one at a time, in an order that is not the order of their
+        /// indices, through the update Add goes through. The sketch is saturated when the
+        /// last of them is capped and at no step before: not at the first, which would be
+        /// "any register", and not one short, which is where a scan that stopped a
+        /// register early would say yes. A saturated sketch reports its ceiling, which is
+        /// what the member is for, and nothing added to it uncaps a register.
+        /// </summary>
+        [TestMethod]
+        [DataRow(1u)]
+        [DataRow(2u)]
+        [DataRow(16u)]
+        [DataRow(1024u)]
+        public void TestASketchIsSaturatedWhenItsLastRegisterIsCapped(uint m)
+        {
+            var hll = new HyperLogLog(m);
+            for (uint step = 0; step < m; step++)
+            {
+                // An odd multiplier takes 0..m-1 to every residue mod m once, scattered.
+                Cap(hll, ((step * 2654435761u) + 7) & (m - 1));
+                Assert.AreEqual(step == m - 1, hll.IsSaturated(),
+                    $"m={m}: after capping {step + 1} of {m} registers");
+            }
+
+            Assert.IsTrue(hll.RegisterState.All(r => r == Q(m) + 1),
+                $"m={m}: the row must have capped every register");
+            AssertEstimate(Ceiling(m), hll.Count(), $"m={m}: a saturated sketch reports its ceiling.");
+
+            for (uint i = 0; i < 1000; i++)
+            {
+                hll.AddHash(i * 2654435761u);
+            }
+
+            Assert.IsTrue(hll.IsSaturated(), $"m={m}: nothing added to a saturated sketch uncaps a register");
+        }
+
+        /// <summary>
+        /// The register just below the cap is not capped. Every register at q is the row
+        /// that tells a cap of q + 1 from one of q, and one register at q among capped
+        /// ones, at the first, middle and last place, is the row that tells every register
+        /// from all but one. That sketch is also one whose count is already the ceiling,
+        /// since a full sketch answers as one a register short of full does, so the member
+        /// is about the registers and not about the number.
+        /// </summary>
+        [TestMethod]
+        [DataRow(1u)]
+        [DataRow(2u)]
+        [DataRow(16u)]
+        [DataRow(1024u)]
+        public void TestARegisterJustBelowTheCapIsNotCapped(uint m)
+        {
+            var q = Q(m);
+            var hll = new HyperLogLog(m);
+            var registers = hll.RegisterState;
+
+            Array.Fill(registers, (byte)q);
+            Assert.IsFalse(hll.IsSaturated(), $"m={m}: every register at {q}, one short of the cap");
+
+            Array.Fill(registers, (byte)(q + 1));
+            Assert.IsTrue(hll.IsSaturated(), $"m={m}: every register at the cap {q + 1}");
+            var ceiling = hll.Count();
+
+            foreach (var j in new[] { 0, (int)(m / 2), (int)m - 1 }.Distinct())
+            {
+                registers[j] = (byte)q;
+                Assert.IsFalse(hll.IsSaturated(), $"m={m}: register {j} at {q} and the rest at the cap");
+                Assert.AreEqual(ceiling, hll.Count(),
+                    $"m={m}, register {j}: a sketch one register short of full already counts its ceiling");
+                registers[j] = (byte)(q + 1);
+            }
+
+            Assert.IsTrue(hll.IsSaturated(), $"m={m}: the registers are put back");
+        }
+
+        /// <summary>
+        /// The reader checks how many registers a payload holds and not what they hold,
+        /// so a sketch can carry a value the update never gives. Count() takes any value
+        /// past q as saturated, and so does this: the two do not disagree about the same
+        /// registers.
+        /// </summary>
+        [TestMethod]
+        public void TestARegisterPastTheCapCountsAsCappedAsCountTakesIt()
+        {
+            const uint m = 16;
+            var q = Q(m);
+            var full = new HyperLogLog(m);
+            Array.Fill(full.RegisterState, (byte)(q + 1));
+
+            var past = new HyperLogLog(m);
+            Array.Fill(past.RegisterState, (byte)(q + 2));
+
+            Assert.IsTrue(past.IsSaturated(), "every register past the cap");
+            Assert.AreEqual(full.Count(), past.Count(),
+                "Count() takes registers past the cap as it takes ones at it, which is what the member follows");
+
+            past.RegisterState[5] = (byte)q;
+            Assert.IsFalse(past.IsSaturated(), "one register at q among those past the cap");
+        }
+
+        /// <summary>
+        /// Sketches as they stand after streams of about 2^n distinct items, through the
+        /// Poisson construction the estimate's own tests use. The rows that are not
+        /// saturated are partly capped, so they are not the empty sketch, and the rows
+        /// that are saturated have every register capped, which the construction makes
+        /// certain: a register is below the cap with probability e^-(n/2^32), which is
+        /// e^-256, about 1e-111, at 2^40.
+        /// </summary>
+        [TestMethod]
+        [DataRow(16u, 30, false)]
+        [DataRow(1024u, 33, false)]
+        [DataRow(16384u, 34, false)]
+        [DataRow(16u, 40, true)]
+        [DataRow(1024u, 40, true)]
+        [DataRow(16384u, 40, true)]
+        public void TestSaturationFollowsTheItemsSeen(uint m, int exponent, bool expected)
+        {
+            var hll = PoissonSketch(m, Math.Pow(2, exponent), new Random(194 + exponent + (int)m));
+            var capped = hll.RegisterState.Count(r => r == Q(m) + 1);
+            var where = $"m={m}, n=2^{exponent}, {capped} of {m} registers capped";
+
+            if (expected)
+            {
+                Assert.AreEqual((int)m, capped, $"{where}: the row must be a full sketch");
+            }
+            else
+            {
+                Assert.IsGreaterThan(0, capped, $"{where}: the row must have something capped");
+                Assert.IsLessThan((int)m, capped, $"{where}: the row must have something uncapped");
+            }
+
+            Assert.AreEqual(expected, hll.IsSaturated(), where);
+        }
+
+        /// <summary>
+        /// What the member reports is what the registers hold now, which a flag set by
+        /// the update would not follow. Two sketches that cap half of the registers each,
+        /// the even ones and the odd ones, are neither saturated; merging one into the
+        /// other saturates it and leaves the other as it was, a copy read back from the
+        /// payload agrees, and a reset clears it.
+        /// </summary>
+        [TestMethod]
+        public void TestSaturationIsWhatTheRegistersHoldAfterMergeResetAndReading()
+        {
+            const uint m = 16;
+            var even = new HyperLogLog(m);
+            var odd = new HyperLogLog(m);
+            for (uint j = 0; j < m; j++)
+            {
+                Cap(j % 2 == 0 ? even : odd, j);
+            }
+
+            Assert.IsFalse(even.IsSaturated(), "the even registers alone");
+            Assert.IsFalse(odd.IsSaturated(), "the odd registers alone");
+            Assert.IsFalse(Persistence.FromByteArray<HyperLogLog>(even.ToByteArray()).IsSaturated(),
+                "half capped, read back");
+
+            Assert.IsTrue(even.Merge(odd));
+            Assert.IsTrue(even.IsSaturated(), "the two together cap every register");
+            Assert.IsFalse(odd.IsSaturated(), "the sketch merged in is as it was");
+            Assert.IsTrue(Persistence.FromByteArray<HyperLogLog>(even.ToByteArray()).IsSaturated(),
+                "saturated, read back");
+
+            Assert.IsFalse(even.Reset().IsSaturated(), "a reset sketch has nothing capped");
+        }
+
         // ---- Never zero ---------------------------------------------------------------
 
         /// <summary>

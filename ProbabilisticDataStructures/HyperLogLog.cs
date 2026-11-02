@@ -56,7 +56,8 @@ namespace ProbabilisticDataStructures
     /// to its nominal error of 1.04/sqrt(m) up to about 2^33 distinct items, about 8.6
     /// billion, with 16 registers or more; past that it degrades as the registers fill,
     /// and it cannot exceed about 2^32 * ln(m), which below 16 registers is short of
-    /// 2^33 itself. <see cref="HyperLogLogPlus"/> and
+    /// 2^33 itself. <see cref="IsSaturated"/> says when every register has reached the
+    /// cap and the estimate is that ceiling. <see cref="HyperLogLogPlus"/> and
     /// <see cref="UltraLogLog"/> use the whole 64-bit hash and have no such limit in
     /// practice.
     /// </remarks>
@@ -271,6 +272,7 @@ namespace ProbabilisticDataStructures
         /// is the largest estimate it can give, about 2^32 * ln(m) -- 1.1e10 at 16
         /// registers, 4.2e10 at 2^14 and 8.9e10 at 2^30. A sketch reporting its ceiling
         /// has probably seen at least that many items, and may have seen far more.
+        /// <see cref="IsSaturated"/> says when a sketch is full.
         /// </para>
         /// </remarks>
         public UInt64 Count()
@@ -329,6 +331,56 @@ namespace ProbabilisticDataStructures
             // estimate below it, and one of them estimates below one.
             var occupied = this.M - (uint)zeros;
             return Math.Max((UInt64)estimate, occupied);
+        }
+
+        /// <summary>
+        /// Returns whether every register is at the cap, which is when
+        /// <see cref="Count"/> reports its ceiling and says only that the sketch has seen
+        /// a great many items.
+        /// </summary>
+        /// <returns>
+        /// True if every register has reached the longest run of zeros the 32-bit hash
+        /// has room for. False otherwise, and always false for an estimator that has seen
+        /// nothing.
+        /// </returns>
+        /// <remarks>
+        /// A saturated sketch's <see cref="Count"/> is about 2^32 * ln(m), and it is a
+        /// floor, not an estimate: the sketch has probably seen at least that many
+        /// distinct items and may have seen far more, and adding items to it cannot move
+        /// it. <see cref="HyperLogLogPlus"/> and <see cref="UltraLogLog"/> use the whole
+        /// 64-bit hash, and are the way to count that many.
+        /// <para>
+        /// False is not a promise that the estimate is good. The error grows from about
+        /// 2^33 distinct items, well before the last register is capped: a sketch is more
+        /// likely than not full from about 2^33.7 items with 16 registers, 2^34.9 with
+        /// 1,024 and 2^35.3 with 16,384. A caller who wants to know sooner can compare
+        /// <see cref="Count"/> with 2^33, which does not depend on the number of
+        /// registers. A sketch one register short of full already counts its ceiling, and
+        /// is not saturated by this definition, which is about the registers.
+        /// </para>
+        /// <para>
+        /// Registers are read as <see cref="Count"/> reads them, so a value past the cap,
+        /// which only a payload this library did not write can hold, counts as capped. It
+        /// stops at the first register that is not, so it is quick unless the sketch is
+        /// saturated, when it reads them all.
+        /// </para>
+        /// </remarks>
+        public bool IsSaturated()
+        {
+            // The same cap as Count(): rho is counted over the q bits of the hash below
+            // the register index, so a register holds at most q + 1, and one there has
+            // seen a run of zeros as long as the hash has room for.
+            var q = 32 - (int)this.B;
+
+            foreach (var val in this.Registers)
+            {
+                if (val <= q)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         /// <summary>
