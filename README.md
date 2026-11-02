@@ -1168,6 +1168,12 @@ sketch.Remove(bytes);                // deletions, which CountMinSketch does not
 int counters = sketch.Width;         // grows with the stream, and shrinks again
 ```
 
+A row holds at most 2^30 counters. At the default growth that is 2^60 keys, which nothing
+reaches, and at a growth exponent of 0.9 it is about ten billion; an `Add` that would
+widen a row past it throws an `InvalidOperationException` before it changes anything,
+and the sketch goes on answering queries. A size factor that would start a row wider than
+that is refused by the constructor.
+
 Described by Eslami, Bercea, Pagh and Dayan in
 [Sublime: Sublinear Error & Space for Unbounded Skewed Streams](https://doi.org/10.1145/3802116),
 SIGMOD 2026.

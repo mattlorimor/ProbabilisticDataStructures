@@ -37,6 +37,15 @@ namespace ProbabilisticDataStructures
     /// afterwards. This is why the arrays double rather than grow by some other factor,
     /// and why the counts already gathered survive it.
     /// </para>
+    /// <para>
+    /// A row holds at most 2^30 counters, the largest power of two an int holds. At the
+    /// default growth the rows reach it after 2^60 keys, and at a growth exponent of 0.9
+    /// after about 10^10. An <see cref="Add(ReadOnlySpan{byte})"/> that would double the
+    /// rows past it throws an <see cref="InvalidOperationException"/> before it changes
+    /// anything: the sketch goes on answering queries and can be written, and keys can be
+    /// removed. A size factor that would start a row past it is refused by the
+    /// constructor.
+    /// </para>
     /// </remarks>
     public class SublimeCountMinSketch : IBinaryPersistable<SublimeCountMinSketch>
     {
@@ -137,10 +146,27 @@ namespace ProbabilisticDataStructures
         /// The width a row starts at: a chunk's worth of counters over the size factor,
         /// rounded down to a power of two.
         /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The size factor asks for a row of 2^31 counters or more, which no row holds.
+        /// </exception>
+        /// <remarks>
+        /// It used to start at <see cref="MaxWidth"/> for any size factor that asked for
+        /// more, quietly, so that a sketch the caller believed was larger had a row of a
+        /// gibibyte that could not widen. Just under 2^31 rounds down to 2^30 and is fine.
+        /// </remarks>
         internal static int StartingWidth(int countersPerChunk, double sizeFactor)
         {
             var wanted = Math.Max(1.0, countersPerChunk / sizeFactor);
-            return 1 << BitOperations.Log2((uint)Math.Min(wanted, MaxWidth));
+            if (wanted >= 2.0 * MaxWidth)
+            {
+                throw new ArgumentOutOfRangeException(nameof(sizeFactor), sizeFactor,
+                    $"A size factor of {sizeFactor} starts each row at {wanted:N0} counters, " +
+                    $"and a row holds at most {MaxWidth:N0}: a width is a power of two held " +
+                    "in an int, and 2^30 is the largest of those. A size factor above " +
+                    $"{countersPerChunk / (2.0 * MaxWidth):G3} starts a row at a width it can hold.");
+            }
+
+            return 1 << BitOperations.Log2((uint)wanted);
         }
 
         /// <summary>
@@ -169,7 +195,9 @@ namespace ProbabilisticDataStructures
         /// </param>
         /// <param name="sizeFactor">
         /// How many counters the sketch starts with, as a divisor: one gives a single
-        /// cache line per row, a half gives two, and so on. Smaller is larger.
+        /// cache line per row, a half gives two, and so on. Smaller is larger, up to a row
+        /// of 2^30 counters, which a size factor of about 6e-8 starts at; a smaller one is
+        /// refused.
         /// </param>
         /// <param name="hash">
         /// The hash function to use, or null for the default.
@@ -317,6 +345,23 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Add(byte[])"/>
         public SublimeCountMinSketch Add(ReadOnlySpan<byte> data)
         {
+            // An add that would widen the rows past what a row holds is refused before it
+            // touches anything. Left to the expansion at its end, it would have
+            // incremented the counters and the count and then failed to widen, leaving a
+            // sketch that had taken the add and not the growth it called for.
+            if (this.count + 1 >= this.expansionLimit && (long)this.width * 2 > this.WidthLimit)
+            {
+                throw new InvalidOperationException(
+                    $"This sketch holds {this.count:N0} keys, and the next would double its " +
+                    $"rows from {this.width:N0} counters to {(long)this.width * 2:N0}. A row " +
+                    $"holds at most {this.WidthLimit:N0}: a width is a power of two held in an " +
+                    "int, and 2^30 is the largest of those. Nothing was added and the sketch " +
+                    "is unchanged; it can still be queried and written, and keys can be " +
+                    "removed. To count more, grow more slowly -- a smaller growth exponent, " +
+                    "or a larger size factor -- or spread the stream over several sketches " +
+                    "and add their counts.");
+            }
+
             var kernel = Utils.HashKernel(data, this.Hash);
 
             for (var i = 0; i < this.rows.Length; i++)
@@ -599,8 +644,9 @@ namespace ProbabilisticDataStructures
             if (width == 0 || width > MaxWidth || BitOperations.PopCount(width) != 1)
             {
                 throw new InvalidDataException(
-                    $"Sketch claims {width} counters a row. A width is a power of two " +
-                    "-- the low bits of a hash pick the counter -- and this is not.");
+                    $"Sketch claims {width:N0} counters a row. A width is a power of two " +
+                    "-- the low bits of a hash pick the counter -- no larger than " +
+                    $"{MaxWidth:N0}, the largest an int holds, and this is not one.");
             }
 
             var sketch = new SublimeCountMinSketch

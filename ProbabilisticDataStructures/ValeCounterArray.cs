@@ -310,7 +310,13 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// The bit position of a chunk's first bit in the array.
         /// </summary>
-        internal static int ChunkStart(int chunk) => chunk * ChunkBits;
+        /// <remarks>
+        /// A long. In an int it wrapped at 2^22 chunks, which is 285 million counters at
+        /// the default tuning, and a row wider than that read and wrote the wrong place
+        /// for every counter past it, or threw. Every position that is built from it is a
+        /// long as well, so that nothing narrows it again on the way to a word.
+        /// </remarks>
+        internal static long ChunkStart(int chunk) => (long)chunk * ChunkBits;
 
         /// <summary>
         /// Which chunk a counter lives in, and where in that chunk.
@@ -430,7 +436,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private int Rank(int chunk, int i)
         {
-            var word = chunk * WordsPerChunk;
+            var word = (long)chunk * WordsPerChunk;
 
             var rank = 0;
             for (var w = 0; w < i / WordBits; w++)
@@ -449,7 +455,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private int CounterWithRank(int chunk, int rank)
         {
-            var word = chunk * WordsPerChunk;
+            var word = (long)chunk * WordsPerChunk;
 
             var remaining = rank;
             for (var w = 0; w * WordBits < _countersPerChunk; w++)
@@ -619,7 +625,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Reads a field of up to sixty-four bits, which may straddle two words.
         /// </summary>
-        private static ulong ReadBits(ulong[] words, int at, int width)
+        private static ulong ReadBits(ulong[] words, long at, int width)
         {
             if (width == 0)
             {
@@ -627,7 +633,7 @@ namespace ProbabilisticDataStructures
             }
 
             var w = at / WordBits;
-            var shift = at % WordBits;
+            var shift = (int)(at % WordBits);
             var mask = width == WordBits ? ulong.MaxValue : (1UL << width) - 1;
 
             var value = words[w] >> shift;
@@ -642,7 +648,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Writes a field of up to sixty-four bits, which may straddle two words.
         /// </summary>
-        private static void WriteBits(ulong[] words, int at, int width, ulong value)
+        private static void WriteBits(ulong[] words, long at, int width, ulong value)
         {
             if (width == 0)
             {
@@ -650,7 +656,7 @@ namespace ProbabilisticDataStructures
             }
 
             var w = at / WordBits;
-            var shift = at % WordBits;
+            var shift = (int)(at % WordBits);
             var mask = width == WordBits ? ulong.MaxValue : (1UL << width) - 1;
 
             value &= mask;

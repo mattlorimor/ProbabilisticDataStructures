@@ -547,6 +547,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   given a rate whose reciprocal is not a number, so that not even the first filter can be
   built, now throws an `ArgumentOutOfRangeException` naming `fpRate`.
 
+- **A `SublimeCountMinSketch` row wider than about 285 million counters read and wrote the
+  wrong place, and threw `IndexOutOfRangeException` for most keys.** A row's counters sit in
+  chunks of one cache line, and a counter was found by the bit its chunk begins at,
+  `chunk * 512` in an `int`, which wraps at 2^22 chunks. A sketch built with a size factor
+  of 1e-9, which starts each row at 2^30 counters and 963 MiB, threw from its first `Add`
+  and from `Count`; at 2^29 about half its keys worked and the rest threw, and an `Add`
+  that threw on a later row had already incremented an earlier one. Every release since
+  `SublimeCountMinSketch` shipped in 6.2.0 is affected. At the default growth a row reaches
+  that width after 8e16 keys, but a growth exponent of 0.9 gets there at about 2.5e9. The
+  positions are now 64-bit, and a row works up to 2^30 counters, the widest an `int` holds.
+  <br><br>
+  Past that, growth is refused. The doubling was an `int` product that went negative from
+  2^30, after the expansion had already put the old rows on its list of records and after
+  the add had counted its key. An `Add` that would widen a row past 2^30 now throws an
+  `InvalidOperationException` first, naming the width and the ways round it, and changes
+  nothing; the sketch can still be queried and written. A size factor that asked for a row
+  of 2^31 counters or more was quietly clamped to 2^30; the constructor now refuses it,
+  naming `sizeFactor`. No width that worked is refused. The stored format does not change
+  and a payload claiming a width past 2^30 is refused with that limit named.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

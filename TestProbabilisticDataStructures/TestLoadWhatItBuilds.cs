@@ -624,6 +624,21 @@ namespace TestProbabilisticDataStructures
             AssertRefused<SublimeCountMinSketch>(
                 PokeUInt32(deepest.ToByteArray(), 24, (uint)SublimeCountMinSketch.MaxDepth + 1),
                 "rows");
+
+            // The width of a row is the largest power of two an int holds. The
+            // constructor starts a row there and no wider, and the reader takes it and no
+            // wider: past it, the payload is refused as past the limit, and at it only for
+            // what a row of a billion counters costs to read. TestSublimeWidth holds the
+            // sketch's own refusal to widen past it.
+            var widthOffset = 24 + sizeof(uint);
+            AssertRefused<SublimeCountMinSketch>(
+                PokeUInt32(deepest.ToByteArray(), widthOffset, (uint)SublimeCountMinSketch.MaxWidth * 2),
+                "no larger than");
+            var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() =>
+                Persistence.FromByteArray<SublimeCountMinSketch>(
+                    PokeUInt32(deepest.ToByteArray(), widthOffset, (uint)SublimeCountMinSketch.MaxWidth)));
+            Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
+                "a payload at the widest row should be refused for what it costs, not its size");
         }
 
         /// <summary>
@@ -1268,6 +1283,7 @@ namespace TestProbabilisticDataStructures
                 [("Grafite", "words of high bits")] = Grafite.MaxHighWords,
                 [("SetSketch", "`m`")] = (ulong)SetSketch.MaxRegisters,
                 [("SublimeCountMinSketch", "rows")] = (ulong)SublimeCountMinSketch.MaxDepth,
+                [("SublimeCountMinSketch", "counters in a row")] = (ulong)SublimeCountMinSketch.MaxWidth,
                 [("ScalableBloomFilter", "filter count")] = (ulong)ScalableBloomFilter.MaxFilters,
                 [("QuotientFilter", "quotient bits")] = QuotientFilter.MaxQuotientBits,
                 [("QuotientFilter", "quotient + remainder bits")] = QuotientFilter.HashBits,
