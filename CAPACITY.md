@@ -170,15 +170,39 @@ so the default budget reads one of 2^28 slots at 1%.
 
 Built once from the whole set, so there is no `n` to guess. The table has about 1.126 cells
 per key, rounded up to a whole segment, each cell 1 byte (a false positive rate of 0.39%)
-or 2 bytes (0.0015%). Nothing in the builder limits the set but memory. A read is charged
+or 2 bytes (0.0015%). The fingerprints are one array, which holds 2,147,483,591 bytes, so
+the most distinct keys are 1,908,641,337 at 8 bits and 954,204,160 at 16; a set with more
+is refused, naming `items`, before the fingerprints are allocated. A read is charged
 twice the table, which is about 2.25 bytes a key for 8-bit fingerprints.
 
 ### `BloomierFilter`
 
 Built once from the whole set of keys and their values, at about the same cells per key. A
 cell holds an 8-bit fingerprint and a value of `v` bits, rounded up to whole bytes: 2
-bytes at `v = 8`, and 6 at `v = 40`, the widest. The builder limits the set to memory;
-a read is charged twice the table.
+bytes at `v = 8`, and 6 at `v = 40`, the widest. The cells are one array, so the most
+distinct keys are 954,204,160 at `v` up to 8, 636,136,107 up to 16 and 318,068,053 up to
+40; a set with more is refused, naming `pairs`, before the cells are allocated. A read is
+charged twice the table.
+
+A key is known to the map by its 64-bit hash alone, and the keys are not kept, so two
+different keys with one hash are one key to it. With the same value that costs nothing; with
+different values the build is refused, with an `ArgumentException` that says the keys
+collided. The chance is chance, and grows with the square of the size: the expected number
+of colliding pairs among `n` keys is `n(n−1) / 2^65`, so the chance some two collide is
+
+| Keys | Chance two share a hash |
+| --- | --- |
+| 1 million | 0.000003% |
+| 10 million | 0.0003% |
+| 100 million | 0.03% |
+| 318 million, the most at 40-bit values | 0.27% |
+| 636 million, the most at 16-bit values | 1.1% |
+| 954 million, the most at 8-bit values | 2.4% |
+| 2^32, which no map builds | 39% |
+
+and the chance of a refusal is at most that, since the values must differ as well. Building
+again with a different hash function moves the collision. Widening the hash would change
+the stored format, and has not been done.
 
 ### `Grafite`
 

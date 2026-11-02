@@ -317,5 +317,40 @@ namespace TestProbabilisticDataStructures
                 Assert.AreEqual("pairs", ((ArgumentOutOfRangeException)ex).ParamName);
             }
         }
+
+        /// <summary>
+        /// The most keys at each width of value are held to the fuse sizing restated from
+        /// the paper's parameters (<see cref="CapacityRows.FuseCells"/>), as the binary
+        /// fuse filter's are: at the most the cells fit one array and with one more they do
+        /// not, the filter's own search agrees, and the refusal names the most.
+        /// </summary>
+        [TestMethod]
+        public void TestTheMostKeysAreTheMostWhoseCellsAreOneArray()
+        {
+            foreach (var valueBits in new[] { 8, 16, 40 })
+            {
+                var stride = (ulong)((8 + valueBits + 7) / 8);
+                var most = BloomierFilter.MaxKeys(valueBits);
+
+                Assert.IsLessThanOrEqualTo((ulong)Array.MaxLength, CapacityRows.FuseCells(most) * stride,
+                    $"{most:N0} keys of {valueBits} bits should fit one array");
+                Assert.IsGreaterThan((ulong)Array.MaxLength, CapacityRows.FuseCells(most + 1UL) * stride,
+                    $"{most + 1UL:N0} keys of {valueBits} bits should not");
+                Assert.AreEqual((long)(CapacityRows.FuseCells(most) * stride),
+                    BloomierFilter.CellBytes(most, valueBits));
+
+                var filter = (BloomierFilter)System.Runtime.CompilerServices.RuntimeHelpers
+                    .GetUninitializedObject(typeof(BloomierFilter));
+                typeof(BloomierFilter).GetField(
+                    "valueBits", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .SetValue(filter, valueBits);
+                var shape = typeof(BloomierFilter).GetMethod(
+                    "Shape", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+                var ex = Assert.ThrowsExactly<System.Reflection.TargetInvocationException>(
+                    () => shape.Invoke(filter, new object[] { most + 1 })).InnerException!;
+                Assert.IsInstanceOfType<ArgumentOutOfRangeException>(ex);
+                StringAssert.Contains(ex.Message, most.ToString("N0"));
+            }
+        }
     }
 }

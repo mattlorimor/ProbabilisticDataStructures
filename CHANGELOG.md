@@ -805,6 +805,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both rows. `HyperLogLog`'s reader needs no check: a payload carries every register it
   claims, and cannot carry 2^31 of them. No size that built before stops building.
 
+- **`BinaryFuseFilter.Build` and `BloomierFilter.Build` failed inside the allocation of
+  their array when the set was too large for one.** The fingerprints, or the cells, are one
+  array of bytes, which holds 2,147,483,591: from one byte too many the build failed with
+  an `OverflowException` (from 2^31) or an `OutOfMemoryException`, after hashing the whole
+  set. That is 1,908,641,337 distinct keys at 8-bit fingerprints and 954,204,160 at 16;
+  954,204,160, 636,136,107 and 318,068,053 for values of up to 8, 16 and 40 bits. A set with
+  more is now an `ArgumentOutOfRangeException` naming `items` or `pairs`, which says how
+  many keys it would have held, before any array of the build is allocated. The README's
+  and CAPACITY.md's "builds up to" are those numbers, where they said memory. No size that
+  built before stops building.
+
+- **`BloomierFilter.Build` refused a legitimate map when two different keys had the same
+  64-bit hash, and said a key had appeared twice.** The filter knows a key by its 64-bit
+  hash alone and keeps no keys, so two different keys that hash alike are one key to it. If
+  they have the same value that costs nothing, and it never did. If they have different
+  values the map cannot hold both, and the build is refused, which it always was; but the
+  message said "a key appears twice with different values", which for two different keys is
+  false and sends the caller looking for a repeat that is not there. The chance is
+  `n(n−1) / 2^65` for `n` keys: 0.03% at 100 million, 2.4% at 954 million, the most a map
+  of 8-bit values builds, and 39% at 2^32. The `ArgumentException` now says both ways two
+  entries can share a hash, gives the odds, and says what to do: build again with a
+  different `hash`, which moves the collision. The table of odds is in the XML docs of
+  `Build` and in CAPACITY.md. The format is unchanged; widening the identity would change
+  it, and has not been done.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

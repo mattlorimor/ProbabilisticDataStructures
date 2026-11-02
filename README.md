@@ -207,11 +207,11 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `CuckooBloomFilter` | n, fp 0.1%, empty | 2,040,109,465 | 510,027,366 | as built |
 | `QuotientFilter` | n, fp 1% | 1,610,612,736 | 201,326,592 | 805,306,368 |
 | `QuotientFilter` | n, fp 0.1% | 1,610,612,736 | 100,663,296 | 805,306,368 |
-| `BinaryFuseFilter` | keys, 8-bit fingerprints | memory | ≈ 476.99 million | ≈ 1.91 billion |
-| `BinaryFuseFilter` | keys, 16-bit fingerprints | memory | ≈ 238.38 million | ≈ 954.20 million |
-| `BloomierFilter` | keys, 8-bit values | memory | ≈ 238.38 million | ≈ 954.20 million |
-| `BloomierFilter` | keys, 16-bit values | memory | ≈ 159.03 million | ≈ 636.14 million |
-| `BloomierFilter` | keys, 40-bit values | memory | ≈ 79.46 million | ≈ 318.07 million |
+| `BinaryFuseFilter` | keys, 8-bit fingerprints | 1,908,641,337 | ≈ 476.99 million | ≈ 1.91 billion |
+| `BinaryFuseFilter` | keys, 16-bit fingerprints | 954,204,160 | ≈ 238.38 million | ≈ 954.20 million |
+| `BloomierFilter` | keys, 8-bit values | 954,204,160 | ≈ 238.38 million | ≈ 954.20 million |
+| `BloomierFilter` | keys, 16-bit values | 636,136,107 | ≈ 159.03 million | ≈ 636.14 million |
+| `BloomierFilter` | keys, 40-bit values | 318,068,053 | ≈ 79.46 million | ≈ 318.07 million |
 | `Grafite` | keys, fp 1%, ranges up to 64, worst case | ≈ 838.04 million | ≈ 282.51 million | as built |
 | `Grafite` | keys, fp 0.1%, ranges up to 64, worst case | ≈ 727.19 million | ≈ 229.78 million | as built |
 | `Grafite` | keys, fp 1%, ranges up to 1,024, worst case | ≈ 838.04 million | ≈ 223.66 million | as built |

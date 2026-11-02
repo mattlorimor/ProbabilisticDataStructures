@@ -522,7 +522,16 @@ namespace TestProbabilisticDataStructures
 
         internal static CapacityRow FuseRow(BinaryFuseWidth width) => Row(
             StructureId.BinaryFuseFilter, $"keys, {(int)width}-bit fingerprints",
-            () => Memory,
+            () =>
+            {
+                // The fingerprints are one array of bytes, so the most keys are those whose
+                // cells, by the fuse sizing restated above, fit it. Found by search, and
+                // held to the filter's own search, which uses its own sizing.
+                var stride = (ulong)((int)width / 8);
+                var most = Largest(1, int.MaxValue, n => FuseCells(n) * stride <= (ulong)Array.MaxLength);
+                Assert.AreEqual(most, (ulong)ProbabilisticDataStructures.BinaryFuseFilter.MaxKeys(width));
+                return Exact(most);
+            },
             () =>
             {
                 CheckFuseCells();
@@ -540,7 +549,14 @@ namespace TestProbabilisticDataStructures
 
         internal static CapacityRow BloomierRow(int valueBits) => Row(
             StructureId.BloomierFilter, $"keys, {valueBits}-bit values",
-            () => Memory,
+            () =>
+            {
+                // The cells are one array of bytes, a fingerprint and a value to a cell.
+                var stride = (ulong)((8 + valueBits + 7) / 8);
+                var most = Largest(1, int.MaxValue, n => FuseCells(n) * stride <= (ulong)Array.MaxLength);
+                Assert.AreEqual(most, (ulong)ProbabilisticDataStructures.BloomierFilter.MaxKeys(valueBits));
+                return Exact(most);
+            },
             () =>
             {
                 var stride = (8 + valueBits + 7) / 8;

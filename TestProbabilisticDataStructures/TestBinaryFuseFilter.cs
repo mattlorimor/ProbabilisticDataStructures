@@ -470,5 +470,42 @@ namespace TestProbabilisticDataStructures
                 Assert.AreEqual("items", ((ArgumentOutOfRangeException)ex).ParamName);
             }
         }
+
+        /// <summary>
+        /// The line is the largest array to the byte. The most keys are held to the
+        /// reference implementation's sizing, which the capacity tests restate from the
+        /// paper's parameters (<see cref="CapacityRows.FuseCells"/>) and not read back
+        /// from the filter: at the most, the fingerprints fit, and with one more key they
+        /// do not. The filter's own search must agree, one more key is refused, and the
+        /// refusal names the most.
+        /// </summary>
+        [TestMethod]
+        public void TestTheMostKeysAreTheMostWhoseFingerprintsAreOneArray()
+        {
+            foreach (var width in new[] { BinaryFuseWidth.Eight, BinaryFuseWidth.Sixteen })
+            {
+                var stride = (ulong)((int)width / 8);
+                var most = BinaryFuseFilter.MaxKeys(width);
+
+                Assert.IsLessThanOrEqualTo((ulong)Array.MaxLength, CapacityRows.FuseCells(most) * stride,
+                    $"{most:N0} keys at {(int)width} bits should fit one array");
+                Assert.IsGreaterThan((ulong)Array.MaxLength, CapacityRows.FuseCells(most + 1UL) * stride,
+                    $"{most + 1UL:N0} keys at {(int)width} bits should not");
+                Assert.AreEqual((long)(CapacityRows.FuseCells(most) * stride),
+                    BinaryFuseFilter.FingerprintBytes(most, width));
+
+                var ex = ShapeFails(most + 1, width);
+                Assert.IsInstanceOfType<ArgumentOutOfRangeException>(ex);
+                StringAssert.Contains(ex.Message, most.ToString("N0"),
+                    "the refusal should say how many keys would have fit");
+            }
+
+            // About 1.9 billion at a byte and 954 million at two: the limits the README
+            // and CAPACITY.md state.
+            Assert.IsGreaterThan(1_900_000_000u, BinaryFuseFilter.MaxKeys(BinaryFuseWidth.Eight));
+            Assert.IsLessThan(1_910_000_000u, BinaryFuseFilter.MaxKeys(BinaryFuseWidth.Eight));
+            Assert.IsGreaterThan(950_000_000u, BinaryFuseFilter.MaxKeys(BinaryFuseWidth.Sixteen));
+            Assert.IsLessThan(955_000_000u, BinaryFuseFilter.MaxKeys(BinaryFuseWidth.Sixteen));
+        }
     }
 }
