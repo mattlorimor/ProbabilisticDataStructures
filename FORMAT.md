@@ -271,6 +271,7 @@ address.
 | `DpswSketch` | depth | 2,147,483,591 | as `width`: the rows of one of those sketches are held in one array |
 | `InverseBloomFilter` | capacity | 2,147,483,591 | the slots are one array of references |
 | `VarOpt` | `k` | 2,147,483,590 | each region is an array of `k + 1` slots |
+| `Grafite` | reduced universe `r` | 2,305,843,009,213,693,950 | the hash works modulo 2^61 − 1, and the constructor refuses a request that needs more; every release capped it here, so a payload written for a request that is now refused carries exactly this and reads |
 | `Grafite` | words of low bits | 2,147,483,591 | they are one array |
 | `Grafite` | words of high bits | 33,554,432 | enough for 2,147,483,647 bits, the most an `int` position addresses |
 | `SetSketch` | `m` | 2,147,483,591 | the registers are one array |

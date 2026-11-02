@@ -225,11 +225,15 @@ about `log2(L/fp)` bits a key for the low parts, and between 2 and 3 for the hig
 A wider range, or a smaller rate, costs more bits a key and so lowers the number a gibibyte
 reads.
 
-The universe is at most 2^61 − 2, the modulus of the hash less one. A request for more
-(`n · L / fp` of 2^61 and over) is built at that size and not refused, and delivers a rate
-for ranges of `L` of `n · L / (2^61 − 2)` instead of `fp`, which is 1 once that reaches one.
-Points and short ranges are unaffected in practice: they are wrong with probability about
-`n · l / 2^61`. `FalsePositiveRate(L)` reports what is delivered.
+The universe is at most 2^61 − 2, the modulus of the hash less one, so `n · L / fp` has to
+stay under 2^61. A request that needs more is refused with an `ArgumentOutOfRangeException`,
+naming `maxRangeSize` and saying the largest range that works for that many keys at that
+rate. That is `L < 2^61 · fp / n`, to within the rounding of a double: for four keys at 1%,
+ranges up to about 5.8e15; for a million keys at 1%, about 2.3e10. When not even a range of
+one key fits, `n / fp` of 2^61 and over, it names `falsePositiveRate` and the finest rate
+those keys can have, a little over `n / 2^61`. Earlier releases built such a filter at the
+largest universe instead, and delivered a weaker rate than they were asked for without
+saying; one they wrote still reads, and answers as it did.
 
 The high parts are addressed with an `int`, so a filter has at most 2,147,483,647 bits of
 them. How many depends on where the keys' largest code falls in the universe, which
