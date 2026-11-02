@@ -879,6 +879,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Build` and in CAPACITY.md. The format is unchanged; widening the identity would change
   it, and has not been done.
 
+- **`DDSketch.Quantile` answered infinity for a value in the top binade of the doubles, and
+  zero for the smallest at the coarsest accuracy.** A bucket reports 2·γⁱ/(γ+1), and written
+  that way the working leaves the range of a double before the answer does: twice γⁱ is
+  infinite from 2^1023 (8.99e307) up, and γⁱ itself just past `double.MaxValue`, though the
+  answer, (1−a)·γⁱ, is never above the largest value its bucket holds. A sketch holding
+  `double.MaxValue` answered `PositiveInfinity` at every accuracy, and `NegativeInfinity` for
+  its negative. At the other end, at an accuracy of 0.99 the smallest 29 multiples of
+  `double.Epsilon` answered zero, which is not within 99% of anything positive.
+  <br><br>
+  An infinite answer is now worked out again from two halves of the power, and if that
+  overflows too the bucket reports `double.MaxValue`, which is within the accuracy of every
+  value it can hold since none is larger; a zero is `double.Epsilon`, likewise. Every other
+  answer is the one it was, bit for bit: the stored indices and counts are untouched, so
+  nothing persisted changes, and of 249,408 answers swept across 12 accuracies and both
+  signs the only ones that moved were the 34,734 infinite and the 58 zero. Among the subnormals the
+  answer is still gamma^i rounded to a multiple of 4.9e-324 and then rounded again, which
+  can leave it up to a unit (0.75 at worst, measured) outside the accuracy; it is not
+  corrected, because a bucket there that answered within the accuracy must keep its answer.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added
