@@ -623,8 +623,9 @@ namespace ProbabilisticDataStructures
         /// picked at each iteration, which means the properties still hold.
         /// </summary>
         /// <remarks>
-        /// p/m to within 2^-32 of itself at every size, which <see cref="DecayStart"/>
-        /// explains.
+        /// For a run shorter than the filter, p/m to within 2^-32 / p of itself at every
+        /// size, which <see cref="DecayStart"/> explains. A run as long as the filter or
+        /// longer reaches every cell, and <see cref="DecayRun"/> says how.
         /// </remarks>
         private void Decrement()
         {
