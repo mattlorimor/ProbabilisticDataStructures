@@ -252,6 +252,83 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A sketch that widened and then has the same key removed folds back to the row it
+        /// started as, counters of any size included.
+        /// </summary>
+        /// <remarks>
+        /// This is not about tuning, and it did not throw. The fold adds a counter to its
+        /// copy and takes off the record it started from, and it did that in signed longs, so
+        /// a result of 2^63 or more was negative and "nothing is allowed to fall below nought"
+        /// made it nought: a counter of 2^63 became 0, and the sketch answered a count of
+        /// nought for a key it had counted 2^63 times, which a Count-Min sketch must never
+        /// do. The sums wrap and come out right as long as the result fits a long, which is
+        /// why 2^62 and 2^63 - 10 are the controls.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(1UL << 62)]
+        [DataRow((1UL << 63) - 10)]
+        [DataRow(1UL << 63)]
+        [DataRow((1UL << 63) + 7)]
+        [DataRow(ulong.MaxValue - 1)]
+        public void TestFoldingBackKeepsCountersOfEveryLength(ulong value)
+        {
+            var sketch = Wide();
+            var row = RowsOf(sketch)[0];
+            for (var j = 0; j < 1024; j++)
+            {
+                row.Set(j, Sparse(j, new[] { value }));
+            }
+
+            // The add doubles the rows, and the removal of the same key takes the count back
+            // under the fold-back limit, so every counter should be where it was.
+            SetField(sketch, "expansionLimit", 1UL);
+            sketch.Add(Key(1));
+            Assert.AreEqual(2048, sketch.Width, "the add should have doubled the row");
+            sketch.Remove(Key(1));
+
+            Assert.AreEqual(1024, sketch.Width, "the removal should have folded the row back");
+            var folded = RowsOf(sketch)[0];
+            for (var j = 0; j < 1024; j++)
+            {
+                Assert.AreEqual(Sparse(j, new[] { value }), folded.Get(j), $"counter {j}");
+            }
+        }
+
+        /// <summary>
+        /// A counter the fold would take past the largest count stops there, as the sketch
+        /// has no larger count to give; it does not wrap round to something small.
+        /// </summary>
+        /// <remarks>
+        /// Two halves that each hold the largest count and started from nothing add up to
+        /// twice it. That cannot be reached by adding -- it is 2^65 adds -- so the state is
+        /// built by hand, and what is asked is only the direction: a count that cannot be
+        /// held must not be reported as less than the sketch has seen.
+        /// </remarks>
+        [TestMethod]
+        public void TestFoldingBackStopsAtTheLargestCountRatherThanWrapping()
+        {
+            var sketch = Wide();
+            SetField(sketch, "expansionLimit", 1UL);
+            sketch.Add(Key(1));
+            Assert.AreEqual(2048, sketch.Width, "the add should have doubled the row");
+
+            var records = (System.Collections.IList)typeof(SublimeCountMinSketch)
+                .GetField("records", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(sketch)!;
+            var record = ((ValeCounterArray[])records[records.Count - 1]!)[0];
+            var row = RowsOf(sketch)[0];
+            const int J = 100;
+            record.Set(J, 0);
+            row.Set(J, ulong.MaxValue);
+            row.Set(J + 1024, ulong.MaxValue);
+
+            sketch.Remove(Key(1));
+
+            Assert.AreEqual(1024, sketch.Width, "the removal should have folded the row back");
+            Assert.AreEqual(ulong.MaxValue, RowsOf(sketch)[0].Get(J));
+        }
+
+        /// <summary>
         /// The widest stub a chunk of the fewest counters can have and still keep the pool
         /// the array requires: the widest the constructor accepts at that many counters.
         /// </summary>
