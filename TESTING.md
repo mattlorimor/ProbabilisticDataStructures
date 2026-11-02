@@ -321,6 +321,149 @@ floating-point fixed-point with the one divergent input guarded and
 anchor-pinned. Memento and Infini segment counters reset when expansion
 rebuilds a segment, so work is only ever measured on expansion-free spans.
 
+### Sequences find what scenarios cannot
+
+Many of the defects this library has shipped needed a particular *sequence* to appear: a
+refused cuckoo insert that lost an element the filter already held, a `Reset` that left
+the item count behind, a restored filter that restarted its random sequence, a payload
+the writer produced and its own reader refused after one run of adds. A scenario test
+builds a structure one way and asks it one kind of question, so none of those were in its
+reach. The planted `Buckets.Reset` sizing error that opened
+[#144](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/144) survived
+the whole suite for the same reason: nothing reset a filter and then saved, loaded or
+merged it.
+
+So the sequence files run long, deterministic sequences of every operation a structure
+offers — `Add`, removal, `Merge`, `Reset`, `TestAndAdd`, save and load — in every order,
+and hold the structure to an oracle after every step. Each oracle is exact, and a
+structure gets the ones its semantics allow:
+
+- **A byte-exact twin**, for any structure whose state is a function of its history. A
+  second instance is given the same history by plainer means: a new instance stands in
+  for `Reset`, nothing for save and load, the other side's adds for `Merge`, `Test` then
+  `Add` for `TestAndAdd`. The persisted bytes are compared, so one comparison covers every
+  field, bookkeeping nothing queries included. The Bloom family gets this after every
+  operation. So do the sketches, where the twins are a saved instance against one never
+  saved, a reset instance against a fresh one, shards merged in a keyed order against the
+  whole stream, and a structure with everything removed against a fresh one; those compare
+  every answer along the way and the bytes at the end.
+- **An exact model or guarantee**, where the semantics can be restated cheaply. The
+  counting filter's saturating counters, the deletable filter's bits and collision
+  regions, the inverse filter's slots, the quotient filter's fingerprint multiset and the
+  cuckoo filter's (fingerprint, bucket pair) multiset predict every answer, false
+  positives included. The theta and tuple sketches are held to "exactly the input hashes
+  below theta", and the invertible Bloom lookup table to the net difference whenever a
+  decode succeeds. Where no such model exists, the guarantee that holds whatever the
+  structure chose is used instead: no false negative, a Count-Min estimate never below
+  the true count, and for Infini and Memento a one-to-one assignment of stored entries to
+  live keys in which each entry remembers only bits its key's hash really has.
+- **Exhaustive small scope with an independent invariant checker**, for the quotient,
+  Infini, Memento and cuckoo filters. Their metadata walks are while-true loops whose
+  termination rests on invariants that a behavioural test sees broken only when a later
+  query happens to walk through the damage. `QuotientFamilyInvariants` decodes each table
+  from first principles, with its own unpacking and none of the library's walks, and
+  checks every slot's bits, the counts and the stored entries after every operation. The
+  sweeps apply every operation to every reachable state of tiny tables, breadth first and
+  deduplicated on the persisted bytes, which is sound because those bytes are the whole
+  state. Where the table is small enough the exploration closes, and then it covers every
+  sequence of every length. Structural bugs appear at small sizes, and an exhaustive run
+  there beats any sample of it.
+
+Roughly: a structure whose state follows from its history gets the twin; one with an
+exact abstraction gets the model as well; one whose layout can be wrong without any
+answer showing it gets the checker and the exhaustive runs on top.
+
+**The files**, and how each derives its roster:
+
+- `TestFilterSequences.cs` is the Bloom family. The roster is the `StructureId` members
+  whose name contains `BloomFilter`; each is covered by a test named for it, or exempted
+  with a reason. Each spec is also held to the public surface by reflection, so a type
+  that gains `Reset`, `Merge` or `TestAndRemove` fails until its spec runs it.
+- `TestOperationSequences.cs` is the sketches and samplers. The roster is all of
+  `StructureId`: the built-once structures are exempt, and the exemption is checked by
+  reflection to have no `Add`, `Remove`, `Merge` or `Reset`; the filters are left to the
+  Bloom and quotient files.
+- `TestQuotientFamilySequences.cs`, with `QuotientFamilyInvariants.cs`, is the quotient,
+  Infini, Memento and cuckoo filters. The roster is every public persistable type that
+  offers `TestAndRemove`, held to a table of what is sequenced, the tests that carry it
+  and the operations they apply. The named tests must exist and carry `[TestMethod]`, and
+  every public operation of a sequenced filter must be applied or classified as a query,
+  checked in both directions. `CountingBloomFilter` and `DeletableBloomFilter` are exempt:
+  their removal does not delete a stored entry, and their model is the Bloom file's.
+
+**The rules**, each an earlier principle applied here:
+
+- *Steps are keyed.* The operation at a step is a pure function of its name — the Bloom
+  file hashes `{structure}[{config}]/t{trial}/s{step}`, the sketch file
+  `seq{seed}-{stream}-{i}` — so a failure names its step and reproduces from the name
+  alone. The one generator is the quotient file's churn schedule, `new Random(<literal>)`
+  as "Deterministic randomness only" allows; the exhaustive runs have none.
+- *Guard against vacuous runs.* A sequence that never reset, never saved a reset filter or
+  never crossed the threshold it is named for says nothing about it, and passes. Each run
+  tallies what it did and fails if it did not exercise the thing: every operation its
+  schedule offers, a reset followed by a save and by a merge, a counter that saturated, a
+  refused insert and an insert that needed kicks, a configuration seen on both sides of
+  each of its thresholds (sparse and dense, filling and full, before and after an
+  expansion), an exhaustive run that reached a full table or an expansion. The last is
+  not decoration: the first Sublime configuration used the default growth exponent, never
+  doubled, and passed every property vacuously.
+- *Bounds are counts, never a clock.* A step and trial count, a seed count and a length,
+  and for every exploration a transition budget that fails by count when the state space
+  outgrows it, with a depth where the space does not close. Nothing in these files reads a
+  clock; see "Bound the work, not the wall clock".
+
+**Adding a structure.** Put it where its semantics put it: a Bloom-style filter in
+`TestFilterSequences.cs`, as a test named `Test<Id>SequencesMatchTheirTwin` or
+`...MatchTheirModel`; a filter that deletes a stored entry in the quotient file's table,
+with a test that applies it; anything else as `Specs` entries in the sketch file, one per
+configuration at a coarse corner, with a `Phase` that shows its thresholds were crossed.
+If you do not, `TestTheSequenceSweepReachesEveryStructure` fails by name for any
+`StructureId` no file reaches, `TestEveryBloomFilterHasASequenceTest` for one whose name
+contains `BloomFilter`, and `TestTheSequenceSweepReachesEveryFilterThatDeletesAnEntry`
+for anything with a public `TestAndRemove`. A new operation on a quotient-family filter
+fails `TestEveryOperationTheSequencedFiltersOfferIsAccountedFor` until a sequence applies
+it or it is classified with a reason, and the Bloom file's
+`AssertSpecRunsWhatTheTypeOffers` does the same for `Reset`, `Merge` and removal. Every
+exemption is a claim, and is checked like one.
+
+**Accepted limits:**
+
+- The twin calls the same `Add` as the subject, so a defect in `Add` itself is left to the
+  per-structure tests for the filters whose state `Add` alone determines.
+- Scalable growth has no model, only the twin with adds in order and the
+  no-false-negative promise. The stable filter has no oracle for its answers, since it
+  evicts; it is held to its twin and to the element just added.
+- Infini and Memento shorten fingerprints as they grow, on a schedule that is the filter's
+  own choice, and it is not modelled. The assignment guarantee holds whatever the
+  schedule, and an entry older than its expansions is caught, but a loss of
+  false-positive accuracy is only partly covered.
+- `DpswSketch` is checked for layout only, because it draws fresh noise on read. VarOpt's
+  total weight and HeavyKeeper's one-sided bound are not modelled; both are held to their
+  twins.
+- A mutant that contracts a `SublimeCountMinSketch` one removal early survives this
+  harness and the scenario tests alike. Counts are preserved exactly, only timing moves,
+  and killing it needs a pin on the width schedule that neither layer has.
+- Theta and tuple `Intersect` and `Difference` are not interleaved in the sequences, where
+  `Union` is. Single-scenario tests cover them, and `TestModelBased` holds a theta
+  sketch's output of each to the same characterization.
+- No model is anchored outside this repository; see "Anchor outside your own reading".
+
+**Deliberately not done**, for this technique:
+
+- **An opt-in deep mode.** The default bounds found every defect the sequences have
+  found and, with the vacuity guards the files now carry, killed every planted mutant but
+  the Sublime one above. Exploratory runs at about 3,000,000 Bloom-family operations and
+  at Memento depth 10 found no defect; the one failure was a premise, that the 4-bit
+  counting configuration never saturates, which at that length it once did. A mode that
+  costs more and finds nothing is not worth carrying.
+- **One engine for all the files.** They drive different things: a spec and a twin per
+  step, properties over generated sequences, and a breadth-first exploration beside a
+  literal-seeded churn. A shared engine would be the lowest common denominator or a
+  framework larger than the files it served. What they share is the rules above.
+- **A Stryker rerun here.** The `Buckets.cs` sweep in the next section predates these
+  files, and its survivor list will look different with them in. Rerunning it on the
+  current tree is [#173](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/173).
+
 ## Mutation testing
 
 Manual, targeted mutation is part of every test commit (step 3 of the loop).
