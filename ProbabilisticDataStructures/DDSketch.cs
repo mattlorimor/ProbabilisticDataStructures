@@ -115,6 +115,41 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The bytes a run of this many buckets is written as: a count of eight bytes for
+        /// each. In 64 bits: in an int it wrapped at 2^28 buckets, two gibibytes of counts,
+        /// and the sketch then failed to write with an OverflowException from the
+        /// allocation, or from 2^29 sized the array for a fraction of the run and ran off
+        /// the end of it filling it.
+        /// </summary>
+        internal static long BytesOf(long span) => span * sizeof(ulong);
+
+        /// <summary>
+        /// The bytes of payload besides the counts: the five fixed fields, then an index of
+        /// the first bucket and a length for each of the two stores.
+        /// </summary>
+        private const int PayloadOverhead = 5 * sizeof(ulong) + 2 * (2 * sizeof(uint));
+
+        /// <summary>
+        /// How long the payload of a sketch with runs of these two lengths is.
+        /// </summary>
+        internal static long PayloadLength(long positiveSpan, long negativeSpan) =>
+            PayloadOverhead + BytesOf(positiveSpan) + BytesOf(negativeSpan);
+
+        /// <summary>
+        /// Refuses a sketch whose payload would not fit an envelope, with the exception the
+        /// payload writer gives for any structure too large to write, before anything is
+        /// allocated for it. The two signs share the one payload, so it is the length of
+        /// both runs together that is held to the limit.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">
+        /// The payload would be longer than <see cref="PersistenceFormat.MaxPayloadLength"/>.
+        /// </exception>
+        internal static void CheckWritable(long positiveSpan, long negativeSpan)
+        {
+            PersistenceFormat.CheckPayloadLength(PayloadLength(positiveSpan, negativeSpan));
+        }
+
+        /// <summary>
         /// Adds a value to the sketch.
         /// </summary>
         /// <param name="value">The value to add. Negative values and zero are allowed.</param>
@@ -356,9 +391,17 @@ namespace ProbabilisticDataStructures
         /// Writes the sketch to a stream.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
+        /// <exception cref="InvalidOperationException">
+        /// The payload would be longer than <see cref="PersistenceFormat.MaxPayloadLength"/>,
+        /// which a sketch holding enough buckets, between its two signs, can be: the counts
+        /// are eight bytes a bucket. The sketch is intact and can still be used, and nothing
+        /// is written.
+        /// </exception>
         public void WriteTo(Stream stream)
         {
             ArgumentNullException.ThrowIfNull(stream);
+
+            CheckWritable(this.positive.Span, this.negative.Span);
 
             var payload = new PayloadWriter();
             payload.WriteDouble(this.relativeAccuracy);
@@ -606,6 +649,11 @@ namespace ProbabilisticDataStructures
             internal int Capacity => this.counts.Length;
 
             /// <summary>
+            /// How many buckets the occupied run covers, none for an empty store.
+            /// </summary>
+            internal long Span => this.IsEmpty ? 0 : (long)this.MaxIndex - this.MinIndex + 1;
+
+            /// <summary>
             /// Writes the occupied run of buckets: where it starts, and the counts from
             /// there upward. The bounds and the total follow from that.
             /// </summary>
@@ -618,8 +666,12 @@ namespace ProbabilisticDataStructures
                     return;
                 }
 
-                var span = this.MaxIndex - this.MinIndex + 1;
-                var bytes = new byte[span * sizeof(ulong)];
+                // The caller has refused a run too long for a payload (CheckWritable), which
+                // is far fewer buckets than an int holds, so the cast and the offsets below
+                // cannot overflow; the checked cast is there so that a caller who had not
+                // would fail rather than write a short run.
+                var span = checked((int)this.Span);
+                var bytes = new byte[BytesOf(span)];
 
                 for (var i = 0; i < span; i++)
                 {
