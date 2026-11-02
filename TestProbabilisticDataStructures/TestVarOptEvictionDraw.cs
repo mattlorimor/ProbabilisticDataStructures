@@ -207,5 +207,90 @@ namespace TestProbabilisticDataStructures
             Assert.IsEmpty(failures, "an add moved the generator by the wrong number of values:\n" +
                 string.Join("\n", failures));
         }
+
+        /// <summary>
+        /// An eviction removes exactly the light item <see cref="VarOpt.EvictionSlot"/> names
+        /// for the generator's value, so the count above, which calls it directly, vouches
+        /// for the evictions a sample makes.
+        /// </summary>
+        /// <remarks>
+        /// With every weight one, an eviction moves the light region's last item into the
+        /// slot it empties, and the item kept is then added at the end. So the last item is
+        /// known before each add, and after an add that kept its item, that last item sits
+        /// in the slot evicted, unless the slot was the last. The generator is followed
+        /// alongside: one value for each contest and one more for each eviction, as
+        /// <see cref="TestAnEvictionTakesOneValueFromTheGenerator"/> pins, and the sample's
+        /// own generator is checked against it at the end.
+        /// <para>
+        /// The 64-bit draw and the 32-bit one agree on all but about L / 2^33 of evictions,
+        /// so a sample that drew some other way would agree with this one almost always. The
+        /// test runs a light region of 1,000,003 items until it has met three evictions where
+        /// the two draws name different slots, and requires that it did.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestAnEvictionRemovesTheSlotEvictionSlotNames()
+        {
+            const uint k = 1_000_003;
+            const ulong seed = 203;
+            const int enough = 3;
+            var sample = new VarOpt(k, seed);
+            for (long i = 0; i <= k; i++)
+            {
+                sample.Add(Key(i), 1.0);
+            }
+
+            var twin = new SeededRandom(seed);
+            var atTransition = DrawsTo(ref twin, GeneratorState(sample), 2);
+            Assert.IsTrue(atTransition is 1 or 2,
+                $"the transition to sampling moved the generator by " +
+                $"{(atTransition < 0 ? "more than 2" : atTransition.ToString())} values, not 1 or 2");
+            Assert.AreEqual(0, sample.HeavyCount, "with every weight one, no item should be heavy");
+
+            var wrong = new List<string>();
+            int evictions = 0, parted = 0;
+            for (long i = k + 1; i < k + 1 + 200_000 && parted < enough; i++)
+            {
+                var lightCount = (uint)sample.LightCount;
+                var last = sample.LightItems[lightCount - 1];
+                var key = Key(i);
+
+                twin.Next();
+                sample.Add(key, 1.0);
+                if (!sample.LightItems[sample.LightCount - 1].AsSpan().SequenceEqual(key))
+                {
+                    // The item was dropped, and nothing was evicted.
+                    continue;
+                }
+
+                evictions++;
+                var value = twin.Next();
+                var slot = VarOpt.EvictionSlot(value, lightCount);
+                var narrow = TestStableDecayDraw.Narrow(value, lightCount);
+                var wide = (uint)Math.BigMul(value, lightCount, out _);
+                if (narrow != wide)
+                {
+                    parted++;
+                }
+
+                if (slot != lightCount - 1 && !ReferenceEquals(sample.LightItems[slot], last))
+                {
+                    wrong.Add($"item {i:N0}: EvictionSlot names slot {slot:N0}, and the last item did " +
+                        $"not move there (the 32-bit draw names {narrow:N0} and a 64-bit one {wide:N0})");
+                    if (wrong.Count >= 5)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            Assert.IsEmpty(wrong, $"an eviction did not remove the slot EvictionSlot names, " +
+                $"in {wrong.Count} of {evictions:N0} evictions:\n" + string.Join("\n", wrong));
+            Assert.AreEqual(enough, parted,
+                $"in {evictions:N0} evictions the two draws named different slots only {parted} times, " +
+                "so this test cannot tell a sample that draws some other way from this one");
+            Assert.AreEqual(twin.State, GeneratorState(sample),
+                "the generator was not followed correctly, so the slots predicted were not the sample's");
+        }
     }
 }
