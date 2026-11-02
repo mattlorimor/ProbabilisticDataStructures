@@ -43,6 +43,7 @@ structure whose layout changes bumps only its own.
 | 4 | 6.2.0 | `SetSketch` | the construction, written only for the second one |
 | 5 | the release after 6.2.0 | `StableBloomFilter` | the state the random generator began in |
 | 6 | the release after 6.2.0 | `CuckooBloomFilter` | the state the random generator began in |
+| 7 | the release after 6.2.0 | `ScalableBloomFilter` | the growth factor, written only by a filter that grows |
 
 The table is also the list of what each structure reads. A version belongs to the
 structures named against it, and a structure's reader reads those versions and no
@@ -85,6 +86,17 @@ version 6 refuses such a payload as written by a later version. A version 1, 2 o
 payload of the cuckoo filter still reads, and its filter takes the generator position it
 was read at as its original state, exactly as the stable filter's does; the details are
 in [The random generator's state](#the-random-generators-state).
+
+Version 7 exists because a `ScalableBloomFilter` can grow its contained filters: the
+i-th is built for hint × sⁱ items rather than for the hint every time. Each nested filter
+already records its own size, so filters of mixed sizes read back at any version; what a
+payload without the factor cannot say is how large the *next* filter should be. Only a
+filter that grows writes version 7. One with a growth factor of 1 — every filter built
+for the hint, as every scalable filter was before the factor existed — still writes
+version 1, so libraries that predate the choice still read it. A version 1 payload is a
+filter with a growth factor of 1 by definition, and goes on adding filters for its hint
+after it is read; a reader older than version 7 refuses a version 7 payload as written by
+a later version.
 
 A reader refuses a payload whose magic does not match, whose version is not one its
 structure has defined, whose structure id is not the type being read, or whose
@@ -226,7 +238,7 @@ address.
 | `SetSketch` | `m` | 2,147,483,591 | the registers are one array |
 | `SublimeCountMinSketch` | rows | 710 | `ceil(ln(1 / delta))` at the smallest delta whose reciprocal is a finite double |
 | `SublimeCountMinSketch` | counters in a row | 1,073,741,824 | a width is a power of two held in an `int`, and 2^30 is the largest of those; the sketch stops widening there |
-| `ScalableBloomFilter` | filter count | 2,147,483,591 | the filters are a list; a filter that grows stops sooner, at the count its rates allow, which is a limit on growing and not on reading |
+| `ScalableBloomFilter` | filter count | 2,147,483,591 | the filters are a list; a filter stops growing sooner, when its next filter would have no finite rate to be sized from, or would be built for more items or bits than a contained filter addresses, which is a limit on growing and not on reading |
 | `CountingBloomFilter` | bytes of counters, `m` × `b` bits, rounded up | 2,147,483,591 | the counters are one array; from four-bit counters up that is fewer counters than a `u32` counts |
 | `StableBloomFilter` | bytes of cells, `m` × `d` bits, rounded up | 2,147,483,591 | the cells are one array, as the counters are |
 | `InfiniFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; a filter stops expanding there |
@@ -388,13 +400,21 @@ from `k` is refused. Each partition must hold `s` buckets.
 f64     r, the tightening ratio
 f64     fp, the target false positive rate
 f64     p, the fill ratio at which a new filter is added
-u32     hint
+u32     hint, the items the first contained filter is built for
+u32     s, the growth factor, at format version 7 only
 u32     filter count
 nested  PartitionedBloomFilter, one per contained filter, in order
 ```
 
 Order matters: each contained filter targets a rate tightened from the last, and the
 final one is the one additions go to.
+
+Filter i is built for hint × sⁱ items at fp × rⁱ, and s is 1 in a payload without it.
+A reader takes each filter's size from its nested payload and does not recompute it:
+the sizing goes through floating point that is not bit-identical across platforms, and
+the filters are what they were built as. The factor is stored for the filters still to
+come. A reader at version 7 rejects a growth factor below 2, since a filter growing by 1
+writes version 1, and every reader rejects a payload holding no filters.
 
 ### `StableBloomFilter` (id 7)
 

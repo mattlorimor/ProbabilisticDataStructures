@@ -666,7 +666,10 @@ From Chazelle, Kilian, Rubinfeld and Tal,
 <sup>[↑ Contents](#contents)</sup>
 
 Adds new filters with geometrically tightening rates as it fills, so it grows to fit
-whatever arrives.
+whatever arrives. Each new filter also holds more than the last, by a growth factor, so
+the stack a query has to ask stays a few dozen filters deep at most; a growth factor of 1
+builds every filter the same size, as the filter did before the factor existed, and
+stops after a few thousand.
 
 **Reach for it when** you genuinely don't know how large the set will be and memory is not
 bounded.
@@ -677,12 +680,14 @@ smaller than a scalable one that grew into the same capacity.
 
 It does have a ceiling, and it is not memory. Each new filter is built at a rate tighter
 than the last by the ratio `r`, and a rate can only be tightened so far: below
-1 / `double.MaxValue`, about 5.6e-309, a Bloom filter cannot be sized for it. At a rate of
-1% and a ratio of 0.8 that is 3,161 filters, and at a ratio of 0.9 it is 6,693; each
-holds about as many items as the hint, so at a hint of a thousand the first is 3.16
-million items. An `Add` past it throws an `InvalidOperationException` that says so, before
-changing anything. A larger hint raises the number of items it allows in proportion, and
-`BloomFilter64` has no ceiling of this kind.
+1 / `double.MaxValue`, about 5.6e-309, a Bloom filter cannot be sized for it. At a growth
+factor of 1, where that is what runs out, a rate of 1% and a ratio of 0.8 allow 3,161
+filters, and a ratio of 0.9 allows 6,693; each holds about as many items as the hint, so
+at a hint of a thousand the first is 3.16 million items. A filter that grows stops sooner,
+when its next filter would be built for more items or bits than a contained filter
+addresses. An `Add` past the ceiling throws an `InvalidOperationException` that says
+which, before changing anything, and the filter goes on answering. `BloomFilter64` has no
+ceiling of this kind.
 
 Described by Almeida, Baquero, Preguiça and Hutchison in
 [Scalable Bloom Filters](https://haslab.uminho.pt/cbm/files/dbloom.pdf).

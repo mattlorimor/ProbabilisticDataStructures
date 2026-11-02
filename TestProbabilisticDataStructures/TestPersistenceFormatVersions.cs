@@ -198,7 +198,9 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestANestedStructureAtAnUndefinedVersionIsRefused()
         {
-            var outer = new ScalableBloomFilter(100, 0.01, 0.8);
+            // Growth 1, so the payload is version 1 and the offset below has no growth
+            // factor in front of it.
+            var outer = new ScalableBloomFilter(100, 0.01, 0.8, 1);
             for (var i = 0; i < 500; i++)
             {
                 outer.Add(System.Text.Encoding.ASCII.GetBytes($"w{i}"));

@@ -25,6 +25,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interface goes on compiling and loading without them, and a budgeted read of it says so
   rather than quietly reading without a budget.
 
+- **`ScalableBloomFilter` can grow its contained filters.** A new constructor,
+  `ScalableBloomFilter(uint hint, double fpRate, double r, uint growth, Func<ReadOnlySpan<byte>, ulong>? hash = null)`,
+  builds each contained filter for `growth` times the items of the one before: filter i
+  holds hint × growthⁱ, at fp × rⁱ as before. That is the growth Almeida et al. describe
+  beside the tightening. Until now every contained filter was built for the hint, so the
+  number of filters grew with the items added, every `Test` asked each of them, each new
+  filter cost more bits per item than the last, and the tightened rate passed what a
+  double holds after a few thousand filters, where `Add` threw. Measured at a hint of
+  1,000, a rate of 1% and r = 0.8:
+
+  | Growth | Stops at | Filters there | Bits per item past 1M items | Negative `Test`, 1M items | False positives, 1M / 100M items |
+  | --- | --- | --- | --- | --- | --- |
+  | 1 | 3.16 million items | 3,161 | 245, rising to 748 | 23.7 µs | 4.04% / unreachable |
+  | 2 | 249 million | 18 | 14–18, up to 35 just after a filter is added | 0.20 µs | 3.46% / 3.73% |
+  | 4 | 332 million | 10 | 13–14, up to 58 just after a filter is added | 0.12 µs | 2.74% / 3.39% |
+
+  The compound bound, fpRate / (1 − r), is 5% there and holds at every factor: it is the
+  sum of the rates, which growth does not change. A growing filter stops when its next
+  contained filter would need more bits than one addresses, 4,294,967,295. A filter that
+  grows writes format version 7, which records the factor; one with a factor of 1 still
+  writes version 1, readable by earlier libraries. Payloads from earlier versions read as
+  filters with a factor of 1, and go on growing that way. (#171)
+
 ### Changed
 
 - **The package's minimum `System.IO.Hashing` rises from 10.0.11 to 10.0.14.** A project
@@ -55,6 +78,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   160 KB payload allocated 3.7 MB to read and now allocates 480 KB. TopK and HeavyKeeper
   size their heaps by the elements a payload holds rather than by `k`. What is read back
   is unchanged. The stored format does not change.
+
+- **A new `ScalableBloomFilter` grows its contained filters by a factor of 2 unless told
+  otherwise, and that is a breaking change.** The constructors that take no growth factor,
+  and `NewDefaultScalableBloomFilter`, now build each contained filter for twice the items
+  of the one before (above). Once a filter has grown, its `Capacity()`, its memory and its
+  payload differ from 6.2.0's: right after it adds a filter it holds up to twice the
+  space its items need, where a filter growing by 1 held at most one hint's worth spare.
+  Its payloads are format version 7, which 6.2.0 and earlier refuse as written by a later
+  version. Pass a growth factor of 1 for the filter as it was; it builds, answers and
+  writes exactly what 6.2.0 did. Stored filters are unaffected: they read with a factor of
+  1 whatever the default. Under the default read budget a growing filter loads up to
+  about 62 million items at a hint of 1,000, 1% and r = 0.8, where one growing by 1
+  loaded up to about 2.83 million; both need `ReadOptions` past that. (#171)
+
+- **`ScalableBloomFilter.Capacity()` returns `ulong`, and that is a breaking change.** It
+  returned a `uint` and added up its contained filters' bits in one, so once they came to
+  more than 4,294,967,295 between them it reported the total wrapped to a small number.
+  No contained filter can pass that alone, since each is a 32-bit filter, but together
+  they did, in 6.2.0 as well: at 1% and r = 0.8, a filter with a hint of 10,000 wrapped
+  after about 13.3 million items, and one with a hint of 100,000 after about 40.5
+  million. A growing filter gets there sooner. At a growth of 2, a hint of 1,000, 1% and
+  r = 0.8, its eighteen filters hold 4,460,676,502 bits, which the old arithmetic
+  reported as 165,709,206. Code that keeps the result in a `uint` needs a wider variable
+  or a cast. The method is not on `IFilter`, and no other structure's `Capacity()`
+  changes type: each of those is one filter, which its own type already holds. (#171)
 
 ### Fixed
 
@@ -529,23 +577,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now refused as one that cannot be read into an array, where it used to fail inside the
   allocation with an `OutOfMemoryException`.
 
-- **A `ScalableBloomFilter` that grew far enough threw an `OverflowException` from inside
-  the sizing arithmetic, with no hint of why.** It adds a filter at a tighter false
-  positive rate each time the last one fills, the i-th at the rate times r^i, and the rate
-  runs out: below 1 / `double.MaxValue`, about 5.6e-309, a filter's hash count cannot be
-  worked out. At a rate of 1% and a ratio of 0.8 that is the 3,162nd filter, which a hint of
-  a thousand reaches after 3,156,212 items (measured), and at a ratio of 0.9 the 6,694th.
-  Every release is affected. The failing add changed nothing, since the filter is built
-  before it is listed, so the filter that threw could still be queried and written.
+- **A `ScalableBloomFilter` at its ceiling threw an `OverflowException` from inside the
+  sizing arithmetic, with no hint of why. It now refuses the add with an
+  `InvalidOperationException` that says why, before anything changes.** A filter growing by
+  1 adds a filter at a tighter false positive rate each time the last one fills, the i-th at
+  the rate times r^i, and the rate runs out: below 1 / `double.MaxValue`, about 5.6e-309, a
+  filter's hash count cannot be worked out. At a rate of 1% and a ratio of 0.8 that is the
+  3,162nd filter, which a hint of a thousand reaches after 3,156,212 items (measured), and
+  at a ratio of 0.9 the 6,694th. A growing filter would have thrown an
+  `ArgumentOutOfRangeException` for a parameter the caller never passed, recommending
+  `ScalableBloomFilter` itself. Every release is affected, for the growth it had. The failing
+  add changed nothing, since the filter is built before it is listed, so the filter that threw
+  could still be queried and written.
   <br><br>
-  The add now throws an `InvalidOperationException` that names the ceiling, says the filter
-  is unchanged, and gives the way round it: a larger hint, which lets the same number of
-  filters hold more items, or `BloomFilter64`, which has no ceiling of this kind. The
-  ceiling is `floor(ln(rate × double.MaxValue) / ln(1 / r)) + 1` filters, and the class
-  documentation gives it with the two figures above. Growth is not redesigned: the filters
-  are still a fixed size, and lifting the ceiling is a separate question. A constructor
-  given a rate whose reciprocal is not a number, so that not even the first filter can be
-  built, now throws an `ArgumentOutOfRangeException` naming `fpRate`.
+  The refusal is one `InvalidOperationException` for every way the next filter can fail: a
+  rate with no finite reciprocal, a capacity past what a contained filter is sized for, or
+  more bits than one addresses. It names the filter that could not be built, the reason, what
+  the filter holds, and what would hold more (a larger hint or growth factor, a ratio nearer
+  one, or a `BloomFilter64`); the filter is as it was and goes on answering. Where the rate is
+  what runs out, at a growth factor of 1, the ceiling is `floor(ln(rate × double.MaxValue) /
+  ln(1 / r)) + 1` filters, 3,161 at 1% and 0.8 and 6,693 at 0.9, which the class
+  documentation gives; a growing filter stops sooner than that, at a few dozen filters,
+  unless its ratio is small. A constructor given a first rate whose reciprocal is not a
+  number, so that not even the first filter can be built, now throws an
+  `ArgumentOutOfRangeException` naming `fpRate`. (#171)
 
 - **A `SublimeCountMinSketch` row wider than about 285 million counters read and wrote the
   wrong place, and threw `IndexOutOfRangeException` for most keys.** A row's counters sit in

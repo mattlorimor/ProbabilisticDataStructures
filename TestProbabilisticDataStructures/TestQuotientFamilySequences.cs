@@ -1241,6 +1241,15 @@ namespace TestProbabilisticDataStructures
         };
 
         /// <summary>
+        /// The structures this class sequences, for the other sequence files to check
+        /// their exemptions against. Derived from the table above, which the roster test
+        /// below holds to the library, so it is what these sequences claim to run and
+        /// not a second list of it.
+        /// </summary>
+        internal static IReadOnlyList<StructureId> SequencedStructures =>
+            Sequenced.Select(s => Enum.Parse<StructureId>(s.Structure.Name)).ToArray();
+
+        /// <summary>
         /// The sweep is about filters that delete by removing a stored entry, so its
         /// roster is every persisted structure offering <c>TestAndRemove</c>, derived
         /// from the library's public surface. A new one fails here until it has a
@@ -1258,16 +1267,30 @@ namespace TestProbabilisticDataStructures
                 .OrderBy(t => t.Name, StringComparer.Ordinal)
                 .ToArray();
 
+            var exempt = new (Type Structure, string Why)[]
+            {
+                (typeof(CountingBloomFilter),
+                    "removal decrements a counter rather than removing a stored entry; " +
+                    $"its model is the saturating counters of {nameof(TestFilterSequences)}"),
+                (typeof(DeletableBloomFilter),
+                    "removal clears a region's collision mark rather than removing a " +
+                    $"stored entry; its model is the bits and regions of {nameof(TestFilterSequences)}"),
+            };
+
+            // An exemption that hands a structure to another file is a claim about that
+            // file, and it goes stale when the file stops sequencing the structure.
+            foreach (var (structure, why) in exempt)
+            {
+                Assert.Contains(Enum.Parse<StructureId>(structure.Name), TestFilterSequences.SequencedStructures,
+                    $"{structure.Name} is exempt here ({why}), but {nameof(TestFilterSequences)} " +
+                    "does not sequence it, so nothing does.");
+            }
+
             StructureRoster.AssertCoversEveryType(
                 "quotient-family sequence",
                 roster,
                 Sequenced.Select(s => s.Structure),
-                (typeof(CountingBloomFilter),
-                    "removal decrements a counter rather than removing a stored entry; " +
-                    "its model is the Bloom family's saturating counters"),
-                (typeof(DeletableBloomFilter),
-                    "removal clears a region's collision mark rather than removing a " +
-                    "stored entry; its model is the Bloom family's bits and regions"));
+                exempt);
 
             // A named test that has lost its attribute vouches for nothing.
             foreach (var (structure, tests, _) in Sequenced)
