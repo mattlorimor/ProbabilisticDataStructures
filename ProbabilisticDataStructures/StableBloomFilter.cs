@@ -642,12 +642,35 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         private void Decrement()
         {
-            var r = this.random.NextBelow(this.M);
+            var r = DecayStart(this.random.Next(), this.M);
             for (uint i = 0; i < this.p; i++)
             {
-                var idx = (r + i) % this.M;
-                this.cells.Increment((uint)idx, -1);
+                this.cells.Increment(DecayCell(r, i, this.M), -1);
             }
+        }
+
+        /// <summary>
+        /// The cell a decay run starts at, for the generator's next 64 bits and a filter
+        /// of <paramref name="m"/> cells.
+        /// </summary>
+        /// <remarks>
+        /// Decrement draws through this, so a test can count the inputs that start a run
+        /// at each cell without a filter of that size. It is
+        /// <see cref="SeededRandom.NextBelow"/>, written out over the value that method
+        /// would have drawn.
+        /// </remarks>
+        internal static uint DecayStart(ulong next, uint m)
+        {
+            return (uint)(((ulong)(uint)(next >> 32) * m) >> 32);
+        }
+
+        /// <summary>
+        /// The <paramref name="i"/>-th cell of a decay run that starts at
+        /// <paramref name="start"/>, in a filter of <paramref name="m"/> cells.
+        /// </summary>
+        internal static uint DecayCell(uint start, uint i, uint m)
+        {
+            return (start + i) % m;
         }
 
         /// <summary>
