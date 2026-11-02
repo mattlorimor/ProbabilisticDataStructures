@@ -1860,6 +1860,12 @@ Shorter ranges do proportionally better: a range of length ℓ is wrong with pro
 at most ℓ/`maxRangeSize` of the headline rate. Longer ones still answer correctly —
 there are never false negatives — but their rate grows in proportion.
 
+The rate is held while `n · maxRangeSize / falsePositiveRate` stays under 2^61, the size of
+the universe the hash works in. Asking for more builds the filter at that size rather than
+refusing it, and it then delivers a weaker rate for ranges of `maxRangeSize` —
+`filter.FalsePositiveRate(maxRangeSize)` says what, and is 1 when no range that wide can be
+excluded — while points and short ranges stay about as exact as they were.
+
 Keys are numbers rather than byte arrays, because a range is a question about order and
 bytes have none a caller would agree with.
 

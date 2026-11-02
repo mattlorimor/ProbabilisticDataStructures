@@ -51,6 +51,12 @@ namespace ProbabilisticDataStructures
         private const ulong Prime = (1UL << 61) - 1;
 
         /// <summary>
+        /// The largest reduced universe a filter is built with, 2^61 - 2: the hash
+        /// reduces modulo <see cref="Prime"/>, so a universe is no wider than that.
+        /// </summary>
+        internal const ulong MaxUniverse = Prime - 1;
+
+        /// <summary>
         /// The size of the reduced universe, r = n*L/e.
         /// </summary>
         internal ulong R { get; set; }
@@ -157,7 +163,8 @@ namespace ProbabilisticDataStructures
         /// <param name="falsePositiveRate">
         /// The false positive rate to hold for ranges of <paramref name="maxRangeSize"/>
         /// keys. Shorter ranges do better in proportion: a range of length l is wrong
-        /// with probability at most l/maxRangeSize of this.
+        /// with probability at most l/maxRangeSize of this. See the remarks for when
+        /// this cannot be held.
         /// </param>
         /// <param name="maxRangeSize">
         /// The largest range the rate is promised for. Larger ranges still answer
@@ -169,6 +176,21 @@ namespace ProbabilisticDataStructures
         /// against an adversary who knows the keys and not the seed, so a fixed seed
         /// is for reproducing a build, not for production.
         /// </param>
+        /// <remarks>
+        /// <b>The rate is held only while n × maxRangeSize / falsePositiveRate stays below
+        /// 2^61 - 1.</b> That is the size of the universe the keys are hashed into, and the
+        /// hash works modulo a prime of that size, so it cannot be wider. A request that
+        /// wants more -- many keys, or a wide range, or a very small rate -- is built with
+        /// the universe at 2^61 - 2 instead, and is not refused. The filter is a good one:
+        /// it has no false negatives, and a range of l keys is still wrong with probability
+        /// at most n × l / (2^61 - 2), which is negligible for points and short ranges. What
+        /// is weaker is the promise for ranges of <paramref name="maxRangeSize"/>, whose rate
+        /// is now n × maxRangeSize / (2^61 - 2), and 1 -- no range that wide is ever
+        /// excluded -- once that reaches one. <see cref="FalsePositiveRate"/> reports what
+        /// the filter delivers, so <c>filter.FalsePositiveRate(maxRangeSize)</c> against the
+        /// rate asked for is the check. A caller who passes a very large range to mean
+        /// "any" and then asks about short ones gets exactly the filter they wanted.
+        /// </remarks>
         public static Grafite Build(
             IEnumerable<ulong> keys,
             double falsePositiveRate,
@@ -203,10 +225,13 @@ namespace ProbabilisticDataStructures
 
             // r = n * L / e, the reduced universe. Computed in floating point and
             // clamped: the product overflows for large inputs long before the filter
-            // stops being useful, and a universe wider than the keys' own buys
-            // nothing.
+            // stops being useful, and the hash works modulo a prime of 2^61 - 1, so it
+            // cannot address a universe wider than MaxUniverse. A request that wants more
+            // is built at the cap and not refused -- see the remarks on Build -- and what
+            // it then delivers is n * l / MaxUniverse for a range of l, which
+            // FalsePositiveRate reports.
             var wanted = n * (double)maxRangeSize / falsePositiveRate;
-            var r = wanted >= Prime ? Prime - 1 : (ulong)Math.Ceiling(wanted);
+            var r = wanted >= Prime ? MaxUniverse : (ulong)Math.Ceiling(wanted);
             r = Math.Max(r, 2);
             filter.R = r;
 
@@ -609,12 +634,22 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal static ulong SizeOfWords(int lowWords, int highWords)
         {
-            return (ulong)((lowWords + highWords) * 8);
+            // Each in 64 bits before they are added: two arrays of a billion words are
+            // sixteen gigabytes, and an int holds neither the sum nor the product.
+            return (((ulong)lowWords) + (ulong)highWords) * sizeof(ulong);
         }
 
         /// <summary>
-        /// The false positive rate promised for a range of the given size.
+        /// The false positive rate the filter delivers for a range of the given size: at
+        /// most n × rangeSize / r for n keys and a reduced universe of r, and never more
+        /// than 1.
         /// </summary>
+        /// <remarks>
+        /// This is what the filter was built to, and what it holds, not what was asked
+        /// for: when the universe asked for did not fit (see <see cref="Build"/>), the
+        /// filter is built at the largest one that does and this reports the rate that
+        /// gives.
+        /// </remarks>
         /// <param name="rangeSize">The range size to ask about.</param>
         public double FalsePositiveRate(ulong rangeSize)
         {

@@ -632,6 +632,20 @@ namespace TestProbabilisticDataStructures
             var fits = Grafite.Build(new ulong[] { 99 }, 0.001, 1UL << 50, seed: 5);
             Assert.AreEqual((ulong)Math.Ceiling((double)(1UL << 50) / 0.001), fits.R);
             Assert.AreEqual(0.001, fits.FalsePositiveRate(1UL << 50), 1e-9);
+
+            // And from half the cap up to right under it, where a cap applied early or
+            // rounded the wrong way would show: wanted is 1.5 * 2^50 / 0.001, about 0.73
+            // of 2^61, and 2^61 - 2^21 for one key at 0.5 over 2^60 - 2^20.
+            var threeQuarters = Grafite.Build(new ulong[] { 99 }, 0.001, 3UL << 49, seed: 5);
+            Assert.AreEqual((ulong)Math.Ceiling(1.5 * (1UL << 50) / 0.001), threeQuarters.R);
+            var justUnder = Grafite.Build(new ulong[] { 99 }, 0.5, (1UL << 60) - (1UL << 20), seed: 5);
+            Assert.AreEqual((1UL << 61) - (1UL << 21), justUnder.R);
+            Assert.AreEqual(0.5, justUnder.FalsePositiveRate((1UL << 60) - (1UL << 20)), 1e-9);
+
+            // The other side of the line by the same margin: the universe wanted is 2^61 +
+            // 2^21, and the cap is what it is built at.
+            var justOver = Grafite.Build(new ulong[] { 99 }, 0.5, (1UL << 60) + (1UL << 20), seed: 5);
+            Assert.AreEqual(Cap, justOver.R);
         }
 
         /// <summary>

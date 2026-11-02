@@ -749,6 +749,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field, so a payload any version wrote reads the same, and one written below 2^32 items
   is byte for byte what it was.
 
+- **`Grafite.SizeInBytes()` worked out its answer in an `int`, which wrapped.** It returns
+  a `ulong`, but added the words of low and high bits and multiplied by eight before
+  widening, so a filter of 2 GiB reported a size near 2^64 and one of 4 GiB reported none.
+  It is 64-bit throughout now. The signature is unchanged.
+  <br><br>
+  `Grafite.Build` is documented where it cannot hold the rate it was asked for, which it
+  never said. The keys are hashed into a universe of `n × maxRangeSize / falsePositiveRate`,
+  and the hash works modulo 2^61 − 1, so a request that wants a wider universe is built at
+  2^61 − 2 and delivers a weaker rate for ranges of `maxRangeSize` than the one asked for:
+  four keys at 1% for ranges of 2^60 deliver 1, which `FalsePositiveRate` has always
+  reported. It is not refused. Measured on 3,000 keys over all 64 bits, a filter built that
+  way had no false negative and no point false positive, because its bound for a range of
+  `l` is `n × l / (2^61 − 2)`, and a caller who passes a very large range to mean "any" and
+  asks about short ones is served by it. The remarks on `Build` and `FalsePositiveRate`,
+  the README and CAPACITY.md now say so.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added
