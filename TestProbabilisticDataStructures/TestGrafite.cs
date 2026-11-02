@@ -591,94 +591,128 @@ namespace TestProbabilisticDataStructures
         // ---- What the rate is promised for, and what is stored ----------------------
 
         /// <summary>
-        /// Keys are hashed into a universe of n * L / e, and the hash works modulo the
-        /// Mersenne prime 2^61 - 1, so the universe is held to 2^61 - 2. A request that
-        /// wants more is built at the cap, and it is not refused: what comes back is a
-        /// filter with no false negatives whose short ranges still have the bound
-        /// n * l / r, and only the headline promise, the rate for ranges of L, is weaker
-        /// than asked for. A caller who passes a huge L to mean "any" and then asks about
-        /// short ranges is served by it, and refusing would strand them. What was wrong
-        /// was that nothing said so. <see cref="Grafite.FalsePositiveRate"/> says what is
-        /// delivered, and these tests pin that it never claims the rate that was asked for
-        /// and not delivered, and that the cap is where the documentation says it is.
+        /// Keys are hashed into a universe of r = n * L / e, and the hash works modulo the
+        /// Mersenne prime 2^61 - 1, so r is at most 2^61 - 2. A request that needs more is
+        /// refused, naming <c>maxRangeSize</c> and the largest range that does work for
+        /// that many keys at that rate. It used to be built at the cap, quietly, and
+        /// deliver a rate far above the one asked for: four keys at 1% for ranges of
+        /// 2^60 reported 1 for those ranges. This is the rule a quotient filter follows
+        /// for a rate finer than it can deliver, which is to refuse and say what would
+        /// work, and not to clamp.
+        /// <para>
+        /// The boundary is derived from the formula, not read from the code: r stays under
+        /// 2^61 while L &lt; 2^61 * e / n. Either side of that by a part in a billion, which
+        /// is far more than the double arithmetic the build does there can move it, a
+        /// request just past it is refused and one just inside builds and delivers the
+        /// rate it was asked for.
+        /// </para>
         /// </summary>
         [TestMethod]
-        public void TestACappedUniverseReportsTheRateItDelivers()
+        public void TestAUniverseTheHashCannotAddressIsRefusedNamingTheRange()
         {
-            const ulong Cap = (1UL << 61) - 2;
-            var keys = new ulong[] { 1, 2, 3, 4 };
-
-            foreach (var range in new[] { 1UL << 60, ulong.MaxValue })
+            // Dyadic rates are exact in a double; the others are not, and the margin is
+            // what covers that.
+            var cases = new (int Keys, double Rate)[]
             {
-                var filter = Grafite.Build(keys, 0.01, range, seed: 5);
-                Assert.AreEqual(Cap, filter.R, "the cap should be what bound here");
-                Assert.AreEqual(1.0, filter.FalsePositiveRate(range),
-                    "at 2^60 the cap leaves no exclusion at all, and it must say so");
-                Assert.AreEqual(4.0 / (1UL << 61), filter.FalsePositiveRate(1), 1e-25,
-                    "a short range keeps its bound, n * l / r, at the capped r");
+                (4, 0.5), (1, 0.25), (1000, 0.125), (1, 0.001), (300, 0.01), (7, 0.9),
+            };
+
+            foreach (var (keyCount, rate) in cases)
+            {
+                var keys = Enumerable.Range(0, keyCount).Select(i => (ulong)i * 97 + 5).ToArray();
+
+                // L at which n * L / e reaches 2^61.
+                var edge = Math.ScaleB(1.0, 61) * rate / keyCount;
+                var inside = (ulong)(edge * (1 - 1e-9));
+                var outside = (ulong)(edge * (1 + 1e-9));
+
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => Grafite.Build(keys, rate, outside, seed: 3),
+                    $"{keyCount} keys at {rate} for ranges of {outside}");
+                Assert.AreEqual("maxRangeSize", ex.ParamName);
+
+                var filter = Grafite.Build(keys, rate, inside, seed: 3);
+                Assert.AreEqual(rate, filter.FalsePositiveRate(inside), rate * 1e-6,
+                    $"{keyCount} keys at {rate}, built right at the boundary, must deliver the rate asked");
+                foreach (var key in keys)
+                {
+                    Assert.IsTrue(filter.Test(key));
+                }
+
+                // And the cases the cap used to take without a word.
+                foreach (var wide in new[] { 1UL << 60, ulong.MaxValue })
+                {
+                    if (wide > outside)
+                    {
+                        Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                            () => Grafite.Build(keys, rate, wide, seed: 3),
+                            $"{keyCount} keys at {rate} for ranges of {wide}");
+                    }
+                }
             }
-
-            // Weaker than asked for but not useless: one key, 1e-9 asked for ranges of
-            // 2^40, which wants a universe of 2^70. What it delivers is 2^40 / r.
-            var weaker = Grafite.Build(new ulong[] { 99 }, 1e-9, 1UL << 40, seed: 5);
-            Assert.AreEqual(Cap, weaker.R);
-            Assert.IsGreaterThan(1e-9, weaker.FalsePositiveRate(1UL << 40),
-                "a capped filter must not claim the rate it was asked for and cannot deliver");
-            Assert.AreEqual((1UL << 40) / (double)(1UL << 61),
-                weaker.FalsePositiveRate(1UL << 40), 1e-15);
-
-            // The control: a wide range whose universe fits is not capped, and delivers
-            // the rate asked for. One key at 0.1% for ranges of 2^50 wants about 2^60.
-            var fits = Grafite.Build(new ulong[] { 99 }, 0.001, 1UL << 50, seed: 5);
-            Assert.AreEqual((ulong)Math.Ceiling((double)(1UL << 50) / 0.001), fits.R);
-            Assert.AreEqual(0.001, fits.FalsePositiveRate(1UL << 50), 1e-9);
-
-            // And from half the cap up to right under it, where a cap applied early or
-            // rounded the wrong way would show: wanted is 1.5 * 2^50 / 0.001, about 0.73
-            // of 2^61, and 2^61 - 2^21 for one key at 0.5 over 2^60 - 2^20.
-            var threeQuarters = Grafite.Build(new ulong[] { 99 }, 0.001, 3UL << 49, seed: 5);
-            Assert.AreEqual((ulong)Math.Ceiling(1.5 * (1UL << 50) / 0.001), threeQuarters.R);
-            var justUnder = Grafite.Build(new ulong[] { 99 }, 0.5, (1UL << 60) - (1UL << 20), seed: 5);
-            Assert.AreEqual((1UL << 61) - (1UL << 21), justUnder.R);
-            Assert.AreEqual(0.5, justUnder.FalsePositiveRate((1UL << 60) - (1UL << 20)), 1e-9);
-
-            // The other side of the line by the same margin: the universe wanted is 2^61 +
-            // 2^21, and the cap is what it is built at.
-            var justOver = Grafite.Build(new ulong[] { 99 }, 0.5, (1UL << 60) + (1UL << 20), seed: 5);
-            Assert.AreEqual(Cap, justOver.R);
         }
 
         /// <summary>
-        /// A capped filter answers correctly. Keys spread over all of 64 bits, so that
-        /// they sit in several blocks of the capped universe, are all found, and so are
-        /// ranges around them; and points that are not keys are not reported, as the
-        /// capped bound of about 2^-61 per key says they will not be.
+        /// A rate finer than the universe can address even for a range of one key is
+        /// refused naming the rate, since no range size would help: n * 1 / e reaches 2^61
+        /// when e is n / 2^61. Four keys cannot be held to better than about 1.7e-18, and
+        /// 3e-18 builds.
         /// </summary>
         [TestMethod]
-        public void TestACappedFilterHasNoFalseNegativesAndNoPointFalsePositives()
+        public void TestARateNoRangeCanHaveIsRefusedNamingTheRate()
         {
-            var random = new Random(7);
-            ulong Next() => ((ulong)random.NextInt64() << 1) ^ (ulong)random.NextInt64();
+            var keys = new ulong[] { 1, 2, 3, 4 };
 
-            var keys = Enumerable.Range(0, 300).Select(_ => Next()).Distinct().ToArray();
-            var filter = Grafite.Build(keys, 0.01, ulong.MaxValue, seed: 11);
-            Assert.AreEqual((1UL << 61) - 2, filter.R, "the cap should be what bound here");
-            Assert.IsTrue(keys.Max() >= filter.R, "the keys should reach past the first block");
-
-            foreach (var key in keys)
+            foreach (var rate in new[] { 1e-18, 1.5e-18, 1e-30 })
             {
-                Assert.IsTrue(filter.Test(key));
-                Assert.IsTrue(filter.Test(key - Math.Min(key, 700), key + Math.Min(ulong.MaxValue - key, 700)));
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => Grafite.Build(keys, rate, 1, seed: 3), $"a rate of {rate}");
+                Assert.AreEqual("falsePositiveRate", ex.ParamName);
             }
 
-            var known = new HashSet<ulong>(keys);
-            for (var i = 0; i < 3000; i++)
+            var finest = Grafite.Build(keys, 3e-18, 1, seed: 3);
+            Assert.AreEqual(3e-18, finest.FalsePositiveRate(1), 3e-18 * 1e-6);
+            foreach (var key in keys)
             {
-                var query = Next();
-                if (!known.Contains(query))
-                {
-                    Assert.IsFalse(filter.Test(query), $"the point {query} is not a key");
-                }
+                Assert.IsTrue(finest.Test(key));
+            }
+        }
+
+        private const int PayloadStart = 14;
+
+        private static byte[] WithUniverse(byte[] payload, ulong universe)
+        {
+            var bytes = (byte[])payload.Clone();
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
+                bytes.AsSpan(PayloadStart), universe);
+
+            var crc = new System.IO.Hashing.Crc32();
+            crc.Append(bytes.AsSpan(4, bytes.Length - 8));
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
+                bytes.AsSpan(bytes.Length - 4), crc.GetCurrentHashAsUInt32());
+            return bytes;
+        }
+
+        /// <summary>
+        /// The reader holds a payload to what the builder makes, so a reduced universe past
+        /// 2^61 - 2 is refused. Every release capped it there, so a payload an earlier
+        /// release wrote for a request the builder now refuses carries exactly 2^61 - 2,
+        /// and it still reads: stored data is read forever.
+        /// </summary>
+        [TestMethod]
+        public void TestThePayloadOfACappedFilterStillReadsAndOnePastTheCapDoesNot()
+        {
+            var bytes = Grafite.Build(new ulong[] { 1, 2, 3 }, 0.01, 16, seed: 1).ToByteArray();
+
+            var capped = Persistence.FromByteArray<Grafite>(WithUniverse(bytes, (1UL << 61) - 2));
+            Assert.AreEqual(3UL, capped.Count());
+
+            foreach (var universe in new[] { (1UL << 61) - 1, 1UL << 61, ulong.MaxValue })
+            {
+                var ex = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<Grafite>(WithUniverse(bytes, universe)),
+                    $"a universe of {universe}");
+                StringAssert.Contains(ex.Message, "universe");
             }
         }
 
