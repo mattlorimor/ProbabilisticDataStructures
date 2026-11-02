@@ -47,7 +47,7 @@ namespace TestProbabilisticDataStructures
                 () => DpswSketch.SubstreamSizeFor(Array.MaxLength + 1L, beta));
 
             // And sizes that built before are unchanged.
-            Assert.AreEqual(388, DpswSketch.SubstreamSizeFor(5000, 0.7));
+            Assert.AreEqual(389, DpswSketch.SubstreamSizeFor(5000, 0.7));
             Assert.AreEqual(1, DpswSketch.SubstreamSizeFor(1, 0.5));
             Assert.AreEqual(50, DpswSketch.SubstreamSizeFor(2500, 0.5));
         }

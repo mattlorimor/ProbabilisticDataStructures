@@ -262,8 +262,8 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `SublimeCountMinSketch` | width w per row (a power of two), δ 1% (5 rows) | 1,073,741,824 | 2,097,152 † | 16,777,216 |
 | `TopK` | width w of the count-min sketch inside, δ 1% (5 rows) | 2,147,483,591 | ≈ 6.71 million | 53,687,082 |
 | `HeavyKeeper` | width w per row, depth 2 | 2,147,483,591 | ≈ 26.84 million | 107,374,175 |
-| `DDSketch` | bucket span, values of one sign | memory | ≈ 44.74 million | ≈ 268.44 million |
-| `DpswSketch` | window (items), width 512, depth 5 | memory | 1,500,000,000 † | 100,000,000,000 † |
+| `DDSketch` | bucket span, values of one sign | 2,147,483,591 | ≈ 44.74 million | ≈ 268.44 million |
+| `DpswSketch` | window (items), width 512, depth 5 | 21,445,114,182,289 | 1,500,000,000 † | 100,000,000,000 † |
 
 ---
 

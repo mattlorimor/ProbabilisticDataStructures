@@ -55,7 +55,8 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         private static string InverseBuilds()
         {
-            Assert.Throws<OutOfMemoryException>(() => new InverseBloomFilter((uint)Array.MaxLength + 1));
+            Assert.AreEqual((uint)Array.MaxLength, InverseBloomFilter.MaxCapacity);
+            Assert.Throws<ArgumentOutOfRangeException>(() => new InverseBloomFilter((uint)Array.MaxLength + 1));
             return Exact((ulong)Array.MaxLength);
         }
 

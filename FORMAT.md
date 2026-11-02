@@ -236,6 +236,8 @@ address.
 | `CountMinSketch` | depth | 710 | `ceil(ln(1 / delta))` at the smallest delta whose reciprocal is a finite double |
 | `PrivateCountMinSketch` | width | 2,147,483,591 | each row is one array |
 | `PrivateCountMinSketch` | depth | 2,147,483,591 | the rows are held in one array |
+| `DpswSketch` | items in a substream | 2,147,483,591 | the checkpoints of a substream are a list with a slot for each item, and a list holds no more than an array |
+| `InverseBloomFilter` | capacity | 2,147,483,591 | the slots are one array of references |
 | `VarOpt` | `k` | 2,147,483,590 | each region is an array of `k + 1` slots |
 | `Grafite` | words of low bits | 2,147,483,591 | they are one array |
 | `Grafite` | words of high bits | 33,554,432 | enough for 2,147,483,647 bits, the most an `int` position addresses |

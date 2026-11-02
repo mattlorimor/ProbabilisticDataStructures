@@ -785,6 +785,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dimensions. FORMAT.md's table of sizes has the four new rows. No size that built before
   stops building.
 
+- **`InverseBloomFilter`, `HyperLogLog` and `DpswSketch` failed inside an allocation, or
+  saturated, instead of refusing a size they could not build.** `InverseBloomFilter`'s
+  slots are one array of references, which holds 2,147,483,591: a capacity past that was
+  an `OutOfMemoryException`, and from 2^31 an `OverflowException`. `HyperLogLog(2^31)`
+  was an `OverflowException`, since the registers are an array of bytes and the largest
+  power of two one holds is 2^30; `NewDefaultHyperLogLog` with an error of 1e-5, which
+  wants 2^34, cast the count to a `uint` that saturates and complained that 4,294,967,295
+  is not a power of two. `DpswSketch` sized a substream, the window to the power of the
+  substream factor, with a cast to an `int` that saturates, so a window of 2^40 at a factor
+  of 0.9 (2^36 items) was built as a substream of 2^31 − 1 whose checkpoints are a list of
+  that many.
+  <br><br>
+  Each is now an `ArgumentOutOfRangeException` naming the parameter (`capacity`, `m`, `e`,
+  `window`), before anything is allocated. A substream may hold at most 2,147,483,591
+  items, the longest list; at the default factor of 0.7 that is a window of
+  21,445,114,182,289. The readers of `InverseBloomFilter` and `DpswSketch` refuse a
+  payload that claims more, as beyond anything built, so FORMAT.md's table of sizes has
+  both rows. `HyperLogLog`'s reader needs no check: a payload carries every register it
+  claims, and cannot carry 2^31 of them. No size that built before stops building.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

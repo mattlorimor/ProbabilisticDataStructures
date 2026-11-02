@@ -119,6 +119,24 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The limit is the last power of two an array holds, which does build: a
+        /// gibibyte of registers, allocated once and not touched, so the cost is the
+        /// allocation. The error that rounds up to it builds the same estimator.
+        /// </summary>
+        [TestMethod]
+        public void TestTheLargestEstimatorBuilds()
+        {
+            var largest = new HyperLogLog(1u << 30);
+            Assert.AreEqual(1u << 30, largest.M);
+            largest.Add(new byte[] { 1, 2, 3 });
+            largest = null;
+
+            // 1.04 / 3.2e-5, squared, is about 1.056e9 registers: 2^30 once rounded up.
+            var byError = HyperLogLog.NewDefaultHyperLogLog(3.2e-5);
+            Assert.AreEqual(1u << 30, byError.M);
+        }
+
+        /// <summary>
         /// An error so small that its register count passes what a register array holds is
         /// refused naming the error. The count was rounded up to a power of two and cast
         /// to a uint, which saturates, so the failure was a complaint that 4294967295 is

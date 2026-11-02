@@ -112,6 +112,14 @@ namespace ProbabilisticDataStructures
         private Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
 
         /// <summary>
+        /// The most registers an estimator has: the registers are one array of bytes, and
+        /// the largest power of two an array holds is 2^30. The constructor refuses a
+        /// count past it; the reader needs no check of its own, since a payload carries
+        /// every register it claims and cannot carry 2^31 of them.
+        /// </summary>
+        internal static uint MaxRegisters => 1u << BitOperations.Log2((uint)Array.MaxLength);
+
+        /// <summary>
         /// Creates a new HyperLogLog with m registers. Returns an error if m isn't a
         /// power of two.
         /// </summary>
@@ -121,6 +129,13 @@ namespace ProbabilisticDataStructures
         /// only way to have one hash cover everything the structure will ever hold:
         /// once anything has been added, the hash can no longer be replaced.
         /// </param>
+        /// <exception cref="ArgumentException">
+        /// The count is not a power of two.
+        /// </exception>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The count is zero, or is 2^31, which is more than one array holds. The most is
+        /// 2^30, an estimator of a gibibyte.
+        /// </exception>
         public HyperLogLog(uint m, Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
             // Zero passes the power-of-two test below, because 0 - 1 underflows to
@@ -131,6 +146,15 @@ namespace ProbabilisticDataStructures
             if ((m & (m - 1)) != 0)
             {
                 throw new ArgumentException(String.Format("{0} is not a power of two", m));
+            }
+
+            // The one power of two a uint holds past the limit, 2^31, used to fail in the
+            // allocation with an OverflowException.
+            if (m > MaxRegisters)
+            {
+                throw new ArgumentOutOfRangeException(nameof(m), m,
+                    $"{m} registers is more than one array holds. The registers are an " +
+                    $"array of bytes, and the most that is a power of two is {MaxRegisters}.");
             }
 
             this.Registers = new byte[m];
@@ -152,10 +176,25 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="e">Desired standard error</param>
         /// <returns>The HyperLogLog optimized for the standard error</returns>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The error needs more registers than an estimator has, 2^30, which is anything
+        /// below about 3.2e-5.
+        /// </exception>
         public static HyperLogLog NewDefaultHyperLogLog(double e)
         {
             var m = Math.Pow(1.04 / e, 2);
-            return new HyperLogLog((uint)Math.Pow(2, Math.Ceiling(Math.Log(m, 2))));
+            var registers = Math.Pow(2, Math.Ceiling(Math.Log(m, 2)));
+
+            // Checked before the cast to a uint, which saturates: an error of 1e-5 wants
+            // 2^34 registers, and the complaint was that 4294967295 is not a power of two.
+            if (!(registers <= MaxRegisters))
+            {
+                throw new ArgumentOutOfRangeException(nameof(e), e,
+                    $"A standard error of {e} needs about {registers:E2} registers, and an " +
+                    $"estimator has at most {MaxRegisters}. Use a larger error.");
+            }
+
+            return new HyperLogLog((uint)registers);
         }
 
         /// <summary>

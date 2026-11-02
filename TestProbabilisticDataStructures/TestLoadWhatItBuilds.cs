@@ -732,6 +732,59 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The slots are one array of references, sixteen gigabytes at the limit. The
+        /// constructor refuses one past it, the reader refuses a payload that claims
+        /// one past it, and a payload at it is refused for what the slots cost.
+        /// </summary>
+        [TestMethod]
+        public void TestInverseBloomFilterLimitIsShared()
+        {
+            Assert.AreEqual((uint)Array.MaxLength, InverseBloomFilter.MaxCapacity);
+            Assert.AreEqual("capacity", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new InverseBloomFilter(InverseBloomFilter.MaxCapacity + 1)).ParamName);
+
+            // u32 capacity, then u32 occupied.
+            var bytes = new InverseBloomFilter(100).ToByteArray();
+            AssertRefused<InverseBloomFilter>(
+                PokeUInt32(bytes, 0, InverseBloomFilter.MaxCapacity + 1), PastTheLimit);
+
+            var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() =>
+                Persistence.FromByteArray<InverseBloomFilter>(
+                    PokeUInt32(bytes, 0, InverseBloomFilter.MaxCapacity)));
+            Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
+                "a payload at the limit should be refused for what it costs, not its size");
+        }
+
+        /// <summary>
+        /// A substream's checkpoints are a list with a slot for each item, so the
+        /// longest substream is the longest list. The constructor refuses a window and
+        /// factor that make more, before building the list; the reader refuses a payload
+        /// that claims more, and one that claims exactly that is refused for what the
+        /// list would cost. (<see cref="TestDpswSketch"/> holds the sizing rule to its
+        /// edge, one item either side.)
+        /// </summary>
+        [TestMethod]
+        public void TestDpswSketchLimitIsShared()
+        {
+            Assert.AreEqual(Array.MaxLength, DpswSketch.MaxSubstreamSize);
+            Assert.AreEqual("window", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new DpswSketch(1L << 40, 1.0, beta: 0.9)).ParamName);
+
+            // u64 window, f64 rho, f64 alpha, then u32 substream size at 24.
+            var bytes = new DpswSketch(100, 1.0, seed: 1).ToByteArray();
+            AssertRefused<DpswSketch>(
+                PokeUInt32(bytes, 24, (uint)DpswSketch.MaxSubstreamSize + 1), PastTheLimit);
+
+            // A window the low word of which is 2^32 - 1 can have a substream at the limit.
+            var wide = PokeUInt32(bytes, 0, uint.MaxValue);
+            var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() =>
+                Persistence.FromByteArray<DpswSketch>(
+                    PokeUInt32(wide, 24, (uint)DpswSketch.MaxSubstreamSize)));
+            Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
+                "a payload at the limit should be refused for what it costs, not its size");
+        }
+
+        /// <summary>
         /// There is no constructor argument here: a scalable filter grows by adding
         /// filters to a list until the list refuses, so its limit is the list's.
         /// Structural at the limit, where the list alone would be sixteen gigabytes of
@@ -1288,15 +1341,12 @@ namespace TestProbabilisticDataStructures
                 (StructureId.BloomFilter, NoCap, nameof(TestBloomFilterReadsPastTheOldCeiling)),
                 (StructureId.DeletableBloomFilter, NoCap,
                     nameof(TestDeletableBloomFilterReadsPastTheOldCeiling)),
-                (StructureId.InverseBloomFilter, NoCap,
-                    nameof(TestInverseBloomFilterReadsPastTheOldCeiling)),
                 (StructureId.CountSketch, NoCap, nameof(TestCountSketchReadsPastTheOldCeiling)),
                 (StructureId.BinaryFuseFilter, NoCap,
                     nameof(TestBinaryFuseFilterReadsPastTheOldCeiling)),
                 (StructureId.DDSketch, NoCap, nameof(TestDDSketchReadsPastTheOldCeiling)),
                 (StructureId.InvertibleBloomLookupTable, NoCap,
                     nameof(TestInvertibleBloomLookupTableReadsPastTheOldCeiling)),
-                (StructureId.DpswSketch, NoCap, nameof(TestDpswSketchReadsPastTheOldCeiling)),
                 (StructureId.HyperLogLog, NoCap, nameof(TestHyperLogLogReadsPastTheOldCeiling)),
             };
 
@@ -1378,6 +1428,12 @@ namespace TestProbabilisticDataStructures
                 (StructureId.PrivateCountMinSketch,
                     new[] { nameof(TestPrivateCountMinSketchReadsPastTheOldCeiling) },
                     nameof(TestPrivateCountMinSketchLimitsAreShared)),
+                (StructureId.InverseBloomFilter,
+                    new[] { nameof(TestInverseBloomFilterReadsPastTheOldCeiling) },
+                    nameof(TestInverseBloomFilterLimitIsShared)),
+                (StructureId.DpswSketch,
+                    new[] { nameof(TestDpswSketchReadsPastTheOldCeiling) },
+                    nameof(TestDpswSketchLimitIsShared)),
                 (StructureId.ScalableBloomFilter,
                     new[] { nameof(TestScalableFilterReaderTakesAFilterCountPastTheOldCeiling) },
                     nameof(TestScalableFilterLimitIsShared)),
@@ -1426,6 +1482,8 @@ namespace TestProbabilisticDataStructures
                 [("CountMinSketch", "depth")] = CountMinSketch.MaxDepth,
                 [("PrivateCountMinSketch", "width")] = PrivateCountMinSketch.MaxWidth,
                 [("PrivateCountMinSketch", "depth")] = PrivateCountMinSketch.MaxDepth,
+                [("InverseBloomFilter", "capacity")] = InverseBloomFilter.MaxCapacity,
+                [("DpswSketch", "items in a substream")] = (ulong)DpswSketch.MaxSubstreamSize,
                 [("VarOpt", "`k`")] = VarOpt.MaxK,
                 [("Grafite", "words of low bits")] = Grafite.MaxLowWords,
                 [("Grafite", "words of high bits")] = Grafite.MaxHighWords,
