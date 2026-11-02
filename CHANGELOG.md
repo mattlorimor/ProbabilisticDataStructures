@@ -104,6 +104,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or a cast. The method is not on `IFilter`, and no other structure's `Capacity()`
   changes type: each of those is one filter, which its own type already holds. (#171)
 
+- **The 32-bit Bloom filters count in 64 bits, and save at format version 8.**
+  `Count()` on `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter` and
+  `PartitionedBloomFilter` returns a `ulong` where it returned a `uint`. This is a
+  breaking change, as `ScalableBloomFilter.Capacity()` already was: a caller assigning the
+  count to a `uint` needs a cast or a wider variable. The count was a `uint` that wrapped
+  to zero after 2^32 adds; it now crosses 2^32, and for the two that remove, comes back
+  down across it. A count that stopped at its maximum instead would have under-reported
+  once a removal took it down.
+  <br><br>
+  Every save of those four and of `StableBloomFilter`, whatever its size, is now
+  [format version 8](FORMAT.md#format-versions): the layout each wrote before, with a
+  placement byte after the fields that size the filter (0 for 32-bit values, 1 for 64-bit
+  ones) and the count, where there is one, as a `u64`. **Releases up to 6.2.0 refuse
+  every such payload** as written by a later version, small filters included. Payloads
+  that earlier releases wrote still read, with their 32-bit placement and their count, and
+  save again as version 8. A placement byte naming neither scheme is refused with what it
+  holds. A `ScalableBloomFilter` keeps its own version, 1 or 7, and its contained filters,
+  each in its own envelope, are version 8.
+
 ### Fixed
 
 - **`InvertibleBloomLookupTable.TryDecode` could report success with a wrong answer.** It
@@ -718,6 +737,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   estimates by the corrected rule. Below about 143 million distinct items, where the old
   correction did not engage, estimates move only where a register has already reached the
   cap, which is rare there, and by at most 0.03%.
+
+- **Large 32-bit Bloom filters had a higher false positive rate than they were sized
+  for.** `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`,
+  `StableBloomFilter` and `PartitionedBloomFilter` took an item's positions as
+  `(low + i * high) mod m` from the two 32-bit halves of its hash, in 32-bit arithmetic.
+  Each such value is a 32-bit number, and reducing it modulo an `m` that does not divide
+  2^32 gives the first `2^32 mod m` positions one more preimage than the rest, so those
+  fill faster and queries land on them as often. A `BloomFilter` of three quarters of
+  2^32 bits sized for 1% measured 1.42%, and 0.17% sized for 0.1%, where a
+  `BloomFilter64` of the same size measured 1.00% and 0.100%. The excess is a sawtooth
+  in `m`: zero at every power of two, highest where `2^32 mod m` is half of `m`, and
+  shrinking with the square of the filter's size. It was 3.7% of the rate at 966 million
+  bits, 1.1% at 507 million and 0.24% at 261 million; below 2^27 bits it is too small
+  to measure. The partitioned filter reduces per partition, so it is its partitions'
+  size that counts. The placement is the one these filters have always used, so every
+  release is affected.
+  <br><br>
+  A new filter whose positions are reduced modulo 2^27 or more — 16 MiB of bits, about
+  14 million items at 1% — now places them with 64-bit values, exactly as
+  `BloomFilter64` does, and delivers its rate at every size. Every smaller filter is
+  placed exactly as before. Each save records which it was, in a placement byte of
+  [format version 8](FORMAT.md#format-versions); see Changed.
+  <br><br>
+  **A filter read back keeps the placement its payload was written with.** The payload
+  decides, never the size: a payload from an earlier release was placed with 32-bit
+  values whatever its size, so it reads back as the filter it was, false positive rate
+  included, and saved again it records that placement. To have the rate it was sized for, add its items to a new filter. The same
+  rule refuses a merge between two filters of the same size placed differently, such as
+  an old payload read back and a new filter, with an `ArgumentException` saying so,
+  since the same item sets different bits in each.
 
 - **`DDSketch` filed a value its 32-bit bucket index could not hold in the last bucket
   there is, and answered with that bucket for all of them.** A bucket is numbered by an

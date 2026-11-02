@@ -186,6 +186,20 @@ namespace ProbabilisticDataStructures
         internal const ushort ScalableGrowthVersion = 7;
 
         /// <summary>
+        /// The version at which the five 32-bit Bloom filters record how their bits were
+        /// placed, in a byte of its own, and their item count, where they have one, in
+        /// 64 bits. The layout is the one each wrote before with those two changes; every
+        /// save of these filters is written at it, whatever its size or placement.
+        /// </summary>
+        /// <remarks>
+        /// The placement could not stay implied by the version once every save writes the
+        /// same one, and it is not implied by the size: a payload written before this
+        /// version was placed with 32-bit values whatever its size, and saved again it
+        /// must still say so. See <see cref="BitPlacement"/>.
+        /// </remarks>
+        internal const ushort PlacementVersion = 8;
+
+        /// <summary>
         /// The format versions each structure has defined, which are exactly the ones its
         /// reader reads. This is the one place that says so.
         /// </summary>
@@ -207,14 +221,15 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         private static readonly Dictionary<StructureId, ushort[]> Readable = new()
         {
-            [StructureId.BloomFilter] = [DefaultVersion],
+            [StructureId.BloomFilter] = [DefaultVersion, PlacementVersion],
             [StructureId.BloomFilter64] = [DefaultVersion],
-            [StructureId.CountingBloomFilter] = [DefaultVersion],
-            [StructureId.DeletableBloomFilter] = [DefaultVersion],
-            [StructureId.PartitionedBloomFilter] = [DefaultVersion],
+            [StructureId.CountingBloomFilter] = [DefaultVersion, PlacementVersion],
+            [StructureId.DeletableBloomFilter] = [DefaultVersion, PlacementVersion],
+            [StructureId.PartitionedBloomFilter] = [DefaultVersion, PlacementVersion],
             [StructureId.ScalableBloomFilter] = [DefaultVersion, ScalableGrowthVersion],
             [StructureId.StableBloomFilter] =
-                [DefaultVersion, RandomStateVersion, StableOriginalStateVersion],
+                [DefaultVersion, RandomStateVersion, StableOriginalStateVersion,
+                 PlacementVersion],
             [StructureId.InverseBloomFilter] = [DefaultVersion],
             [StructureId.CuckooBloomFilter] =
                 [DefaultVersion, RandomStateVersion, CuckooPackedVersion,

@@ -155,8 +155,8 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestAbsurdPartitionCountIsRefused()
         {
-            // u32 m, u32 k, u32 s, u32 count, then the partition count.
-            const int PartitionCountOffset = 16;
+            // u32 m, u32 k, u32 s, u8 placement, u64 count, then the partition count.
+            const int PartitionCountOffset = 21;
 
             var bytes = new PartitionedBloomFilter(1000, 0.01).ToByteArray();
 

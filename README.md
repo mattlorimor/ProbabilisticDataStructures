@@ -198,8 +198,8 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `BloomFilter` | n, fp 0.1% | 298,726,561 | ≈ 298.73 million | as built |
 | `BloomFilter64` | n, fp 1% | memory | ≈ 448.09 million | ≈ 1.79 billion |
 | `BloomFilter64` | n, fp 0.1% | memory | ≈ 298.73 million | ≈ 1.19 billion |
-| `CountingBloomFilter` | n, 4-bit counters, fp 1% | 448,089,830 | ≈ 112.02 million | 448,089,822 |
-| `CountingBloomFilter` | n, 8-bit counters, fp 1% | 224,044,915 | ≈ 56.01 million | 224,044,911 |
+| `CountingBloomFilter` | n, 4-bit counters, fp 1% | 448,089,830 | ≈ 112.02 million | 448,089,821 |
+| `CountingBloomFilter` | n, 8-bit counters, fp 1% | 224,044,915 | ≈ 56.01 million | 224,044,910 |
 | `DeletableBloomFilter` | n, r 1,000, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
 | `PartitionedBloomFilter` | n, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
 | `CuckooBloomFilter` | n, fp 1%, empty | 2,040,109,465 | 510,027,366 | as built |
@@ -250,7 +250,7 @@ building at the scale it describes, which is the measurement as of commit 426348
 | --- | --- | --- | --- | --- |
 | `StableBloomFilter` | m cells, 1-bit cells, fp 1% | 4,294,967,295 | ≈ 4.29 billion | as built |
 | `StableBloomFilter` | m cells, 3-bit cells, fp 1% | 4,294,967,295 | ≈ 1.43 billion | as built |
-| `StableBloomFilter` | m cells, 8-bit cells, fp 1% | 2,147,483,591 | ≈ 536.87 million | 2,147,483,536 |
+| `StableBloomFilter` | m cells, 8-bit cells, fp 1% | 2,147,483,591 | ≈ 536.87 million | 2,147,483,535 |
 | `HyperLogLog` | registers m (a power of two) | 1,073,741,824 | 268,435,456 | as built |
 | `HyperLogLogPlus` | registers 2^p, p up to 18 | 262,144 | any | as built |
 | `UltraLogLog` | registers 2^p, p up to 26 | 67,108,864 | any | as built |
@@ -578,14 +578,15 @@ bool wasAlreadyThere = filter.TestAndAdd(bytes);
 
 The same structure with 64-bit sizing throughout.
 
-**Reach for it when** the filter needs more than about **121 million items at 1%**.
-`BloomFilter` places its bits with a 32-bit hash, and from there to its limit of 4.29
-billion bits — about 448 million items at 1% — it delivers a worse false positive rate than
-the one it was asked for: a filter sized for 1% measured 1.42% at three quarters of that
-size, where this one measured 1.00%. The band, and what was measured, are in
-[CAPACITY.md](CAPACITY.md#the-bloomfilter-32-bit-band). `BloomFilter` and
-`PartitionedBloomFilter` also refuse past 4.29 billion bits, naming this structure when
-they do.
+**Reach for it when** the filter needs more than 4.29 billion bits — about **448 million
+items at 1%** — which is where `BloomFilter` and `PartitionedBloomFilter` refuse, naming
+this structure when they do. Below that the two deliver the same rate: a `BloomFilter` of
+2^27 bits or more, about 14 million items at 1%, places its bits exactly as this one does.
+One read back from a payload written before the release after 6.2.0 keeps the 32-bit
+placement it was written with, whose rate rises at large sizes: sized for 1%, it measured
+1.42% at three quarters of 2^32 bits, where this one measured 1.00%. How the two
+placements differ, and what was measured, are in
+[CAPACITY.md](CAPACITY.md#how-the-32-bit-filters-place-their-bits).
 
 `CountingBloomFilter` and `DeletableBloomFilter` size in 32 bits too, and **this structure
 is not a replacement for either**: it cannot delete. For a set that large that has to
@@ -596,8 +597,8 @@ counters are, since its array is `m` buckets of `b` bits and one .NET array hold
 refuses a size past that, naming `n`; the "Builds up to" figures are in
 [the table](#how-much-each-one-holds).
 
-**Look elsewhere otherwise.** Below about 121 million items it is the same filter with
-wider arithmetic, so `BloomFilter` is the plainer choice. And if you do not know the size
+**Look elsewhere otherwise.** Below 4.29 billion bits it is the same filter with wider
+arithmetic, so `BloomFilter` is the plainer choice. And if you do not know the size
 in advance, `ScalableBloomFilter` takes it from you, but it does not reach much further:
 every filter it adds is itself a 32-bit filter, so at its default growth it stops at the
 items in [the table](#how-much-each-one-holds), a few hundred million. Past that, size a

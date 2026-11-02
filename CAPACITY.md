@@ -76,19 +76,32 @@ the structure with an exception that names the limit, before anything changes, a
 - **A Memento slot is at most 64 bits.** The constructor refuses a fingerprint and a range
   that make it wider, and a slot of exactly 64 bits holds its keys.
 
-## The BloomFilter 32-bit band
+## How the 32-bit filters place their bits
 
-`BloomFilter`, `DeletableBloomFilter` and a one-bit `StableBloomFilter` place their bits
-with a 32-bit kernel; `BloomFilter64` uses a 128-bit one. When such a filter is a large
-share of 2^32 bits, the false positive rate it delivers is worse than the one it was
-asked for. This was measured at master 596071f by the investigation of issue 172, and is
-not rebuilt by the suite, which cannot make a filter of three billion bits: a filter sized
-for 1% measured 1.419% ± 0.006% at m = 0.75 · 2^32 bits, where `BloomFilter64` at the same
-m and k measured 1.003%, and both were 1.0% at m = 0.125 · 2^32. The band runs from about
-0.27 · 2^32 bits, which is about 121 million items at 1%, to nearly the 32-bit limit, and
-the worst case is about ×1.42 at 1% and ×1.67 at 0.1%. Nothing in the library refuses
-or warns about it. For a filter of more than about 121 million items at 1% use
-`BloomFilter64`, which has no band.
+`BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`, `StableBloomFilter` and
+`PartitionedBloomFilter` turn an item's hash into `k` positions. Until the release after
+6.2.0 every one of them did it with 32-bit values: position `i` was
+`(low + i · high) mod m`, with `low` and `high` the hash's two 32-bit halves and the sum
+taken in 32-bit arithmetic. That gives the first `2^32 mod m` positions one more of the
+2^32 values than the rest, so they fill faster, and a query lands on them as often as an
+item did. The false positive rate rose with it, in a sawtooth over the size: not at all
+where `m` is a power of two, and most where `2^32 mod m` is half of `m`. This was measured
+at master 596071f by the investigation of issue 172, and is not rebuilt by the suite,
+which cannot make a filter of three billion bits: a filter sized for 1% measured 1.419% ±
+0.006% at m = 0.75 · 2^32 bits, where `BloomFilter64` at the same m and k measured 1.003%,
+and sized for 0.1% it measured 0.173%.
+
+From the release after 6.2.0, a new filter whose positions are reduced modulo 2^27 or
+more — 16 MiB of bits, about 14 million items at 1%, and for the partitioned filter each
+partition — places them with 64-bit values, exactly as `BloomFilter64` does. At m = 0.75 ·
+2^32 sized for 1% it measured 1.004%, as `BloomFilter64` did. A smaller filter is placed
+as before. Below 2^27 the excess is at most about 0.07% of the rate at 1%, too small to
+measure. Every save of these filters, whatever its size, is written at format version 8,
+which records the placement in a byte of its own and the item count in 64 bits, and which
+6.2.0 and earlier refuse. A filter read from a payload written before the release after
+6.2.0 keeps the 32-bit placement, and the rate that goes with it, whatever its size, and
+records it when saved again. It does not merge with a new filter of the same size; to have
+the rate it was sized for, add its items to a new filter.
 
 ## Sized for n items
 
