@@ -969,6 +969,31 @@ namespace TestProbabilisticDataStructures
             AssertRefusedForItsShape<CuckooBloomFilter>(bytes, Poke(bytes, 24, uint.MaxValue), "outside its");
         }
 
+        /// <summary>
+        /// A quotient filter claiming a remainder wider than its hash, a table that would
+        /// be priced well past the budget. Not a quotient too wide: the slot count is a
+        /// 32-bit shift, which wraps a quotient past 32 to a small table.
+        /// </summary>
+        [TestMethod]
+        public void TestAQuotientFilterSplitWiderThanItsHashIsRefusedForThat()
+        {
+            var bytes = Filled(new QuotientFilter(50_000, 0.001), (f, k) => f.Add(k), 5000).ToByteArray();
+
+            // u32 quotient bits, then the u32 remainder bits.
+            AssertRefusedForItsShape<QuotientFilter>(bytes, Poke(bytes, 4, 1_000_000), "not a split of a");
+        }
+
+        /// <summary>An infini filter table claiming an address narrower than any it builds.</summary>
+        [TestMethod]
+        public void TestAnInfiniTableTooNarrowIsRefusedForThat()
+        {
+            var bytes = Filled(new InfiniFilter(10_000), (f, k) => f.Add(k), 20_000).ToByteArray();
+
+            // u64 items, u32 doublings, u32 table count, then the first table's u32
+            // address bits.
+            AssertRefusedForItsShape<InfiniFilter>(bytes, Poke(bytes, 16, 1), "bits of address");
+        }
+
         /// <summary>A theta sketch claiming to retain no values, a size none is built at.</summary>
         [TestMethod]
         public void TestAThetaSketchRetainingNothingIsRefusedForThat()
