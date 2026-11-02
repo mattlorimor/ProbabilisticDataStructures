@@ -115,6 +115,41 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The bytes a run of this many buckets is written as: a count of eight bytes for
+        /// each. In 64 bits: in an int it wrapped at 2^28 buckets, two gibibytes of counts,
+        /// and the sketch then failed to write with an OverflowException from the
+        /// allocation, or from 2^29 sized the array for a fraction of the run and ran off
+        /// the end of it filling it.
+        /// </summary>
+        internal static long BytesOf(long span) => span * sizeof(ulong);
+
+        /// <summary>
+        /// The bytes of payload besides the counts: the five fixed fields, then an index of
+        /// the first bucket and a length for each of the two stores.
+        /// </summary>
+        private const int PayloadOverhead = 5 * sizeof(ulong) + 2 * (2 * sizeof(uint));
+
+        /// <summary>
+        /// How long the payload of a sketch with runs of these two lengths is.
+        /// </summary>
+        internal static long PayloadLength(long positiveSpan, long negativeSpan) =>
+            PayloadOverhead + BytesOf(positiveSpan) + BytesOf(negativeSpan);
+
+        /// <summary>
+        /// Refuses a sketch whose payload would not fit an envelope, with the exception the
+        /// payload writer gives for any structure too large to write, before anything is
+        /// allocated for it. The two signs share the one payload, so it is the length of
+        /// both runs together that is held to the limit.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">
+        /// The payload would be longer than <see cref="PersistenceFormat.MaxPayloadLength"/>.
+        /// </exception>
+        internal static void CheckWritable(long positiveSpan, long negativeSpan)
+        {
+            PersistenceFormat.CheckPayloadLength(PayloadLength(positiveSpan, negativeSpan));
+        }
+
+        /// <summary>
         /// Adds a value to the sketch.
         /// </summary>
         /// <param name="value">The value to add. Negative values and zero are allowed.</param>
@@ -356,9 +391,17 @@ namespace ProbabilisticDataStructures
         /// Writes the sketch to a stream.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
+        /// <exception cref="InvalidOperationException">
+        /// The payload would be longer than <see cref="PersistenceFormat.MaxPayloadLength"/>,
+        /// which a sketch holding enough buckets, between its two signs, can be: the counts
+        /// are eight bytes a bucket. The sketch is intact and can still be used, and nothing
+        /// is written.
+        /// </exception>
         public void WriteTo(Stream stream)
         {
             ArgumentNullException.ThrowIfNull(stream);
+
+            CheckWritable(this.positive.Span, this.negative.Span);
 
             var payload = new PayloadWriter();
             payload.WriteDouble(this.relativeAccuracy);
@@ -568,9 +611,54 @@ namespace ProbabilisticDataStructures
         /// The value a bucket reports: the point within it that is no further than the
         /// relative accuracy from anything the bucket can hold.
         /// </summary>
+        /// <remarks>
+        /// The midpoint is 2 * gamma^i / (gamma + 1), and written that way the working
+        /// leaves the range of a double before the answer does. Twice gamma^i is
+        /// infinite from 2^1023 upward, and gamma^i is itself infinite just past the
+        /// largest double, though the answer, (1 - a) * gamma^i, is at most the largest
+        /// value the bucket holds: a quantile over the largest doubles came back as
+        /// infinity. And at the other end, at a coarse accuracy the answer for the
+        /// smallest doubles rounds to zero, which is not within the accuracy of anything
+        /// positive.
+        /// <para>
+        /// So an answer that is finite and nonzero is the one it always was, bit for bit,
+        /// and the two kinds that are not are replaced. An infinite one is worked out
+        /// again without an intermediate outside the doubles: gamma^i as the product of
+        /// two halves of the power, each between 1e-162 and 1e155, with (1 - a) between
+        /// them. If that is infinite too, the largest double stands in for it: every
+        /// value the bucket holds is at most the largest double and above the midpoint
+        /// over (1 + a), so the largest double is within the accuracy of all of them. A
+        /// zero is the smallest double, for the bucket holds one, so the midpoint was
+        /// no more than half of it over (1 - a), and so no value in the bucket is more
+        /// than 1 / (1 - a) of it.
+        /// </para>
+        /// <para>
+        /// Among the subnormals the answer is still gamma^i rounded to a multiple of
+        /// 4.9e-324 and then rounded again, which can leave it a unit from the nearest
+        /// double to the midpoint. It is not corrected, because the same sum answers
+        /// correctly for most buckets there and telling which is which needs the bucket's
+        /// own largest and smallest doubles; a bucket that answered within the accuracy
+        /// keeps its answer.
+        /// </para>
+        /// </remarks>
         private double ValueAt(long index)
         {
-            return 2 * Math.Pow(this.gamma, index) / (this.gamma + 1);
+            var value = 2 * Math.Pow(this.gamma, index) / (this.gamma + 1);
+
+            if (value == 0)
+            {
+                return double.Epsilon;
+            }
+
+            if (!double.IsInfinity(value))
+            {
+                return value;
+            }
+
+            var half = index / 2;
+            value = Math.Pow(this.gamma, half) * (2 / (this.gamma + 1)) * Math.Pow(this.gamma, index - half);
+
+            return double.IsInfinity(value) ? double.MaxValue : value;
         }
 
         /// <summary>
@@ -606,6 +694,11 @@ namespace ProbabilisticDataStructures
             internal int Capacity => this.counts.Length;
 
             /// <summary>
+            /// How many buckets the occupied run covers, none for an empty store.
+            /// </summary>
+            internal long Span => this.IsEmpty ? 0 : (long)this.MaxIndex - this.MinIndex + 1;
+
+            /// <summary>
             /// Writes the occupied run of buckets: where it starts, and the counts from
             /// there upward. The bounds and the total follow from that.
             /// </summary>
@@ -618,8 +711,12 @@ namespace ProbabilisticDataStructures
                     return;
                 }
 
-                var span = this.MaxIndex - this.MinIndex + 1;
-                var bytes = new byte[span * sizeof(ulong)];
+                // The caller has refused a run too long for a payload (CheckWritable), which
+                // is far fewer buckets than an int holds, so the cast and the offsets below
+                // cannot overflow; the checked cast is there so that a caller who had not
+                // would fail rather than write a short run.
+                var span = checked((int)this.Span);
+                var bytes = new byte[BytesOf(span)];
 
                 for (var i = 0; i < span; i++)
                 {
