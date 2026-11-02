@@ -60,6 +60,21 @@ namespace ProbabilisticDataStructures
         {
             var optimalM = Math.Ceiling((double)n / ((Math.Log(Defaults.FILL_RATIO) *
                 Math.Log(1 - Defaults.FILL_RATIO)) / Math.Abs(Math.Log(fpRate))));
+
+            // A bit count is a ulong, and a request for more than that arrives as an
+            // OverflowException from inside the conversion, which says something true
+            // about the machinery and nothing about the mistake.
+            if (!(optimalM < 18446744073709551616.0))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(n), n,
+                    $"Holding {n} items at a false positive rate of {fpRate} needs " +
+                    $"{optimalM:N0} bits, and a bit count is a 64-bit number, which holds " +
+                    $"at most {ulong.MaxValue:N0}. Use a looser false positive rate or fewer " +
+                    "items, or ScalableBloomFilter, which grows by adding filters rather " +
+                    "than by making one larger.");
+            }
+
             return Convert.ToUInt64(optimalM);
         }
 

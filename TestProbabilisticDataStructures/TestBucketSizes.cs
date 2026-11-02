@@ -179,7 +179,7 @@ namespace TestProbabilisticDataStructures
         /// The first item count whose sizing passes a number of buckets, so the filter
         /// built from it is one bucket past a limit without being built.
         /// </summary>
-        private static uint FirstItemCountSizedAbove(ulong buckets, double fpRate)
+        internal static uint FirstItemCountSizedAbove(ulong buckets, double fpRate)
         {
             uint low = 1;
             uint high = uint.MaxValue;

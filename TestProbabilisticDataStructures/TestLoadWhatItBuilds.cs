@@ -650,6 +650,68 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The counters are one array, so the largest counting filter is the most counters
+        /// one holds at the width asked for, 2,147,483,591 at eight bits. Structural at the
+        /// limit, where the table is two gigabytes: the constructor's side is its sizing,
+        /// reached with the first item count to size past the limit, and the reader's is
+        /// a small payload with its count raised, which is refused one counter past the
+        /// limit as beyond anything built and at the limit only for the table it lacks.
+        /// </summary>
+        [TestMethod]
+        public void TestCountingFilterLimitIsShared()
+        {
+            // The counters are an array.
+            Assert.AreEqual((long)Array.MaxLength, Buckets.MaxDataBytes);
+
+            // The first item count to size past the limit is refused, against n.
+            var n = TestBucketSizes.FirstItemCountSizedAbove((ulong)Array.MaxLength, 0.01);
+            Assert.AreEqual("n", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new CountingBloomFilter(n, 8, 0.01)).ParamName);
+
+            // u32 m, u32 k, u32 count, then the buckets: u32 count, u8 width, bytes.
+            var bytes = new CountingBloomFilter(1000, 8, 0.01).ToByteArray();
+            AssertBucketLimitIsShared<CountingBloomFilter>(bytes, 0, 12);
+        }
+
+        /// <summary>
+        /// The same for the stable filter's cells, which are its own parameter.
+        /// </summary>
+        [TestMethod]
+        public void TestStableFilterLimitIsShared()
+        {
+            Assert.AreEqual((long)Array.MaxLength, Buckets.MaxDataBytes);
+
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new StableBloomFilter((uint)Array.MaxLength + 1, 8, 0.01, seed: 1));
+
+            // u32 m, u32 k, u32 p, then the buckets.
+            var bytes = new StableBloomFilter(1000, 8, 0.01, seed: 1).ToByteArray();
+            AssertBucketLimitIsShared<StableBloomFilter>(bytes, 0, 12);
+        }
+
+        /// <summary>
+        /// A reader past the limit says so, and at it asks only for the table. The
+        /// payload's two counts are raised together because a filter checks them against
+        /// each other.
+        /// </summary>
+        private static void AssertBucketLimitIsShared<T>(byte[] eightBit, int mOffset, int bucketCountOffset)
+            where T : IBinaryPersistable<T>
+        {
+            var limit = (uint)Buckets.MaxCount(8);
+            Assert.AreEqual((uint)Array.MaxLength, limit);
+
+            AssertRefused<T>(
+                PokeUInt32(PokeUInt32(eightBit, mOffset, limit + 1), bucketCountOffset, limit + 1),
+                PastTheLimit);
+
+            var ex = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<T>(
+                PokeUInt32(PokeUInt32(eightBit, mOffset, limit), bucketCountOffset, limit)));
+            StringAssert.Contains(ex.Message, "were stored",
+                "a payload at the limit should be refused for its table, not its size");
+            Assert.DoesNotContain(PastTheLimit, ex.Message);
+        }
+
+        /// <summary>
         /// The quotient filter was the other way round: its reader's limits were the
         /// right ones, and its constructor built past them -- a million items at 5e-14
         /// split a 64-bit hash into 66 bits and wrote a payload its own reader refused.
@@ -1073,12 +1135,8 @@ namespace TestProbabilisticDataStructures
                     "it is one 64-bit value and has no size",
                     nameof(TestSimHashSignatureHasNoSize)),
                 (StructureId.BloomFilter, NoCap, nameof(TestBloomFilterReadsPastTheOldCeiling)),
-                (StructureId.CountingBloomFilter, NoCap,
-                    nameof(TestCountingBloomFilterReadsPastTheOldCeiling)),
                 (StructureId.DeletableBloomFilter, NoCap,
                     nameof(TestDeletableBloomFilterReadsPastTheOldCeiling)),
-                (StructureId.StableBloomFilter, NoCap,
-                    nameof(TestStableBloomFilterReadsPastTheOldCeiling)),
                 (StructureId.InverseBloomFilter, NoCap,
                     nameof(TestInverseBloomFilterReadsPastTheOldCeiling)),
                 (StructureId.CountMinSketch, NoCap,
@@ -1170,6 +1228,12 @@ namespace TestProbabilisticDataStructures
                 (StructureId.ScalableBloomFilter,
                     new[] { nameof(TestScalableFilterReaderTakesAFilterCountPastTheOldCeiling) },
                     nameof(TestScalableFilterLimitIsShared)),
+                (StructureId.CountingBloomFilter,
+                    new[] { nameof(TestCountingBloomFilterReadsPastTheOldCeiling) },
+                    nameof(TestCountingFilterLimitIsShared)),
+                (StructureId.StableBloomFilter,
+                    new[] { nameof(TestStableBloomFilterReadsPastTheOldCeiling) },
+                    nameof(TestStableFilterLimitIsShared)),
                 (StructureId.QuotientFilter,
                     new[] { nameof(TestQuotientFilterAtItsWidestSplitRoundTrips) },
                     nameof(TestQuotientFilterLimitIsShared)),
@@ -1188,6 +1252,10 @@ namespace TestProbabilisticDataStructures
             var expected = new Dictionary<(string Structure, string Size), ulong>
             {
                 [("CuckooBloomFilter", "entries, `m` × `b`")] = CuckooBloomFilter.MaxEntries,
+                [("CountingBloomFilter", "bytes of counters, `m` × `b` bits, rounded up")] =
+                    (ulong)Buckets.MaxDataBytes,
+                [("StableBloomFilter", "bytes of cells, `m` × `d` bits, rounded up")] =
+                    (ulong)Buckets.MaxDataBytes,
                 [("ThetaSketch", "`k`")] = ThetaSketch.MaxNominalEntries,
                 [("TupleSketch", "`k`")] = TupleSketch.MaxNominalEntries,
                 [("MinHashSignature", "`k`")] = (ulong)MinHashSignature.MaxValues,

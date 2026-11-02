@@ -466,7 +466,9 @@ The same structure with 64-bit sizing throughout.
 **Reach for it when** the filter needs more than 4.29 billion bits — about **448 million
 items at 1%**, and fewer at a tighter rate. `BloomFilter`, `CountingBloomFilter`,
 `PartitionedBloomFilter` and `DeletableBloomFilter` all size in 32 bits and refuse past
-that, naming this structure when they do.
+that, naming this structure when they do. `CountingBloomFilter` reaches its limit sooner
+the wider its counters are, since its counters have to fit one .NET array of 2,147,483,591
+bytes: 4,294,967,182 four-bit counters, or 2,147,483,591 eight-bit ones.
 
 **Look elsewhere otherwise.** Below that ceiling it is the same filter with wider
 arithmetic, so `BloomFilter` is the plainer choice. And above it, consider
@@ -509,6 +511,13 @@ merging at lower memory, in which case `QuotientFilter`.
 
 A counter that saturates stops being decrementable, so an element added far more often than
 the counter width allows may not be fully removable.
+
+Its counters are one array, which holds at most 2,147,483,591 bytes. The constructor refuses
+a size past that, naming `n`, and says how many counters of that width fit: 4,294,967,182
+at four bits and 2,147,483,591 at eight. Anything smaller works. Before this was fixed, a
+filter whose counters came to 512 MiB or more was built with a table of the wrong length
+and failed on an add; one stored then is refused with an explanation when read, and has to
+be built again.
 
 ```C#
 var filter = new CountingBloomFilter(10000, 4, 0.01);

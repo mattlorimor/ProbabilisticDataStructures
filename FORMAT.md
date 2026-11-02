@@ -168,7 +168,10 @@ u8      bits per bucket
 bytes   packed data
 ```
 
-The data length is checked against what the count and bucket width imply.
+The data length is checked against what the count and bucket width imply: the count
+times the width, in bits, rounded up to whole bytes. A reader works that out in 64 bits.
+Releases up to and including 6.2.0 worked it out in 32, so a table of 2^32 bits or more
+was written with a length that had wrapped; [Sizes](#sizes) says what is done with those.
 
 `Buckets64`, its 64-bit counterpart, holds several arrays because one filter can need
 more bytes than a single array holds:
@@ -223,9 +226,27 @@ address.
 | `SetSketch` | `m` | 2,147,483,591 | the registers are one array |
 | `SublimeCountMinSketch` | rows | 710 | `ceil(ln(1 / delta))` at the smallest delta whose reciprocal is a finite double |
 | `ScalableBloomFilter` | filter count | 2,147,483,591 | the filters are a list |
+| `CountingBloomFilter` | bytes of counters, `m` × `b` bits, rounded up | 2,147,483,591 | the counters are one array; from four-bit counters up that is fewer counters than a `u32` counts |
+| `StableBloomFilter` | bytes of cells, `m` × `d` bits, rounded up | 2,147,483,591 | the cells are one array, as the counters are |
 | `QuotientFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; the reader also reads 32, which earlier constructors wrote as a wrapped one-slot table |
 | `QuotientFilter` | quotient + remainder bits | 64 | a fingerprint is cut from a 64-bit hash |
 | `QuotientFilter` | remainder bits | 61 | a slot is its remainder and three bits of bookkeeping in one 64-bit word; the reader also reads the wider remainders earlier constructors wrote |
+
+The other filters built on `Buckets` hold one-bit buckets, so the most they hold is what
+a `u32` counts, 4,294,967,295, which is 536,870,912 bytes, and their sizing refuses
+anything beyond it. The same arithmetic limits the counting and stable filters from four
+bits up: at 4 bits it is 4,294,967,182 buckets, and at 8 bits 2,147,483,591.
+
+A bucket array of 2^32 bits or more, 512 MiB, was written by 6.2.0 and every release before
+it with a byte count that had wrapped in 32 bits: a Bloom filter of 4,294,967,294 buckets
+was stored with no bytes, and a counting filter of 1,127,428,565 four-bit counters with
+26,843,371 of the 563,714,283 they need. Nothing of the bucket array can be recovered from
+such a payload, and the filter that wrote it could not use it either, since an add that
+landed past the end of the table threw after setting the buckets before it. A reader
+therefore refuses a bucket array whose stored length is exactly the wrapped one, and says
+so; it does not read the short table as the filter it was meant to be. Any other length that
+disagrees with the count is refused as corrupt. Sizes that did not wrap are unchanged, and
+read as they always did.
 
 A size below its limit can still be refused for not being in the payload. Where a reader
 allocates for a count, it first checks that the bytes left could hold that many, so what

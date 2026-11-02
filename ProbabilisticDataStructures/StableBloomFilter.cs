@@ -132,6 +132,9 @@ namespace ProbabilisticDataStructures
                 k = 1;
             }
 
+            Buckets.CheckSize(m, d, nameof(m),
+                $"A stable filter of {m:N0} cells of {d} bits",
+                "Use fewer cells or narrower ones.");
             var cells = new Buckets(m, d);
 
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();

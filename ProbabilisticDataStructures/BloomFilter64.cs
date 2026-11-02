@@ -54,6 +54,10 @@ namespace ProbabilisticDataStructures
 
             var m = Utils.OptimalM64(n, fpRate);
             var k = Utils.OptimalK(fpRate);
+            Buckets64.CheckSize(m, 1, nameof(n),
+                $"Holding {n:N0} items at a false positive rate of {fpRate} needs {m:N0} bits",
+                "Use fewer items or a looser false positive rate, or ScalableBloomFilter, " +
+                "which grows by adding filters rather than by making one larger.");
             Buckets = new Buckets64(m, 1);
             Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.m = m;

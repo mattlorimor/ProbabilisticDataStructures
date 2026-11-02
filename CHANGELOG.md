@@ -476,6 +476,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The stored format does not change. Payloads that were refused for their size now load,
   and every other refusal stands.
 
+- **A `BloomFilter`, `CountingBloomFilter` or `StableBloomFilter` sized past 2^32 bits was
+  built with a table too short for it, and failed on an add.** The bucket array's byte
+  count was worked out in 32 bits, so it wrapped at 512 MiB of one-bit buckets, 128 MiB
+  of eight-bit ones. `new BloomFilter(448_089_842, 0.01)` allocated no bits at all and its
+  first `Add` threw `IndexOutOfRangeException`. `new CountingBloomFilter(117_623_547, 4,
+  0.01)` allocated 26.8 MB of the 564 MB it needs, and an add that landed past the end
+  threw after setting the counters before it, leaving the filter half updated: in 200 of
+  200 adds. A `StableBloomFilter` of 1,431,655,763 three-bit cells got none. The counting
+  filter starts to do this at about 112 million items at 1% with four-bit counters, and at
+  about 56 million with eight-bit ones. Every release is affected, for each filter it had.
+  A bucket's position in the table was also a `uint` product that wrapped at the same
+  size, so even a table of the right length would have been read and written at the wrong
+  bytes.
+  <br><br>
+  The sizes are now worked out in 64 bits, and a filter works up to the most its table can
+  be: one .NET array, 2,147,483,591 bytes. For a `BloomFilter`, `PartitionedBloomFilter`
+  and `DeletableBloomFilter`, whose buckets are one bit, that is more than their 32-bit
+  count addresses, so nothing changes about how large they can be. A
+  `CountingBloomFilter` or `StableBloomFilter` of four-bit buckets or wider stops at
+  4,294,967,182 buckets at four bits and 2,147,483,591 at eight, and the constructor now
+  refuses a size past that with an `ArgumentOutOfRangeException` naming `n` or `m`. No size
+  that worked before is refused. `BloomFilter64` and its 64-bit arrays are refused at a
+  count whose arrays would not fit the array that holds them, about 2.3e18 bits, where an
+  array count cast to an `int` wrapped, and `Utils.OptimalM64` says that a bit count
+  beyond a `ulong` is a mistake in the item count where it threw an `OverflowException`.
+  <br><br>
+  **A payload written by an earlier version for a filter this large is now refused.** It
+  holds the wrapped table, and the count it records is the filter's real one: a Bloom
+  filter of 4,294,967,294 buckets stored with no bytes. Nothing in it says which buckets
+  were lost, and the filter that wrote it could not use it, so reading it would be
+  guessing; the reader says what happened and the filter has to be built again from the
+  data. Payloads of sizes that did not wrap read as they always did. The format does not
+  change, and [FORMAT.md](FORMAT.md#sizes) says which length is refused as the wrapped one.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added
