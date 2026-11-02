@@ -279,5 +279,39 @@ namespace TestProbabilisticDataStructures
             Assert.IsGreaterThan(0, emptying, "no run took every cell down by its maximum");
             Assert.IsGreaterThan(0, differed, "no run changed a cell, so the comparison saw nothing");
         }
+
+        /// <summary>
+        /// Runs far too long for the loop to run beside them take every cell down far more
+        /// than its maximum, which is to zero -- including a single cell taken down
+        /// 4,294,967,295 times, a count no int holds.
+        /// </summary>
+        /// <remarks>
+        /// A filter of one cell cannot show this: its one cell is also the one its add sets
+        /// back to the maximum. So it is held here, on the run itself.
+        /// </remarks>
+        [TestMethod]
+        public void TestARunTooLongToStepEmptiesEveryCell()
+        {
+            foreach (byte d in new byte[] { 1, 2, 8 })
+            {
+                foreach (uint m in new uint[] { 1, 2, 3, 10 })
+                {
+                    foreach (var p in new uint[] { (uint)int.MaxValue + 1, uint.MaxValue })
+                    {
+                        var cells = new Buckets(m, d);
+                        for (uint c = 0; c < m; c++)
+                        {
+                            cells.Set(c, cells.MaxBucketValue());
+                        }
+
+                        StableBloomFilter.DecayRun(cells, m, p, m - 1);
+                        for (uint c = 0; c < m; c++)
+                        {
+                            Assert.AreEqual(0u, cells.Get(c), $"d = {d}, m = {m}, p = {p:N0}: cell {c}");
+                        }
+                    }
+                }
+            }
+        }
     }
 }
