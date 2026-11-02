@@ -520,6 +520,15 @@ is why an entry can be moved without its slot's occupied bit moving with it.
 A payload claiming more entries than there are slots is refused, as is one whose table is
 not the size its two widths call for.
 
+The quotient bits run from 1 to 32 and the two widths together come to at most 64, the
+bits a hash supplies; a payload outside either is refused. The writer never goes past 31
+quotient bits, because the slot count is a 32-bit number and 2^32 does not fit it. A
+payload at 32 was written by a constructor from 6.2.0 or earlier, which wrapped a request
+for more items than the largest table into a table of one slot. Such a payload holds one
+slot's bytes, so its slot count is 1, not `2^32`, and it reads back as that one-slot
+filter, exactly as it was written. Remainders wider than the writer now allows are read
+as written in the same way.
+
 ### `ThetaSketch` (id 18)
 
 ```

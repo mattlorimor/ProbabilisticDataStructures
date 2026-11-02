@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.IO;
 using System.Text;
@@ -369,6 +370,11 @@ namespace TestProbabilisticDataStructures
 
             AssertRefused(Poke(clean, 0, 0), "quotient bits");
             AssertRefused(Poke(clean, 0, 40), "quotient bits");
+
+            // One past what a payload may say. 33 is the width the old constructor wrote
+            // for the largest item counts, and the reader refused it then as now; 32 is
+            // read, and has its own test beside the stored payloads.
+            AssertRefused(Poke(clean, 0, 33), "quotient bits");
             AssertRefused(Poke(clean, 4, 0), "not a split");
             AssertRefused(Poke(clean, 4, 60), "not a split");
             AssertRefused(Poke(clean, 8, 999999), "slots");
@@ -389,6 +395,237 @@ namespace TestProbabilisticDataStructures
             // Sized past the item count, since a quotient filter's runs lengthen as it
             // fills and lookups walk them.
             Assert.IsGreaterThan(10000u, filter.Capacity());
+        }
+
+        // What the constructor will build, restated as plain arithmetic rather than read
+        // back from the filter. A fingerprint is the top q + r bits of a 64-bit hash, so
+        // q + r cannot exceed 64. A slot is r + 3 bits read and written through one ulong,
+        // so r cannot exceed 61 whatever q is. And a table has 2^q slots counted in a uint,
+        // so q cannot exceed 31: 2^32 is one more than a uint holds.
+
+        private const int HashBits = 64;
+        private const int MetadataBits = 3;
+        private const int LargestSlotBits = 64;
+        private const int LargestQuotientBits = 31;
+
+        // Three quarters of the 2^31 slots the largest table has, the load factor the
+        // filter is sized for: the most items it will be asked to hold.
+        private const uint LargestItemCount = 3u << 29;
+
+        /// <summary>
+        /// The quotient width for n items: the fewest bits whose table, kept to three
+        /// quarters full, holds them. Restated in integers, so that it agrees with the
+        /// filter's own logarithm only if both are right.
+        /// </summary>
+        private static int QuotientBitsFor(uint n)
+        {
+            var q = 1;
+            while (4UL * n > 3UL << q)
+            {
+                q++;
+            }
+
+            return q;
+        }
+
+        /// <summary>
+        /// The widest remainder a filter sized for n items can hold: what the hash has
+        /// left after the quotient, and never more than a slot can carry.
+        /// </summary>
+        private static int FinestRemainderBits(uint n)
+        {
+            return Math.Min(LargestSlotBits - MetadataBits, HashBits - QuotientBitsFor(n));
+        }
+
+        /// <summary>
+        /// Item counts at and just past every step in the quotient width, for the widths
+        /// a test can afford. n = 3 * 2^(q-2) fills a table of 2^q slots to its load
+        /// factor exactly and one more needs the next width, and the width is a ceiling,
+        /// so a count that avoids the steps says nothing about where the limit falls.
+        /// Across them the limit moves from the slot (n up to 6) to the hash (beyond).
+        /// </summary>
+        private static IEnumerable<uint> CountsAcrossTheSteps()
+        {
+            yield return 1;
+            for (var q = 2; q <= 12; q++)
+            {
+                var step = 3u << (q - 2);
+                yield return step;
+                yield return step + 1;
+            }
+        }
+
+        /// <summary>
+        /// At the finest rate a filter of each size can honour, the fingerprint is as wide
+        /// as the hash lets it be and the filter must still behave: every stored
+        /// fingerprint is the one the hash gives, every answer is the model's, and the
+        /// payload reads back. Fingerprints wider than the hash used to collapse to a few
+        /// of its top bits, which answered yes to every key at a measured rate of 1.00.
+        /// </summary>
+        [TestMethod]
+        public void TestTheFinestRateAFilterCanHonourIsHonoured()
+        {
+            const int Probes = 2000;
+            var hash = Defaults.GetDefaultHashFunction();
+
+            foreach (var n in CountsAcrossTheSteps())
+            {
+                var q = QuotientBitsFor(n);
+                var r = FinestRemainderBits(n);
+                var filter = new QuotientFilter(n, Math.ScaleB(1.0, -r));
+
+                Assert.AreEqual((uint)(r + MetadataBits), filter.BitsPerSlot(),
+                    $"n = {n}: the remainder is not the widest this size allows.");
+                Assert.AreEqual(1u << q, filter.Capacity(), $"n = {n}: the table's size.");
+
+                var keys = new List<byte[]>();
+                var model = new HashSet<ulong>();
+                var held = new List<ulong>();
+                for (var i = 0u; i < n; i++)
+                {
+                    var key = Key($"n{n}-item-{i}");
+                    keys.Add(key);
+                    filter.Add(key);
+
+                    var fingerprint = hash(key) >> (HashBits - (q + r));
+                    model.Add(fingerprint);
+                    held.Add(fingerprint);
+                }
+
+                var stored = QuotientFamilyInvariants.CheckQuotientFilter(filter, out var payload);
+                CollectionAssert.AreEqual(held.OrderBy(f => f).ToArray(), stored,
+                    $"n = {n}: the table does not hold the top {q + r} bits of each hash.");
+
+                foreach (var key in keys)
+                {
+                    Assert.IsTrue(filter.Test(key), $"n = {n}: an added item is not found.");
+                }
+
+                // The absent keys' answers are the model's, collisions included, and
+                // at this width the model predicts that nothing collides. That is the
+                // measured rate, against the 1.00 the collapse gave.
+                var hits = 0;
+                for (var i = 0; i < Probes; i++)
+                {
+                    var probe = Key($"n{n}-absent-{i}");
+                    var expected = model.Contains(hash(probe) >> (HashBits - (q + r)));
+                    Assert.AreEqual(expected, filter.Test(probe),
+                        $"n = {n}: absent key {i} has {(expected ? "a" : "no")} " +
+                        "fingerprint collision with what is stored.");
+                    hits += expected ? 1 : 0;
+                }
+
+                Assert.AreEqual(0, hits, $"n = {n}: the model itself predicts false positives.");
+
+                var back = Persistence.FromByteArray<QuotientFilter>(payload);
+                CollectionAssert.AreEqual(payload, back.ToByteArray(),
+                    $"n = {n}: the payload does not read back as the table it was.");
+                foreach (var key in keys)
+                {
+                    Assert.IsTrue(back.Test(key), $"n = {n}: the restored filter lost an item.");
+                }
+
+                foreach (var key in keys)
+                {
+                    Assert.IsTrue(filter.TestAndRemove(key), $"n = {n}: a held item would not go.");
+                }
+
+                Assert.AreEqual(0u, filter.Count());
+                Assert.AreEqual(0, QuotientFamilyInvariants.CheckQuotientFilter(filter, out _).Length,
+                    $"n = {n}: the table is not empty after everything was removed.");
+            }
+        }
+
+        /// <summary>
+        /// A rate finer than the fingerprint can hold is refused rather than built, and
+        /// the refusal names the finest rate that would have been. The bound is derived
+        /// from each count, at and across every step in the quotient width, and probed
+        /// just past it two ways: a whole bit finer, and one percent finer, where the
+        /// remainder's ceiling takes it over by exactly one bit. The extremes follow,
+        /// including rates so small that their reciprocal is not a number.
+        /// </summary>
+        [TestMethod]
+        public void TestARateFinerThanTheFingerprintCanHoldIsRefused()
+        {
+            foreach (var n in CountsAcrossTheSteps())
+            {
+                var finest = Math.ScaleB(1.0, -FinestRemainderBits(n));
+                var named = finest.ToString("R", CultureInfo.InvariantCulture);
+
+                foreach (var tooFine in new[] { finest / 2, finest * 0.99, 1e-300, 1e-320, double.Epsilon })
+                {
+                    var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                        () => new QuotientFilter(n, tooFine),
+                        $"n = {n}, rate {tooFine:R}: a rate finer than {named} was accepted.");
+
+                    Assert.AreEqual("fpRate", ex.ParamName);
+                    Assert.AreEqual(tooFine, ex.ActualValue);
+                    StringAssert.Contains(ex.Message, named,
+                        $"n = {n}: the refusal does not say what rate would have worked.");
+                }
+            }
+
+            // The case that was reported: 1,000 items need 11 quotient bits, which leaves
+            // 53 for the remainder, so 1e-15 is fine and 1e-16 is a bit past it.
+            _ = new QuotientFilter(1000, 1e-15);
+            foreach (var tooFine in new[] { 1e-16, 1e-17 })
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => new QuotientFilter(1000, tooFine));
+                Assert.AreEqual("fpRate", ex.ParamName);
+            }
+        }
+
+        /// <summary>
+        /// More items than a table the slot count can index is refused, and the refusal
+        /// names the most it will take. The table's size is a power of two held in a
+        /// uint, so it stops at 2^31 slots, and an item count past three quarters of
+        /// that needs 2^32, which shifted into a table of one slot and then two.
+        /// </summary>
+        [TestMethod]
+        public void TestAnItemCountPastTheLargestTableIsRefused()
+        {
+            var named = LargestItemCount.ToString(CultureInfo.InvariantCulture);
+
+            foreach (var n in new[] { LargestItemCount + 1, 2_000_000_000u, uint.MaxValue })
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => new QuotientFilter(n, 0.5),
+                    $"n = {n} is more than the largest table is sized for and was accepted.");
+
+                Assert.AreEqual("n", ex.ParamName);
+                Assert.AreEqual(n, ex.ActualValue);
+                StringAssert.Contains(ex.Message, named,
+                    $"n = {n}: the refusal does not say how many items would have worked.");
+            }
+        }
+
+        /// <summary>
+        /// The other side of both limits, without building what they describe: a table
+        /// of 2^31 slots is gigabytes, so the sizing is asked directly. It is the same
+        /// sizing the constructor runs, so what it accepts here is what the constructor
+        /// would build.
+        /// </summary>
+        [TestMethod]
+        public void TestTheLargestTableAndTheFinestRateAreStillSized()
+        {
+            Assert.IsLessThanOrEqualTo((ulong)uint.MaxValue, 1UL << LargestQuotientBits,
+                "a table of this many slots has to be countable in a uint");
+            Assert.IsGreaterThan((ulong)uint.MaxValue, 1UL << (LargestQuotientBits + 1),
+                "the next width up is the one a uint cannot count, which is why it is the limit");
+
+            Assert.AreEqual((31u, 1u), QuotientFilter.Split(LargestItemCount, 0.5));
+            // And the step below it, so the widest width is what the count needs and not
+            // simply the most that is allowed: 3 * 2^28 items fill 2^30 slots exactly.
+            Assert.AreEqual((30u, 1u), QuotientFilter.Split(3u << 28, 0.5));
+            Assert.AreEqual((31u, 1u), QuotientFilter.Split((3u << 28) + 1, 0.5));
+
+            // Where the two limits meet: the widest table still leaves 33 bits of hash,
+            // and a rate that needs them is sized.
+            var finest = Math.ScaleB(1.0, -(HashBits - LargestQuotientBits));
+            Assert.AreEqual((31u, 33u), QuotientFilter.Split(LargestItemCount, finest));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => QuotientFilter.Split(LargestItemCount, finest / 2));
         }
 
         private static void AssertRefused(byte[] payload, string expected)
