@@ -374,8 +374,12 @@ times nominal at 2^34 with 1,024 registers or more, and a sketch whose every reg
 capped reports its ceiling, about 2^32 × ln m: 11,280,826,639 with 16 registers,
 29,737,154,114 with 1,024 and 41,673,492,339 with 16,384. Below 16 registers the ceiling is
 under 2^33; with one register it is 1,490,120,207. It never reports 0 once anything has
-been added. Earlier releases, measured on the estimator of master 596071f and not rebuilt
-by the suite, overestimated past about 143 million distinct items, by +3.2% at 2^28 and
+been added. `IsSaturated()` is true when every register is capped, which is when `Count()`
+is a floor and not an estimate. It does not warn sooner: the error grows from about 2^33
+distinct items, and a sketch is not likely to be full until later still, and the more
+registers it has the later that is. A caller who wants the earlier warning compares
+`Count()` with 2^33. Earlier releases, measured on the estimator of master 596071f and not
+rebuilt by the suite, overestimated past about 143 million distinct items, by +3.2% at 2^28 and
 +13% at 2^30, and returned 0 from about 5.7 billion (2^32.4). For more than a few billion
 distinct items use `HyperLogLogPlus` or `UltraLogLog`, which use 64 bits.
 

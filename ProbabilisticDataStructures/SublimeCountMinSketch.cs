@@ -345,6 +345,12 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Adds the data to the sketch.
         /// </summary>
+        /// <remarks>
+        /// A counter holds at most <c>ulong.MaxValue</c>, and an add to one that has got
+        /// there leaves it there rather than wrapping it to nought, so an estimate never
+        /// falls for want of room. That takes 2^64 adds to one counter, or a counter read
+        /// from a payload or folded back to it.
+        /// </remarks>
         /// <param name="data">The data to add.</param>
         /// <returns>The sketch.</returns>
         public SublimeCountMinSketch Add(byte[] data)
@@ -374,6 +380,7 @@ namespace ProbabilisticDataStructures
             }
 
             var kernel = Utils.HashKernel(data, this.Hash);
+            var onTailsBefore = ChunksOnTails();
 
             for (var i = 0; i < this.rows.Length; i++)
             {
@@ -388,7 +395,7 @@ namespace ProbabilisticDataStructures
             }
             else
             {
-                RetuneIfCrowded();
+                RetuneIfCrowded(onTailsBefore);
             }
 
             return this;
@@ -656,6 +663,13 @@ namespace ProbabilisticDataStructures
             sketch.width = (int)width;
             sketch.rows = ReadCounters(ref reader, (int)depth, (int)width);
             reader.ExpectEnd();
+
+            // The constructor left the defaults, and the rows were built at a tuning chosen
+            // from the counts. The properties describe the rows, not the records of earlier
+            // states, which were tuned separately at their own widths. A sketch has at
+            // least one row, and every row is built at the same tuning.
+            sketch.countersPerChunk = sketch.rows[0].CountersPerChunk;
+            sketch.stubBits = sketch.rows[0].StubBits;
 
             return sketch;
         }
@@ -1001,22 +1015,51 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Lays the counters out again if too many chunks have given up on their pools.
+        /// Lays the counters out again if the add just made has pushed too many chunks
+        /// onto tails arrays.
         /// </summary>
-        private void RetuneIfCrowded()
+        /// <param name="onTailsBefore">
+        /// How many chunks were on tails before the add, from <see cref="ChunksOnTails"/>.
+        /// </param>
+        /// <remarks>
+        /// Only an add that has put a chunk on tails can call for this. Between layouts
+        /// nothing else puts one there, so a sketch already past the fraction before an
+        /// add was left past it by its last layout -- which is what the fallback tuning
+        /// does, when no tuning meets the bound <see cref="Tune(ReadOnlySpan{long})"/> sets
+        /// and the tails arrays carry what the pools cannot. Laying the same counts out
+        /// again picks the same tuning and puts the same chunks back on tails, so asking
+        /// after every add laid out the whole sketch on every add, for nothing. Where every
+        /// layout leaves no more than the fraction on tails, as an ordinary sketch's does,
+        /// an add can take the sketch past it only by putting a chunk on tails, so this
+        /// lays it out again at exactly the adds it always did.
+        /// </remarks>
+        private void RetuneIfCrowded(int onTailsBefore)
         {
             var chunks = 0;
-            var onTails = 0;
             foreach (var row in this.rows)
             {
                 chunks += row.ChunkCount;
-                onTails += row.ChunksWithTails;
             }
 
-            if (onTails > chunks * TailsFractionBeforeRetuning)
+            var onTails = ChunksOnTails();
+            if (onTails > onTailsBefore && onTails > chunks * TailsFractionBeforeRetuning)
             {
                 Retune(this.width);
             }
+        }
+
+        /// <summary>
+        /// How many chunks, across every row, have fallen back to tails arrays.
+        /// </summary>
+        private int ChunksOnTails()
+        {
+            var onTails = 0;
+            foreach (var row in this.rows)
+            {
+                onTails += row.ChunksWithTails;
+            }
+
+            return onTails;
         }
 
         /// <summary>
