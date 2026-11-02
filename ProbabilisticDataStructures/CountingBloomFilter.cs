@@ -59,6 +59,10 @@ namespace ProbabilisticDataStructures
         /// Buffer used to cache indices
         /// </summary>
         private uint[] indexBuffer { get; set; }
+        /// <summary>
+        /// How an item's hash becomes the counters it moves and tests.
+        /// </summary>
+        internal Placement Placement { get; private set; }
 
         /// <summary>
         /// Creates a new Counting Bloom Filter optimized to store n-items with a
@@ -75,6 +79,21 @@ namespace ProbabilisticDataStructures
         /// once anything has been added, the hash can no longer be replaced.
         /// </param>
         public CountingBloomFilter(uint n, byte b, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            : this(n, b, fpRate, hash, null)
+        {
+        }
+
+        /// <summary>
+        /// Creates a filter as the public constructor does, placing its counters as
+        /// <paramref name="placement"/> says, or as its size calls for when that is null.
+        /// </summary>
+        /// <remarks>
+        /// The choice is made by size, and a filter large enough for it to matter is too
+        /// large to build in numbers in a test. This lets a test have a small filter
+        /// place its counters the way a large one does.
+        /// </remarks>
+        internal CountingBloomFilter(
+            uint n, byte b, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash, Placement? placement)
         {
             Guard.ValidItemCount(n, nameof(n));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
@@ -86,6 +105,7 @@ namespace ProbabilisticDataStructures
             this.m = m;
             this.k = k;
             this.indexBuffer = new uint[k];
+            this.Placement = placement ?? BitPlacement.For(m);
         }
 
         /// <summary>
@@ -146,14 +166,12 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Test(byte[])"/>
         public bool Test(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.m);
 
             // If any of the K bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                if (this.Buckets.Get((lower + upper * i) % this.m) == 0)
+                if (this.Buckets.Get(positions[i]) == 0)
                 {
                     return false;
                 }
@@ -177,14 +195,12 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Add(byte[])"/>
         public IFilter Add(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.m);
 
             // Set the K bits.
             for (uint i = 0; i < this.k; i++)
             {
-                this.Buckets.Increment((lower + upper * i) % this.m, 1);
+                this.Buckets.Increment(positions[i], 1);
             }
 
             this.count++;
@@ -207,15 +223,13 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="TestAndAdd(byte[])"/>
         public bool TestAndAdd(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.m);
             var member = true;
 
             // If any of the K bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                var idx = (lower + upper * i) % this.m;
+                var idx = positions[i];
                 if (this.Buckets.Get(idx) == 0)
                 {
                     member = false;
@@ -243,15 +257,13 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="TestAndRemove(byte[])"/>
         public bool TestAndRemove(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.m);
             var member = true;
 
             // Set the K bits.
             for (uint i = 0; i < this.k; i++)
             {
-                this.indexBuffer[i] = (lower + upper * i) % this.m;
+                this.indexBuffer[i] = positions[i];
                 if (this.Buckets.Get(this.indexBuffer[i]) == 0)
                 {
                     member = false;

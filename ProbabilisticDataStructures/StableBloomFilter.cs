@@ -59,6 +59,10 @@ namespace ProbabilisticDataStructures
         /// Buffer used to cache indices
         /// </summary>
         private uint[] IndexBuffer { get; set; } = null!;
+        /// <summary>
+        /// How an item's hash becomes the cells it sets and tests.
+        /// </summary>
+        internal Placement Placement { get; private set; }
 
         private SeededRandom random;
 
@@ -118,6 +122,21 @@ namespace ProbabilisticDataStructures
         /// </param>
         public StableBloomFilter(uint m, byte d, double fpRate,
             Func<ReadOnlySpan<byte>, ulong>? hash = null, int? seed = null)
+            : this(m, d, fpRate, hash, seed, null)
+        {
+        }
+
+        /// <summary>
+        /// Creates a filter as the public constructor does, placing items in its cells as
+        /// <paramref name="placement"/> says, or as its size calls for when that is null.
+        /// </summary>
+        /// <remarks>
+        /// The choice is made by size, and a filter large enough for it to matter is too
+        /// large to build in numbers in a test. This lets a test have a small filter
+        /// place items the way a large one does.
+        /// </remarks>
+        internal StableBloomFilter(uint m, byte d, double fpRate,
+            Func<ReadOnlySpan<byte>, ulong>? hash, int? seed, Placement? placement)
         {
             Guard.ValidItemCount(m, nameof(m));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
@@ -145,6 +164,7 @@ namespace ProbabilisticDataStructures
             this.Max = cells.MaxBucketValue();
             this.cells = cells;
             this.IndexBuffer = new uint[k];
+            this.Placement = placement ?? BitPlacement.For(m);
         }
 
         /// <summary>
@@ -184,7 +204,8 @@ namespace ProbabilisticDataStructures
                 p = 0,
                 Max = cells.MaxBucketValue(),
                 cells = cells,
-                IndexBuffer = new uint[k]
+                IndexBuffer = new uint[k],
+                Placement = BitPlacement.For(m),
             };
         }
 
@@ -261,14 +282,12 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Test(byte[])"/>
         public bool Test(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.M);
 
             // If any of the K cells are 0, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                if (this.cells.Get((lower + upper * i) % this.M) == 0)
+                if (this.cells.Get(positions[i]) == 0)
                 {
                     return false;
                 }
@@ -295,14 +314,12 @@ namespace ProbabilisticDataStructures
             // Randomly decrement p cells to make room for new elements.
             this.Decrement();
 
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.M);
 
             // Set the K cells to max.
             for (uint i = 0; i < this.k; i++)
             {
-                this.cells.Set((lower + upper * i) % this.M, this.Max);
+                this.cells.Set(positions[i], this.Max);
             }
 
             return this;
@@ -324,15 +341,13 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="TestAndAdd(byte[])"/>
         public bool TestAndAdd(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.M);
             var member = true;
 
             // If any of the K cells are 0, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                this.IndexBuffer[i] = (lower + upper * i) % this.M;
+                this.IndexBuffer[i] = positions[i];
                 if (this.cells.Get(this.IndexBuffer[i]) == 0)
                 {
                     member = false;

@@ -58,6 +58,10 @@ namespace ProbabilisticDataStructures
         /// Number of items added
         /// </summary>
         private uint count { get; set; }
+        /// <summary>
+        /// How an item's hash becomes the position it sets and tests in each partition.
+        /// </summary>
+        internal Placement Placement { get; private set; }
 
         /// <summary>How many bits the filter holds across every partition, for tests.</summary>
         internal uint BitCount => this.M;
@@ -77,6 +81,22 @@ namespace ProbabilisticDataStructures
         /// once anything has been added, the hash can no longer be replaced.
         /// </param>
         public PartitionedBloomFilter(uint n, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            : this(n, fpRate, hash, null)
+        {
+        }
+
+        /// <summary>
+        /// Creates a filter as the public constructor does, placing its bits as
+        /// <paramref name="placement"/> says, or as the size of its partitions calls for
+        /// when that is null.
+        /// </summary>
+        /// <remarks>
+        /// The choice is made by size, and a filter large enough for it to matter is too
+        /// large to build in numbers in a test. This lets a test have a small filter
+        /// place its bits the way a large one does.
+        /// </remarks>
+        internal PartitionedBloomFilter(
+            uint n, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash, Placement? placement)
         {
             Guard.ValidItemCount(n, nameof(n));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
@@ -96,6 +116,7 @@ namespace ProbabilisticDataStructures
             this.M = m;
             this.k = k;
             this.S = s;
+            this.Placement = placement ?? BitPlacement.For(s);
         }
 
         /// <summary>
@@ -172,14 +193,12 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Test(byte[])"/>
         public bool Test(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.S);
 
             // If any of the K partiion bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                if (this.Partitions[i].Get((lower + upper * i) % this.S) == 0)
+                if (this.Partitions[i].Get(positions[i]) == 0)
                 {
                     return false;
                 }
@@ -204,14 +223,12 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Add(byte[])"/>
         public IFilter Add(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.S);
 
             // Set the K partition bits.
             for (uint i = 0; i < this.k; i++)
             {
-                this.Partitions[i].Set((lower + upper * i) % this.S, 1);
+                this.Partitions[i].Set(positions[i], 1);
             }
 
             this.count++;
@@ -236,15 +253,13 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="TestAndAdd(byte[])"/>
         public bool TestAndAdd(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.S);
             var member = true;
 
             // If any K partition bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                var idx = (lower + upper * i) % this.S;
+                var idx = positions[i];
                 if (this.Partitions[i].Get(idx) == 0)
                 {
                     member = false;
