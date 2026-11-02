@@ -226,7 +226,7 @@ namespace TestProbabilisticDataStructures
 
             // Two hash functions, and a filter nearly twice the threshold in two partitions
             // each short of it.
-            partitioned = new PartitionedBloomFilter((uint)(single * 1.9), 0.3);
+            partitioned = new PartitionedBloomFilter(SmallestCountReaching(Threshold * 19 / 10, 0.3), 0.3);
             Assert.AreEqual(2u, partitioned.K());
             Assert.IsGreaterThan(Threshold, (ulong)partitioned.Capacity());
             Assert.IsLessThan(Threshold, (ulong)partitioned.Partitions[0].count);

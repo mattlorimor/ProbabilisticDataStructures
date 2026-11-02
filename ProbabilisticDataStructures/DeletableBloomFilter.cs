@@ -20,6 +20,14 @@ namespace ProbabilisticDataStructures
     /// but cannot allow false negatives. This means they can be safely swapped in
     /// place of traditional Bloom filters.
     /// </summary>
+    /// <remarks>
+    /// A filter whose data region is 2^27 bits or more places items with 64-bit hash
+    /// values and is written at format version 8, which libraries before this one cannot
+    /// read; a smaller one places with 32-bit values and is written exactly as it always
+    /// was. Placing a large filter with 32-bit values crowds the start of its data region
+    /// and raises its false positive rate, as it does for <see cref="BloomFilter"/>, where
+    /// the details are. A filter read back keeps the scheme its payload was placed with.
+    /// </remarks>
     public class DeletableBloomFilter : IFilter, IBinaryPersistable<DeletableBloomFilter>
     {
         /// <summary>
@@ -334,7 +342,8 @@ namespace ProbabilisticDataStructures
                 stream,
                 StructureId.DeletableBloomFilter,
                 PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+                payload.WrittenSpan,
+                BitPlacement.Version(this.Placement, PersistenceFormat.DefaultVersion));
         }
 
         /// <summary>
@@ -407,7 +416,8 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.DeletableBloomFilter);
-            var payload = PersistenceFormat.Read(stream, StructureId.DeletableBloomFilter, out var hashId, budget);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.DeletableBloomFilter, out var hashId, out var version, budget);
             var reader = new PayloadReader(payload, budget);
 
             var m = reader.ReadUInt32();
@@ -448,6 +458,9 @@ namespace ProbabilisticDataStructures
                 RegionSize = (m + collisions.count - 1) / collisions.count,
                 IndexBuffer = new uint[k],
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+                // From the version, never from m: a version 1 payload of any size was
+                // placed with 32-bit values.
+                Placement = BitPlacement.At(version),
             };
         }
 

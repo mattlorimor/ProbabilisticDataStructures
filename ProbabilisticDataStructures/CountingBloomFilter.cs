@@ -33,6 +33,15 @@ namespace ProbabilisticDataStructures
     /// and removed from the data set. Since they use n-bit buckets, CBFs use
     /// roughly n-times more memory than traditional Bloom filters.
     /// </summary>
+    /// <remarks>
+    /// A filter of 2^27 counters or more places items with 64-bit hash values and is
+    /// written at format version 8, which libraries before this one cannot read; a
+    /// smaller one places with 32-bit values and is written exactly as it always was.
+    /// Placing a large filter with 32-bit values crowds its first counters and raises its
+    /// false positive rate, as it does for <see cref="BloomFilter"/>, where the details
+    /// are. A filter read back keeps the scheme its payload was placed with, and the two
+    /// schemes do not merge.
+    /// </remarks>
     public class CountingBloomFilter : IFilter, IBinaryPersistable<CountingBloomFilter>
     {
         /// <summary>
@@ -325,7 +334,8 @@ namespace ProbabilisticDataStructures
                 stream,
                 StructureId.CountingBloomFilter,
                 PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+                payload.WrittenSpan,
+                BitPlacement.Version(this.Placement, PersistenceFormat.DefaultVersion));
         }
 
         /// <summary>
@@ -398,7 +408,8 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.CountingBloomFilter);
-            var payload = PersistenceFormat.Read(stream, StructureId.CountingBloomFilter, out var hashId, budget);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.CountingBloomFilter, out var hashId, out var version, budget);
             var reader = new PayloadReader(payload, budget);
 
             var m = reader.ReadUInt32();
@@ -427,6 +438,9 @@ namespace ProbabilisticDataStructures
                 // between calls.
                 indexBuffer = new uint[k],
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+                // From the version, never from m: a version 1 payload of any size was
+                // placed with 32-bit values.
+                Placement = BitPlacement.At(version),
             };
         }
 
@@ -448,7 +462,10 @@ namespace ProbabilisticDataStructures
         /// <exception cref="ArgumentNullException"><paramref name="other"/> is null.</exception>
         /// <exception cref="ArgumentException">
         /// The two were built with different dimensions, different counter widths, or
-        /// different hash functions.
+        /// different hash functions, or their counters were placed by different schemes:
+        /// a filter read from a payload written before format version 8 places with
+        /// 32-bit values whatever its size, and a new filter of 2^27 counters or more with
+        /// 64-bit values.
         /// </exception>
         /// <remarks>
         /// Counters are added rather than maxed, since a counting filter records how
@@ -483,6 +500,7 @@ namespace ProbabilisticDataStructures
                     $"{this.Buckets.BucketSize}-bit ones.", nameof(other));
             }
 
+            BitPlacement.Same(this.Placement, other.Placement, nameof(other));
             Guard.SameHashFunction(this.Hash, other.Hash, nameof(other));
 
             this.Buckets.Add(other.Buckets);

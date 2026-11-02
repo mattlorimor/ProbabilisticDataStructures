@@ -29,6 +29,15 @@ namespace ProbabilisticDataStructures
     /// events from an unbounded event stream with a specified upper bound on false
     /// positives and minimal false negatives.
     /// </summary>
+    /// <remarks>
+    /// A filter of 2^27 cells or more places items with 64-bit hash values and is written
+    /// at format version 8, which libraries before this one cannot read; a smaller one
+    /// places with 32-bit values and is written at version 5, exactly as it was. Placing a
+    /// large filter with 32-bit values crowds its first cells and raises its false
+    /// positive rate, as it does for <see cref="BloomFilter"/>, where the details are. A
+    /// filter read back keeps the scheme its payload was placed with, and
+    /// <see cref="Reset"/> keeps it too.
+    /// </remarks>
     public class StableBloomFilter : IFilter, IBinaryPersistable<StableBloomFilter>
     {
         /// <summary>
@@ -419,7 +428,7 @@ namespace ProbabilisticDataStructures
                 StructureId.StableBloomFilter,
                 PersistenceFormat.Identify(this.Hash),
                 payload.WrittenSpan,
-                PersistenceFormat.StableOriginalStateVersion);
+                BitPlacement.Version(this.Placement, PersistenceFormat.StableOriginalStateVersion));
         }
 
         /// <summary>
@@ -547,6 +556,10 @@ namespace ProbabilisticDataStructures
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
                 random = random,
                 originalRandomState = originalRandomState,
+                // From the version, never from m: a payload before version 8 of any size
+                // was placed with 32-bit values. Version 8 is the version 5 layout, which
+                // the two reads above already take it to be.
+                Placement = BitPlacement.At(version),
             };
         }
 

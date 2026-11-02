@@ -43,6 +43,7 @@ structure whose layout changes bumps only its own.
 | 4 | 6.2.0 | `SetSketch` | the construction, written only for the second one |
 | 5 | the release after 6.2.0 | `StableBloomFilter` | the state the random generator began in |
 | 6 | the release after 6.2.0 | `CuckooBloomFilter` | the state the random generator began in |
+| 8 | the release after 6.2.0 | `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter`, `StableBloomFilter` | bits placed with 64-bit values, written only for a filter of 2^27 positions or more |
 
 The table is also the list of what each structure reads. A version belongs to the
 structures named against it, and a structure's reader reads those versions and no
@@ -85,6 +86,22 @@ version 6 refuses such a payload as written by a later version. A version 1, 2 o
 payload of the cuckoo filter still reads, and its filter takes the generator position it
 was read at as its original state, exactly as the stable filter's does; the details are
 in [The random generator's state](#the-random-generators-state).
+
+Version 8 changes what a filter's bits stand for, not where they are written. Each of
+the five structures named on it writes, at version 8, exactly the layout it wrote before
+-- version 5's for the stable filter, version 1's for the rest -- and the version says
+its positions were derived from 64-bit values rather than 32-bit ones, as
+[Bit placement](#bit-placement) describes. A new filter is built that way when the number
+of positions it reduces modulo is 2^27 or more, and writes version 8; every smaller one is
+built and written exactly as before, so a library older than version 8 reads every filter
+of a size it could have built. One number covers all five, because it names one change.
+
+The version is the only thing that says how a payload was placed. A payload before
+version 8 was placed with 32-bit values whatever its size, and reads back that way, so a
+large filter written by an earlier release is the filter it was, including the false
+positive rate it had; a version 8 payload is placed with 64-bit values whatever its
+size. Two filters of the same size placed differently set different bits for the same
+item, so the filters that merge refuse to merge them.
 
 A reader refuses a payload whose magic does not match, whose version is not one its
 structure has defined, whose structure id is not the type being read, or whose
@@ -285,7 +302,8 @@ u32     count, the number of items added
 Buckets the bit array
 ```
 
-The bucket count must equal `m`.
+The bucket count must equal `m`. Which item a bit stands for depends on the version:
+see [Bit placement](#bit-placement).
 
 ### `CountMinSketch` (id 10)
 
@@ -321,6 +339,8 @@ u32     count
 Buckets the counter array, whose bucket width is the counter width
 ```
 
+Which items a counter counts depends on the version: see [Bit placement](#bit-placement).
+
 ### `DeletableBloomFilter` (id 4)
 
 ```
@@ -331,7 +351,9 @@ Buckets the data region
 Buckets the collision regions, one bucket per region
 ```
 
-The region size is **not** stored. See [What is not stored](#what-is-not-stored).
+The region size is **not** stored. See [What is not stored](#what-is-not-stored). Which
+item a bit of the data region stands for depends on the version: see
+[Bit placement](#bit-placement), with `m` the data region.
 
 ### `PartitionedBloomFilter` (id 5)
 
@@ -345,7 +367,9 @@ Buckets one per partition
 ```
 
 There is one partition per hash function, and a payload whose partition count differs
-from `k` is refused. Each partition must hold `s` buckets.
+from `k` is refused. Each partition must hold `s` buckets. Which item a bit stands for
+depends on the version: see [Bit placement](#bit-placement), with `m` the partition size
+`s`.
 
 ### `ScalableBloomFilter` (id 6)
 
@@ -372,7 +396,8 @@ u64     the random generator's state    (version 2 onwards)
 u64     the state it began in           (version 5 onwards)
 ```
 
-The maximum cell value follows from the cell width the cells carry.
+The maximum cell value follows from the cell width the cells carry. Version 8 is this
+layout, version 5's, with the cells placed as [Bit placement](#bit-placement) describes.
 
 The state the generator began in is the last field, and payloads before version 5 simply
 end before it; version 1 payloads end a field earlier still, before the generator's
@@ -1090,6 +1115,40 @@ window claims to have seen, and a nested sketch whose shape disagrees with the w
 It also applies the same refusal the constructor makes for a checkpoint factor whose
 leanest sketch would be drowned in its own noise, so that a payload is not a way around
 it — and every nested sketch carries the all-integers guard above.
+
+## Bit placement
+
+The bits of `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`,
+`PartitionedBloomFilter` and `StableBloomFilter` are positions an item's hash was mapped
+to, so reading them needs the mapping as well as the layout. Each filter has `k` hash
+functions and reduces positions modulo `m`: the bit count for the plain and counting
+filters, the data region for the deletable filter, the cell count for the stable filter,
+and the partition size `s` for the partitioned filter, whose `i`th position goes in the
+`i`th partition. `h` is the 64-bit hash of the item: XxHash3 with seed 0 for hash id 1.
+
+In a payload before version 8, positions come from 32-bit values:
+
+```
+low  = h & 0xFFFFFFFF
+high = h >> 32
+position i = ((low + i * high) mod 2^32) mod m,   for i = 0 .. k - 1
+```
+
+In a version 8 payload they come from 64-bit values, as `BloomFilter64`'s always have:
+
+```
+first  = h
+second = the same hash, of first's eight bytes, least significant first
+position i = ((first + i * second) mod 2^64) mod m,   for i = 0 .. k - 1
+```
+
+The 32-bit form reduces a 32-bit value modulo `m`, which gives the first `2^32 mod m`
+positions one more of the 2^32 values than the rest. Those positions fill faster, and a
+query lands on them as often as an item did, so the false positive rate rises: a filter
+of three quarters of 2^32 bits sized for 1% measured 1.42%. The excess is zero when `m`
+is a power of two and largest when `2^32 mod m` is half of `m`, and it shrinks with the
+square of `m`'s share of 2^32. Below 2^27 positions it is too small to measure, which is
+why the 64-bit form is written only from there.
 
 ## The random generator's state
 

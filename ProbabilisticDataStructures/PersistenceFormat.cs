@@ -177,6 +177,21 @@ namespace ProbabilisticDataStructures
         internal const ushort CuckooOriginalStateVersion = 6;
 
         /// <summary>
+        /// The version at which a filter in the Bloom family records that its bits were
+        /// placed with 64-bit values, as <see cref="BloomFilter64"/> places them, rather
+        /// than with the 32-bit scheme every earlier payload used. The layout is the one
+        /// the structure wrote before; what changes is which positions its bits stand
+        /// for. Written only by a filter large enough to be built that way (see
+        /// <see cref="BitPlacement.WideFrom"/>): every smaller one writes the version it
+        /// always did, which libraries from before this one read.
+        /// </summary>
+        /// <remarks>
+        /// Version 7 is not skipped here by accident. It was given to another change, and a
+        /// number names one change, shared by every structure it applies to.
+        /// </remarks>
+        internal const ushort WidePlacementVersion = 8;
+
+        /// <summary>
         /// The format versions each structure has defined, which are exactly the ones its
         /// reader reads. This is the one place that says so.
         /// </summary>
@@ -198,14 +213,15 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         private static readonly Dictionary<StructureId, ushort[]> Readable = new()
         {
-            [StructureId.BloomFilter] = [DefaultVersion],
+            [StructureId.BloomFilter] = [DefaultVersion, WidePlacementVersion],
             [StructureId.BloomFilter64] = [DefaultVersion],
-            [StructureId.CountingBloomFilter] = [DefaultVersion],
-            [StructureId.DeletableBloomFilter] = [DefaultVersion],
-            [StructureId.PartitionedBloomFilter] = [DefaultVersion],
+            [StructureId.CountingBloomFilter] = [DefaultVersion, WidePlacementVersion],
+            [StructureId.DeletableBloomFilter] = [DefaultVersion, WidePlacementVersion],
+            [StructureId.PartitionedBloomFilter] = [DefaultVersion, WidePlacementVersion],
             [StructureId.ScalableBloomFilter] = [DefaultVersion],
             [StructureId.StableBloomFilter] =
-                [DefaultVersion, RandomStateVersion, StableOriginalStateVersion],
+                [DefaultVersion, RandomStateVersion, StableOriginalStateVersion,
+                 WidePlacementVersion],
             [StructureId.InverseBloomFilter] = [DefaultVersion],
             [StructureId.CuckooBloomFilter] =
                 [DefaultVersion, RandomStateVersion, CuckooPackedVersion,

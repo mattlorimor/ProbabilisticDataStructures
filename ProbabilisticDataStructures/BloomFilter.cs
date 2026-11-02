@@ -8,6 +8,17 @@ namespace ProbabilisticDataStructures
     /// BloomFilter implements a classic Bloom filter. A bloom filter has a non-zero
     /// probability of false positives and a zero probability of false negatives.
     /// </summary>
+    /// <remarks>
+    /// A filter of 2^27 bits or more, about 14 million items at 1%, places its bits with
+    /// 64-bit hash values, as <see cref="BloomFilter64"/> does, and is written at format
+    /// version 8, which libraries before this one cannot read. A smaller filter places
+    /// with 32-bit values and is written exactly as it always was. Before this, every
+    /// filter placed with 32-bit values, and a large one delivered a higher false
+    /// positive rate than it was sized for: 1.42% at three quarters of 2^32 bits sized
+    /// for 1%. A filter read back keeps the scheme its payload was placed with, so one
+    /// written before is still that filter, rate included; add its items to a new filter
+    /// to have the rate it was sized for. The two schemes do not merge.
+    /// </remarks>
     public class BloomFilter : IFilter, IBinaryPersistable<BloomFilter>
     {
         /// <summary>
@@ -249,7 +260,8 @@ namespace ProbabilisticDataStructures
                 stream,
                 StructureId.BloomFilter,
                 PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+                payload.WrittenSpan,
+                BitPlacement.Version(this.Placement, PersistenceFormat.DefaultVersion));
         }
 
         /// <summary>
@@ -322,7 +334,8 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.BloomFilter);
-            var payload = PersistenceFormat.Read(stream, StructureId.BloomFilter, out var hashId, budget);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.BloomFilter, out var hashId, out var version, budget);
             var reader = new PayloadReader(payload, budget);
 
             var m = reader.ReadUInt32();
@@ -354,6 +367,9 @@ namespace ProbabilisticDataStructures
                 k = k,
                 count = count,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+                // From the version, never from m: a version 1 payload of any size was
+                // placed with 32-bit values.
+                Placement = BitPlacement.At(version),
             };
         }
 
@@ -374,8 +390,11 @@ namespace ProbabilisticDataStructures
         /// <returns>This filter, so calls can be chained.</returns>
         /// <exception cref="ArgumentNullException"><paramref name="other"/> is null.</exception>
         /// <exception cref="ArgumentException">
-        /// The two were built with different dimensions or different hash functions, so
-        /// their contents do not describe the same positions.
+        /// The two were built with different dimensions or different hash functions, or
+        /// their bits were placed by different schemes, so their contents do not describe
+        /// the same positions. A filter read from a payload written before format version
+        /// 8 places with 32-bit values whatever its size, and a new filter of 2^27 bits or
+        /// more with 64-bit values, so two such filters of the same size do not merge.
         /// </exception>
         /// <remarks>
         /// The result is exactly what adding everything to one of them would have
@@ -399,6 +418,7 @@ namespace ProbabilisticDataStructures
                     "different positions.", nameof(other));
             }
 
+            BitPlacement.Same(this.Placement, other.Placement, nameof(other));
             Guard.SameHashFunction(this.Hash, other.Hash, nameof(other));
 
             this.Buckets.Union(other.Buckets);

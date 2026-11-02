@@ -476,6 +476,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The stored format does not change. Payloads that were refused for their size now load,
   and every other refusal stands.
 
+- **Large 32-bit Bloom filters had a higher false positive rate than they were sized
+  for.** `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`,
+  `StableBloomFilter` and `PartitionedBloomFilter` took an item's positions as
+  `(low + i * high) mod m` from the two 32-bit halves of its hash, in 32-bit arithmetic.
+  Each such value is a 32-bit number, and reducing it modulo an `m` that does not divide
+  2^32 gives the first `2^32 mod m` positions one more preimage than the rest, so those
+  fill faster and queries land on them as often. A `BloomFilter` of three quarters of
+  2^32 bits sized for 1% measured 1.42%, and 0.17% sized for 0.1%, where a
+  `BloomFilter64` of the same size measured 1.00% and 0.100%. The excess is a sawtooth
+  in `m`: zero at every power of two, highest where `2^32 mod m` is half of `m`, and
+  shrinking with the square of the filter's size. It was 3.7% of the rate at 966 million
+  bits, 1.1% at 507 million and 0.24% at 261 million; below 2^27 bits it is too small
+  to measure. The partitioned filter reduces per partition, so it is its partitions'
+  size that counts. The placement is the one these filters have always used, so every
+  release is affected.
+  <br><br>
+  A new filter whose positions are reduced modulo 2^27 or more — 16 MiB of bits, about
+  14 million items at 1% — now places them with 64-bit values, exactly as
+  `BloomFilter64` does, and delivers its rate at every size. It is written at a new
+  [format version 8](FORMAT.md#format-versions), which earlier releases refuse as written
+  by a later version. Every smaller filter is placed and written exactly as before,
+  byte for byte, so earlier releases go on reading them.
+  <br><br>
+  **A filter read back keeps the placement its payload was written with.** The version
+  decides, never the size: a payload from an earlier release was placed with 32-bit
+  values whatever its size, so it reads back as the filter it was, false positive rate
+  included. To have the rate it was sized for, add its items to a new filter. The same
+  rule refuses a merge between two filters of the same size placed differently, such as
+  an old payload read back and a new filter, with an `ArgumentException` saying so,
+  since the same item sets different bits in each.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added
