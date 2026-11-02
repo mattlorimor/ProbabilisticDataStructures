@@ -650,22 +650,8 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.MementoFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.MementoFilter, out var hashId, budget, Price);
-
-            if (hash is not null)
-            {
-                throw new InvalidDataException(
-                    "A Memento filter holds numbers rather than bytes -- a range is a " +
-                    "question about order -- so it cannot be read with a supplied " +
-                    "hash function. Read it with the overload that takes none.");
-            }
-            if (hashId != HashId.None)
-            {
-                throw new InvalidDataException(
-                    $"Payload names hash function {(ushort)hashId}, and a Memento " +
-                    "filter mixes numbers rather than hashing bytes. It was not " +
-                    "written by this structure.");
-            }
+                stream, StructureId.MementoFilter, out _, budget, Price,
+                hash, CheckHash);
 
             var reader = new PayloadReader(payload, budget);
             var added = reader.ReadUInt64();
@@ -721,6 +707,28 @@ namespace ProbabilisticDataStructures
 
             reader.ExpectEnd();
             return filter;
+        }
+
+        /// <summary>
+        /// Refuses a supplied hash, and a payload naming any hash but none: this
+        /// structure hashes nothing. See <see cref="HashCheck"/>.
+        /// </summary>
+        private static void CheckHash(HashId recorded, Func<ReadOnlySpan<byte>, ulong>? supplied)
+        {
+            if (supplied is not null)
+            {
+                throw new InvalidDataException(
+                    "A Memento filter holds numbers rather than bytes -- a range is a " +
+                    "question about order -- so it cannot be read with a supplied " +
+                    "hash function. Read it with the overload that takes none.");
+            }
+            if (recorded != HashId.None)
+            {
+                throw new InvalidDataException(
+                    $"Payload names hash function {(ushort)recorded}, and a Memento " +
+                    "filter mixes numbers rather than hashing bytes. It was not " +
+                    "written by this structure.");
+            }
         }
 
         /// <summary>

@@ -704,7 +704,8 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.DpswSketch);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.DpswSketch, out var hashId, budget, Price);
+                stream, StructureId.DpswSketch, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var window = (long)reader.ReadUInt64();

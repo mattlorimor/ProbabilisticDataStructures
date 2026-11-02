@@ -148,15 +148,8 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.MinHashSignature);
-            var payload = PersistenceFormat.Read(stream, StructureId.MinHashSignature, out var hashId, budget, Price);
-
-            if (hashId != HashId.XxHash3_64)
-            {
-                throw new InvalidDataException(
-                    $"Signature was built with hash function {(ushort)hashId}, and this " +
-                    "version builds them with XxHash3. Comparing signatures built with " +
-                    "different hash functions gives a number that means nothing.");
-            }
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.MinHashSignature, out _, budget, Price, null, CheckHash);
 
             var reader = new PayloadReader(payload, budget);
 
@@ -176,6 +169,21 @@ namespace ProbabilisticDataStructures
 
             reader.ExpectEnd();
             return new MinHashSignature(values);
+        }
+
+        /// <summary>
+        /// Refuses a payload naming any hash but XxHash3, the one this structure
+        /// builds with, whatever hash was supplied. See <see cref="HashCheck"/>.
+        /// </summary>
+        private static void CheckHash(HashId recorded, Func<ReadOnlySpan<byte>, ulong>? _)
+        {
+            if (recorded != HashId.XxHash3_64)
+            {
+                throw new InvalidDataException(
+                    $"Signature was built with hash function {(ushort)recorded}, and this " +
+                    "version builds them with XxHash3. Comparing signatures built with " +
+                    "different hash functions gives a number that means nothing.");
+            }
         }
 
         /// <summary>

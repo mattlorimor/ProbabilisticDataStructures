@@ -486,8 +486,15 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.ScalableBloomFilter);
+
+            // The hash this header names is the contained filters', written from the
+            // first of them, and each of theirs is checked again as it is read. It is
+            // checked here as well, so that a filter written with a hash it is not read
+            // with is refused before the read is priced rather than once its budget has
+            // been raised to read it.
             var payload = PersistenceFormat.Read(
-                stream, StructureId.ScalableBloomFilter, out _, out var version, budget, Price);
+                stream, StructureId.ScalableBloomFilter, out _, out var version, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var r = reader.ReadDouble();

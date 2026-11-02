@@ -617,7 +617,8 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.SublimeCountMinSketch);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.SublimeCountMinSketch, out var hashId, budget, Price);
+                stream, StructureId.SublimeCountMinSketch, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var delta = reader.ReadDouble();

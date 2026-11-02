@@ -233,7 +233,8 @@ being flattened into the outer payload.
 
 That costs eighteen bytes per nested structure, against payloads measured in tens of
 thousands, and buys three things. The inner structure names its own hash, so a composite
-cannot silently disagree with itself about hashing. It can be pulled out of the outer
+cannot silently disagree with itself about hashing. The outer envelope names one too,
+the hash of the first structure it holds, and a reader checks both. It can be pulled out of the outer
 payload and read on its own. And the outer structure can change what it holds without
 the inner layout being part of that change.
 
@@ -344,6 +345,17 @@ corrupted one is refused as corrupted. One whose length alone is more than the b
 never held: its fields are read from the stream and its runs skipped, to name the total,
 before its checksum could be checked. A payload that ends early, or whose fields are not
 ones its reader accepts, is priced as far as it goes.
+
+The hash id is checked before anything is priced: after the checksum when the payload is
+held, and as the header states it when it is not. A payload naming a hash its reader
+cannot read it with — one the caller has not supplied and the reader cannot reconstruct,
+or any hash at all for a structure that hashes nothing — is refused for that under any
+budget.
+
+The total is worked out from the payload's shape, its header and the fields that size what
+it holds, so a budget of it reads a payload that is well formed. One damaged past those
+fields, or wrong in what it holds, names the total too, and is refused for what is wrong
+with it under a budget that covers it.
 
 The default is 1,073,741,824 bytes, one gibibyte (`ReadOptions.DefaultMemoryBudget`).
 `ReadFrom` without options reads under it; the overloads taking `ReadOptions` read under

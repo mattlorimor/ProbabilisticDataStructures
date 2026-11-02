@@ -680,7 +680,8 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.InvertibleBloomLookupTable);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.InvertibleBloomLookupTable, out var hashId, budget, Price);
+                stream, StructureId.InvertibleBloomLookupTable, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var cells = reader.ReadUInt32();

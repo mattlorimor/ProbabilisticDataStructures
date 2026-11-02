@@ -449,7 +449,9 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.ThetaSketch);
-            var payload = PersistenceFormat.Read(stream, StructureId.ThetaSketch, out var hashId, budget, Price);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.ThetaSketch, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var nominalEntries = reader.ReadUInt32();

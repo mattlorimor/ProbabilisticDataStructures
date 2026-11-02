@@ -315,7 +315,9 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.BloomFilter64);
-            var payload = PersistenceFormat.Read(stream, StructureId.BloomFilter64, out var hashId, budget, Price);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.BloomFilter64, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var m = reader.ReadUInt64();

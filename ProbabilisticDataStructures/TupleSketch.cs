@@ -669,7 +669,8 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.TupleSketch);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.TupleSketch, out var hashId, budget, Price);
+                stream, StructureId.TupleSketch, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var nominalEntries = reader.ReadUInt32();

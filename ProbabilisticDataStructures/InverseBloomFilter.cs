@@ -379,7 +379,9 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.InverseBloomFilter);
-            var payload = PersistenceFormat.Read(stream, StructureId.InverseBloomFilter, out var hashId, budget, Price);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.InverseBloomFilter, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var capacity = reader.ReadUInt32();

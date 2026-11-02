@@ -405,8 +405,8 @@ catch (InvalidDataException e) when (e.InnerException is ReadBudgetExceededExcep
 
 The number works as given. `RequiredBytes` is the whole read — the payload, the
 structure, and any structure nested inside it — and the same whatever budget was
-refused, so a budget of exactly that loads the payload on the next attempt, and the
-message names it in the call to make. A refused read has consumed some of the stream, so
+refused, so a budget of exactly that loads a well-formed payload on the next attempt, and
+the message names it in the call to make. A refused read has consumed some of the stream, so
 read again from the payload's start:
 
 ```C#
@@ -426,6 +426,14 @@ A payload too large for its budget is never held to work this out: its sizes are
 the stream and the rest skipped. Only a payload that is malformed, or ends early, before
 its sizes have all been read names less, and is then refused for what is wrong with it
 under a budget that covers what it named.
+
+The total is worked out from the payload's shape — its header and the fields that size
+what it holds — and not from everything in it. A payload damaged past those fields, or
+wrong in what it holds, names the total like any other, and is refused for what is wrong
+with it once the budget covers that: as corrupted when its checksum is checked, or for
+what it holds as that is read. A hash a structure cannot be read with is refused for that
+under any budget, before anything is priced: a filter written while using a hash set
+through `SetHash` and read without it, or a `DDSketch` read with one.
 
 ### Merging
 

@@ -460,7 +460,9 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.HyperLogLog);
-            var payload = PersistenceFormat.Read(stream, StructureId.HyperLogLog, out var hashId, budget, Price);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.HyperLogLog, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var m = reader.ReadUInt32();

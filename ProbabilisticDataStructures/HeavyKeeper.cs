@@ -512,7 +512,9 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.HeavyKeeper);
-            var payload = PersistenceFormat.Read(stream, StructureId.HeavyKeeper, out var hashId, budget, Price);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.HeavyKeeper, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var k = reader.ReadUInt32();

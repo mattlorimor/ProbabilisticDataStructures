@@ -382,7 +382,9 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.CountMinSketch);
-            var payload = PersistenceFormat.Read(stream, StructureId.CountMinSketch, out var hashId, budget, Price);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.CountMinSketch, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var epsilon = reader.ReadDouble();

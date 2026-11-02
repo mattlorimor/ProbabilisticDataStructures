@@ -343,7 +343,9 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.CountSketch);
-            var payload = PersistenceFormat.Read(stream, StructureId.CountSketch, out var hashId, budget, Price);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.CountSketch, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var width = reader.ReadUInt32();

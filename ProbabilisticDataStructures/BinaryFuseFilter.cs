@@ -779,7 +779,8 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.BinaryFuseFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.BinaryFuseFilter, out var hashId, budget, Price);
+                stream, StructureId.BinaryFuseFilter, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var size = reader.ReadUInt32();

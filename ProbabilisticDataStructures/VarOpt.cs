@@ -783,23 +783,9 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.VarOpt);
-            var payload = PersistenceFormat.Read(stream, StructureId.VarOpt, out var hashId, budget, Price);
-
-            if (hash is not null)
-            {
-                throw new InvalidDataException(
-                    "A VarOpt sample does not hash anything -- it keeps the items " +
-                    "themselves -- so it cannot be read with a supplied hash " +
-                    "function. Read it with the overload that takes none.");
-            }
-
-            if (hashId != HashId.None)
-            {
-                throw new InvalidDataException(
-                    $"Payload names hash function {(ushort)hashId}, and a VarOpt " +
-                    "sample does not hash anything. It was not written by this " +
-                    "structure.");
-            }
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.VarOpt, out _, budget, Price,
+                hash, CheckHash);
 
             var reader = new PayloadReader(payload, budget);
 
@@ -854,6 +840,29 @@ namespace ProbabilisticDataStructures
             reader.ExpectEnd();
 
             return restored;
+        }
+
+        /// <summary>
+        /// Refuses a supplied hash, and a payload naming any hash but none: this
+        /// structure hashes nothing. See <see cref="HashCheck"/>.
+        /// </summary>
+        private static void CheckHash(HashId recorded, Func<ReadOnlySpan<byte>, ulong>? supplied)
+        {
+            if (supplied is not null)
+            {
+                throw new InvalidDataException(
+                    "A VarOpt sample does not hash anything -- it keeps the items " +
+                    "themselves -- so it cannot be read with a supplied hash " +
+                    "function. Read it with the overload that takes none.");
+            }
+
+            if (recorded != HashId.None)
+            {
+                throw new InvalidDataException(
+                    $"Payload names hash function {(ushort)recorded}, and a VarOpt " +
+                    "sample does not hash anything. It was not written by this " +
+                    "structure.");
+            }
         }
 
         /// <summary>

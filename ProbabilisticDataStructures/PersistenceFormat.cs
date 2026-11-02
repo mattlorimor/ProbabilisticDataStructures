@@ -111,6 +111,22 @@ namespace ProbabilisticDataStructures
     internal delegate void PayloadPrice(ref PayloadReader reader, ushort version);
 
     /// <summary>
+    /// Refuses the hash a payload's header names, <paramref name="recorded"/>, if its
+    /// reader cannot read it with <paramref name="supplied"/>, the hash the caller gave
+    /// it or null, and returns otherwise.
+    /// </summary>
+    /// <remarks>
+    /// Which hash a payload names is in its header, and which one it is read with is the
+    /// caller's to say, so nothing past the header bears on it. The envelope checks it
+    /// before the read is priced, so that a payload which can never be read is refused
+    /// for that under any budget rather than priced, and held, for a read that cannot
+    /// happen. Every reader passes one: most <see cref="PersistenceFormat.CheckResolvable"/>,
+    /// and a structure with its own rule about hashes, that rule. A static method, so
+    /// that passing it allocates nothing.
+    /// </remarks>
+    internal delegate void HashCheck(HashId recorded, Func<ReadOnlySpan<byte>, ulong>? supplied);
+
+    /// <summary>
     /// The envelope every persisted structure is wrapped in.
     /// </summary>
     /// <remarks>
@@ -229,7 +245,7 @@ namespace ProbabilisticDataStructures
         /// others. Accepting every version up to the highest anywhere would read a
         /// version some other structure defined as though it were this one's newest
         /// layout;
-        /// <see cref="Read(Stream, StructureId, out HashId, out ushort, ReadBudget, PayloadPrice)"/> refuses
+        /// <see cref="Read(Stream, StructureId, out HashId, out ushort, ReadBudget, PayloadPrice, Func{ReadOnlySpan{byte}, ulong}, HashCheck)"/> refuses
         /// it instead, and says which versions it does read.
         /// <para>
         /// Every structure is listed, including those that have only ever written the
@@ -408,9 +424,9 @@ namespace ProbabilisticDataStructures
         /// </exception>
         internal static byte[] Read(
             Stream stream, StructureId expected, out HashId hash, ReadBudget budget,
-            PayloadPrice price)
+            PayloadPrice price, Func<ReadOnlySpan<byte>, ulong>? supplied, HashCheck checkHash)
         {
-            return Read(stream, expected, out hash, out _, budget, price);
+            return Read(stream, expected, out hash, out _, budget, price, supplied, checkHash);
         }
 
         /// <summary>
@@ -432,13 +448,20 @@ namespace ProbabilisticDataStructures
         /// alone is more than the budget it is never held: it is priced from the stream, a
         /// field at a time, its runs skipped, and refused.
         /// <para>
+        /// The hash the header names is checked against <paramref name="supplied"/>, by
+        /// <paramref name="checkHash"/>, before anything is priced: once the checksum has
+        /// vouched for the header when the payload is held, so that a header damaged there
+        /// is refused as damaged, and as the header stands when it is not, as everything a
+        /// payload too large to hold is priced from does.
+        /// </para>
+        /// <para>
         /// A structure nested inside another is read under the budget its outer read has
         /// already priced, nested envelope included, so its own reads draw on that.
         /// </para>
         /// </remarks>
         internal static byte[] Read(
             Stream stream, StructureId expected, out HashId hash, out ushort version,
-            ReadBudget budget, PayloadPrice price)
+            ReadBudget budget, PayloadPrice price, Func<ReadOnlySpan<byte>, ulong>? supplied, HashCheck checkHash)
         {
             var header = ReadExactly(stream, HeaderLength, "header");
             var length = CheckHeader(header, expected, out version, out hash);
@@ -455,6 +478,7 @@ namespace ProbabilisticDataStructures
                 budget.Price(envelope);
                 if (budget.Charged > budget.Limit)
                 {
+                    checkHash(hash, supplied);
                     PriceUnheld(stream, length, version, budget, price);
                     throw budget.Refusal(budget.Charged);
                 }
@@ -479,6 +503,8 @@ namespace ProbabilisticDataStructures
                     $"Payload checksum does not match: expected {expectedCrc:X8} and " +
                     $"found {actualCrc:X8}. The data has been corrupted or truncated.");
             }
+
+            checkHash(hash, supplied);
 
             if (pricing)
             {
@@ -605,11 +631,27 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal static Func<ReadOnlySpan<byte>, ulong>? Resolve(HashId hash)
         {
-            return hash switch
+            return IsResolvable(hash) ? Defaults.GetDefaultHashFunction() : null;
+        }
+
+        /// <summary>
+        /// Whether <see cref="Resolve"/> supplies a hash for an identifier, without making
+        /// the delegate it would return.
+        /// </summary>
+        internal static bool IsResolvable(HashId hash) => hash == HashId.XxHash3_64;
+
+        /// <summary>
+        /// The check for a structure that hashes with what it is given, or else with what
+        /// its payload names: that <see cref="ResolveOrThrow"/> will settle on a hash,
+        /// refusing the payload as it would. It allocates nothing, as it runs for every
+        /// structure a scalable filter holds.
+        /// </summary>
+        internal static void CheckResolvable(HashId recorded, Func<ReadOnlySpan<byte>, ulong>? supplied)
+        {
+            if (supplied is null && !IsResolvable(recorded))
             {
-                HashId.XxHash3_64 => Defaults.GetDefaultHashFunction(),
-                _ => null,
-            };
+                throw Unresolvable(recorded);
+            }
         }
 
         /// <summary>
@@ -630,15 +672,15 @@ namespace ProbabilisticDataStructures
                 return supplied;
             }
 
-            var resolved = Resolve(hash);
-            if (resolved is not null)
-            {
-                return resolved;
-            }
+            return Resolve(hash) ?? throw Unresolvable(hash);
+        }
 
+        /// <summary>The refusal of a hash that cannot be reconstructed, when none was supplied.</summary>
+        private static InvalidDataException Unresolvable(HashId hash)
+        {
             if (hash == HashId.Custom)
             {
-                throw new InvalidDataException(
+                return new InvalidDataException(
                     "This structure was written while using a hash function set through " +
                     "SetHash, which cannot be recorded. Read it with the overload that " +
                     "takes a hash function, supplying the same one. Reading it with the " +
@@ -646,7 +688,7 @@ namespace ProbabilisticDataStructures
                     "and look empty rather than wrong.");
             }
 
-            throw new InvalidDataException(
+            return new InvalidDataException(
                 $"This structure was written using hash function {(ushort)hash}, which " +
                 "this version does not know. It was written by a later version. Supply " +
                 "that hash function explicitly to read it anyway.");

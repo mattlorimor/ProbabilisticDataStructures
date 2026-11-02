@@ -997,7 +997,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   digits grouped, in the call that reads it: `BloomFilter64.ReadFrom(stream, new
   ReadOptions(…))`. A payload too large for its budget to be held is priced from the
   stream without being held, its runs skipped. What each structure is charged is
-  unchanged, so every figure in the README's table and in CAPACITY.md stands.
+  unchanged, so every figure in the README's table and in CAPACITY.md stands. The total
+  comes from the payload's shape, so it loads a payload that is well formed; one damaged
+  past the fields that size it, or wrong in what it holds, is refused for that once the
+  budget covers it.
+
+- **A payload naming a hash its reader would refuse was priced, and held, first.** Under
+  a budget the read did not fit, it was refused for the budget, and for its hash only
+  once that budget had been raised; and many structures, resolving their hash as they
+  built themselves, refused it only after allocating what they hold, under any budget. A filter written while using a hash set through `SetHash` and read without it,
+  or a `DDSketch` read with a hash, is now refused for that under any budget, before
+  anything is priced, with the message it always had. `ScalableBloomFilter` and `TopK`
+  check the hash their own header names, as every other reader does; they had checked
+  only the structures inside them, and their header always names the first of those.
 
 ## [6.2.0] - 2026-08-19
 

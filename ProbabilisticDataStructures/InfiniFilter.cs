@@ -557,7 +557,8 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.InfiniFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.InfiniFilter, out var hashId, budget, Price);
+                stream, StructureId.InfiniFilter, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var added = reader.ReadUInt64();

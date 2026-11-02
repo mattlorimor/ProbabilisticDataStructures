@@ -839,7 +839,8 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.QuotientFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.QuotientFilter, out var hashId, budget, Price);
+                stream, StructureId.QuotientFilter, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var quotientBits = reader.ReadUInt32();
