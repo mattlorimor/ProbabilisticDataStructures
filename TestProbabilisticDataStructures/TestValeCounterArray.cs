@@ -376,6 +376,54 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A counter at the largest count a ulong holds stays there when it is incremented,
+        /// and the one below it takes its last step up to it.
+        /// </summary>
+        /// <remarks>
+        /// The mirror of the floor at nought. Adding one to the largest count is nought in a
+        /// ulong, and an array that wrote that back would turn the largest count the sketch
+        /// can hold into the smallest. The counters either side and a heavy one in another
+        /// chunk are checked as well, since writing nought over a counter that held a
+        /// full-length extension frees its fragments, and what was packed beside them is
+        /// what would move. The tunings are the ones the round-trip test above uses, so that
+        /// the largest count sits in a pool at some of them and on a tails array at others.
+        /// </remarks>
+        [TestMethod]
+        public void TestIncrementingTheLargestCountLeavesItThere()
+        {
+            foreach (var (counters, stubBits) in new[] { (C, S), (16, 4), (92, 4), (32, 8), (24, 16) })
+            {
+                var array = new ValeCounterArray(counters * 2, counters, stubBits);
+                var where = $"{counters} counters per chunk and a {stubBits}-bit stub";
+
+                const int Target = 1;
+                var other = counters + 1;
+                array.Set(Target - 1, 7);
+                array.Set(Target + 1, 123_456_789);
+                array.Set(other, ulong.MaxValue - 1);
+
+                // Two below the largest: one step to the one below it, one to it, and then
+                // the steps that must go nowhere.
+                array.Set(Target, ulong.MaxValue - 2);
+                var expected = new[]
+                {
+                    ulong.MaxValue - 1, ulong.MaxValue, ulong.MaxValue, ulong.MaxValue,
+                };
+                for (var step = 0; step < expected.Length; step++)
+                {
+                    array.Increment(Target);
+                    Assert.AreEqual(expected[step], array.Get(Target),
+                        $"Step {step + 1} up from the largest count less two, at {where}.");
+                    Assert.AreEqual(7UL, array.Get(Target - 1), $"The counter below, at {where}.");
+                    Assert.AreEqual(123_456_789UL, array.Get(Target + 1),
+                        $"The counter above, at {where}.");
+                    Assert.AreEqual(ulong.MaxValue - 1, array.Get(other),
+                        $"A heavy counter in the next chunk, at {where}.");
+                }
+            }
+        }
+
+        /// <summary>
         /// Chunks do not reach into one another.
         /// </summary>
         /// <remarks>

@@ -421,6 +421,80 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// An add that lands on a counter at the largest count leaves it there, and the one
+        /// below it takes its last step up to it: the counter does not wrap to nought.
+        /// </summary>
+        /// <remarks>
+        /// A counter can be at the largest count without 2^64 adds, from a payload or from
+        /// the fold above, and an add to it came out as nought. The estimate is the smallest
+        /// of a key's counters, so the nought is the estimate, for a key the sketch has
+        /// counted at least 2^64 times: an undercount, which a Count-Min sketch never gives.
+        /// Every counter of a one-row sketch is set, so that the key lands on one whatever
+        /// the hash makes of it, and the row is read from a payload because that is how a
+        /// caller meets it.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(ulong.MaxValue, ulong.MaxValue)]
+        [DataRow(ulong.MaxValue - 1, ulong.MaxValue)]
+        [DataRow(ulong.MaxValue - 2, ulong.MaxValue - 1)]
+        public void TestAnAddToTheLargestCountLeavesItThere(ulong held, ulong expected)
+        {
+            var payload = WithCounters(Wide().ToByteArray(), _ => held);
+            var read = SublimeCountMinSketch.ReadFrom(new MemoryStream(payload));
+
+            read.Add(Key(1));
+
+            Assert.AreEqual(expected, read.Count(Key(1)), "the estimate after the add");
+
+            // The add raises the one counter the key lands on, if it can, and no other.
+            var row = RowsOf(read)[0];
+            var raised = 0;
+            for (var j = 0; j < 1024; j++)
+            {
+                var now = row.Get(j);
+                Assert.IsTrue(now == held || now == expected, $"counter {j} held {held} and now holds {now}");
+                raised += now == held ? 0 : 1;
+            }
+            Assert.AreEqual(held == expected ? 0 : 1, raised, "the counters the add raised");
+        }
+
+        /// <summary>
+        /// One row at the largest count does not drag the estimate down, wherever in the
+        /// sketch that row is.
+        /// </summary>
+        /// <remarks>
+        /// The estimate is the smallest of the rows, so a row that wrapped to nought is the
+        /// estimate whatever the others hold: this is how one row is enough, and why the
+        /// test has rows that are not at the largest count to be told apart from. An add
+        /// raises each of them by one and leaves the saturated row where it is, so the
+        /// estimate goes from the others' count to one more. The row that is saturated runs
+        /// through the first, a middle one and the last, so that no row is exempt from it.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(0)]
+        [DataRow(2)]
+        [DataRow(4)]
+        public void TestOneRowAtTheLargestCountLeavesTheEstimateWhereTheOthersPutIt(int saturated)
+        {
+            var sketch = new SublimeCountMinSketch(0.01, 0.5, 1.0 / 16);
+            var rows = RowsOf(sketch);
+            Assert.AreEqual(5, rows.Length, "the test is about the position of a row among several");
+            Assert.AreEqual(1024, sketch.Width);
+            for (var i = 0; i < rows.Length; i++)
+            {
+                for (var j = 0; j < 1024; j++)
+                {
+                    rows[i].Set(j, i == saturated ? ulong.MaxValue : 40);
+                }
+            }
+            Assert.AreEqual(40UL, sketch.Count(Key(1)), "the estimate before the add");
+
+            sketch.Add(Key(1));
+
+            Assert.AreEqual(41UL, sketch.Count(Key(1)), "the estimate after the add");
+        }
+
+        /// <summary>
         /// The widest stub a chunk of the fewest counters can have and still keep the pool
         /// the array requires: the widest the constructor accepts at that many counters.
         /// </summary>
