@@ -25,6 +25,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interface goes on compiling and loading without them, and a budgeted read of it says so
   rather than quietly reading without a budget.
 
+- **`ScalableBloomFilter` can grow its contained filters.** A new constructor,
+  `ScalableBloomFilter(uint hint, double fpRate, double r, uint growth, Func<ReadOnlySpan<byte>, ulong>? hash = null)`,
+  builds each contained filter for `growth` times the items of the one before: filter i
+  holds hint × growthⁱ, at fp × rⁱ as before. That is the growth Almeida et al. describe
+  beside the tightening. Until now every contained filter was built for the hint, so the
+  number of filters grew with the items added, every `Test` asked each of them, each new
+  filter cost more bits per item than the last, and the tightened rate passed what a
+  double holds after a few thousand filters, where `Add` threw. Measured at a hint of
+  1,000, a rate of 1% and r = 0.8:
+
+  | Growth | Stops at | Filters there | Bits per item past 1M items | Negative `Test`, 1M items | False positives, 1M / 100M items |
+  | --- | --- | --- | --- | --- | --- |
+  | 1 | 3.16 million items | 3,161 | 245, rising to 748 | 23.7 µs | 4.04% / unreachable |
+  | 2 | 249 million | 18 | 14–18, up to 35 just after a filter is added | 0.20 µs | 3.46% / 3.73% |
+  | 4 | 332 million | 10 | 13–14, up to 58 just after a filter is added | 0.12 µs | 2.74% / 3.39% |
+
+  The compound bound, fpRate / (1 − r), is 5% there and holds at every factor: it is the
+  sum of the rates, which growth does not change. A growing filter stops when its next
+  contained filter would need more bits than one addresses, 4,294,967,295. A filter that
+  grows writes format version 7, which records the factor; one with a factor of 1 still
+  writes version 1, readable by earlier libraries. Payloads from earlier versions read as
+  filters with a factor of 1, and go on growing that way. (#171)
+
 ### Changed
 
 - **The package's minimum `System.IO.Hashing` rises from 10.0.11 to 10.0.14.** A project
@@ -55,6 +78,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   160 KB payload allocated 3.7 MB to read and now allocates 480 KB. TopK and HeavyKeeper
   size their heaps by the elements a payload holds rather than by `k`. What is read back
   is unchanged. The stored format does not change.
+
+- **A new `ScalableBloomFilter` grows its contained filters by a factor of 2 unless told
+  otherwise, and that is a breaking change.** The constructors that take no growth factor,
+  and `NewDefaultScalableBloomFilter`, now build each contained filter for twice the items
+  of the one before (above). Once a filter has grown, its `Capacity()`, its memory and its
+  payload differ from 6.2.0's: right after it adds a filter it holds up to twice the
+  space its items need, where a filter growing by 1 held at most one hint's worth spare.
+  Its payloads are format version 7, which 6.2.0 and earlier refuse as written by a later
+  version. Pass a growth factor of 1 for the filter as it was; it builds, answers and
+  writes exactly what 6.2.0 did. Stored filters are unaffected: they read with a factor of
+  1 whatever the default. Under the default read budget a growing filter loads up to
+  about 62 million items at a hint of 1,000, 1% and r = 0.8, where one growing by 1
+  loaded up to about 2.83 million; both need `ReadOptions` past that. (#171)
 
 ### Fixed
 
@@ -475,6 +511,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   <br><br>
   The stored format does not change. Payloads that were refused for their size now load,
   and every other refusal stands.
+
+- **A `ScalableBloomFilter` at its ceiling refuses the add with an
+  `InvalidOperationException` that says why, before anything changes.** A filter growing
+  by 1 threw an `OverflowException` from inside its sizing once the tightened rate
+  passed what a double holds, about 3.16 million items at a hint of 1,000, 1% and
+  r = 0.8. A growing filter would have thrown an `ArgumentOutOfRangeException` for a
+  parameter the caller never passed, recommending `ScalableBloomFilter` itself. The
+  refusal now names the filter that could not be built, the reason, what the filter
+  holds, and what would hold more; the filter is as it was and goes on answering. (#171)
 
 ## [6.2.0] - 2026-08-19
 

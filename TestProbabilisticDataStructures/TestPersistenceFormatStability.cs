@@ -312,16 +312,24 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestTheVersionAfterTheNewestIsRefused()
         {
-            var stable = Relabeled(ReadFixture("stablebloomfilter-v5.bin"), 7);
+            // Eight is one past the newest, version 7. It is written out rather than
+            // computed from the library's ceiling, which is the thing being checked.
+            var stable = Relabeled(ReadFixture("stablebloomfilter-v5.bin"), 8);
             var ex = Assert.ThrowsExactly<InvalidDataException>(
                 () => StableBloomFilter.ReadFrom(new MemoryStream(stable)));
-            StringAssert.Contains(ex.Message, "format version 7");
+            StringAssert.Contains(ex.Message, "format version 8");
             StringAssert.Contains(ex.Message, "written by a later version");
 
-            var cuckoo = Relabeled(ReadFixture("cuckoobloomfilter-v6.bin"), 7);
+            var cuckoo = Relabeled(ReadFixture("cuckoobloomfilter-v6.bin"), 8);
             ex = Assert.ThrowsExactly<InvalidDataException>(
                 () => CuckooBloomFilter.ReadFrom(new MemoryStream(cuckoo)));
-            StringAssert.Contains(ex.Message, "format version 7");
+            StringAssert.Contains(ex.Message, "format version 8");
+            StringAssert.Contains(ex.Message, "written by a later version");
+
+            var scalable = Relabeled(ReadFixture("scalablebloomfilter-v7.bin"), 8);
+            ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => ScalableBloomFilter.ReadFrom(new MemoryStream(scalable)));
+            StringAssert.Contains(ex.Message, "format version 8");
             StringAssert.Contains(ex.Message, "written by a later version");
         }
 
