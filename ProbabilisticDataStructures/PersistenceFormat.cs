@@ -177,6 +177,15 @@ namespace ProbabilisticDataStructures
         internal const ushort CuckooOriginalStateVersion = 6;
 
         /// <summary>
+        /// The version at which <see cref="ScalableBloomFilter"/> stores its growth factor,
+        /// so that a restored filter sizes the filters it adds next as it would have. Each
+        /// contained filter already records its own size; what an earlier payload cannot
+        /// say is how large the next one should be. Written only by a filter that grows:
+        /// one that adds every filter at its hint writes the layout it always wrote.
+        /// </summary>
+        internal const ushort ScalableGrowthVersion = 7;
+
+        /// <summary>
         /// The format versions each structure has defined, which are exactly the ones its
         /// reader reads. This is the one place that says so.
         /// </summary>
@@ -203,7 +212,7 @@ namespace ProbabilisticDataStructures
             [StructureId.CountingBloomFilter] = [DefaultVersion],
             [StructureId.DeletableBloomFilter] = [DefaultVersion],
             [StructureId.PartitionedBloomFilter] = [DefaultVersion],
-            [StructureId.ScalableBloomFilter] = [DefaultVersion],
+            [StructureId.ScalableBloomFilter] = [DefaultVersion, ScalableGrowthVersion],
             [StructureId.StableBloomFilter] =
                 [DefaultVersion, RandomStateVersion, StableOriginalStateVersion],
             [StructureId.InverseBloomFilter] = [DefaultVersion],

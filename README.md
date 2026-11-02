@@ -656,7 +656,10 @@ From Chazelle, Kilian, Rubinfeld and Tal,
 <sup>[↑ Contents](#contents)</sup>
 
 Adds new filters with geometrically tightening rates as it fills, so it grows to fit
-whatever arrives.
+whatever arrives. Each new filter also holds more than the last, by a growth factor, so
+the stack a query has to ask stays a few dozen filters deep at most; a growth factor of 1
+builds every filter the same size, as the filter did before the factor existed, and
+stops after a few thousand.
 
 **Reach for it when** you genuinely don't know how large the set will be and memory is not
 bounded.

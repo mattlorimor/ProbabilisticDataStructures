@@ -136,14 +136,26 @@ namespace TestProbabilisticDataStructures
         /// rate here is correct behavior rather than a defect -- the first version of
         /// this test asserted the flat bound and failed at a legitimate 3.64%.
         /// </para>
+        /// <para>
+        /// The bound does not depend on the growth factor: it is the sum of the rates,
+        /// and growing the filters' capacities changes how many of them there are, not
+        /// what each is built to. So it holds at every factor, and fewer filters at a
+        /// larger one make it slacker, not tighter.
+        /// </para>
         /// </summary>
         [TestMethod]
-        public void TestScalableBloomFilterPropertiesAcrossGrowth()
+        [DataRow(1u, 11)]
+        [DataRow(2u, 4)]
+        [DataRow(4u, 3)]
+        public void TestScalableBloomFilterPropertiesAcrossGrowth(uint growth, int filters)
         {
             const double r = 0.8;
-            var f = new ScalableBloomFilter(1000, TargetFpRate, r);
+            var f = new ScalableBloomFilter(1000, TargetFpRate, r, growth);
 
             AssertNoFalseNegatives("ScalableBloomFilter", f.Test, d => f.Add(d));
+            Assert.AreEqual(filters, f.Filters.Count,
+                $"{N} items against a hint of 1,000 at s = {growth} did not build the filters " +
+                "this test is about");
 
             var observed = MeasureFalsePositiveRate(f.Test);
             var compoundBound = TargetFpRate / (1 - r);
