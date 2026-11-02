@@ -1098,8 +1098,9 @@ corrected estimate.
 distinct items, 8.6 billion, with 16 registers or more. Past that its registers fill, the
 error grows, and the estimate stops at a ceiling of about 2^32 × ln *m*: 11 billion with 16
 registers, 42 billion with 2^14. A sketch at its ceiling has probably seen at least that
-many and may have seen far more. `HyperLogLogPlus` and `UltraLogLog` hash to 64 bits and
-have no such limit in practice.
+many and may have seen far more, and `IsSaturated()` says when one is there. It is no early
+warning: for that, compare `Count()` with 2^33. `HyperLogLogPlus` and `UltraLogLog` hash to
+64 bits and have no such limit in practice.
 
 Described by Flajolet, Fusy, Gandouet and Meunier in
 [HyperLogLog](http://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf).

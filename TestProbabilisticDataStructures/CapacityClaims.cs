@@ -727,6 +727,59 @@ namespace TestProbabilisticDataStructures
                         return hll.Count() >= 1;
                     })
                     && FullHyperLogLog(1u << b).Count() >= 1UL << b)),
+            new Claim("`IsSaturated()` is true when every register is capped, which is when `Count()` is a floor and " +
+                "not an estimate", () =>
+            {
+                // Every register capped, at the smallest and the largest sketch the section gives a
+                // ceiling for, and not one register short of it; and the count of a saturated sketch is
+                // the ceiling that stays put however much is added.
+                var oneShort = FullHyperLogLog(16);
+                oneShort.RegisterState[7] = (byte)(32 - BitOperations.Log2(16u));
+                var full = FullHyperLogLog(16384);
+                var before = full.Count();
+                for (uint i = 0; i < 1000; i++)
+                {
+                    full.AddHash(i * 2654435761u);
+                }
+
+                return FullHyperLogLog(16).IsSaturated()
+                    && full.IsSaturated()
+                    && !oneShort.IsSaturated()
+                    && full.Count() == before;
+            }),
+            new Claim("a sketch is not likely to be full until later still, and the more registers it has the later " +
+                "that is", () =>
+            {
+                // At 2^33 items, where the error starts to grow, 16 registers are full about one time in ten
+                // and 1,024 never; at 2^34 they are full three times in four and 1,024 still never.
+                bool Full(uint m, int exponent, int trials, int seed)
+                {
+                    var random = new Random(seed);
+                    var saturated = 0;
+                    for (var t = 0; t < trials; t++)
+                    {
+                        saturated += TestHyperLogLogRange.PoissonSketch(m, Math.Pow(2, exponent), random).IsSaturated() ? 1 : 0;
+                    }
+
+                    return saturated > trials / 2;
+                }
+
+                return !Full(16, 33, 1024, 1)
+                    && Full(16, 34, 1024, 2)
+                    && !Full(1024, 34, 64, 3)
+                    && !Full(16384, 34, 64, 4)
+                    && !Full(16384, 35, 64, 5)
+                    && Full(16384, 36, 64, 6);
+            }),
+            new Claim("A caller who wants the earlier warning compares `Count()` with 2^33", () =>
+            {
+                // A sketch of 1,024 registers is below 2^33 at 2^32 items and above it at 2^34, with
+                // errors of a few percent against a factor of four between them.
+                var random = new Random(194);
+                return Enumerable.Range(0, 64).All(_ =>
+                    TestHyperLogLogRange.PoissonSketch(1024, Math.Pow(2, 32), random).Count() < 1UL << 33
+                    && TestHyperLogLogRange.PoissonSketch(1024, Math.Pow(2, 34), random).Count() > 1UL << 33);
+            }),
             new Claim("The largest is about half a megabyte", () =>
                 Rounds(ChargeLine.Known["HyperLogLogPlus"].At(1 << 18) / 1_000_000, 0.5, 1)),
             new Claim("a read is charged three times the registers", () =>

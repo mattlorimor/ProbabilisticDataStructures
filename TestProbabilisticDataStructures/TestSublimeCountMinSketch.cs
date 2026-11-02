@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Reflection;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -261,6 +263,167 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        private static ValeCounterArray[] RowsOf(SublimeCountMinSketch sketch)
+        {
+            var field = typeof(SublimeCountMinSketch).GetField("rows",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(field, "the sketch has no field rows");
+            return (ValeCounterArray[])field.GetValue(sketch)!;
+        }
+
+        /// <summary>
+        /// The counter a key raises in each row, found by adding it to an empty twin.
+        /// </summary>
+        private static int[] ColumnsOf(byte[] key, Func<SublimeCountMinSketch> twin)
+        {
+            var sketch = twin();
+            sketch.Add(key);
+            var rows = RowsOf(sketch);
+            var columns = new int[rows.Length];
+            for (var i = 0; i < rows.Length; i++)
+            {
+                columns[i] = -1;
+                for (var j = 0; j < rows[i].Count; j++)
+                {
+                    if (rows[i].Get(j) != 0)
+                    {
+                        columns[i] = j;
+                    }
+                }
+                Assert.AreNotEqual(-1, columns[i], $"the key raised nothing in row {i}");
+            }
+            return columns;
+        }
+
+        /// <summary>
+        /// Fills the pool of the chunk holding <paramref name="target"/> with as many of the
+        /// shortest extensions as it holds, and leaves the target one count short of needing
+        /// one more.
+        /// </summary>
+        private static void OneCountFromSpilling(ValeCounterArray row, int target)
+        {
+            var first = target / row.CountersPerChunk * row.CountersPerChunk;
+            var shortest = 1UL << row.StubBits;
+            var fit = row.PoolFragments / ValeCounter.ExtensionLength(shortest >> row.StubBits);
+            var filled = 0;
+            for (var j = first; filled < fit; j++)
+            {
+                Assert.IsTrue(j < first + row.CountersPerChunk, "the chunk is too short to fill");
+                if (j != target)
+                {
+                    row.Set(j, shortest);
+                    filled++;
+                }
+            }
+            row.Set(target, shortest - 1);
+        }
+
+        /// <summary>
+        /// A sketch is laid out again at the add that puts more than three in a hundred of its
+        /// chunks on tails, counted over every row, and not at an add that leaves it at or
+        /// under that.
+        /// </summary>
+        /// <remarks>
+        /// The test above shows that crowding is answered; this pins when. Three rows of 4,096
+        /// counters at the starting tuning are 183 chunks, so five on tails are within the
+        /// fraction and six are past it. Four chunks are put on tails by hand, all in the
+        /// first two rows, and two more are packed one count short of spilling, each where a
+        /// different key lands: the first key's add takes the sketch to five and must leave
+        /// the rows as they are, and the second's takes it to six and must lay them out.
+        /// <para>
+        /// Each step straddles a way of getting the rule wrong that every other test passed:
+        /// laying out at any add that puts a chunk on tails, whatever the fraction; taking the
+        /// fraction of one row's chunks rather than all of them, which five already passes;
+        /// and counting only the last row's tails, which here never changes. The keys are
+        /// placed by watching which counters they raise, so the test does not restate how a
+        /// hash picks a column.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestASketchIsLaidOutAgainAtTheAddThatTakesItPastTheFraction()
+        {
+            Func<SublimeCountMinSketch> make = () =>
+                new SublimeCountMinSketch(0.05, 0.5, ValeCounterArray.DefaultCountersPerChunk / 6144.0);
+            var sketch = make();
+            var rows = RowsOf(sketch);
+            Assert.AreEqual(4096, sketch.Width);
+            Assert.AreEqual(3, rows.Length);
+            var perChunk = rows[0].CountersPerChunk;
+            var chunks = rows.Sum(r => r.ChunkCount);
+            Assert.AreEqual(183, chunks, "three rows of 4,096 counters, 68 to a chunk");
+            Assert.IsTrue(5 <= chunks * 0.03 && 6 > chunks * 0.03,
+                "five chunks on tails should be within three in a hundred and six past it");
+
+            // A key whose first-row chunk can be packed, and a second that shares no chunk
+            // with it in any row and whose second-row chunk can be packed.
+            int ChunkOf(int column) => column / perChunk;
+            bool Packable(int column) => ChunkOf(column) < rows[0].ChunkCount - 1;
+            var first = Key(0);
+            var firstColumns = ColumnsOf(first, make);
+            for (var k = 1; !Packable(firstColumns[0]); k++)
+            {
+                first = Key(k);
+                firstColumns = ColumnsOf(first, make);
+            }
+            byte[] second = null;
+            int[] secondColumns = null;
+            for (var k = 1000; second == null; k++)
+            {
+                var columns = ColumnsOf(Key(k), make);
+                if (Packable(columns[1])
+                    && Enumerable.Range(0, 3).All(i => ChunkOf(columns[i]) != ChunkOf(firstColumns[i])))
+                {
+                    second = Key(k);
+                    secondColumns = columns;
+                }
+            }
+
+            // Two chunks on tails in each of the first two rows, away from both keys.
+            for (var i = 0; i < 2; i++)
+            {
+                var spilled = 0;
+                for (var c = 0; spilled < 2; c++)
+                {
+                    if (c == ChunkOf(firstColumns[i]) || c == ChunkOf(secondColumns[i]))
+                    {
+                        continue;
+                    }
+                    for (var j = c * perChunk; j < (c + 1) * perChunk; j++)
+                    {
+                        rows[i].Set(j, 1UL << 40);
+                    }
+                    spilled++;
+                }
+            }
+            OneCountFromSpilling(rows[0], firstColumns[0]);
+            OneCountFromSpilling(rows[1], secondColumns[1]);
+            int OnTails() => RowsOf(sketch).Sum(r => r.ChunksWithTails);
+            Assert.AreEqual(4, OnTails(), "four chunks should be on tails, none in the last row");
+            Assert.AreEqual(0, rows[2].ChunksWithTails);
+
+            sketch.Add(first);
+
+            Assert.AreEqual(5, OnTails(), "the first add should have put its chunk on tails");
+            Assert.AreEqual(4096, sketch.Width);
+            for (var i = 0; i < rows.Length; i++)
+            {
+                Assert.AreSame(rows[i], RowsOf(sketch)[i],
+                    $"row {i} was laid out again with five of {chunks} chunks on tails, " +
+                    "which is within three in a hundred");
+            }
+
+            sketch.Add(second);
+
+            Assert.AreEqual(4096, sketch.Width);
+            for (var i = 0; i < rows.Length; i++)
+            {
+                Assert.AreNotSame(rows[i], RowsOf(sketch)[i],
+                    $"row {i} was not laid out again with six of {chunks} chunks on tails, " +
+                    "which is past three in a hundred");
+            }
+            Assert.IsTrue(sketch.Count(first) >= 1 && sketch.Count(second) >= 1);
+        }
+
         /// <summary>
         /// Growing faster gives more counters and closer estimates.
         /// </summary>
@@ -354,6 +517,85 @@ namespace TestProbabilisticDataStructures
 
             Assert.IsTrue(checks >= 5,
                 $"Only {checks} tunings were seen, so this checked almost nothing.");
+        }
+
+        /// <summary>
+        /// A sketch read back reports the tuning its rows were built with, not the
+        /// default it started from.
+        /// </summary>
+        /// <remarks>
+        /// The reader tunes the rows from the counts it reads, so what it chooses is
+        /// what the writer chose only while the counts are the ones the writer chose it
+        /// for. That is true at the moment a sketch lays its rows out, and not after
+        /// more adds, which change the counts and leave the tuning where it was. So the
+        /// sketch is written at those moments, found as the existing tuning test finds
+        /// them: the width changes, or the tuning does, and both are a layout.
+        /// <para>
+        /// The tuning is internal and nothing public reads it, so a reader that never
+        /// recorded it answered every query correctly and wrote the same bytes. Only an
+        /// inspection of the read-back sketch sees the difference, which is why this
+        /// asks the read-back sketch directly. The records of earlier states are tuned
+        /// separately, at their own widths, and are not what the properties describe.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestASketchReadBackReportsTheTuningItsRowsWereBuiltWith()
+        {
+            var sketch = new SublimeCountMinSketch(0.01);
+            var startingWidth = sketch.Width;
+            var defaults = (
+                ValeCounterArray.DefaultCountersPerChunk, ValeCounterArray.DefaultStubBits);
+
+            // Not the first state: a sketch that has never laid its rows out reports the
+            // default it was built with, which says nothing about a reader's choice.
+            var width = sketch.Width;
+            var tuning = (sketch.CountersPerChunk, sketch.StubBits);
+
+            var checks = 0;
+            var grown = 0;
+            var away = new HashSet<(int, int)>();
+            var adds = 0;
+            foreach (var key in Skewed(300_000, 100_000, 9))
+            {
+                sketch.Add(Key(key));
+                adds++;
+
+                if (sketch.Width == width
+                    && tuning == (sketch.CountersPerChunk, sketch.StubBits))
+                {
+                    continue;
+                }
+                width = sketch.Width;
+                tuning = (sketch.CountersPerChunk, sketch.StubBits);
+                checks++;
+                if (width > startingWidth)
+                {
+                    grown++;
+                }
+                if (tuning != defaults)
+                {
+                    away.Add(tuning);
+                }
+
+                var stream = new MemoryStream();
+                sketch.WriteTo(stream);
+                stream.Position = 0;
+                var read = SublimeCountMinSketch.ReadFrom(stream);
+
+                Assert.AreEqual(tuning, (read.CountersPerChunk, read.StubBits),
+                    $"After {adds:N0} adds the sketch, at a width of {width:N0}, held " +
+                    $"{tuning.Item1} counters to a chunk with {tuning.Item2}-bit stubs. " +
+                    $"Read back, it reports {read.CountersPerChunk} and {read.StubBits}.");
+            }
+
+            // Away from the default, or a reader that never recorded anything passes; and
+            // after an expansion, so that there are records for a reader to mistake for
+            // the rows.
+            Assert.IsTrue(away.Count >= 5,
+                $"Only {away.Count} tunings other than the default were seen, so this " +
+                "checked almost nothing.");
+            Assert.IsTrue(grown >= 3,
+                $"Only {grown} of {checks} sketches written had expanded.");
         }
 
         /// <summary>
