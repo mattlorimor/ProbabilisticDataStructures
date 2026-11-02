@@ -970,6 +970,13 @@ namespace ProbabilisticDataStructures
                     ValeCounterArray.DefaultStubBits);
             }
 
+            // The widest stub the fewest counters can have with a pool left, which is the
+            // answer if nothing else is. It is found by the loop below, from the same two
+            // tests that decide which stubs it tries, and not named here: the widest stub
+            // there is, MaxStubBits, leaves no pool at sixteen counters, and the array
+            // refuses it.
+            var widestStub = ValeCounterArray.MinStubBits;
+
             for (var c = ValeCounterArray.MaxCountersPerChunk;
                  c >= ValeCounterArray.MinCountersPerChunk;
                  c--)
@@ -992,6 +999,11 @@ namespace ProbabilisticDataStructures
                     if (poolBits < 2 * ValeCounterArray.MinPoolFragments)
                     {
                         break;
+                    }
+
+                    if (c == ValeCounterArray.MinCountersPerChunk)
+                    {
+                        widestStub = s;
                     }
 
                     var expected = 0.0;
@@ -1030,7 +1042,7 @@ namespace ProbabilisticDataStructures
             // Nothing satisfied the bound, which means the counts have outgrown what a
             // cache line can hold cheaply. The widest stub with a pool left is the best
             // remaining answer; the tails arrays will carry the rest.
-            return (ValeCounterArray.MinCountersPerChunk, ValeCounterArray.MaxStubBits);
+            return (ValeCounterArray.MinCountersPerChunk, widestStub);
         }
 
         /// <summary>
