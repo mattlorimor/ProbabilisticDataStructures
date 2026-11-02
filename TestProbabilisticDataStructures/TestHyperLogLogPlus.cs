@@ -131,10 +131,17 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// The older estimator keeps only the low 32 bits of the hash, so two items
-        /// whose hashes agree there are one item as far as it can tell. This is not a
-        /// tail risk at scale: collisions in a 32-bit space start arriving in the tens
-        /// of thousands, and by a hundred million items they cost a systematic
-        /// undercount no number of registers can fix.
+        /// whose hashes agree there are one item as far as it can tell. Collisions in a
+        /// 32-bit space start arriving in the tens of thousands, and at two items this
+        /// one is the whole answer.
+        /// <para>
+        /// At scale they cost nothing, which is easy to get backwards: a register keeps
+        /// the longest run of zeros it has seen, and an item whose 32 bits match one
+        /// already seen moves the registers exactly as it would have under a wider hash,
+        /// unless its run reaches the end of the 32 bits. What limits the older
+        /// estimator is that cap -- its registers fill as the count nears a few times
+        /// 2^32 -- not lost items; TestHyperLogLogRange has the measurements.
+        /// </para>
         /// <para>
         /// The pair below was found by hashing consecutive integers until two collided
         /// in the low 32 bits, which took 67,297 of them.
@@ -828,7 +835,7 @@ namespace TestProbabilisticDataStructures
         /// saturated-register correction that replaces the classic large-range
         /// correction.
         /// </summary>
-        private static double ErtlTau(double x)
+        internal static double ErtlTau(double x)
         {
             if (x == 0.0 || x == 1.0)
             {
