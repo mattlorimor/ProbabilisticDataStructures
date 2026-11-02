@@ -115,6 +115,32 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The bytes a run of this many buckets is written as: a count of eight bytes for
+        /// each. The old arithmetic, an int product, until the fix.
+        /// </summary>
+        internal static long BytesOf(long span) => unchecked((int)span * sizeof(ulong));
+
+        /// <summary>
+        /// The bytes of payload besides the counts: the five fixed fields, then an index of
+        /// the first bucket and a length for each of the two stores.
+        /// </summary>
+        private const int PayloadOverhead = 5 * sizeof(ulong) + 2 * (2 * sizeof(uint));
+
+        /// <summary>
+        /// How long the payload of a sketch with runs of these two lengths is.
+        /// </summary>
+        internal static long PayloadLength(long positiveSpan, long negativeSpan) =>
+            PayloadOverhead + BytesOf(positiveSpan) + BytesOf(negativeSpan);
+
+        /// <summary>
+        /// Refuses a sketch whose payload would not fit an envelope, with the exception the
+        /// payload writer gives for any structure too large to write. Nothing yet.
+        /// </summary>
+        internal static void CheckWritable(long positiveSpan, long negativeSpan)
+        {
+        }
+
+        /// <summary>
         /// Adds a value to the sketch.
         /// </summary>
         /// <param name="value">The value to add. Negative values and zero are allowed.</param>
@@ -359,6 +385,8 @@ namespace ProbabilisticDataStructures
         public void WriteTo(Stream stream)
         {
             ArgumentNullException.ThrowIfNull(stream);
+
+            CheckWritable(this.positive.Span, this.negative.Span);
 
             var payload = new PayloadWriter();
             payload.WriteDouble(this.relativeAccuracy);
@@ -606,6 +634,11 @@ namespace ProbabilisticDataStructures
             internal int Capacity => this.counts.Length;
 
             /// <summary>
+            /// How many buckets the occupied run covers, none for an empty store.
+            /// </summary>
+            internal long Span => this.IsEmpty ? 0 : (long)this.MaxIndex - this.MinIndex + 1;
+
+            /// <summary>
             /// Writes the occupied run of buckets: where it starts, and the counts from
             /// there upward. The bounds and the total follow from that.
             /// </summary>
@@ -619,7 +652,7 @@ namespace ProbabilisticDataStructures
                 }
 
                 var span = this.MaxIndex - this.MinIndex + 1;
-                var bytes = new byte[span * sizeof(ulong)];
+                var bytes = new byte[BytesOf(span)];
 
                 for (var i = 0; i < span; i++)
                 {
