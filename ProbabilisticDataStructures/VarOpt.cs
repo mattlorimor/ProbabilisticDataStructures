@@ -567,7 +567,7 @@ namespace ProbabilisticDataStructures
             {
                 // The drop fell to the light region, whose members are
                 // interchangeable: evict one uniformly.
-                var victim = (int)this.random.NextBelow((uint)this.LightCount);
+                var victim = (int)EvictionSlot(this.random.Next(), (uint)this.LightCount);
                 this.LightItems[victim] = this.LightItems[this.LightCount - 1];
                 this.LightItems[this.LightCount - 1] = null!;
                 this.LightCount--;
@@ -587,6 +587,20 @@ namespace ProbabilisticDataStructures
             // The survivors inherit the dropped item's weight: this is what keeps
             // the total exact and every survivor's adjusted weight at the threshold.
             this.LightWeight = candidateWeight;
+        }
+
+        /// <summary>
+        /// The slot of the light item an eviction removes, for the generator's next 64
+        /// bits and a light region of <paramref name="lightCount"/> items.
+        /// </summary>
+        /// <remarks>
+        /// Downsample draws through this, so a test can count the inputs that evict each
+        /// slot without a sample of that size. It is <see cref="SeededRandom.NextBelow"/>,
+        /// written out over the value that method would have drawn.
+        /// </remarks>
+        internal static uint EvictionSlot(ulong next, uint lightCount)
+        {
+            return (uint)(((ulong)(uint)(next >> 32) * lightCount) >> 32);
         }
 
         /// <summary>
