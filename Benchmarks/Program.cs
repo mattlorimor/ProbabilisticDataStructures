@@ -20,6 +20,12 @@ namespace Benchmarks
                 return;
             }
 
+            if (args.Length >= 2 && args[0] == "study" && args[1] == "bloom-placement")
+            {
+                BloomPlacementStudy.Run(args[2..]);
+                return;
+            }
+
             BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
         }
     }

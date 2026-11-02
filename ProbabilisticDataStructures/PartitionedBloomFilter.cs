@@ -32,6 +32,18 @@ namespace ProbabilisticDataStructures
     /// respective slice. Thus, each element is described by exactly k bits, meaning
     /// the distribution of false positives is uniform across all elements.
     /// </summary>
+    /// <remarks>
+    /// A filter whose partitions are 2^27 bits or more places items with 64-bit hash
+    /// values; a smaller one places with 32-bit values, as it always did. Every save is
+    /// format version 8, which records the placement in a byte of its own and the item
+    /// count in 64 bits, and which libraries before this one cannot read.
+    /// A position is reduced modulo its partition's size, so that is what decides,
+    /// and a filter of <c>k</c> partitions reaches the threshold at <c>k</c> times 2^27
+    /// bits: at a rate of 1%, seven partitions and 940 million bits. Placing a large
+    /// partition with 32-bit values crowds its first bits and raises the false positive
+    /// rate, as it does for <see cref="BloomFilter"/>, where the details are. A filter read
+    /// back keeps the scheme its payload was placed with, and the two schemes do not merge.
+    /// </remarks>
     public class PartitionedBloomFilter : IFilter, IBinaryPersistable<PartitionedBloomFilter>
     {
         /// <summary>
@@ -57,7 +69,11 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Number of items added
         /// </summary>
-        private uint count { get; set; }
+        private ulong count { get; set; }
+        /// <summary>
+        /// How an item's hash becomes the position it sets and tests in each partition.
+        /// </summary>
+        internal Placement Placement { get; private set; }
 
         /// <summary>How many bits the filter holds across every partition, for tests.</summary>
         internal uint BitCount => this.M;
@@ -77,6 +93,22 @@ namespace ProbabilisticDataStructures
         /// once anything has been added, the hash can no longer be replaced.
         /// </param>
         public PartitionedBloomFilter(uint n, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            : this(n, fpRate, hash, null)
+        {
+        }
+
+        /// <summary>
+        /// Creates a filter as the public constructor does, placing its bits as
+        /// <paramref name="placement"/> says, or as the size of its partitions calls for
+        /// when that is null.
+        /// </summary>
+        /// <remarks>
+        /// The choice is made by size, and a filter large enough for it to matter is too
+        /// large to build in numbers in a test. This lets a test have a small filter
+        /// place its bits the way a large one does.
+        /// </remarks>
+        internal PartitionedBloomFilter(
+            uint n, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash, Placement? placement)
         {
             Guard.ValidItemCount(n, nameof(n));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
@@ -96,6 +128,7 @@ namespace ProbabilisticDataStructures
             this.M = m;
             this.k = k;
             this.S = s;
+            this.Placement = placement ?? BitPlacement.For(s);
         }
 
         /// <summary>
@@ -120,7 +153,11 @@ namespace ProbabilisticDataStructures
         /// Returns the number of items in the filter.
         /// </summary>
         /// <returns>The number of items in the filter</returns>
-        public uint Count()
+        /// <remarks>
+        /// A 64-bit count, so that it goes on counting past 2^32 adds rather than wrapping
+        /// to zero. Before the release after 6.2.0 it was a <c>uint</c>.
+        /// </remarks>
+        public ulong Count()
         {
             return this.count;
         }
@@ -172,14 +209,12 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Test(byte[])"/>
         public bool Test(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.S);
 
             // If any of the K partiion bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                if (this.Partitions[i].Get((lower + upper * i) % this.S) == 0)
+                if (this.Partitions[i].Get(positions[i]) == 0)
                 {
                     return false;
                 }
@@ -204,14 +239,12 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Add(byte[])"/>
         public IFilter Add(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.S);
 
             // Set the K partition bits.
             for (uint i = 0; i < this.k; i++)
             {
-                this.Partitions[i].Set((lower + upper * i) % this.S, 1);
+                this.Partitions[i].Set(positions[i], 1);
             }
 
             this.count++;
@@ -236,15 +269,13 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="TestAndAdd(byte[])"/>
         public bool TestAndAdd(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.S);
             var member = true;
 
             // If any K partition bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                var idx = (lower + upper * i) % this.S;
+                var idx = positions[i];
                 if (this.Partitions[i].Get(idx) == 0)
                 {
                     member = false;
@@ -284,7 +315,8 @@ namespace ProbabilisticDataStructures
             payload.WriteUInt32(this.M);
             payload.WriteUInt32(this.k);
             payload.WriteUInt32(this.S);
-            payload.WriteUInt32(this.count);
+            BitPlacement.Write(payload, this.Placement);
+            payload.WriteUInt64(this.count);
 
             payload.WriteUInt32((uint)this.Partitions.Length);
             foreach (var partition in this.Partitions)
@@ -296,7 +328,8 @@ namespace ProbabilisticDataStructures
                 stream,
                 StructureId.PartitionedBloomFilter,
                 PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+                payload.WrittenSpan,
+                PersistenceFormat.PlacementVersion);
         }
 
         /// <summary>
@@ -369,13 +402,17 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.PartitionedBloomFilter);
-            var payload = PersistenceFormat.Read(stream, StructureId.PartitionedBloomFilter, out var hashId, budget);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.PartitionedBloomFilter, out var hashId, out var version, budget);
             var reader = new PayloadReader(payload, budget);
 
             var m = reader.ReadUInt32();
             var k = reader.ReadUInt32();
             var s = reader.ReadUInt32();
-            var count = reader.ReadUInt32();
+            // From the payload, never from s: a version 1 payload of any size was placed
+            // with 32-bit values, and a version 8 one says how it was placed.
+            var placement = BitPlacement.Read(ref reader, version);
+            var count = BitPlacement.ReadCount(ref reader, version);
             var partitionCount = reader.ReadUInt32();
 
             if (partitionCount == 0 || partitionCount > PersistenceFormat.MaxNestedCount)
@@ -423,6 +460,7 @@ namespace ProbabilisticDataStructures
                 S = s,
                 count = count,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+                Placement = placement,
             };
         }
 
@@ -441,8 +479,11 @@ namespace ProbabilisticDataStructures
         /// <returns>This filter, so calls can be chained.</returns>
         /// <exception cref="ArgumentNullException"><paramref name="other"/> is null.</exception>
         /// <exception cref="ArgumentException">
-        /// The two were built with different dimensions or different hash functions, so
-        /// their contents do not describe the same positions.
+        /// The two were built with different dimensions or different hash functions, or
+        /// their bits were placed by different schemes, so their contents do not describe
+        /// the same positions. A filter read from a payload written before format version
+        /// 8 places with 32-bit values whatever its size, and a new filter whose
+        /// partitions are 2^27 bits or more with 64-bit values.
         /// </exception>
         /// <remarks>
         /// The result is exactly what adding everything to one of them would have
@@ -467,6 +508,7 @@ namespace ProbabilisticDataStructures
                     "describe different positions.", nameof(other));
             }
 
+            BitPlacement.Same(this.Placement, other.Placement, nameof(other));
             Guard.SameHashFunction(this.Hash, other.Hash, nameof(other));
 
             for (int i = 0; i < this.Partitions.Length; i++)

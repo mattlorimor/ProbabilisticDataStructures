@@ -80,11 +80,62 @@ namespace TestProbabilisticDataStructures
 
 
         /// <summary>
-        /// The items at which a 1% filter reaches 0.27 · 2^32 bits, where the 32-bit band
-        /// that was measured begins.
+        /// The bits from which a new 32-bit filter places with 64-bit values, written out
+        /// rather than read from the library, which is what the claims about it check.
         /// </summary>
-        private static ulong BandStart() =>
-            Largest(1, CapacityRows.LargestSized(0.01), n => Utils.OptimalM((uint)n, 0.01) <= 0.27 * uint.MaxValue);
+        private const ulong WideFrom = 1UL << 27;
+
+        /// <summary>
+        /// The most items a 1% filter is sized for while it is still short of
+        /// <see cref="WideFrom"/> bits.
+        /// </summary>
+        private static ulong LastNarrow() =>
+            Largest(1, CapacityRows.LargestSized(0.01), n => Utils.OptimalM((uint)n, 0.01) < WideFrom);
+
+        /// <summary>
+        /// How much more than an even placement the 32-bit fold gives a filter of
+        /// <paramref name="m"/> bits sized for <paramref name="fp"/>, as a fraction of the
+        /// rate: the first <c>2^32 mod m</c> positions take <c>floor(2^32 / m) + 1</c> of the
+        /// 2^32 values and the rest one fewer, with an item's positions treated as
+        /// independent. This is the model the study in <c>Benchmarks/BloomPlacementStudy.cs</c>
+        /// prints beside each measurement, and it predicted every one to within it.
+        /// </summary>
+        private static double FoldExcess(ulong m, double fp)
+        {
+            const double TwoTo32 = 4294967296.0;
+            var k = Utils.OptimalK(fp);
+            var inserts = m * Math.Log(2) * Math.Log(2) / Math.Abs(Math.Log(fp)) * k;
+            double Set(double p) => 1 - Math.Exp(inserts * Math.Log(1 - p));
+
+            var q = (1UL << 32) / m;
+            var r = (1UL << 32) % m;
+            var heavy = (q + 1) / TwoTo32;
+            var light = q / TwoTo32;
+            var folded = Math.Pow(r * heavy * Set(heavy) + (m - r) * light * Set(light), k);
+            return folded / Math.Pow(Set(1.0 / m), k) - 1;
+        }
+
+        /// <summary>
+        /// The largest <see cref="FoldExcess"/> at 1% of any size below
+        /// <see cref="WideFrom"/>, over the teeth of the sawtooth from the one just below it
+        /// down: each tooth is the sizes sharing <c>floor(2^32 / m)</c>, and they fall
+        /// below it, so the first is where the largest is.
+        /// </summary>
+        private static double LargestFoldBelowWide()
+        {
+            var largest = 0.0;
+            for (ulong q = 32; q <= 64; q++)
+            {
+                var low = (1UL << 32) / (q + 1) + 1;
+                var high = Math.Min((1UL << 32) / q, WideFrom - 1);
+                for (var step = 0; step <= 200; step++)
+                {
+                    largest = Math.Max(largest, FoldExcess(low + (high - low) * (ulong)step / 200, 0.01));
+                }
+            }
+
+            return largest;
+        }
 
         /// <summary>
         /// Sentences of CAPACITY.md that state what was measured at a scale the suite cannot
@@ -97,9 +148,16 @@ namespace TestProbabilisticDataStructures
             ("a filter sized for 1% measured 1.419% ± 0.006% at m = 0.75 · 2^32 bits",
                 "it is the rate of a filter holding more than 300 million items, and a measurement of a rate needs as many probes again",
                 () => Utils.OptimalK(0.01) == 7 && 0.75 * 4_294_967_296.0 / BitsPerItem(0.01) > 300_000_000),
-            ("the worst case is about ×1.42 at 1% and ×1.67 at 0.1%",
-                "the band begins at a filter of more than 100 million items",
-                () => BandStart() > 100_000_000),
+            ("and sized for 0.1% it measured 0.173%",
+                "it is the rate of a filter holding more than 200 million items, and a measurement of a rate that small needs ten times as many probes",
+                () => Utils.OptimalK(0.001) == 10 && 0.75 * 4_294_967_296.0 / BitsPerItem(0.001) > 200_000_000),
+            ("At m = 0.75 · 2^32 sized for 1% it measured 1.004%, as `BloomFilter64` did",
+                "it is the rate of a filter holding more than 300 million items, as the measurement before the change was",
+                () => Utils.OptimalK(0.01) == 7 && 0.75 * 4_294_967_296.0 / BitsPerItem(0.01) > 300_000_000),
+            ("too small to measure",
+                "the largest excess below 2^27 is at a filter of more than 13 million items, and telling it from no excess at 1% takes more than a billion probes of each",
+                () => LastNarrow() > 13_000_000
+                    && 9 * 0.99 / (0.01 * Math.Pow(LargestFoldBelowWide(), 2)) > 1_000_000_000),
             ("overestimated past about 143 million distinct items, by +3.2% at 2^28 and +13% at 2^30, and returned 0 from about 5.7 billion (2^32.4)",
                 "they describe the estimator before its large-range correction was removed, which the library no longer has: " +
                 "a state past the old threshold now counts its raw estimate, and a full sketch its ceiling rather than 0",
@@ -174,11 +232,118 @@ namespace TestProbabilisticDataStructures
                     .ToArray();
                 return pairs.Length > 10 && pairs.All(p => p.Charge >= 1.95 * p.Payload);
             }),
-            new Claim("with a 32-bit kernel; `BloomFilter64` uses a 128-bit one", () =>
-                typeof(HashKernelReturnValue).GetProperty(nameof(HashKernelReturnValue.LowerBaseHash))!.PropertyType == typeof(uint)
-                && typeof(HashKernel128ReturnValue).GetProperty(nameof(HashKernel128ReturnValue.LowerBaseHash))!.PropertyType == typeof(ulong)),
-            new Claim("about 121 million items at 1%, to nearly the 32-bit limit", () =>
-                Rounds(BandStart() / 1e6, 121, 0)),
+            // ---- How the 32-bit filters place their bits ------------------------------
+            new Claim("position `i` was `(low + i · high) mod m`, with `low` and `high` the hash's two 32-bit halves and the sum taken in 32-bit arithmetic", () =>
+                Enumerable.Range(0, 50).All(t =>
+                {
+                    // Sizes in the band where the fold is largest, so a placement that did
+                    // not wrap at 2^32 would come out different.
+                    var key = Key(t);
+                    var m = 3_000_000_000u + 7_919u * (uint)t;
+                    var sum = Defaults.GetDefaultHashFunction()(key);
+                    var positions = Positions.Of(key, Defaults.GetDefaultHashFunction(), Placement.Narrow, m);
+                    return Enumerable.Range(0, 7).All(i =>
+                        positions[(uint)i] == unchecked((uint)sum + (uint)(sum >> 32) * (uint)i) % m);
+                })),
+            // The rule, and a new filter built either side of it: 16 MiB of bits each.
+            new Claim("a new filter whose positions are reduced modulo 2^27 or more", () =>
+                BitPlacement.WideFrom == WideFrom
+                && BitPlacement.For(WideFrom - 1) == Placement.Narrow
+                && BitPlacement.For(WideFrom) == Placement.Wide
+                && new BloomFilter((uint)LastNarrow(), 0.01).Placement == Placement.Narrow
+                && new BloomFilter((uint)LastNarrow() + 1, 0.01).Placement == Placement.Wide),
+            new Claim("16 MiB of bits", () => WideFrom / 8 == 16 * 1024 * 1024),
+            new Claim("about 14 million items at 1%", () =>
+                Rounds(LastNarrow() / 1e6, 14, 0)
+                && Utils.OptimalM((uint)LastNarrow() + 1, 0.01) >= WideFrom),
+            new Claim("and for the partitioned filter each partition", () =>
+            {
+                // One hash function, so one partition, of the threshold exactly or more;
+                // then two, in a filter past the threshold whose partitions are not.
+                var one = Largest(1, CapacityRows.LargestSized(0.5), n => Utils.OptimalM((uint)n, 0.5) < WideFrom) + 1;
+                var single = new PartitionedBloomFilter((uint)one, 0.5).Placement;
+                var two = new PartitionedBloomFilter(
+                    (uint)Largest(1, CapacityRows.LargestSized(0.3), n => Utils.OptimalM((uint)n, 0.3) < WideFrom * 19 / 10), 0.3);
+                return single == Placement.Wide
+                    && two.K() == 2 && two.Capacity() > WideFrom && two.Partitions[0].count < WideFrom
+                    && two.Placement == Placement.Narrow;
+            }),
+            new Claim("places them with 64-bit values, exactly as `BloomFilter64` does", () =>
+            {
+                var wide = new BloomFilter(500, 0.01, null, Placement.Wide);
+                var reference = new BloomFilter64(500, 0.01);
+                for (var i = 0; i < 500; i++)
+                {
+                    wide.Add(Key(i));
+                    reference.Add(Key(i));
+                }
+
+                return reference.Capacity() == wide.Capacity()
+                    && Enumerable.Range(0, (int)wide.Capacity())
+                        .All(b => wide.Buckets.Get((uint)b) == reference.Buckets.Get((ulong)b));
+            }),
+            // 6.2.0 wrote versions up to 4, the second SetSketch construction's, and refuses
+            // any above the highest it wrote.
+            new Claim("A smaller filter is placed as before", () =>
+                new BloomFilter(100, 0.01).Placement == Placement.Narrow
+                && new CountingBloomFilter(100, 4, 0.01).Placement == Placement.Narrow
+                && new DeletableBloomFilter(100, 10, 0.01).Placement == Placement.Narrow
+                && new PartitionedBloomFilter(100, 0.01).Placement == Placement.Narrow
+                && new StableBloomFilter(100, 2, 0.01).Placement == Placement.Narrow),
+            new Claim("Below 2^27 the excess is at most about 0.07% of the rate at 1%", () =>
+                Rounds(LargestFoldBelowWide() * 100, 0.07, 2)),
+            // Small and large alike: a small filter of each of the five, placed either way.
+            new Claim("Every save of these filters, whatever its size, is written at format version 8", () =>
+                new[] { Placement.Narrow, Placement.Wide }.All(p =>
+                    new BloomFilter(100, 0.01, null, p).ToByteArray()[4] == 8
+                    && new CountingBloomFilter(100, 4, 0.01, null, p).ToByteArray()[4] == 8
+                    && new DeletableBloomFilter(100, 10, 0.01, null, p).ToByteArray()[4] == 8
+                    && new PartitionedBloomFilter(100, 0.01, null, p).ToByteArray()[4] == 8
+                    && new StableBloomFilter(100, 2, 0.01, null, 1, p).ToByteArray()[4] == 8)),
+            // The plain filter's layout: u32 m, u32 k, the placement byte, the u64 count,
+            // then the bucket array, whose count follows.
+            new Claim("which records the placement in a byte of its own and the item count in 64 bits", () =>
+                new[] { (Placement.Narrow, 0), (Placement.Wide, 1) }.All(p =>
+                {
+                    var filter = new BloomFilter(100, 0.01, null, p.Item1);
+                    for (var i = 0; i < 10; i++) filter.Add(Key(i));
+                    var bytes = filter.ToByteArray();
+                    return bytes[14 + 8] == p.Item2
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(14 + 9)) == 10
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(14 + 17)) == filter.Capacity();
+                })),
+            // 6.2.0 wrote versions up to 4, the second SetSketch construction's, and refuses
+            // any above the highest it wrote.
+            new Claim("and which 6.2.0 and earlier refuse", () =>
+                PersistenceFormat.PlacementVersion == 8
+                && PersistenceFormat.SetSketchVariantVersion == 4
+                && new[] { PersistenceFormat.RandomStateVersion, PersistenceFormat.CuckooPackedVersion }
+                    .All(v => v < PersistenceFormat.SetSketchVariantVersion)),
+            // A version 1 payload, the plain filter's earlier layout: no placement byte and a
+            // u32 count. It reads placed with 32-bit values, and saved again says so.
+            new Claim("keeps the 32-bit placement, and the rate that goes with it, whatever its size, and records it when saved again", () =>
+            {
+                var old = TestBitPlacement.Downgraded(new BloomFilter(100, 0.01).ToByteArray(), 1, 8, 9);
+                var read = Persistence.FromByteArray<BloomFilter>(old);
+                var again = read.ToByteArray();
+                return System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(old.AsSpan(4)) == 1
+                    && read.Placement == Placement.Narrow
+                    && System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(again.AsSpan(4)) == 8 && again[14 + 8] == 0;
+            }),
+            new Claim("does not merge with a new filter of the same size", () =>
+            {
+                var old = new BloomFilter(100, 0.01, null, Placement.Narrow);
+                var fresh = new BloomFilter(100, 0.01, null, Placement.Wide);
+                try
+                {
+                    old.Merge(fresh);
+                    return false;
+                }
+                catch (ArgumentException)
+                {
+                    return true;
+                }
+            }),
             new Claim("a slot that holds an item is written as an index, a length and the item", () =>
                 Near(Facts["inverse slot bytes"], 16, 0.01)),
 

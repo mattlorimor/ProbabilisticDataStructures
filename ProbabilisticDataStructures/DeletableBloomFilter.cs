@@ -20,6 +20,15 @@ namespace ProbabilisticDataStructures
     /// but cannot allow false negatives. This means they can be safely swapped in
     /// place of traditional Bloom filters.
     /// </summary>
+    /// <remarks>
+    /// A filter whose data region is 2^27 bits or more places items with 64-bit hash
+    /// values; a smaller one places with 32-bit values, as it always did. Every save is
+    /// format version 8, which records the placement in a byte of its own and the item
+    /// count in 64 bits, and which libraries before this one cannot read.
+    /// Placing a large filter with 32-bit values crowds the start of its data region
+    /// and raises its false positive rate, as it does for <see cref="BloomFilter"/>, where
+    /// the details are. A filter read back keeps the scheme its payload was placed with.
+    /// </remarks>
     public class DeletableBloomFilter : IFilter, IBinaryPersistable<DeletableBloomFilter>
     {
         /// <summary>
@@ -49,11 +58,15 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Number of items in the filter
         /// </summary>
-        private uint count { get; set; }
+        private ulong count { get; set; }
         /// <summary>
         /// Buffer used to cache indices
         /// </summary>
         private uint[] IndexBuffer { get; set; }
+        /// <summary>
+        /// How an item's hash becomes the positions it sets and tests in the data region.
+        /// </summary>
+        internal Placement Placement { get; private set; }
 
         /// <summary>
         /// NewDeletableBloomFilter creates a new DeletableBloomFilter optimized to store
@@ -70,6 +83,22 @@ namespace ProbabilisticDataStructures
         /// once anything has been added, the hash can no longer be replaced.
         /// </param>
         public DeletableBloomFilter(uint n, uint r, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            : this(n, r, fpRate, hash, null)
+        {
+        }
+
+        /// <summary>
+        /// Creates a filter as the public constructor does, placing its bits as
+        /// <paramref name="placement"/> says, or as the size of its data region calls for
+        /// when that is null.
+        /// </summary>
+        /// <remarks>
+        /// The choice is made by size, and a filter large enough for it to matter is too
+        /// large to build in numbers in a test. This lets a test have a small filter
+        /// place its bits the way a large one does.
+        /// </remarks>
+        internal DeletableBloomFilter(
+            uint n, uint r, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash, Placement? placement)
         {
             Guard.ValidItemCount(n, nameof(n));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
@@ -100,6 +129,7 @@ namespace ProbabilisticDataStructures
             this.RegionSize = (this.M + r - 1) / r;
             this.k = k;
             this.IndexBuffer = new uint[k];
+            this.Placement = placement ?? BitPlacement.For(this.M);
         }
 
         /// <summary>
@@ -123,8 +153,13 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Returns the number of items added to the filter.
         /// </summary>
-        /// <returns>The number of items added to the filter</returns>
-        public uint Count()
+        /// <returns>The number of items added to the filter and not removed</returns>
+        /// <remarks>
+        /// A 64-bit count, so that it crosses 2^32 rather than wrapping to zero, and comes
+        /// back down across it as items are removed. Before the release after 6.2.0 it was
+        /// a <c>uint</c>.
+        /// </remarks>
+        public ulong Count()
         {
             return this.count;
         }
@@ -146,14 +181,12 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Test(byte[])"/>
         public bool Test(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.M);
 
             // If any of the K bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                if (this.Buckets.Get((lower + upper * i) % this.M) == 0)
+                if (this.Buckets.Get(positions[i]) == 0)
                 {
                     return false;
                 }
@@ -177,14 +210,12 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Add(byte[])"/>
         public IFilter Add(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.M);
 
             // Set the K bits.
             for (uint i = 0; i < this.k; i++)
             {
-                var idx = (lower + upper * i) % this.M;
+                var idx = positions[i];
                 if (this.Buckets.Get(idx) != 0)
                 {
                     // Collision, set corresponding region bit.
@@ -216,15 +247,13 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="TestAndAdd(byte[])"/>
         public bool TestAndAdd(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.M);
             var member = true;
 
             // If any of the K bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
             {
-                var idx = (lower + upper * i) % this.M;
+                var idx = positions[i];
                 if (this.Buckets.Get(idx) == 0)
                 {
                     member = false;
@@ -257,15 +286,13 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="TestAndRemove(byte[])"/>
         public bool TestAndRemove(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var positions = Positions.Of(data, this.Hash, this.Placement, this.M);
             var member = true;
 
             // Set the K bits.
             for (uint i = 0; i < this.k; i++)
             {
-                var idx = (lower + upper * i) % this.M;
+                var idx = positions[i];
                 this.IndexBuffer[i] = idx;
                 if (this.Buckets.Get(idx) == 0)
                 {
@@ -313,7 +340,8 @@ namespace ProbabilisticDataStructures
             var payload = new PayloadWriter();
             payload.WriteUInt32(this.M);
             payload.WriteUInt32(this.k);
-            payload.WriteUInt32(this.count);
+            BitPlacement.Write(payload, this.Placement);
+            payload.WriteUInt64(this.count);
             PersistenceFormat.WriteBuckets(payload, this.Buckets);
             PersistenceFormat.WriteBuckets(payload, this.Collisions);
 
@@ -321,7 +349,8 @@ namespace ProbabilisticDataStructures
                 stream,
                 StructureId.DeletableBloomFilter,
                 PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+                payload.WrittenSpan,
+                PersistenceFormat.PlacementVersion);
         }
 
         /// <summary>
@@ -394,12 +423,16 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.DeletableBloomFilter);
-            var payload = PersistenceFormat.Read(stream, StructureId.DeletableBloomFilter, out var hashId, budget);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.DeletableBloomFilter, out var hashId, out var version, budget);
             var reader = new PayloadReader(payload, budget);
 
             var m = reader.ReadUInt32();
             var k = reader.ReadUInt32();
-            var count = reader.ReadUInt32();
+            // From the payload, never from m: a version 1 payload of any size was placed
+            // with 32-bit values, and a version 8 one says how it was placed.
+            var placement = BitPlacement.Read(ref reader, version);
+            var count = BitPlacement.ReadCount(ref reader, version);
             var buckets = PersistenceFormat.ReadBuckets(ref reader);
             var collisions = PersistenceFormat.ReadBuckets(ref reader);
             reader.ExpectEnd();
@@ -435,6 +468,7 @@ namespace ProbabilisticDataStructures
                 RegionSize = (m + collisions.count - 1) / collisions.count,
                 IndexBuffer = new uint[k],
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+                Placement = placement,
             };
         }
 
