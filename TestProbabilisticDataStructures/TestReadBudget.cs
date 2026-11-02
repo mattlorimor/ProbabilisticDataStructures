@@ -686,7 +686,12 @@ namespace TestProbabilisticDataStructures
         {
             var bytes = (byte[])original.Clone();
             BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(PayloadStart + payloadOffset), value);
+            return Reseal(bytes);
+        }
 
+        /// <summary>Rewrites the envelope's checksum over a payload edited in place.</summary>
+        private static byte[] Reseal(byte[] bytes)
+        {
             var crc = new Crc32();
             crc.Append(bytes.AsSpan(4, bytes.Length - 8));
             BinaryPrimitives.WriteUInt32LittleEndian(
@@ -849,6 +854,129 @@ namespace TestProbabilisticDataStructures
             // array count at 29: a million references.
             var bytes = new BloomFilter64(1000, 0.01).ToByteArray();
             AssertRefusedBeforeAllocating<BloomFilter64>(Poke(bytes, 29, 1_000_000), 8L * 1_000_000);
+        }
+
+        // ---- A payload wrong in its shape is refused for that, whatever the budget -----
+
+        /// <summary>
+        /// A payload malformed in one field its price reads is refused for that field
+        /// under a budget it would also fail, not for the budget: the price runs the
+        /// reader's shape checks, in the reader's order, before it prices what follows.
+        /// Without them a price walks on past the field and names a total, and the
+        /// payload is refused for its shape only once the caller has raised the budget
+        /// to that total.
+        /// </summary>
+        /// <remarks>
+        /// The budget is one byte short of what the unedited payload names. A price that
+        /// skipped the check would walk the rest of the payload as it would the
+        /// unedited one, and so price at least that much.
+        /// </remarks>
+        private static void AssertRefusedForItsShape<T>(byte[] unedited, byte[] edited, string because)
+            where T : IBinaryPersistable<T>
+        {
+            Assert.IsTrue(
+                RefusedForBudget(() => Persistence.FromByteArray<T>(unedited, new ReadOptions(1)), out var whole),
+                $"an unedited {typeof(T).Name} was not refused under a budget of one byte");
+            var budget = whole.RequiredBytes - 1;
+
+            var e = Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<T>(edited, new ReadOptions(budget)));
+            Assert.IsNotInstanceOfType<ReadBudgetExceededException>(e.InnerException,
+                $"an edited {typeof(T).Name} was refused for its budget, not its shape: {e.Message}");
+            StringAssert.Contains(e.Message, because);
+        }
+
+        private static byte[] PokeByte(byte[] original, int payloadOffset, byte value)
+        {
+            var bytes = (byte[])original.Clone();
+            bytes[PayloadStart + payloadOffset] = value;
+            return Reseal(bytes);
+        }
+
+        private static byte[] Poke64(byte[] original, int payloadOffset, ulong value)
+        {
+            var bytes = (byte[])original.Clone();
+            BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(PayloadStart + payloadOffset), value);
+            return Reseal(bytes);
+        }
+
+        /// <summary>A top-k claiming more elements than it tracks.</summary>
+        [TestMethod]
+        public void TestATopKHoldingMoreThanItTracksIsRefusedForThat()
+        {
+            var bytes = Filled(new TopK(0.001, 0.01, 50), (s, k) => s.Add(k), 2000).ToByteArray();
+
+            // u32 k, u32 n, then the nested sketch's u32 length and its bytes, then the
+            // element count.
+            var nested = (int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + 8));
+            AssertRefusedForItsShape<TopK>(bytes, Poke(bytes, 12 + nested, 1_000_000), "with room for 50");
+        }
+
+        /// <summary>A Grafite claiming a universe past the largest it can reduce to.</summary>
+        [TestMethod]
+        public void TestAGrafiteUniverseTooLargeIsRefusedForThat()
+        {
+            var bytes = Grafite.Build(
+                Enumerable.Range(0, 20_000).Select(i => (ulong)i * 1009), 0.01, 64, seed: 7).ToByteArray();
+
+            // The u64 reduced universe comes first.
+            AssertRefusedForItsShape<Grafite>(bytes, Poke64(bytes, 0, ulong.MaxValue), "beyond anything");
+        }
+
+        /// <summary>A DPSW window with a substream holding nothing.</summary>
+        [TestMethod]
+        public void TestADpswSubstreamHoldingNothingIsRefusedForThat()
+        {
+            var bytes = Filled(
+                new DpswSketch(2000, 1.0, width: 1024, depth: 3, seed: 1), (s, k) => s.Add(k), 5000).ToByteArray();
+
+            // u64 window, f64 budget, f64 checkpoint factor, u32 substream size, u32
+            // width, u32 depth, u64 items seen, u32 substream count, then the first
+            // substream's u64 position and, at 56, its u32 item count.
+            AssertRefusedForItsShape<DpswSketch>(bytes, Poke(bytes, 56, 0), "holds 0 of a possible");
+        }
+
+        /// <summary>A partition whose bucket width disagrees with its data's length.</summary>
+        [TestMethod]
+        public void TestAPartitionWhoseDataDisagreesWithItsWidthIsRefusedForThat()
+        {
+            var bytes = Filled(new PartitionedBloomFilter(100_000, 0.01), (s, k) => s.Add(k), 5000).ToByteArray();
+
+            // u32 m, u32 k, u32 s, u8 placement, u64 count, u32 partition count, then the
+            // first partition's u32 bucket count and, at 29, its u8 bucket width.
+            AssertRefusedForItsShape<PartitionedBloomFilter>(bytes, PokeByte(bytes, 29, 2), "were stored");
+        }
+
+        /// <summary>
+        /// A cuckoo entry placed in a bucket the table does not have, in a version 2
+        /// payload: before version 3 each fingerprint is a run of its own, which the
+        /// price walks the entries to price. A packed payload is priced at its table,
+        /// which the reader charges before it reads an entry, so a budget refusal comes
+        /// first in both.
+        /// </summary>
+        [TestMethod]
+        public void TestACuckooEntryOutsideItsTableIsRefusedForThat()
+        {
+            using var resource = typeof(TestReadBudget).Assembly.GetManifestResourceStream(
+                "TestProbabilisticDataStructures.fixtures.cuckoobloomfilter-v2.bin")
+                ?? throw new InvalidOperationException("the version 2 cuckoo fixture is not embedded");
+            using var buffer = new MemoryStream();
+            resource.CopyTo(buffer);
+            var bytes = buffer.ToArray();
+
+            // u32 m, u32 b, u32 f, u32 count, u32 n, u32 occupied entry count, then the
+            // first entry's u32 bucket index.
+            AssertRefusedForItsShape<CuckooBloomFilter>(bytes, Poke(bytes, 24, uint.MaxValue), "outside its");
+        }
+
+        /// <summary>A theta sketch claiming to retain no values, a size none is built at.</summary>
+        [TestMethod]
+        public void TestAThetaSketchRetainingNothingIsRefusedForThat()
+        {
+            var bytes = Filled(new ThetaSketch(4096), (s, k) => s.Add(k), 100_000).ToByteArray();
+
+            // The u32 retained size comes first.
+            AssertRefusedForItsShape<ThetaSketch>(bytes, Poke(bytes, 0, 0), "not a size this");
         }
 
         // ---- The default, the options, and the refusal --------------------------------
