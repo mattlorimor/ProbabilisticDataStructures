@@ -357,6 +357,85 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A sketch read back reports the tuning its rows were built with, not the
+        /// default it started from.
+        /// </summary>
+        /// <remarks>
+        /// The reader tunes the rows from the counts it reads, so what it chooses is
+        /// what the writer chose only while the counts are the ones the writer chose it
+        /// for. That is true at the moment a sketch lays its rows out, and not after
+        /// more adds, which change the counts and leave the tuning where it was. So the
+        /// sketch is written at those moments, found as the existing tuning test finds
+        /// them: the width changes, or the tuning does, and both are a layout.
+        /// <para>
+        /// The tuning is internal and nothing public reads it, so a reader that never
+        /// recorded it answered every query correctly and wrote the same bytes. Only an
+        /// inspection of the read-back sketch sees the difference, which is why this
+        /// asks the read-back sketch directly. The records of earlier states are tuned
+        /// separately, at their own widths, and are not what the properties describe.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestASketchReadBackReportsTheTuningItsRowsWereBuiltWith()
+        {
+            var sketch = new SublimeCountMinSketch(0.01);
+            var startingWidth = sketch.Width;
+            var defaults = (
+                ValeCounterArray.DefaultCountersPerChunk, ValeCounterArray.DefaultStubBits);
+
+            // Not the first state: a sketch that has never laid its rows out reports the
+            // default it was built with, which says nothing about a reader's choice.
+            var width = sketch.Width;
+            var tuning = (sketch.CountersPerChunk, sketch.StubBits);
+
+            var checks = 0;
+            var grown = 0;
+            var away = new HashSet<(int, int)>();
+            var adds = 0;
+            foreach (var key in Skewed(300_000, 100_000, 9))
+            {
+                sketch.Add(Key(key));
+                adds++;
+
+                if (sketch.Width == width
+                    && tuning == (sketch.CountersPerChunk, sketch.StubBits))
+                {
+                    continue;
+                }
+                width = sketch.Width;
+                tuning = (sketch.CountersPerChunk, sketch.StubBits);
+                checks++;
+                if (width > startingWidth)
+                {
+                    grown++;
+                }
+                if (tuning != defaults)
+                {
+                    away.Add(tuning);
+                }
+
+                var stream = new MemoryStream();
+                sketch.WriteTo(stream);
+                stream.Position = 0;
+                var read = SublimeCountMinSketch.ReadFrom(stream);
+
+                Assert.AreEqual(tuning, (read.CountersPerChunk, read.StubBits),
+                    $"After {adds:N0} adds the sketch, at a width of {width:N0}, held " +
+                    $"{tuning.Item1} counters to a chunk with {tuning.Item2}-bit stubs. " +
+                    $"Read back, it reports {read.CountersPerChunk} and {read.StubBits}.");
+            }
+
+            // Away from the default, or a reader that never recorded anything passes; and
+            // after an expansion, so that there are records for a reader to mistake for
+            // the rows.
+            Assert.IsTrue(away.Count >= 5,
+                $"Only {away.Count} tunings other than the default were seen, so this " +
+                "checked almost nothing.");
+            Assert.IsTrue(grown >= 3,
+                $"Only {grown} of {checks} sketches written had expanded.");
+        }
+
+        /// <summary>
         /// A smaller size factor starts the sketch larger.
         /// </summary>
         [TestMethod]
