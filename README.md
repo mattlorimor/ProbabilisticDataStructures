@@ -781,8 +781,12 @@ rejected instead, at 2^-8 per lookup. It costs one byte per cell and turns the f
 into the bounded, quotable kind the rest of this library deals in.
 
 A key appearing twice with different values is refused: a map cannot hold both, and since
-the filter does not keep keys it could not tell you which one it dropped. A value too wide
-for `valueBits` is refused rather than truncated.
+the filter does not keep keys it could not tell you which one it dropped. The same goes for
+two *different* keys with the same 64-bit hash, which is all the filter knows a key by: chance,
+at about n²/2⁶⁵ for n keys — 0.03% at 100 million, 2.4% at the 954 million that 8-bit values
+build — and the refusal says so and suggests a different `hash`, which moves the collision.
+[CAPACITY.md](CAPACITY.md) has the odds by size. A value too wide for `valueBits` is refused
+rather than truncated.
 
 From Chazelle, Kilian, Rubinfeld and Tal,
 [The Bloomier Filter](https://dl.acm.org/doi/10.5555/982792.982797).
