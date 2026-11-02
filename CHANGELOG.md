@@ -879,6 +879,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Build` and in CAPACITY.md. The format is unchanged; widening the identity would change
   it, and has not been done.
 
+- **`DpswSketch` built with a width or depth no `PrivateCountMinSketch` holds, and failed
+  on its first `Add`.** Every sketch a window holds is a private sketch, whose row is one
+  array and whose rows are one array, so each of the width and the depth is at most
+  2,147,483,591. A window given more constructed, and the failure came when the first item
+  began the first substream, as that sketch's `ArgumentOutOfRangeException` naming that
+  type. A depth past the limit was worse at a small budget: the guard on the noise of the
+  window's leanest checkpoint divides the depth by the budget that checkpoint is left, so
+  it refused the depth first, as an `ArgumentOutOfRangeException` naming `alpha`.
+  <br><br>
+  The constructor now refuses a width or depth past the limit with an
+  `ArgumentOutOfRangeException` naming `width` or `depth` and saying what the limit is,
+  before the checkpoints are built, from the same symbols the private sketch uses so that
+  the two cannot drift. The reader refuses a payload that claims either past it, as beyond
+  anything built; it loaded one that held no substreams, since no inner sketch was there to
+  refuse the size. FORMAT.md's table of sizes has the two new rows. No size that built
+  before stops building: the limit is the sketch's own.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

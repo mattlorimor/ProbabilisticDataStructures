@@ -267,6 +267,8 @@ address.
 | `PrivateCountMinSketch` | width | 2,147,483,591 | each row is one array |
 | `PrivateCountMinSketch` | depth | 2,147,483,591 | the rows are held in one array |
 | `DpswSketch` | items in a substream | 2,147,483,591 | the checkpoints of a substream are a list with a slot for each item, and a list holds no more than an array |
+| `DpswSketch` | width | 2,147,483,591 | the sketches it holds are `PrivateCountMinSketch`es, whose rows are each one array |
+| `DpswSketch` | depth | 2,147,483,591 | as `width`: the rows of one of those sketches are held in one array |
 | `InverseBloomFilter` | capacity | 2,147,483,591 | the slots are one array of references |
 | `VarOpt` | `k` | 2,147,483,590 | each region is an array of `k + 1` slots |
 | `Grafite` | words of low bits | 2,147,483,591 | they are one array |
@@ -1219,7 +1221,8 @@ round.
 
 A reader rejects a window shorter than one item, a budget or checkpoint factor outside
 its range, a substream size below one or larger than the window, sketches with no rows
-or columns, a negative position, substreams that do not follow one another in order, a
+or columns or with more of either than a `PrivateCountMinSketch` holds (see Sizes), a
+negative position, substreams that do not follow one another in order, a
 substream holding nothing or more than its size, a substream ending past the items the
 window claims to have seen, and a nested sketch whose shape disagrees with the window's.
 It also applies the same refusal the constructor makes for a checkpoint factor whose

@@ -667,7 +667,7 @@ namespace TestProbabilisticDataStructures
                 new CountMinSketch(0.01, 0.01).Depth == 5 && Near(Slope("CountMinSketch"), 16, 0.01)),
             new Claim("A read charges 24 bytes a counter.", () => Near(Slope("CountSketch"), 24, 0.01)),
             new Claim("A read charges 16 bytes a counter.", () => Near(Slope("PrivateCountMinSketch"), 16, 0.01)),
-            new Claim("the sketches of a window are at most as wide and as deep as a `PrivateCountMinSketch` is, 2,147,483,591", () =>
+            new Claim("sketches of a window are at most as wide and as deep as a `PrivateCountMinSketch` is, 2,147,483,591", () =>
                 PrivateCountMinSketch.MaxWidth == 2_147_483_591 && PrivateCountMinSketch.MaxDepth == 2_147_483_591
                 && Assert.Throws<ArgumentOutOfRangeException>(
                     () => new DpswSketch(100, 1.0, width: PrivateCountMinSketch.MaxWidth + 1)).ParamName == "width"
