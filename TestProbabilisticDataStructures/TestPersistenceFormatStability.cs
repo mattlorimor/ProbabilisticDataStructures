@@ -25,6 +25,159 @@ namespace TestProbabilisticDataStructures
         private static readonly string[] Words =
             { "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa" };
 
+        /// <summary>
+        /// The plain filter's own version 1 payload, read and placed as it was written:
+        /// with 32-bit values, which is what every version 1 payload holds. It holds the
+        /// first five words, not all ten.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredBloomFilterStillReads()
+        {
+            var f = BloomFilter.ReadFrom(Fixture("bloomfilter-v1.bin"));
+
+            Assert.AreEqual(959u, f.Capacity());
+            Assert.AreEqual(7u, f.K());
+            Assert.AreEqual(5u, f.Count());
+            Assert.AreEqual(Placement.Narrow, f.Placement);
+            foreach (var word in Words.Take(5))
+            {
+                Assert.IsTrue(f.Test(Key(word)), $"the stored filter no longer finds {word}");
+            }
+        }
+
+        /// <summary>
+        /// Version 8 is the version 1 layout with its bits placed by 64-bit values, which
+        /// a new filter of 2^27 bits or more is. The five version 8 fixtures were
+        /// assembled by hand from FORMAT.md and the 64-bit scheme -- XxHash3 of the item,
+        /// XxHash3 of that value's eight little-endian bytes, positions
+        /// <c>(first + i * second) mod m</c> in 64-bit arithmetic -- without the library,
+        /// so that reading them holds the reader to the format and not to the writer.
+        /// Each holds the same ten words as the version 1 fixtures, in a filter of the same
+        /// size, small enough to be a fixture; the version and not the size says how it
+        /// was placed.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredBloomFilterAtVersionEightStillReads()
+        {
+            var f = BloomFilter.ReadFrom(Fixture("bloomfilter-v8.bin"));
+
+            Assert.AreEqual(959u, f.Capacity());
+            Assert.AreEqual(7u, f.K());
+            Assert.AreEqual(10u, f.Count());
+            Assert.AreEqual(Placement.Wide, f.Placement);
+            AssertAllPresent(f.Test);
+            AssertLostWhenReadAs(1, "bloomfilter-v8.bin", b => BloomFilter.ReadFrom(new MemoryStream(b)).Test);
+        }
+
+        [TestMethod]
+        public void TestStoredCountingBloomFilterAtVersionEightStillReads()
+        {
+            var f = CountingBloomFilter.ReadFrom(Fixture("countingbloomfilter-v8.bin"));
+
+            Assert.AreEqual(959u, f.Capacity());
+            Assert.AreEqual(7u, f.K());
+            Assert.AreEqual(10u, f.Count());
+            Assert.AreEqual(Placement.Wide, f.Placement);
+            AssertAllPresent(f.Test);
+            AssertLostWhenReadAs(1, "countingbloomfilter-v8.bin", b => CountingBloomFilter.ReadFrom(new MemoryStream(b)).Test);
+
+            // The counters came back where the 64-bit scheme put them: each word removes
+            // once and is gone.
+            Assert.IsTrue(f.TestAndRemove(Key("alpha")));
+            Assert.IsFalse(f.Test(Key("alpha")));
+        }
+
+        [TestMethod]
+        public void TestStoredDeletableBloomFilterAtVersionEightStillReads()
+        {
+            var f = DeletableBloomFilter.ReadFrom(Fixture("deletablebloomfilter-v8.bin"));
+
+            Assert.AreEqual(949u, f.Capacity());
+            Assert.AreEqual(7u, f.K());
+            Assert.AreEqual(10u, f.Count());
+            Assert.AreEqual(Placement.Wide, f.Placement);
+            AssertAllPresent(f.Test);
+            AssertLostWhenReadAs(1, "deletablebloomfilter-v8.bin", b => DeletableBloomFilter.ReadFrom(new MemoryStream(b)).Test);
+            Assert.IsTrue(f.TestAndRemove(Key("alpha")));
+        }
+
+        [TestMethod]
+        public void TestStoredPartitionedBloomFilterAtVersionEightStillReads()
+        {
+            var f = PartitionedBloomFilter.ReadFrom(Fixture("partitionedbloomfilter-v8.bin"));
+
+            Assert.AreEqual(959u, f.Capacity());
+            Assert.AreEqual(7u, f.K());
+            Assert.AreEqual(10u, f.Count());
+            Assert.AreEqual(Placement.Wide, f.Placement);
+            AssertAllPresent(f.Test);
+            AssertLostWhenReadAs(1, "partitionedbloomfilter-v8.bin", b => PartitionedBloomFilter.ReadFrom(new MemoryStream(b)).Test);
+        }
+
+        /// <summary>
+        /// The stable filter's version 8 is its version 5 layout placed by 64-bit values:
+        /// the cells, where the generator had got to and where it began. Assembled by
+        /// hand like the others, with the generator's draws and the decay restated as
+        /// well, from the filter the version 5 fixture holds.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredStableBloomFilterAtVersionEightStillReads()
+        {
+            var f = StableBloomFilter.ReadFrom(Fixture("stablebloomfilter-v8.bin"));
+
+            Assert.AreEqual(1000u, f.Cells());
+            Assert.AreEqual(3u, f.K());
+            Assert.AreEqual(35u, f.P());
+            Assert.AreEqual(Placement.Wide, f.Placement);
+            AssertAllPresent(f.Test);
+            AssertLostWhenReadAs(5, "stablebloomfilter-v8.bin", b => StableBloomFilter.ReadFrom(new MemoryStream(b)).Test);
+
+            // It resumes the sequence it was stored partway through, placing as it did...
+            var twin = StoredWideStableTwin();
+            for (var i = 0; i < 300; i++)
+            {
+                f.Add(Key($"more{i}"));
+                twin.Add(Key($"more{i}"));
+            }
+
+            CollectionAssert.AreEqual(twin.ToByteArray(), f.ToByteArray(),
+                "the restored filter did not carry on the sequence it was stored partway through");
+
+            // ...and a reset takes it back to its seed, and keeps its placement.
+            f.Reset();
+            CollectionAssert.AreEqual(
+                new StableBloomFilter(1000, 2, 0.01, null, 7, Placement.Wide).ToByteArray(), f.ToByteArray(),
+                "Reset did not return the restored filter to its stored original state");
+        }
+
+        /// <summary>
+        /// The stored payload, relabelled as the version its layout had before version 8
+        /// and read, loses words: read as placed with 32-bit values, the filter looks for
+        /// them where they were not put. That is what makes the fixture a witness to the
+        /// placement and not only to the layout.
+        /// </summary>
+        private static void AssertLostWhenReadAs(ushort version, string fixture, Func<byte[], Func<byte[], bool>> read)
+        {
+            var test = read(Relabeled(ReadFixture(fixture), version));
+            var lost = Words.Count(word => !test(Key(word)));
+            Assert.IsGreaterThan(0, lost,
+                $"{fixture} read as version {version} still finds every word, so it cannot tell the placements apart");
+        }
+
+        /// <summary>
+        /// A never-saved filter in the state the version 8 stable fixture holds.
+        /// </summary>
+        private static StableBloomFilter StoredWideStableTwin()
+        {
+            var twin = new StableBloomFilter(1000, 2, 0.01, null, 7, Placement.Wide);
+            foreach (var word in Words)
+            {
+                twin.Add(Key(word));
+            }
+
+            return twin;
+        }
+
         [TestMethod]
         public void TestStoredBloomFilter64StillReads()
         {
@@ -243,16 +396,24 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestTheVersionAfterTheNewestIsRefused()
         {
-            var stable = Relabeled(ReadFixture("stablebloomfilter-v5.bin"), 7);
+            // Nine is one past the newest, version 8. It is written out rather than
+            // computed from the library's ceiling, which is the thing being checked.
+            var stable = Relabeled(ReadFixture("stablebloomfilter-v8.bin"), 9);
             var ex = Assert.ThrowsExactly<InvalidDataException>(
                 () => StableBloomFilter.ReadFrom(new MemoryStream(stable)));
-            StringAssert.Contains(ex.Message, "format version 7");
+            StringAssert.Contains(ex.Message, "format version 9");
             StringAssert.Contains(ex.Message, "written by a later version");
 
-            var cuckoo = Relabeled(ReadFixture("cuckoobloomfilter-v6.bin"), 7);
+            var cuckoo = Relabeled(ReadFixture("cuckoobloomfilter-v6.bin"), 9);
             ex = Assert.ThrowsExactly<InvalidDataException>(
                 () => CuckooBloomFilter.ReadFrom(new MemoryStream(cuckoo)));
-            StringAssert.Contains(ex.Message, "format version 7");
+            StringAssert.Contains(ex.Message, "format version 9");
+            StringAssert.Contains(ex.Message, "written by a later version");
+
+            var bloom = Relabeled(ReadFixture("bloomfilter-v8.bin"), 9);
+            ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => BloomFilter.ReadFrom(new MemoryStream(bloom)));
+            StringAssert.Contains(ex.Message, "format version 9");
             StringAssert.Contains(ex.Message, "written by a later version");
         }
 
@@ -1132,11 +1293,18 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestWritingStillProducesTheStoredBytes()
         {
+            var bloom = new BloomFilter(100, 0.01);
             var bloom64 = new BloomFilter64(100, 0.01);
             var counting = new CountingBloomFilter(100, 4, 0.01);
             var deletable = new DeletableBloomFilter(100, 10, 0.01);
             var partitioned = new PartitionedBloomFilter(100, 0.01);
             var inverse = new InverseBloomFilter(64);
+
+            // The plain filter's fixture holds the first five words.
+            foreach (var word in Words.Take(5))
+            {
+                bloom.Add(Key(word));
+            }
 
             foreach (var word in Words)
             {
@@ -1148,6 +1316,7 @@ namespace TestProbabilisticDataStructures
                 inverse.Add(key);
             }
 
+            AssertBytes("bloomfilter-v1.bin", bloom.ToByteArray());
             AssertBytes("bloomfilter64-v1.bin", bloom64.ToByteArray());
             AssertBytes("countingbloomfilter-v1.bin", counting.ToByteArray());
             AssertBytes("deletablebloomfilter-v1.bin", deletable.ToByteArray());
@@ -1379,6 +1548,34 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The filters placed with 64-bit values, as one of 2^27 bits or more is, write the
+        /// version 8 payloads assembled by hand: the writer is held to the format and the
+        /// restated scheme rather than to itself.
+        /// </summary>
+        [TestMethod]
+        public void TestWritingAWideFilterProducesTheStoredVersionEightBytes()
+        {
+            var bloom = new BloomFilter(100, 0.01, null, Placement.Wide);
+            var counting = new CountingBloomFilter(100, 4, 0.01, null, Placement.Wide);
+            var deletable = new DeletableBloomFilter(100, 10, 0.01, null, Placement.Wide);
+            var partitioned = new PartitionedBloomFilter(100, 0.01, null, Placement.Wide);
+            foreach (var word in Words)
+            {
+                var key = Key(word);
+                bloom.Add(key);
+                counting.Add(key);
+                deletable.Add(key);
+                partitioned.Add(key);
+            }
+
+            AssertBytes("bloomfilter-v8.bin", bloom.ToByteArray());
+            AssertBytes("countingbloomfilter-v8.bin", counting.ToByteArray());
+            AssertBytes("deletablebloomfilter-v8.bin", deletable.ToByteArray());
+            AssertBytes("partitionedbloomfilter-v8.bin", partitioned.ToByteArray());
+            AssertBytes("stablebloomfilter-v8.bin", StoredWideStableTwin().ToByteArray());
+        }
+
+        /// <summary>
         /// The structure id in every stored payload is the one the format assigns, which
         /// is what stops a payload being read as the wrong structure. Reading the byte
         /// directly rather than through the enum, so that renumbering the enum shows up
@@ -1404,6 +1601,11 @@ namespace TestProbabilisticDataStructures
                 ("minhashsignature-v1.bin", 13, 1),
                 ("stablebloomfilter-v2.bin", 7, 2),
                 ("stablebloomfilter-v5.bin", 7, 5),
+                ("bloomfilter-v8.bin", 1, 8),
+                ("countingbloomfilter-v8.bin", 3, 8),
+                ("deletablebloomfilter-v8.bin", 4, 8),
+                ("partitionedbloomfilter-v8.bin", 5, 8),
+                ("stablebloomfilter-v8.bin", 7, 8),
                 ("cuckoobloomfilter-v2.bin", 9, 2),
                 ("cuckoobloomfilter-v3.bin", 9, 3),
                 ("cuckoobloomfilter-v6.bin", 9, 6),
