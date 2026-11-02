@@ -378,18 +378,24 @@ answer showing it gets the checker and the exhaustive runs on top.
 - `TestFilterSequences.cs` is the Bloom family. The roster is the `StructureId` members
   whose name contains `BloomFilter`; each is covered by a test named for it, or exempted
   with a reason. Each spec is also held to the public surface by reflection, so a type
-  that gains `Reset`, `Merge` or `TestAndRemove` fails until its spec runs it.
+  that gains `Reset`, `Merge` or `TestAndRemove` fails until its spec runs it. What the
+  file sequences is read off those test names, and `CuckooBloomFilter`'s exemption is
+  checked to be one the quotient file sequences.
 - `TestOperationSequences.cs` is the sketches and samplers. The roster is all of
   `StructureId`: the built-once structures are exempt, and the exemption is checked by
-  reflection to have no `Add`, `Remove`, `Merge` or `Reset`; the filters are left to the
-  Bloom and quotient files.
+  reflection to have no `Add`, `Remove`, `Merge` or `Reset`. Each spec is also held to the
+  public surface: a sketch that offers an operation no spec sequences fails unless the
+  operation names the existing test that covers it, which must exist and carry
+  `[TestMethod]`. The filters it leaves to the other files are what those files say they
+  sequence, not a list kept here, and the reason names the file.
 - `TestQuotientFamilySequences.cs`, with `QuotientFamilyInvariants.cs`, is the quotient,
   Infini, Memento and cuckoo filters. The roster is every public persistable type that
   offers `TestAndRemove`, held to a table of what is sequenced, the tests that carry it
   and the operations they apply. The named tests must exist and carry `[TestMethod]`, and
   every public operation of a sequenced filter must be applied or classified as a query,
   checked in both directions. `CountingBloomFilter` and `DeletableBloomFilter` are exempt:
-  their removal does not delete a stored entry, and their model is the Bloom file's.
+  their removal does not delete a stored entry, and their model is the Bloom file's, which
+  is checked to sequence both.
 
 **The rules**, each an earlier principle applied here:
 
@@ -445,7 +451,8 @@ exemption is a claim, and is checked like one.
   and killing it needs a pin on the width schedule that neither layer has.
 - Theta and tuple `Intersect` and `Difference` are not interleaved in the sequences, where
   `Union` is. Single-scenario tests cover them, and `TestModelBased` holds a theta
-  sketch's output of each to the same characterization.
+  sketch's output of each to the same characterization. They are named in the sketch
+  file's `CoveredElsewhere` with the test that covers each.
 - No model is anchored outside this repository; see "Anchor outside your own reading".
 
 **Deliberately not done**, for this technique:
