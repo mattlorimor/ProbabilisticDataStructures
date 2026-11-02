@@ -117,6 +117,17 @@ namespace ProbabilisticDataStructures
         private const int MaxPoolFragments = 64;
 
         /// <summary>
+        /// The bits in a counter, and so the longest bit length one can have.
+        /// </summary>
+        /// <remarks>
+        /// A counter is a <c>ulong</c> and every <c>ulong</c> is a valid one, so a length
+        /// runs from nought, for a counter holding nothing, to this. The tally is one slot
+        /// longer than this for that reason; it was sixty-four slots, which left no room
+        /// for the counters of 2^63 and more.
+        /// </remarks>
+        private const int CounterBits = 64;
+
+        /// <summary>
         /// The most rows a sketch can have: ceil(ln(1 / delta)) for the smallest delta
         /// whose reciprocal is still a finite double.
         /// </summary>
@@ -908,8 +919,10 @@ namespace ProbabilisticDataStructures
         /// taken off once.
         /// <para>
         /// A counter can end up below where it started, since deletions are what brings
-        /// a sketch here in the first place, so the arithmetic is done signed and
-        /// nothing is allowed to fall below nought.
+        /// a sketch here in the first place, so nothing is allowed to fall below nought.
+        /// Nor past the largest count a counter holds, which the sum of two halves can
+        /// reach. The sum is taken in 128 bits, unsigned: in signed longs, as it once was,
+        /// a counter of 2^63 or more came out negative and was folded to nought.
         /// </para>
         /// </remarks>
         private void Contract()
@@ -924,10 +937,10 @@ namespace ProbabilisticDataStructures
                 folded[i] = new ulong[halved];
                 for (var j = 0; j < halved; j++)
                 {
-                    var kept = (long)this.rows[i].Get(j)
-                        + (long)this.rows[i].Get(j + halved)
-                        - (long)record[i].Get(j);
-                    folded[i][j] = kept > 0 ? (ulong)kept : 0;
+                    var gathered = (UInt128)this.rows[i].Get(j) + this.rows[i].Get(j + halved);
+                    var started = (UInt128)record[i].Get(j);
+                    var kept = gathered > started ? gathered - started : UInt128.Zero;
+                    folded[i][j] = kept > ulong.MaxValue ? ulong.MaxValue : (ulong)kept;
                 }
             }
 
@@ -1045,6 +1058,13 @@ namespace ProbabilisticDataStructures
                     ValeCounterArray.DefaultStubBits);
             }
 
+            // The widest stub the fewest counters can have with a pool left, which is the
+            // answer if nothing else is. It is found by the loop below, from the same two
+            // tests that decide which stubs it tries, and not named here: the widest stub
+            // there is, MaxStubBits, leaves no pool at sixteen counters, and the array
+            // refuses it.
+            var widestStub = ValeCounterArray.MinStubBits;
+
             for (var c = ValeCounterArray.MaxCountersPerChunk;
                  c >= ValeCounterArray.MinCountersPerChunk;
                  c--)
@@ -1069,9 +1089,14 @@ namespace ProbabilisticDataStructures
                         break;
                     }
 
+                    if (c == ValeCounterArray.MinCountersPerChunk)
+                    {
+                        widestStub = s;
+                    }
+
                     var expected = 0.0;
                     var variance = 0.0;
-                    for (var bits = s + 1; bits < 64; bits++)
+                    for (var bits = s + 1; bits <= CounterBits; bits++)
                     {
                         if (lengths[bits] == 0)
                         {
@@ -1105,14 +1130,18 @@ namespace ProbabilisticDataStructures
             // Nothing satisfied the bound, which means the counts have outgrown what a
             // cache line can hold cheaply. The widest stub with a pool left is the best
             // remaining answer; the tails arrays will carry the rest.
-            return (ValeCounterArray.MinCountersPerChunk, ValeCounterArray.MaxStubBits);
+            return (ValeCounterArray.MinCountersPerChunk, widestStub);
         }
 
         /// <summary>
         /// How many counters hold a value of each bit length, counted over the sketch
         /// as it will be once it has been laid out at the given width.
         /// </summary>
-        private static long[] CounterLengths(ulong[][] values)
+        /// <remarks>
+        /// Indexed by length, from nought to <see cref="CounterBits"/> inclusive. Internal
+        /// so that a test can ask it what it tallied, which the tuning built on it hides.
+        /// </remarks>
+        internal static long[] CounterLengths(ulong[][] values)
         {
             var lengths = new long[CounterLengthCount];
 
@@ -1127,13 +1156,16 @@ namespace ProbabilisticDataStructures
             return lengths;
         }
 
-        /// <summary>How many lengths <see cref="CounterLengths"/> tallies counters by.</summary>
-        private const int CounterLengthCount = 64;
+        /// <summary>
+        /// How many lengths <see cref="CounterLengths"/> tallies counters by: every one
+        /// from nought to <see cref="CounterBits"/>.
+        /// </summary>
+        private const int CounterLengthCount = CounterBits + 1;
 
         /// <summary>Counts <paramref name="value"/> at its bit length.</summary>
         private static void Tally(Span<long> lengths, ulong value)
         {
-            lengths[64 - BitOperations.LeadingZeroCount(value)]++;
+            lengths[CounterBits - BitOperations.LeadingZeroCount(value)]++;
         }
     }
 }
