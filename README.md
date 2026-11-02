@@ -222,8 +222,10 @@ building at the scale it describes, which is the measurement as of commit 426348
 
 | Structure | Counts | Builds up to | Loads by default up to | Saves up to |
 | --- | --- | --- | --- | --- |
-| `ScalableBloomFilter` | items added, hint 1,000, fp 1%, r 0.8 | ≈ 3.16 million | ≈ 2.83 million | as built |
-| `ScalableBloomFilter` | items added, hint 1,000, fp 1%, r 0.9 | ≈ 6.68 million | ≈ 4.10 million | as built |
+| `ScalableBloomFilter` | items added, hint 1,000, growth 2, fp 1%, r 0.8 | ≈ 248.99 million | ≈ 62.41 million | as built |
+| `ScalableBloomFilter` | items added, hint 1,000, growth 2, fp 1%, r 0.9 | ≈ 490.25 million | ≈ 123.41 million | as built |
+| `ScalableBloomFilter` | items added, hint 1,000, growth 1, fp 1%, r 0.8 | ≈ 3.16 million | ≈ 2.83 million | as built |
+| `ScalableBloomFilter` | items added, hint 1,000, growth 1, fp 1%, r 0.9 | ≈ 6.68 million | ≈ 4.10 million | as built |
 | `InfiniFilter` | items added, 8-bit fingerprints | 1,610,612,736 | 100,663,296 | 805,306,368 |
 | `InfiniFilter` | items added, 16-bit fingerprints | 1,610,612,736 | 100,663,296 | 402,653,184 |
 | `MementoFilter` | items added, one per block, range 256, 8-bit fingerprints | 1,610,612,736 | 100,663,296 | 402,653,184 |
@@ -594,10 +596,11 @@ truncated one and fails when you add to it; the sizes where that begins are the 
 up to" figures in [the table](#how-much-each-one-holds).
 
 **Look elsewhere otherwise.** Below about 121 million items it is the same filter with
-wider arithmetic, so `BloomFilter` is the plainer choice. And above its limit, consider
-`ScalableBloomFilter` instead: it grows by adding filters rather than by making one
-larger, so it has no single-filter ceiling at all, and it does not need you to know the
-size in advance.
+wider arithmetic, so `BloomFilter` is the plainer choice. And if you do not know the size
+in advance, `ScalableBloomFilter` takes it from you, but it does not reach much further:
+every filter it adds is itself a 32-bit filter, so at its default growth it stops at the
+items in [the table](#how-much-each-one-holds), a few hundred million. Past that, size a
+`BloomFilter64` for the most you expect.
 
 Only the Bloom family has this ceiling. `CuckooBloomFilter` and `BinaryFuseFilter` hold
 around 2.1 billion entries before they run into .NET's 2 GB array limit, and the sketches —
@@ -784,7 +787,10 @@ Adds new filters with geometrically tightening rates as it fills, so it grows to
 whatever arrives. Each new filter also holds more than the last, by a growth factor, so
 the stack a query has to ask stays a few dozen filters deep at most; a growth factor of 1
 builds every filter the same size, as the filter did before the factor existed, and
-stops after a few thousand.
+stops after a few thousand. Either way it has a ceiling, and an `Add` that needs one more
+filter than it can build throws `InvalidOperationException` and leaves the filter as it
+was; how many items that is, and how many read back under the default budget, are in
+[the table](#how-much-each-one-holds) for growth factors of 2 and 1.
 
 **Reach for it when** you genuinely don't know how large the set will be and memory is not
 bounded.

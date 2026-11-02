@@ -64,6 +64,21 @@ namespace TestProbabilisticDataStructures
         private static byte[] Key(long i) => BitConverter.GetBytes(i);
 
         /// <summary>
+        /// Whether a scalable filter that has <paramref name="filters"/> filters cannot build
+        /// the next, and for the reason of this kind: the exception its sizing has inside.
+        /// </summary>
+        private static bool CeilingIs(uint hint, double fp, double r, uint growth, int filters, Type inner)
+        {
+            var scalable = new ScalableBloomFilter(hint, fp, r, growth);
+            scalable.Filters.Clear();
+            for (var i = 0; i < filters; i++) scalable.Filters.Add(CapacityRows.Placeholder);
+            var refused = Assert.Throws<InvalidOperationException>(
+                () => scalable.NextCapacity(fp * Math.Pow(r, filters)));
+            return refused.InnerException is not null && inner.IsInstanceOfType(refused.InnerException);
+        }
+
+
+        /// <summary>
         /// The items at which a 1% filter reaches 0.27 · 2^32 bits, where the 32-bit band
         /// that was measured begins.
         /// </summary>
@@ -237,16 +252,46 @@ namespace TestProbabilisticDataStructures
             new Claim("It has 1.5 cells for each", () => InvertibleBloomLookupTable.CellsPerDifference == 1.5),
 
             // ---- ScalableBloomFilter -------------------------------------------------------
-            new Claim("which at 1% and `r = 0.8` comes after about 3,160 filters", () =>
+            new Claim("A growth factor of 2 is what a filter built without one takes", () =>
+                ScalableBloomFilter.DefaultGrowth == 2),
+            new Claim("a payload written before the factor existed reads back with a growth factor of 1", () =>
+            {
+                // A filter that does not grow its filters writes the layout from before the factor,
+                // which carries none, and reads back as one that does not grow them.
+                var old = Persistence.FromByteArray<ScalableBloomFilter>(new ScalableBloomFilter(1000, 0.01, 0.8, 1).ToByteArray());
+                var grown = Persistence.FromByteArray<ScalableBloomFilter>(new ScalableBloomFilter(1000, 0.01, 0.8, 2).ToByteArray());
+                return old.Growth == 1 && grown.Growth == 2;
+            }),
+            new Claim("each contained filter is sized for `growth` times as many items as the last", () =>
+            {
+                var scalable = new ScalableBloomFilter(1000, 0.01, 0.8, 3);
+                scalable.Filters.Clear();
+                scalable.Filters.Add(CapacityRows.Placeholder);
+                scalable.Filters.Add(CapacityRows.Placeholder);
+                return scalable.NextCapacity(0.01 * 0.64) == 9000;
+            }),
+            new Claim("it comes after about 3,160 filters", () =>
             {
                 // Where the rate underflows is a matter of the last digits of a power of a
                 // number near the smallest double, so it is allowed a few filters either way.
-                var steps = CapacityRows.Steps(1000, 0.01, 0.8);
-                return Math.Abs(steps.Count - 3160) <= 5
-                    && Assert.Throws<OverflowException>(
-                        () => new PartitionedBloomFilter(1000, 0.01 * Math.Pow(0.8, steps.Count))) is not null;
+                var shape = CapacityRows.ShapeOf(1000, 0.01, 0.8, 1);
+                return Math.Abs(shape.Count - 3160) <= 5 && CeilingIs(1000, 0.01, 0.8, 1, shape.Count, typeof(OverflowException));
             }),
-            new Claim("about four times the bytes of the filters", () =>
+            new Claim("the next filter would need more bits than a contained filter addresses", () =>
+            {
+                var shape = CapacityRows.ShapeOf(1000, 0.01, 0.8, 2);
+                return CeilingIs(1000, 0.01, 0.8, 2, shape.Count, typeof(ArgumentOutOfRangeException));
+            }),
+            new Claim("and the `Add` that needs it throws `InvalidOperationException` with the filter as it was", () =>
+            {
+                var scalable = new ScalableBloomFilter(1000, 0.01, 0.8, 1);
+                scalable.Filters.Clear();
+                var shape = CapacityRows.ShapeOf(1000, 0.01, 0.8, 1);
+                for (var i = 0; i < shape.Count; i++) scalable.Filters.Add(CapacityRows.Placeholder);
+                return Assert.Throws<InvalidOperationException>(
+                    () => scalable.NextCapacity(0.01 * Math.Pow(0.8, shape.Count))) is not null && scalable.Filters.Count == shape.Count;
+            }),
+            new Claim("Reading costs about four times the bytes of the filters", () =>
                 Rounds(Facts["scalable bytes ratio 1000 0.01 0.8"], 4, 0)),
 
             // ---- InfiniFilter and MementoFilter --------------------------------------------

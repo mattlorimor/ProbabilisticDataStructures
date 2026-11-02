@@ -27,8 +27,10 @@ namespace TestProbabilisticDataStructures
                 yield return row;
             }
 
-            yield return ScalableRow(1000, 0.01, "1%", 0.8);
-            yield return ScalableRow(1000, 0.01, "1%", 0.9);
+            yield return ScalableRow(1000, 0.01, "1%", 0.8, 2);
+            yield return ScalableRow(1000, 0.01, "1%", 0.9, 2);
+            yield return ScalableRow(1000, 0.01, "1%", 0.8, 1);
+            yield return ScalableRow(1000, 0.01, "1%", 0.9, 1);
             yield return CuckooRow(0.01, "1%", filled: false);
             yield return CuckooRow(0.01, "1%", filled: true);
             yield return CuckooRow(0.001, "0.1%", filled: false);
@@ -95,9 +97,87 @@ namespace TestProbabilisticDataStructures
         // ---- ScalableBloomFilter ---------------------------------------------------------
 
         /// <summary>
+        /// The items a contained filter takes before the next is started: the next filter
+        /// is started by the Add after the one that finds this one at its fill ratio, so a
+        /// filter takes the items it takes to get there. Its partitions are
+        /// <paramref name="slots"/> bits each.
+        /// </summary>
+        private static ulong ItemsBeforeNext(uint slots)
+        {
+            var items = (ulong)Math.Ceiling(slots * Math.Log(2));
+            while (1 - Math.Exp(-(double)items / slots) < Defaults.FILL_RATIO)
+            {
+                items++;
+            }
+
+            while (items > 1 && 1 - Math.Exp(-(double)(items - 1) / slots) >= Defaults.FILL_RATIO)
+            {
+                items--;
+            }
+
+            return items;
+        }
+
+        /// <summary>
         /// The contained filters a scalable filter grows to, in order, as each one is
-        /// sized: the items it takes before the next is started, and what a read of it
-        /// alone is charged. Ends where the constructor can no longer size one.
+        /// sized: the items it takes before the next is started, and the bytes of bits it
+        /// holds. Ends where the filter's own sizing, which is asked and not restated,
+        /// says the next cannot be built, so no filter is allocated.
+        /// </summary>
+        internal static List<(ulong Items, ulong Units)> Shape(uint hint, double fp, double r, uint growth)
+        {
+            // The filter is asked how large its next filter is, and answers by how many it
+            // has, so it is given placeholders for the ones it would have.
+            var scalable = new ScalableBloomFilter(hint, fp, r, growth);
+            scalable.Filters.Clear();
+            var steps = new List<(ulong, ulong)>();
+            while (true)
+            {
+                var rate = fp * Math.Pow(r, scalable.Filters.Count);
+                uint capacity;
+                try
+                {
+                    capacity = scalable.NextCapacity(rate);
+                }
+                catch (InvalidOperationException)
+                {
+                    return steps;
+                }
+
+                scalable.Filters.Add(Placeholder);
+                var k = Utils.OptimalK(rate);
+                var slots = (uint)Math.Ceiling((double)Utils.OptimalM(capacity, rate) / k);
+                steps.Add((ItemsBeforeNext(slots), k * TrueBytes(slots, 1)));
+            }
+        }
+
+        /// <summary>
+        /// A filter standing for one a scalable filter would have, empty and tiny, so that
+        /// the scalable filter can count them and total what they hold.
+        /// </summary>
+        internal static readonly PartitionedBloomFilter Placeholder = new(1, 0.5);
+
+        private static readonly Dictionary<(uint, double, double, uint), List<(ulong Items, ulong Units)>> ShapeCache = new();
+
+        internal static List<(ulong Items, ulong Units)> ShapeOf(uint hint, double fp, double r, uint growth)
+        {
+            lock (ShapeCache)
+            {
+                if (!ShapeCache.TryGetValue((hint, fp, r, growth), out var shape))
+                {
+                    shape = Shape(hint, fp, r, growth);
+                    ShapeCache[(hint, fp, r, growth)] = shape;
+                }
+
+                return shape;
+            }
+        }
+
+        /// <summary>
+        /// The contained filters of a scalable filter that does not grow them, in order,
+        /// with what a read of each alone is charged. Every filter is built, so this is the
+        /// measured side of <see cref="Shape"/>, and it is kept for the filters whose
+        /// partitions, a thousand to a filter by the end, make their charge more than their bits.
         /// </summary>
         private static List<(ulong Items, long Charge)> ScalableSteps(uint hint, double fp, double r)
         {
@@ -115,19 +195,8 @@ namespace TestProbabilisticDataStructures
                     return steps;
                 }
 
-                // The next filter is started by the Add after the one that finds this one
-                // at its fill ratio, so a filter takes the items it takes to get there.
                 var slots = (uint)Math.Ceiling((double)filter.BitCount / filter.PartitionCount);
-                var items = (ulong)Math.Ceiling(slots * Math.Log(2));
-                while (1 - Math.Exp(-(double)items / slots) < Defaults.FILL_RATIO)
-                {
-                    items++;
-                }
-
-                while (items > 1 && 1 - Math.Exp(-(double)(items - 1) / slots) >= Defaults.FILL_RATIO)
-                {
-                    items--;
-                }
+                var items = ItemsBeforeNext(slots);
 
                 // Read nested, a filter is also in the outer payload and copied out of it once more,
                 // each the length of its own envelope.
@@ -155,68 +224,131 @@ namespace TestProbabilisticDataStructures
             }
         }
 
-        internal static CapacityRow ScalableRow(uint hint, double fp, string fpLabel, double r) => Row(
-            StructureId.ScalableBloomFilter, $"items added, hint {hint:N0}, fp {fpLabel}, r {r}",
+        internal static CapacityRow ScalableRow(uint hint, double fp, string fpLabel, double r, uint growth) => Row(
+            StructureId.ScalableBloomFilter, $"items added, hint {hint:N0}, growth {growth}, fp {fpLabel}, r {r}",
             () =>
             {
                 // Items added before the filter that cannot be sized is wanted; the Add
                 // that wants it throws.
-                var steps = Steps(hint, fp, r);
-                var total = steps.Aggregate(0UL, (sum, s) => sum + s.Items);
-                return About(total, total, 2);
-            },
-            () =>
-            {
-                var steps = Steps(hint, fp, r);
-
-                // A scalable filter is read as its contained filters one after another,
-                // each as a read of its own plus the same fixed charge for being nested.
-                // The fixed charges are found from real reads of a few filters, and the
-                // sum is then taken over the filters of the size they are.
-                var counts = new[] { 1, 2, 3, 4 };
-                var measured = counts.Select(f =>
+                var total = ShapeOf(hint, fp, r, growth).Aggregate(0UL, (sum, s) => sum + s.Items);
+                if (growth == 1)
                 {
-                    var filter = new ScalableBloomFilter(hint, fp, r);
-                    var items = steps.Take(f - 1).Aggregate(0UL, (sum, s) => sum + s.Items) + 1;
-                    for (var i = 0UL; i < items; i++)
-                    {
-                        filter.Add(Key((long)i));
-                    }
-
-                    Assert.HasCount(f, filter.Filters, "the filter did not grow as the sum of its steps says");
-                    return (Filters: f, Charge: ChargeOf(StructureId.ScalableBloomFilter, filter));
-                }).ToArray();
-
-                var line = ChargeLine.Fit("ScalableBloomFilter's fixed charges", 32 * 4,
-                    measured.Select(m => ((long)m.Filters,
-                        m.Charge - steps.Take(m.Filters).Sum(s => s.Charge))).ToArray());
-
-                // The items that make the most filters read under the budget.
-                ulong ItemsThatFit(bool surely)
-                {
-                    var charge = 0L;
-                    var items = 0UL;
-                    var most = 0UL;
-                    for (var f = 1; f <= steps.Count; f++)
-                    {
-                        charge += steps[f - 1].Charge;
-                        items += steps[f - 1].Items;
-                        var fits = surely
-                            ? line.Surely((ulong)f, Budget - charge)
-                            : line.Possibly((ulong)f, Budget - charge);
-                        if (!fits)
-                        {
-                            break;
-                        }
-
-                        most = items;
-                    }
-
-                    return most;
+                    // The same, found by building every filter.
+                    Assert.AreEqual(total, Steps(hint, fp, r).Aggregate(0UL, (sum, s) => sum + s.Items));
                 }
 
-                return About(ItemsThatFit(true), ItemsThatFit(false));
-            });
+                return About(total, total, 2);
+            },
+            () => growth == 1 ? ScalableLoadsUngrown(hint, fp, r) : ScalableLoadsGrown(hint, fp, r, growth));
+
+        /// <summary>
+        /// A filter that does not grow its filters is read as them one after another, each
+        /// as a read of its own plus the same fixed charge for being nested. The fixed
+        /// charges are found from real reads of a few filters, and the sum is then taken
+        /// over the filters, each charged as the filter it is.
+        /// </summary>
+        private static string ScalableLoadsUngrown(uint hint, double fp, double r)
+        {
+            var steps = Steps(hint, fp, r);
+            var counts = new[] { 1, 2, 3, 4 };
+            var measured = counts.Select(f =>
+            {
+                var filter = new ScalableBloomFilter(hint, fp, r, 1);
+                var items = steps.Take(f - 1).Aggregate(0UL, (sum, s) => sum + s.Items) + 1;
+                for (var i = 0UL; i < items; i++)
+                {
+                    filter.Add(Key((long)i));
+                }
+
+                Assert.HasCount(f, filter.Filters, "the filter did not grow as the sum of its steps says");
+                return (Filters: f, Charge: ChargeOf(StructureId.ScalableBloomFilter, filter));
+            }).ToArray();
+
+            var line = ChargeLine.Fit("ScalableBloomFilter's fixed charges", 32 * 4,
+                measured.Select(m => ((long)m.Filters,
+                    m.Charge - steps.Take(m.Filters).Sum(s => s.Charge))).ToArray());
+
+            // The items that make the most filters read under the budget.
+            ulong ItemsThatFit(bool surely)
+            {
+                var charge = 0L;
+                var items = 0UL;
+                var most = 0UL;
+                for (var f = 1; f <= steps.Count; f++)
+                {
+                    charge += steps[f - 1].Charge;
+                    items += steps[f - 1].Items;
+                    var fits = surely
+                        ? line.Surely((ulong)f, Budget - charge)
+                        : line.Possibly((ulong)f, Budget - charge);
+                    if (!fits)
+                    {
+                        break;
+                    }
+
+                    most = items;
+                }
+
+                return most;
+            }
+
+            return About(ItemsThatFit(true), ItemsThatFit(false));
+        }
+
+        /// <summary>
+        /// A filter that grows its filters is read mostly as its last few, which are the
+        /// largest by far, so the read is a line in the bytes of bits the contained filters
+        /// hold; the line is found from real reads of the first few filters, and the number
+        /// of filters it stops at has to be the same whichever way the slack goes.
+        /// </summary>
+        private static string ScalableLoadsGrown(uint hint, double fp, double r, uint growth)
+        {
+            var shape = ShapeOf(hint, fp, r, growth);
+            var points = Enumerable.Range(2, 10).Select(f =>
+            {
+                var filter = new ScalableBloomFilter(hint, fp, r, growth);
+                var items = shape.Take(f - 1).Aggregate(0UL, (sum, s) => sum + s.Items) + 1;
+                for (var i = 0UL; i < items; i++)
+                {
+                    filter.Add(Key((long)i));
+                }
+
+                Assert.HasCount(f, filter.Filters, "the filter did not grow as the sum of its steps says");
+                return ((long)shape.Take(f).Aggregate(0UL, (sum, s) => sum + s.Units),
+                    ChargeOf(StructureId.ScalableBloomFilter, filter));
+            }).ToArray();
+
+            // The partitions of each filter cost a few bytes each beyond their bits, which
+            // is a few thousand bytes over the filters measured.
+            var line = ChargeLine.Fit($"ScalableBloomFilter growth {growth}", 12_000, points);
+
+            ulong ItemsThatFit(bool surely)
+            {
+                var units = 0UL;
+                var items = 0UL;
+                var most = 0UL;
+                foreach (var step in shape)
+                {
+                    units += step.Units;
+                    items += step.Items;
+                    if (!(surely ? line.Surely(units) : line.Possibly(units)))
+                    {
+                        break;
+                    }
+
+                    most = items;
+                }
+
+                return most;
+            }
+
+            var low = ItemsThatFit(true);
+            var high = ItemsThatFit(false);
+            Assert.AreEqual(low, high, "the slack leaves the number of filters the read stops at undecided");
+            Facts[$"scalable growth {growth} {r} loads"] = low;
+
+            return About(low, high, 2);
+        }
 
         // ---- CuckooBloomFilter -------------------------------------------------------------
 

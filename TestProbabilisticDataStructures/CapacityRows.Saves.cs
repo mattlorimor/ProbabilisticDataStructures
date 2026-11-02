@@ -113,7 +113,15 @@ namespace TestProbabilisticDataStructures
             StructureId.ScalableBloomFilter => () =>
             {
                 var r = row.Counts.Contains("r 0.9", StringComparison.Ordinal) ? 0.9 : 0.8;
-                return AsBuiltIf(Facts[$"scalable length 1000 0.01 {r}"] <= MaxPayload, "the contained filters come to more than the ceiling");
+                if (row.Counts.Contains("growth 1,", StringComparison.Ordinal))
+                {
+                    return AsBuiltIf(Facts[$"scalable length 1000 0.01 {r}"] <= MaxPayload, "the contained filters come to more than the ceiling");
+                }
+
+                // Each contained filter is its partitions' bits, a little over, and the filter is
+                // all of them: a tenth is room enough for the lengths and headers.
+                var units = ShapeOf(1000, 0.01, r, 2).Aggregate(0UL, (sum, s) => sum + s.Units);
+                return AsBuiltIf(units * 1.1 <= MaxPayload, "the contained filters come to more than the ceiling");
             },
             StructureId.CuckooBloomFilter => () =>
             {

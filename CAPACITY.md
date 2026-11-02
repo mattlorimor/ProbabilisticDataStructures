@@ -95,8 +95,8 @@ using 7 hash functions at 1% and 10 at 0.1%.
 
 `m` is a `uint`. `Utils.OptimalM` refuses a filter of more than 4,294,967,295 bits, which
 is 448,089,842 items at 1%, and the figure in the table is the last of those that builds a
-working array. For more items use `BloomFilter64`, which sizes in 64 bits, or
-`ScalableBloomFilter`, which grows by adding filters.
+working array. For more items use `BloomFilter64`, which sizes in 64 bits.
+`ScalableBloomFilter` does not reach much further: each filter it adds is a 32-bit filter.
 
 A read is charged twice the filter's bytes, so the default budget reads a filter of
 about 537 megabytes: nearly all of what the constructor builds, and a filter sized for the
@@ -196,18 +196,32 @@ what limits the build, and wider keys make a larger table to read.
 
 ### `ScalableBloomFilter`
 
-`hint` is how many items each contained filter is sized for. A new filter is started
-when the last reaches a fill ratio of one half, which takes a little under `hint` items,
-so the filter holds about `hint` times as many items as it has filters. Each new filter
-is sized for a rate `r` times the last one's, so that the compound rate stays bounded:
-the filters get larger, and there are more of them the closer `r` is to 1.
+`hint` is how many items the first contained filter is sized for, and `growth` is how many
+times as many each next one is sized for: each contained filter is sized for `growth`
+times as many items as the last. A growth factor of 2 is what a filter built without one
+takes, and a payload written before the factor existed reads back with a growth factor of
+1. A new filter is started when the last reaches a fill ratio of one half, which takes a
+little under what it is sized for, so the filter holds about as many items as its last
+filter is sized for, and a growth factor of 2 doubles that with every filter. Each new
+filter is also sized for a rate `r` times the last one's, so that the compound rate stays
+bounded: a filter is larger for the tighter rate, and there are more of them the closer
+`r` is to 1.
 
-The filter stops growing when the rate of the next filter is so small that the sizing
-overflows, which at 1% and `r = 0.8` comes after about 3,160 filters, and the `Add` that needs the next
-throws `OverflowException`. The table gives the items added before that. Reading costs
-about four times the bytes of the filters, because each is a payload inside a payload,
-and the later filters are the largest, so the default budget is reached first. A larger
-`hint` makes each filter larger, and both numbers scale with it.
+What ends the filter, and so what the growth factor does to the first number, depends on
+that factor. With a growth factor of 2 or more the filters double until the next filter
+would need more bits than a contained filter addresses, which is the ceiling in the
+table; and the `Add` that needs it throws `InvalidOperationException` with the filter as it
+was. With a growth factor of 1 every filter is sized for `hint` items, and what ends the
+filter is the tightened rate, not the bits: it comes after about 3,160 filters, when the
+rate of the next has no finite reciprocal to size it from, at a small fraction of the
+items. So the table gives both, at the same `hint`, rate and `r`.
+
+Reading costs about four times the bytes of the filters, because each is a payload inside a
+payload. With a growth factor of 1 the filters get larger as their rate tightens, and the
+default budget is reached before the ceiling. With a factor of 2 the last filters are the
+largest by far, and the default budget is reached a number of doublings before the
+ceiling: the read stops at the filter before the one that passes it, which is why the
+number in the table is a sum of whole filters and not a round one.
 
 ### `InfiniFilter`
 
