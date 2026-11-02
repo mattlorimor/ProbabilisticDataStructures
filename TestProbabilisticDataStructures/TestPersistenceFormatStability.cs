@@ -83,8 +83,9 @@ namespace TestProbabilisticDataStructures
         {
             var f = ScalableBloomFilter.ReadFrom(Fixture("scalablebloomfilter-v1.bin"));
 
-            Assert.AreEqual(1053u, f.Capacity());
+            Assert.AreEqual(1053ul, f.Capacity());
             Assert.AreEqual(7u, f.K());
+            var stored = f.Filters.Count;
 
             for (int i = 0; i < 100; i++)
             {
@@ -98,7 +99,75 @@ namespace TestProbabilisticDataStructures
                 f.Add(Key($"s{i}"));
             }
 
-            Assert.IsGreaterThan(1053u, f.Capacity(), "the restored filter did not grow");
+            Assert.IsGreaterThan(1053ul, f.Capacity(), "the restored filter did not grow");
+
+            // And it grows the way it always did. A version 1 payload carries no growth
+            // factor because every filter then added its filters at the hint, so the
+            // filters it adds after reading are sized for 20 items each -- not for the
+            // default growth a new filter is given. The twin was built that way and
+            // never saved; the two must agree byte for byte, and still write version 1.
+            Assert.AreEqual(1u, f.Growth, "a version 1 payload read as a growing filter");
+            Assert.IsGreaterThan(stored, f.Filters.Count,
+                "no filter was added after reading, so nothing below is checked");
+            for (int i = stored; i < f.Filters.Count; i++)
+            {
+                Assert.AreEqual(Utils.OptimalM(20, 0.01 * Math.Pow(0.8, i)), f.Filters[i].BitCount,
+                    $"filter {i}, added after reading, is not sized for the hint");
+            }
+
+            var twin = new ScalableBloomFilter(20, 0.01, 0.8, 1);
+            for (int i = 0; i < 400; i++)
+            {
+                twin.Add(Key($"s{i}"));
+            }
+
+            CollectionAssert.AreEqual(twin.ToByteArray(), f.ToByteArray(),
+                "the restored filter grew differently from one that was never saved");
+            Assert.AreEqual(1, f.ToByteArray()[4], "the restored filter no longer writes version 1");
+        }
+
+        /// <summary>
+        /// Version 7 adds the growth factor, so a filter whose contained filters grow
+        /// goes on growing by it after a save and a load. The fixture holds three filters
+        /// sized for 20, 40 and 80 items -- the growth is in the payload as well as in
+        /// the factor -- and the filters added after reading go on doubling.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredScalableBloomFilterAtVersionSevenStillReads()
+        {
+            var f = ScalableBloomFilter.ReadFrom(Fixture("scalablebloomfilter-v7.bin"));
+
+            Assert.AreEqual(2u, f.Growth);
+            Assert.AreEqual(20u, f.Hint);
+            Assert.AreEqual(3, f.Filters.Count);
+            CollectionAssert.AreEqual(new uint[] { 192, 402, 842 }, f.Filters.Select(x => x.BitCount).ToArray());
+            CollectionAssert.AreEqual(new uint[] { 20, 41, 39 }, f.Filters.Select(x => x.Count()).ToArray());
+
+            for (int i = 0; i < 100; i++)
+            {
+                Assert.IsTrue(f.Test(Key($"s{i}")), $"the stored filter no longer finds s{i}");
+            }
+
+            for (int i = 100; i < 400; i++)
+            {
+                f.Add(Key($"s{i}"));
+            }
+
+            Assert.IsGreaterThan(3, f.Filters.Count, "nothing was added after reading, so nothing below was checked");
+            for (int i = 0; i < f.Filters.Count; i++)
+            {
+                Assert.AreEqual(Utils.OptimalM(20u << i, 0.01 * Math.Pow(0.8, i)), f.Filters[i].BitCount,
+                    $"filter {i} is not sized for 20*2^{i} items");
+            }
+
+            var twin = new ScalableBloomFilter(20, 0.01, 0.8, 2);
+            for (int i = 0; i < 400; i++)
+            {
+                twin.Add(Key($"s{i}"));
+            }
+
+            CollectionAssert.AreEqual(twin.ToByteArray(), f.ToByteArray(),
+                "the restored filter grew differently from one that was never saved");
         }
 
         [TestMethod]
@@ -243,16 +312,24 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestTheVersionAfterTheNewestIsRefused()
         {
-            var stable = Relabeled(ReadFixture("stablebloomfilter-v5.bin"), 7);
+            // Eight is one past the newest, version 7. It is written out rather than
+            // computed from the library's ceiling, which is the thing being checked.
+            var stable = Relabeled(ReadFixture("stablebloomfilter-v5.bin"), 8);
             var ex = Assert.ThrowsExactly<InvalidDataException>(
                 () => StableBloomFilter.ReadFrom(new MemoryStream(stable)));
-            StringAssert.Contains(ex.Message, "format version 7");
+            StringAssert.Contains(ex.Message, "format version 8");
             StringAssert.Contains(ex.Message, "written by a later version");
 
-            var cuckoo = Relabeled(ReadFixture("cuckoobloomfilter-v6.bin"), 7);
+            var cuckoo = Relabeled(ReadFixture("cuckoobloomfilter-v6.bin"), 8);
             ex = Assert.ThrowsExactly<InvalidDataException>(
                 () => CuckooBloomFilter.ReadFrom(new MemoryStream(cuckoo)));
-            StringAssert.Contains(ex.Message, "format version 7");
+            StringAssert.Contains(ex.Message, "format version 8");
+            StringAssert.Contains(ex.Message, "written by a later version");
+
+            var scalable = Relabeled(ReadFixture("scalablebloomfilter-v7.bin"), 8);
+            ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => ScalableBloomFilter.ReadFrom(new MemoryStream(scalable)));
+            StringAssert.Contains(ex.Message, "format version 8");
             StringAssert.Contains(ex.Message, "written by a later version");
         }
 
@@ -1154,13 +1231,27 @@ namespace TestProbabilisticDataStructures
             AssertBytes("partitionedbloomfilter-v1.bin", partitioned.ToByteArray());
             AssertBytes("inversebloomfilter-v1.bin", inverse.ToByteArray());
 
-            var scalable = new ScalableBloomFilter(20, 0.01, 0.8);
+            // A filter that adds every filter at its hint writes the layout it always
+            // wrote, version 1, with no growth factor in it.
+            var scalable = new ScalableBloomFilter(20, 0.01, 0.8, 1);
             for (int i = 0; i < 100; i++)
             {
                 scalable.Add(Key($"s{i}"));
             }
 
             AssertBytes("scalablebloomfilter-v1.bin", scalable.ToByteArray());
+
+            // One that grows writes version 7. The fixture was assembled from FORMAT.md's
+            // layout outside the library's writer -- the outer fields by hand, each
+            // contained filter built for 20*2^i items directly -- so this holds the
+            // writer to the layout rather than to itself.
+            var growing = new ScalableBloomFilter(20, 0.01, 0.8, 2);
+            for (int i = 0; i < 100; i++)
+            {
+                growing.Add(Key($"s{i}"));
+            }
+
+            AssertBytes("scalablebloomfilter-v7.bin", growing.ToByteArray());
 
             var hll = new HyperLogLog(64);
             for (int i = 0; i < 20; i++)
@@ -1395,6 +1486,7 @@ namespace TestProbabilisticDataStructures
                 ("deletablebloomfilter-v1.bin", 4, 1),
                 ("partitionedbloomfilter-v1.bin", 5, 1),
                 ("scalablebloomfilter-v1.bin", 6, 1),
+                ("scalablebloomfilter-v7.bin", 6, 7),
                 ("stablebloomfilter-v1.bin", 7, 1),
                 ("inversebloomfilter-v1.bin", 8, 1),
                 ("cuckoobloomfilter-v1.bin", 9, 1),
@@ -1449,6 +1541,14 @@ namespace TestProbabilisticDataStructures
                 "the stable filter is not writing the version its layout needs");
             Assert.AreEqual(6, new CuckooBloomFilter(100, 0.01).ToByteArray()[4],
                 "the cuckoo filter is not writing the version its layout needs");
+
+            // The scalable filter writes version 7 only when it has a growth factor to
+            // record, so one that adds every filter at its hint stays readable by
+            // libraries that predate the choice.
+            Assert.AreEqual(1, new ScalableBloomFilter(100, 0.01, 0.8, 1).ToByteArray()[4],
+                "a scalable filter that does not grow started writing a later format version");
+            Assert.AreEqual(7, new ScalableBloomFilter(100, 0.01, 0.8, 2).ToByteArray()[4],
+                "a scalable filter that grows is not writing the version its layout needs");
         }
 
         /// <summary>

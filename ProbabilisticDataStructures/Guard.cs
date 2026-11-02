@@ -215,6 +215,21 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A scalable filter builds each contained filter after the first for this many
+        /// times the last one's items, so zero would size them for none.
+        /// </summary>
+        internal static void ValidGrowthFactor(uint growth, string paramName)
+        {
+            if (growth == 0)
+            {
+                throw new ArgumentOutOfRangeException(paramName, growth,
+                    "The growth factor must be at least 1. Each contained filter after the " +
+                    "first is built for this many times the items of the one before, so 0 " +
+                    "would size them for none; 1 builds every one for the hint.");
+            }
+        }
+
+        /// <summary>
         /// The deletable filter partitions its bits into data and collision regions,
         /// so the collision count has to leave room for the data.
         /// </summary>
