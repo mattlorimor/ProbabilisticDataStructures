@@ -32,10 +32,15 @@ MUTATION_KILLED=0
 MUTATION_SURVIVED=0
 
 mutation_target() {
-    MUTATION_DIR="$1"
+    local dir="$1"
 
-    if [ ! -d "$MUTATION_DIR" ]; then
-        echo "mutate: no such directory: $MUTATION_DIR" >&2
+    # A refusal has to stay a refusal. Assigning MUTATION_DIR up front left it
+    # set after a "refusing to run", so a scratch script that did not check the
+    # return code went on to run_mutation, whose first act is the restore.
+    MUTATION_DIR=""
+
+    if [ ! -d "$dir" ]; then
+        echo "mutate: no such directory: $dir" >&2
         return 1
     fi
 
@@ -46,11 +51,11 @@ mutation_target() {
 
     # The guard. Staged or unstaged changes under the target are exactly what
     # the restore would throw away.
-    if ! git diff --quiet -- "$MUTATION_DIR" \
-        || ! git diff --cached --quiet -- "$MUTATION_DIR"; then
-        echo "mutate: refusing to run -- '$MUTATION_DIR' has uncommitted changes." >&2
+    if ! git diff --quiet -- "$dir" \
+        || ! git diff --cached --quiet -- "$dir"; then
+        echo "mutate: refusing to run -- '$dir' has uncommitted changes." >&2
         echo >&2
-        git status --short -- "$MUTATION_DIR" >&2
+        git status --short -- "$dir" >&2
         echo >&2
         echo "  Restoring a mutation discards everything uncommitted in that" >&2
         echo "  directory, not only the deliberate break. Commit the work first;" >&2
@@ -62,14 +67,15 @@ mutation_target() {
     # usually mean a change is half made, and a mutation table measured now
     # describes a tree nobody will have again.
     local untracked
-    untracked="$(git ls-files --others --exclude-standard -- "$MUTATION_DIR")"
+    untracked="$(git ls-files --others --exclude-standard -- "$dir")"
     if [ -n "$untracked" ]; then
-        echo "mutate: note -- untracked files under '$MUTATION_DIR':" >&2
+        echo "mutate: note -- untracked files under '$dir':" >&2
         echo "$untracked" | sed 's/^/    /' >&2
         echo "  These survive the restore, but the table will describe a tree" >&2
         echo "  that is not the commit under test." >&2
     fi
 
+    MUTATION_DIR="$dir"
     trap 'mutation_restore' EXIT INT TERM
     MUTATION_KILLED=0
     MUTATION_SURVIVED=0
