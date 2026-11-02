@@ -397,6 +397,11 @@ namespace ProbabilisticDataStructures
                     "there would be none, and neither is a sketch.");
             }
 
+            // Each row is allocated before it is read.
+            reader.Budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf(depth, sizeof(long)),
+                ReadBudget.Times(depth, ReadBudget.ArrayOf(width, sizeof(double))),
+                ReadBudget.SmallObject));
             var matrix = new double[depth][];
             var anyNoise = false;
 

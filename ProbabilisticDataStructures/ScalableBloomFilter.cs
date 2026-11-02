@@ -375,6 +375,8 @@ namespace ProbabilisticDataStructures
             reader.RequireHolds(
                 filterCount, PersistenceFormat.MinNestedLength, "contained filters");
 
+            budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf(filterCount, sizeof(long)), ReadBudget.SmallObject));
             var filters = new List<PartitionedBloomFilter>((int)filterCount);
             for (uint i = 0; i < filterCount; i++)
             {

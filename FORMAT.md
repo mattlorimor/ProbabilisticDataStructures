@@ -232,13 +232,47 @@ allocates for a count, it first checks that the bytes left could hold that many,
 it allocates follows what the payload actually holds rather than what it claims. A sketch
 claiming a large `k` and holding a few values costs a few values.
 
-Two cannot size by the payload, and allocate what the size says. A cuckoo filter writes
-only its occupied entries but must hold its whole table, and a `VarOpt` sample holds its
-regions whole because its arithmetic assumes their size. For those a payload can ask for
-as large a structure as the constructor would build, and no larger.
+Some cannot size by the payload, and allocate what a size says: a cuckoo filter writes
+only its occupied entries but must hold its whole table, a `VarOpt` sample holds its
+regions whole because its arithmetic assumes their size, and a quotient filter's header
+names its table outright. A payload can ask those for as large a structure as the
+constructor would build. What stops a small one asking is the read budget, below.
 
 The envelope bounds everything else: a payload is at most 2,147,483,647 bytes, so a
 structure whose payload would be larger can be built but not written.
+
+### Read budget
+
+Every read has a budget: the most memory, in bytes, reading one payload may allocate — the
+payload itself, the copies made of runs within it, the structure, and any structure nested
+inside it, all from one allowance. A reader works out what each allocation will cost from
+the fields that size it, before making it, and refuses the payload when the allowance
+would be passed. The refusal is an `InvalidDataException` whose inner exception is a
+`ReadBudgetExceededException` naming the bytes needed and the budget.
+
+The default is 1,073,741,824 bytes, one gibibyte (`ReadOptions.DefaultMemoryBudget`).
+`ReadFrom` without options reads under it; the overloads taking `ReadOptions` read under
+any other, or under none. Since a read holds the payload while it builds the structure, it
+costs roughly the structure plus its payload.
+
+The limits in [Sizes](#sizes) are what can be read at all; the budget is what will be read
+without asking. Most limits there are far past the default — a structure at one is
+gigabytes, and loads only with a budget raised to match. What each read is charged:
+
+| Structure | Charged beyond the payload and the runs it copies |
+| --- | --- |
+| `BloomFilter`, `BloomFilter64`, `HyperLogLog`, `HyperLogLogPlus` (dense), `UltraLogLog`, `BinaryFuseFilter`, `BloomierFilter`, `SimHashSignature` | the structure's own copy of its registers or bits, where it keeps one |
+| `CountingBloomFilter`, `DeletableBloomFilter`, `StableBloomFilter` | a scratch buffer of four bytes per hash function |
+| `PartitionedBloomFilter`, `ScalableBloomFilter` | a slot per partition or contained filter; a contained filter is charged as a read of its own |
+| `CuckooBloomFilter` | the whole table, `m` × `b` fingerprints of `f` bits, and a bit per entry, whatever the payload holds |
+| `QuotientFilter` | the whole table, 2^`q` slots of `r` + 3 bits |
+| `VarOpt` | five regions of `k` + 1 slots, eight bytes each |
+| `InverseBloomFilter` | a slot of eight bytes per unit of capacity |
+| `CountMinSketch`, `CountSketch`, `PrivateCountMinSketch`, `SublimeCountMinSketch` | every row, before it is read; Sublime also its packed rows |
+| `TopK`, `HeavyKeeper` | a heap sized by the elements held, not by `k`; HeavyKeeper also its bucket arrays |
+| `ThetaSketch`, `TupleSketch`, `MinHashSignature`, `Grafite`, `SetSketch`, `InvertibleBloomLookupTable`, `DDSketch`, `HyperLogLogPlus` (sparse) | arrays sized by the values the payload carries |
+| `InfiniFilter`, `MementoFilter` | each table twice: as read, and as the segment built from it |
+| `DpswSketch` | its checkpoints, rebuilt from the substream size, and a list of segments per substream; each segment's sketch as above |
 
 ## Payloads
 

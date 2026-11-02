@@ -172,6 +172,7 @@ namespace ProbabilisticDataStructures
             // the payload it came in.
             reader.RequireHolds(length, sizeof(ulong), "values");
 
+            budget.Charge(ReadBudget.ArrayOf(length, sizeof(ulong)));
             var values = new ulong[length];
             for (uint i = 0; i < length; i++)
             {

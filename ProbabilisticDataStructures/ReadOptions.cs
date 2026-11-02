@@ -249,7 +249,12 @@ namespace ProbabilisticDataStructures
         /// Sums costs, saturating rather than wrapping, so that a product of claimed sizes
         /// too large for a long is refused rather than read as a small one.
         /// </summary>
-        internal static long Sum(params long[] costs)
+        /// <remarks>
+        /// A span rather than an array of parameters, so that charging allocates nothing
+        /// itself. As an array it cost 48 bytes a call, which a read that charges once per
+        /// nested sketch paid hundreds of times over, uncharged.
+        /// </remarks>
+        internal static long Sum(params ReadOnlySpan<long> costs)
         {
             var total = 0L;
             foreach (var cost in costs)
@@ -257,6 +262,33 @@ namespace ProbabilisticDataStructures
                 total = cost > long.MaxValue - total ? long.MaxValue : total + cost;
             }
             return total;
+        }
+
+        /// <summary>
+        /// What a <see cref="System.Collections.Generic.List{T}"/> grown by adding to it,
+        /// from empty, to <paramref name="count"/> elements of
+        /// <paramref name="elementSize"/> bytes allocates: the list and every array it
+        /// outgrew on the way.
+        /// </summary>
+        internal static long ListOf(ulong count, int elementSize)
+        {
+            // A list starts empty, takes four on its first add, and doubles each time it
+            // is full, so filling it to count allocates every capacity from four up to
+            // the first at or above it. Summed exactly; the doublings are few.
+            var total = SmallObject;
+            if (count == 0)
+            {
+                return total;
+            }
+
+            for (ulong capacity = 4; ; capacity *= 2)
+            {
+                total = Sum(total, ArrayOf(capacity, elementSize));
+                if (capacity >= count || total == long.MaxValue)
+                {
+                    return total;
+                }
+            }
         }
 
         /// <summary><paramref name="count"/> times <paramref name="each"/>, saturating.</summary>

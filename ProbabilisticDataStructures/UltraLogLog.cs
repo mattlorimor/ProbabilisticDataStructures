@@ -732,6 +732,7 @@ namespace ProbabilisticDataStructures
 
             reader.ExpectEnd();
 
+            budget.Charge(ReadBudget.ArrayOf(1UL << (int)precision, 1));
             var restored = new UltraLogLog(precision,
                 PersistenceFormat.ResolveOrThrow(hashId, hash));
             registers.CopyTo(restored.Registers, 0);

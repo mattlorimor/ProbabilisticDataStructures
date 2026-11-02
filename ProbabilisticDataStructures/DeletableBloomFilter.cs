@@ -418,6 +418,9 @@ namespace ProbabilisticDataStructures
                     "safe; it divides by that count on first use.");
             }
 
+            // The scratch buffer below is sized by the hash count the payload claims.
+            budget.Charge(ReadBudget.ArrayOf(k, sizeof(uint)));
+
             return new DeletableBloomFilter
             {
                 Buckets = buckets,

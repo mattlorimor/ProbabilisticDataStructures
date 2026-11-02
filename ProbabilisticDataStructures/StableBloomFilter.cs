@@ -517,6 +517,9 @@ namespace ProbabilisticDataStructures
                     "Filter has no hash functions, so it would set no cells and test none.");
             }
 
+            // The scratch buffer below is sized by the hash count the payload claims.
+            budget.Charge(ReadBudget.ArrayOf(k, sizeof(uint)));
+
             return new StableBloomFilter
             {
                 cells = cells,

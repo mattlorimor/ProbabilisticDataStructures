@@ -363,6 +363,7 @@ namespace ProbabilisticDataStructures
             // Built through the constructor, so that b and alpha are derived exactly the
             // way a fresh estimator derives them, rather than trusted from the payload.
             // b was computed wrongly before 3.1.0, and storing it would have kept that.
+            budget.Charge(ReadBudget.ArrayOf(m, 1));
             var hyperLogLog = new HyperLogLog(m)
             {
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),

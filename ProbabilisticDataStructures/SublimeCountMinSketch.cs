@@ -648,6 +648,10 @@ namespace ProbabilisticDataStructures
         private static ValeCounterArray[] ReadCounters(
             ref PayloadReader reader, int depth, int forWidth)
         {
+            // Each row of plain counts is allocated before it is read.
+            reader.Budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf((ulong)depth, sizeof(long)),
+                ReadBudget.Times((ulong)depth, ReadBudget.ArrayOf((ulong)forWidth, sizeof(ulong)))));
             var values = new ulong[depth][];
             for (var i = 0; i < depth; i++)
             {
@@ -660,6 +664,10 @@ namespace ProbabilisticDataStructures
 
             var (chunkCounters, stub) = Tune(values);
 
+            // And then packed, at the tuning just chosen.
+            reader.Budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf((ulong)depth, sizeof(long)),
+                ReadBudget.Times((ulong)depth, ValeCounterArray.RestoreCost(forWidth, chunkCounters))));
             var rows = new ValeCounterArray[depth];
             for (var i = 0; i < depth; i++)
             {

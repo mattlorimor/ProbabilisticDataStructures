@@ -561,6 +561,11 @@ namespace ProbabilisticDataStructures
             reader.RequireHolds(
                 (ulong)width * depth, sizeof(ushort) + sizeof(ulong), "buckets");
 
+            budget.Charge(ReadBudget.Sum(
+                ReadBudget.Times(2, ReadBudget.ArrayOf(depth, sizeof(long))),
+                ReadBudget.Times(depth, ReadBudget.Sum(
+                    ReadBudget.ArrayOf(width, sizeof(ushort)),
+                    ReadBudget.ArrayOf(width, sizeof(ulong))))));
             var restored = new HeavyKeeper(PersistenceFormat.ResolveOrThrow(hashId, hash),
                 k, width, depth, decay, randomState)
             {
@@ -592,6 +597,7 @@ namespace ProbabilisticDataStructures
             // Sized by what is held, not by k: the heap grows as elements arrive. Each
             // element is its length, at least, and its frequency.
             reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
+            budget.Charge(ElementHeap.RestoreCost(elementCount));
             restored.elements = new ElementHeap((int)elementCount);
             for (uint i = 0; i < elementCount; i++)
             {

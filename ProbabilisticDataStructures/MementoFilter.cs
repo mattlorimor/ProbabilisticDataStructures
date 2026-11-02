@@ -682,6 +682,10 @@ namespace ProbabilisticDataStructures
                         $"{expected}.");
                 }
 
+                // Read into one array, then copied into the table the segment builds.
+                budget.Charge(ReadBudget.Sum(
+                    ReadBudget.Times(2, ReadBudget.ArrayOf(words, sizeof(ulong))),
+                    ReadBudget.SmallObject));
                 var data = new ulong[words];
                 for (var w = 0; w < words; w++)
                 {

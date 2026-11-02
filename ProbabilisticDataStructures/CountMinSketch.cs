@@ -378,6 +378,10 @@ namespace ProbabilisticDataStructures
                     "no columns divides by zero.");
             }
 
+            // Each row is allocated before it is read.
+            budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf(depth, sizeof(long)),
+                ReadBudget.Times(depth, ReadBudget.ArrayOf(width, sizeof(ulong)))));
             var matrix = new UInt64[depth][];
             for (uint i = 0; i < depth; i++)
             {

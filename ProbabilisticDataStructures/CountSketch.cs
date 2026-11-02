@@ -359,6 +359,9 @@ namespace ProbabilisticDataStructures
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
             };
 
+            budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf(depth, sizeof(long)),
+                ReadBudget.Times(depth, ReadBudget.ArrayOf(width, sizeof(long)))));
             sketch.table = new long[depth][];
             var at = 0;
             for (var row = 0; row < depth; row++)

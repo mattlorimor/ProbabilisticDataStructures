@@ -71,19 +71,24 @@ namespace ProbabilisticDataStructures
         /// <exception cref="InvalidDataException">
         /// The data is not the length the count and bucket size imply.
         /// </exception>
+        /// <remarks>
+        /// The data read is kept rather than copied into a fresh array. Restoring used to
+        /// allocate the empty array the count implied, compare lengths, and throw it away
+        /// -- a second copy of the filter's bits for every read, and one a payload's count
+        /// alone could size before the comparison refused it.
+        /// </remarks>
         internal static Buckets Restore(uint count, byte bucketSize, byte[] data)
         {
-            var buckets = new Buckets(count, bucketSize);
+            var needed = DataLength(count, bucketSize);
 
-            if (data.Length != buckets.Data.Length)
+            if (data.Length != needed)
             {
                 throw new InvalidDataException(
-                    $"{count} buckets of {bucketSize} bits need {buckets.Data.Length} " +
+                    $"{count} buckets of {bucketSize} bits need {needed} " +
                     $"bytes and {data.Length} were stored.");
             }
 
-            buckets.Data = data;
-            return buckets;
+            return new Buckets(count, bucketSize, data);
         }
 
         /// <summary>
@@ -93,6 +98,23 @@ namespace ProbabilisticDataStructures
         /// <param name="count">Number of buckets.</param>
         /// <param name="bucketSize">Number of bits per bucket.</param>
         internal Buckets(uint count, byte bucketSize)
+            : this(count, bucketSize, new byte[DataLength(count, bucketSize)])
+        {
+        }
+
+        private Buckets(uint count, byte bucketSize, byte[] data)
+        {
+            this.count = count;
+            this.Data = data;
+            this.bucketSize = bucketSize;
+            this.Max = (1 << bucketSize) - 1;
+        }
+
+        /// <summary>
+        /// The bytes <paramref name="count"/> buckets of <paramref name="bucketSize"/>
+        /// bits occupy, refusing a bucket size this type cannot hold.
+        /// </summary>
+        private static long DataLength(uint count, byte bucketSize)
         {
             if (bucketSize == 0)
             {
@@ -110,10 +132,7 @@ namespace ProbabilisticDataStructures
                     "the extra space without being able to hold a larger value.");
             }
 
-            this.count = count;
-            this.Data = new byte[(count * bucketSize + 7) / 8];
-            this.bucketSize = bucketSize;
-            this.Max = (1 << bucketSize) - 1;
+            return (count * bucketSize + 7) / 8;
         }
 
         /// <summary>

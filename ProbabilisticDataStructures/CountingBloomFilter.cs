@@ -402,6 +402,9 @@ namespace ProbabilisticDataStructures
                     "hold them, which do not describe the same filter.");
             }
 
+            // The scratch buffer below is sized by the hash count the payload claims.
+            budget.Charge(ReadBudget.ArrayOf(k, sizeof(uint)));
+
             return new CountingBloomFilter
             {
                 Buckets = buckets,

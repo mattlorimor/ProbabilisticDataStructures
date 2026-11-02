@@ -394,6 +394,7 @@ namespace ProbabilisticDataStructures
                     "partitioned filter has one partition per hash function.");
             }
 
+            budget.Charge(ReadBudget.ArrayOf(partitionCount, sizeof(long)));
             var partitions = new Buckets[partitionCount];
             for (uint i = 0; i < partitionCount; i++)
             {

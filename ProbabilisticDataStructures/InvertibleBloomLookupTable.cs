@@ -712,6 +712,9 @@ namespace ProbabilisticDataStructures
                     "keys and hashes do not come to the byte counts that implies.");
             }
 
+            // Counts and hash sums are unpacked into arrays of their own; the key sums
+            // are the run already copied.
+            budget.Charge(ReadBudget.Times(2, ReadBudget.ArrayOf(cells, sizeof(long))));
             var table = new InvertibleBloomLookupTable(
                 keySize, PersistenceFormat.ResolveOrThrow(hashId, hash), cells, keySums);
 

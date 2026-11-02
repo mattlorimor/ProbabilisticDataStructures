@@ -196,7 +196,7 @@ namespace ProbabilisticDataStructures
             this.remainderMask = remainderBits >= 64 ? ulong.MaxValue : (1UL << (int)remainderBits) - 1;
 
             // One spare word so a slot straddling the end has somewhere to reach.
-            this.data = new ulong[(((long)this.slots * this.bitsPerSlot) >> 6) + 2];
+            this.data = new ulong[TableWords(quotientBits, remainderBits)];
         }
 
         /// <summary>
@@ -875,6 +875,11 @@ namespace ProbabilisticDataStructures
                     "hash.");
             }
 
+            // The table is allocated whole, from the two widths alone, before the bytes
+            // carried are compared with it.
+            budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf((ulong)TableWords(quotientBits, remainderBits), sizeof(ulong)),
+                ReadBudget.SmallObject));
             var filter = Build(quotientBits, remainderBits, PersistenceFormat.ResolveOrThrow(hashId, hash));
 
             if (count > filter.slots)
@@ -906,6 +911,13 @@ namespace ProbabilisticDataStructures
         /// carries -- the constructor's item count and rate are only ever a way of
         /// arriving at them.
         /// </summary>
+        /// <summary>
+        /// The 64-bit words a table of this split occupies: one slot of remainder and
+        /// metadata per quotient, and two spare words for reads that straddle the end.
+        /// </summary>
+        private static long TableWords(uint quotientBits, uint remainderBits) =>
+            (((long)(1u << (int)quotientBits) * ((int)remainderBits + MetadataBits)) >> 6) + 2;
+
         private static QuotientFilter Build(
             uint quotientBits, uint remainderBits, Func<ReadOnlySpan<byte>, ulong> hash)
         {

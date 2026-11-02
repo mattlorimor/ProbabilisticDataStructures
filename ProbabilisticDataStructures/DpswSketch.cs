@@ -682,6 +682,9 @@ namespace ProbabilisticDataStructures
             }
 
             var resolved = PersistenceFormat.ResolveOrThrow(hashId, hash);
+
+            // Restoring rebuilds the checkpoints from the substream size the payload names.
+            budget.Charge(CheckpointsCost(substreamSize));
             var sketch = new DpswSketch(
                 window, rho, alpha, substreamSize, width, depth, resolved)
             {
@@ -703,8 +706,17 @@ namespace ProbabilisticDataStructures
                     "around it.");
             }
 
+            // One segment for the whole substream and two for every checkpoint past
+            // the first, as PlanFor lays them out.
+            var segmentsPlanned = 2UL * (ulong)sketch.checkpoints.Length - 1;
+            budget.Charge(PlanCost(segmentsPlanned));
             var plan = sketch.PlanFor(0);
+
+            // Each substream is at least its start and its count, so the list of them is
+            // checked against the bytes behind it before it is charged for.
             var substreamCount = reader.ReadUInt32();
+            reader.RequireHolds(substreamCount, sizeof(ulong) + sizeof(uint), "substreams");
+            budget.Charge(ReadBudget.ListOf(substreamCount, sizeof(long)));
             var previousStart = 0L;
 
             for (var s = 0u; s < substreamCount; s++)
@@ -735,6 +747,10 @@ namespace ProbabilisticDataStructures
 
                 previousStart = start;
 
+                // The substream, and a segment list as long as the plan; each segment's
+                // sketch charges itself as it is read.
+                budget.Charge(ReadBudget.Sum(
+                    ReadBudget.SmallObject, PlanCost((ulong)plan.Count)));
                 var substream = new Substream(start) { Held = held };
                 foreach (var planned in plan)
                 {
@@ -843,8 +859,28 @@ namespace ProbabilisticDataStructures
         /// differ by at most that factor, which is what bounds how badly the chosen
         /// range can miss the window's true start.
         /// </remarks>
+        /// <summary>
+        /// What <see cref="Checkpoints"/> allocates for a substream of
+        /// <paramref name="substreamSize"/> items: a list of every offset, grown by
+        /// adding to it, and at most that many in the array it ends as. A payload names
+        /// the substream size, so a reader charges this before it rebuilds the
+        /// checkpoints.
+        /// </summary>
+        internal static long CheckpointsCost(int substreamSize) => ReadBudget.Sum(
+            ReadBudget.ListOf((ulong)substreamSize, sizeof(int)),
+            ReadBudget.ArrayOf((ulong)substreamSize, sizeof(int)));
+
+        /// <summary>
+        /// What a plan of <paramref name="segments"/> segments allocates: the list, grown
+        /// by adding to it, and a segment each.
+        /// </summary>
+        private static long PlanCost(ulong segments) => ReadBudget.Sum(
+            ReadBudget.ListOf(segments, sizeof(long)),
+            ReadBudget.Times(segments, ReadBudget.SmallObject));
+
         private static int[] Checkpoints(int substreamSize, double alpha)
         {
+            // CheckpointsCost bounds what this allocates; keep the two together.
             var indices = new List<int>();
             for (var i = substreamSize; i >= 1; i--)
             {

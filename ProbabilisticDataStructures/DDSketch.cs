@@ -537,6 +537,13 @@ namespace ProbabilisticDataStructures
                         "largest index a bucket can have.");
                 }
 
+                // One array for the whole run, sized from it. Left to Add, the window
+                // would be reallocated every time the next bucket passed its edge,
+                // re-centred with half the room each time, which comes to many times the
+                // run's size in allocations for a dense one.
+                reader.Budget.Charge(ReadBudget.ArrayOf((ulong)span, sizeof(ulong)));
+                store.Reserve(minIndex, span);
+
                 for (var i = 0; i < span; i++)
                 {
                     var amount = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(
@@ -590,6 +597,16 @@ namespace ProbabilisticDataStructures
                 {
                     this.MaxIndex = index;
                 }
+            }
+
+            /// <summary>
+            /// Sizes an empty store's window to exactly <paramref name="span"/> buckets from
+            /// <paramref name="lowest"/>, for a reader about to add a run that long.
+            /// </summary>
+            internal void Reserve(int lowest, int span)
+            {
+                this.counts = new ulong[span];
+                this.offset = lowest;
             }
 
             /// <summary>

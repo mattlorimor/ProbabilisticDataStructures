@@ -524,6 +524,16 @@ rest of a message survives, as it should, and one that deletes the guard does no
   and the reader must refuse it *only* for the bytes it lacks. That is the check a real
   payload of that size passes, so it shows the size check let the claim through, and
   the reader checking bytes before allocating is what makes it cheap.
+- **A cost that is charged is held to the cost that is measured.** Every read charges
+  what it is about to allocate against a budget, and those charges are only a defence
+  if they are upper bounds. `TestReadBudget` finds each structure's charge by bisection
+  on the budget -- the smallest it loads under -- and holds the read's allocation, from
+  `GC.GetAllocatedBytesForCurrentThread`, to that plus a stated slack, on a sample large
+  enough that anything missing could not hide in the slack. Two things learned getting
+  there: the counter is exact for what a read allocates, but a collection landing
+  mid-read can add a retired allocation context's worth, so the measurement is the least
+  of five; and the first undercharge found was in the accounting itself, a `params`
+  array allocated by every call that summed the charges.
 - **An exemption names the test that checks its reason.** The same sweep exempts the
   structures whose readers cap nothing their constructors can reach, and each exemption
   points at a test asserting why -- the cap is unreachable, or the reader caps nothing.

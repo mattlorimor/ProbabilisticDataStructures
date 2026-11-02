@@ -739,6 +739,8 @@ namespace ProbabilisticDataStructures
                 // never exceeds the cap -- a buffer above it with room to spare would
                 // move the conversion point. A payload holding exactly the cap comes back
                 // full, so its first new item converts it and a repeat does not.
+                budget.Charge(ReadBudget.ArrayOf(
+                    (ulong)Math.Max(estimator.InitialSparseEntries, (long)held), sizeof(ulong)));
                 var buffer = new ulong[Math.Max(estimator.InitialSparseEntries, (int)held)];
                 var previous = 0UL;
 

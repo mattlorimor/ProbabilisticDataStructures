@@ -890,6 +890,9 @@ namespace ProbabilisticDataStructures
                 }
             }
 
+            // Its five regions, k + 1 slots each, whatever the payload holds: the
+            // sample's arithmetic assumes their size.
+            budget.Charge(ReadBudget.Times(5, ReadBudget.ArrayOf((ulong)k + 1, sizeof(long))));
             var restored = new VarOpt(k, randomState)
             {
                 N = n,

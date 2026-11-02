@@ -710,6 +710,8 @@ namespace ProbabilisticDataStructures
                 theta = theta,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
             };
+            budget.Charge(ReadBudget.Times(
+                2, ReadBudget.ArrayOf((ulong)Math.Max(16L, held), sizeof(ulong))));
             var size = sketch.Capacity((int)held);
             sketch.values = new ulong[size];
             sketch.summaries = new double[size];

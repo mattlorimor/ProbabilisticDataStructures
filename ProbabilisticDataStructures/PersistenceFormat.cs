@@ -391,6 +391,12 @@ namespace ProbabilisticDataStructures
                     "into a single array.");
             }
 
+            // The payload is the first thing a header's claim allocates, and it is
+            // charged before it is: a header claiming two gigabytes is refused on that
+            // claim, not after the read has made room for it. The header and checksum
+            // buffers and the checksum's state come with it.
+            budget.Charge(EnvelopeCost(length));
+
             var payload = ReadExactly(stream, (int)length, "payload");
             var checksum = ReadExactly(stream, ChecksumLength, "checksum");
 
@@ -511,6 +517,10 @@ namespace ProbabilisticDataStructures
             var count = reader.ReadUInt32();
             var bucketSize = reader.ReadByte();
             var data = reader.ReadBytes();
+
+            // The data is the run just copied, charged as it was; Restore keeps it rather
+            // than allocating its own, so what is left is the object holding it.
+            reader.Budget.Charge(ReadBudget.SmallObject);
             return Buckets.Restore(count, bucketSize, data);
         }
 
@@ -546,6 +556,8 @@ namespace ProbabilisticDataStructures
                     "library builds.");
             }
 
+            reader.Budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf(arrayCount, sizeof(long)), ReadBudget.SmallObject));
             var arrays = new byte[arrayCount][];
             for (uint i = 0; i < arrayCount; i++)
             {
@@ -586,7 +598,10 @@ namespace ProbabilisticDataStructures
             using var buffer = new MemoryStream(bytes, writable: false);
 
             // The nested structure draws on the same allowance as the one around it, so
-            // that a composite cannot spend its budget once per part.
+            // that a composite cannot spend its budget once per part. The run it was
+            // copied from is charged by ReadBytes; this is the stream and options around
+            // it, and the nested envelope then charges its own payload.
+            reader.Budget.Charge(NestedReadCost);
             var options = new ReadOptions(reader.Budget);
             return hash is null ? T.ReadFrom(buffer, options) : T.ReadFrom(buffer, hash, options);
         }
@@ -617,6 +632,23 @@ namespace ProbabilisticDataStructures
         /// length prefix and an envelope around an empty payload.
         /// </summary>
         internal const int MinNestedLength = sizeof(uint) + HeaderLength + ChecksumLength;
+
+        /// <summary>
+        /// What reading an envelope with a payload of <paramref name="length"/> bytes
+        /// allocates: the payload, the header and checksum buffers, and the checksum's
+        /// state.
+        /// </summary>
+        internal static long EnvelopeCost(uint length) => ReadBudget.Sum(
+            ReadBudget.ArrayOf(length, 1),
+            ReadBudget.ArrayOf(HeaderLength, 1),
+            ReadBudget.ArrayOf(ChecksumLength, 1),
+            ReadBudget.SmallObject);
+
+        /// <summary>
+        /// What a nested read allocates around the run it reads from: a stream over it
+        /// and the options that carry the shared budget.
+        /// </summary>
+        internal const long NestedReadCost = 4 * ReadBudget.SmallObject;
 
         private static byte[] ReadExactly(Stream stream, int count, string what)
         {

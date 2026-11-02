@@ -136,7 +136,11 @@ namespace ProbabilisticDataStructures
                     "single array.");
             }
 
-            return Take((int)count).ToArray();
+            // Bounds-checked first, so a run the payload does not hold is refused as
+            // truncated; then the copy is charged before it is made.
+            var run = Take((int)count);
+            this.Budget.Charge(ReadBudget.ArrayOf(count, 1));
+            return run.ToArray();
         }
 
         /// <summary>

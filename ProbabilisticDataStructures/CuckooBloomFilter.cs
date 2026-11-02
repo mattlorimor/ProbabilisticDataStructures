@@ -565,6 +565,13 @@ namespace ProbabilisticDataStructures
             }
 
             var entries = (ulong)m * b;
+
+            // The whole table, and the map of which entries hold something: what a
+            // filter of this shape is, however few entries the payload carries.
+            budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf(WordsFor(entries, bits), sizeof(ulong)),
+                ReadBudget.ArrayOf((entries + 7) / 8, 1),
+                ReadBudget.SmallObject));
             var fingerprints = new ulong[WordsFor(entries, bits)];
             var occupancy = new Buckets((uint)entries, 1);
 

@@ -312,6 +312,7 @@ namespace ProbabilisticDataStructures
             // structure read back behaves as it did, and a large k costs nothing until
             // it is used. Each element is its length, at least, and its frequency.
             reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
+            budget.Charge(ElementHeap.RestoreCost(elementCount));
             var heap = new ElementHeap((int)elementCount);
             for (uint i = 0; i < elementCount; i++)
             {

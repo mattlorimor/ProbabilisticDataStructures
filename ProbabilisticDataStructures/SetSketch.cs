@@ -858,6 +858,10 @@ namespace ProbabilisticDataStructures
             // them before the arrays are allocated.
             reader.RequireHolds(m, sizeof(ushort), "registers");
 
+            // The registers, and the two arrays that order their updates.
+            budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf(m, sizeof(ushort)),
+                ReadBudget.Times(2, ReadBudget.ArrayOf(m, sizeof(uint)))));
             var sketch = new SetSketch(
                 (int)m, b, a, (int)q,
                 PersistenceFormat.ResolveOrThrow(hashId, hash),

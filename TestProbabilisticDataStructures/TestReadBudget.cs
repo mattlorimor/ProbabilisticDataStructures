@@ -153,7 +153,8 @@ namespace TestProbabilisticDataStructures
                     refusesAHashBecause: "it holds numbers rather than bytes, and hashes nothing"),
                 [StructureId.InfiniFilter] = Of("InfiniFilter",
                     Filled(new InfiniFilter(10_000), (f, k) => f.Add(k), 20_000)),
-                [StructureId.MementoFilter] = Of("MementoFilter", FilledMemento()),
+                [StructureId.MementoFilter] = Of("MementoFilter", FilledMemento(),
+                    refusesAHashBecause: "it holds numbers rather than bytes, and hashes nothing"),
                 [StructureId.SublimeCountMinSketch] = Of("SublimeCountMinSketch",
                     Filled(new SublimeCountMinSketch(0.01), (s, k) => s.Add(k), 200_000)),
                 [StructureId.SetSketch] = Of("SetSketch",
@@ -227,13 +228,29 @@ namespace TestProbabilisticDataStructures
             return low;
         }
 
-        private static long Allocated(Func<object> read)
+        /// <summary>
+        /// What a read allocates on this thread: the least of several measurements.
+        /// </summary>
+        /// <remarks>
+        /// The counter is exact for what a read allocates, but a collection that lands
+        /// mid-read -- and the rest of the suite runs in parallel, so one can -- retires
+        /// this thread's allocation context, and the counter can then report a few
+        /// kilobytes the read did not ask for. Measured identically twice, a read came to
+        /// 240,200 and 248,248 bytes. That noise only ever adds, so the least of a few
+        /// repeats is the read's own allocation.
+        /// </remarks>
+        private static long Allocated(Func<object> read, int repeats = 5)
         {
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            var result = read();
-            var after = GC.GetAllocatedBytesForCurrentThread();
-            GC.KeepAlive(result);
-            return after - before;
+            var least = long.MaxValue;
+            for (var i = 0; i < repeats; i++)
+            {
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                var result = read();
+                var after = GC.GetAllocatedBytesForCurrentThread();
+                GC.KeepAlive(result);
+                least = Math.Min(least, after - before);
+            }
+            return least;
         }
 
         /// <summary>

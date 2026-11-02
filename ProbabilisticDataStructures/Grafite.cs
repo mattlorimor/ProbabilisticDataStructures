@@ -801,6 +801,7 @@ namespace ProbabilisticDataStructures
                     $"this library builds: they are one array, of at most {MaxLowWords}.");
             }
             reader.RequireHolds(lowWords, sizeof(ulong), "words of low bits");
+            budget.Charge(ReadBudget.ArrayOf(lowWords, sizeof(ulong)));
             filter.Lows = new ulong[lowWords];
             for (var i = 0; i < lowWords; i++)
             {
@@ -815,6 +816,10 @@ namespace ProbabilisticDataStructures
                     $"this library builds: its high parts fit in {MaxHighWords}.");
             }
             reader.RequireHolds(highWords, sizeof(ulong), "words of high bits");
+            // And the select index built over them below, a count per word.
+            budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf(highWords, sizeof(ulong)),
+                ReadBudget.ArrayOf((ulong)highWords + 1, sizeof(int))));
             filter.Highs = new ulong[highWords];
             for (var i = 0; i < highWords; i++)
             {

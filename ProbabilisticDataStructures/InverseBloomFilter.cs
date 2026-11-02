@@ -377,6 +377,9 @@ namespace ProbabilisticDataStructures
                     $"Filter claims {occupied} occupied slots in a capacity of {capacity}.");
             }
 
+            // Every slot is allocated, occupied or not; the occupied ones' data are
+            // runs, charged as they are copied.
+            budget.Charge(ReadBudget.ArrayOf(capacity, sizeof(long)));
             var slots = new byte[capacity][];
             for (uint n = 0; n < occupied; n++)
             {

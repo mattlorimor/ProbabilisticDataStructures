@@ -7,10 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ReadOptions`, a memory budget for reading.** Every structure gains
+  `ReadFrom(Stream, ReadOptions)` and `ReadFrom(Stream, Func<ReadOnlySpan<byte>, ulong>,
+  ReadOptions)`, and `Persistence.FromByteArray<T>` the same two. The budget is the most
+  a read may allocate, payload and structure together and nested structures included;
+  `ReadOptions.Default` is `ReadOptions.DefaultMemoryBudget`, one gibibyte, and
+  `ReadOptions.Unlimited` sets none. A payload over budget is refused before the
+  allocation it would have needed, with an `InvalidDataException` whose inner exception is
+  a new `ReadBudgetExceededException` carrying the bytes needed and the budget.
+  `InvalidDataException` is sealed, so the refusal cannot be a subclass of it; existing
+  `catch` blocks catch it unchanged.
+  <br><br>
+  `IBinaryPersistable<TSelf>` gains the two overloads as static *virtual* members whose
+  default throws `NotSupportedException`. A type outside this library implementing the
+  interface goes on compiling and loading without them, and a budgeted read of it says so
+  rather than quietly reading without a budget.
+
 ### Changed
 
 - **The package's minimum `System.IO.Hashing` rises from 10.0.11 to 10.0.14.** A project
   that pins an earlier version of that package has to raise it to restore this one. (#142)
+
+- **Reading is now limited to one gibibyte by default, and that is a breaking change.**
+  `ReadFrom(Stream)`, `ReadFrom(Stream, hash)` and `Persistence.FromByteArray<T>` read
+  under `ReadOptions.Default`. A payload whose read needs more than 1,073,741,824 bytes —
+  which loaded in 6.2.0 — is now refused, and needs the overload that takes
+  `ReadOptions`: a Bloom filter whose bits come to more than about half a gigabyte, a
+  quotient or cuckoo filter whose table is that large however little it holds, a large
+  count-min sketch, and so on. A read costs roughly the structure plus its payload, and
+  [FORMAT.md](FORMAT.md#read-budget) says what each structure's read is charged. Under
+  Semantic Versioning this calls for a new major version.
+  <br><br>
+  The reason is that a reader must allocate what a payload says before it can fill it,
+  and many structures are far larger than their payloads: a cuckoo filter writes only its
+  occupied entries, a quotient filter's header names its table outright. Once every reader
+  loaded everything its constructor builds (below), a few dozen bytes could ask for tens
+  of gigabytes. Each reader now charges what it is about to allocate against the budget
+  first, from the fields that size it.
+  <br><br>
+  Some readers allocate less than they did, which makes more room under the budget.
+  Restoring a bit array no longer allocates an empty one of the same size to compare
+  against and throw away: a Bloom filter with a 1.2 MB payload allocated 3.6 MB to read
+  and now allocates 2.4 MB. A DDSketch store is sized once from the run it reads, where
+  it was re-centred every time the next bucket passed its edge: a dense sketch with a
+  160 KB payload allocated 3.7 MB to read and now allocates 480 KB. TopK and HeavyKeeper
+  size their heaps by the elements a payload holds rather than by `k`. What is read back
+  is unchanged. The stored format does not change.
 
 ### Fixed
 
