@@ -1775,6 +1775,13 @@ less than sparse: the same 256,000 keys take 41.0 bits each spread one to a bloc
 20.5 packed sixty-four to a block. Sparse data gets no such saving — every block holding
 one key costs a slot, as it would anywhere.
 
+A slot is held in a 64-bit word, so the fingerprint and the range, in bits, have to fit
+beside four bits of bookkeeping: `fingerprintBits` plus the bits of `maxRangeSize` is at
+most 60. A pair past that — a range of 2^32 with a 29-bit fingerprint, say — is refused by
+the constructor, which names the widest fingerprint for the range. The table doubles as it
+fills, up to 2^31 slots; an `Add` that would pass that throws before changing anything, and
+the filter goes on answering.
+
 Described by Eslami and Dayan in
 [Memento Filter: A Fast, Dynamic, and Robust Range Filter](https://doi.org/10.1145/3698820).
 
