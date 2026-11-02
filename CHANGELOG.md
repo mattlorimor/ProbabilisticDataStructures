@@ -529,6 +529,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now refused as one that cannot be read into an array, where it used to fail inside the
   allocation with an `OutOfMemoryException`.
 
+- **A `ScalableBloomFilter` that grew far enough threw an `OverflowException` from inside
+  the sizing arithmetic, with no hint of why.** It adds a filter at a tighter false
+  positive rate each time the last one fills, the i-th at the rate times r^i, and the rate
+  runs out: below 1 / `double.MaxValue`, about 5.6e-309, a filter's hash count cannot be
+  worked out. At a rate of 1% and a ratio of 0.8 that is the 3,162nd filter, which a hint of
+  a thousand reaches after 3,156,212 items (measured), and at a ratio of 0.9 the 6,694th.
+  Every release is affected. The failing add changed nothing, since the filter is built
+  before it is listed, so the filter that threw could still be queried and written.
+  <br><br>
+  The add now throws an `InvalidOperationException` that names the ceiling, says the filter
+  is unchanged, and gives the way round it: a larger hint, which lets the same number of
+  filters hold more items, or `BloomFilter64`, which has no ceiling of this kind. The
+  ceiling is `floor(ln(rate × double.MaxValue) / ln(1 / r)) + 1` filters, and the class
+  documentation gives it with the two figures above. Growth is not redesigned: the filters
+  are still a fixed size, and lifting the ceiling is a separate question. A constructor
+  given a rate whose reciprocal is not a number, so that not even the first filter can be
+  built, now throws an `ArgumentOutOfRangeException` naming `fpRate`.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

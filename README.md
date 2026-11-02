@@ -474,7 +474,8 @@ bytes: 4,294,967,182 four-bit counters, or 2,147,483,591 eight-bit ones.
 arithmetic, so `BloomFilter` is the plainer choice. And above it, consider
 `ScalableBloomFilter` instead: it grows by adding filters rather than by making one
 larger, so it has no single-filter ceiling at all, and it does not need you to know the
-size in advance.
+size in advance. (It has a ceiling of its own, on how many filters it can stack; see its
+entry.)
 
 Only the Bloom family has this ceiling. `CuckooBloomFilter` and `BinaryFuseFilter` hold
 around 2.1 billion entries before they run into .NET's 2 GB array limit, and the sketches —
@@ -673,6 +674,15 @@ bounded.
 **Look elsewhere if** memory *is* bounded — `StableBloomFilter` or `InverseBloomFilter`
 hold a ceiling. Or if you do know the size, since a correctly sized `BloomFilter` is
 smaller than a scalable one that grew into the same capacity.
+
+It does have a ceiling, and it is not memory. Each new filter is built at a rate tighter
+than the last by the ratio `r`, and a rate can only be tightened so far: below
+1 / `double.MaxValue`, about 5.6e-309, a Bloom filter cannot be sized for it. At a rate of
+1% and a ratio of 0.8 that is 3,161 filters, and at a ratio of 0.9 it is 6,693; each
+holds about as many items as the hint, so at a hint of a thousand the first is 3.16
+million items. An `Add` past it throws an `InvalidOperationException` that says so, before
+changing anything. A larger hint raises the number of items it allows in proportion, and
+`BloomFilter64` has no ceiling of this kind.
 
 Described by Almeida, Baquero, Preguiça and Hutchison in
 [Scalable Bloom Filters](https://haslab.uminho.pt/cbm/files/dbloom.pdf).

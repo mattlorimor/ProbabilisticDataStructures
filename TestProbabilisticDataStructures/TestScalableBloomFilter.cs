@@ -303,6 +303,7 @@ namespace TestProbabilisticDataStructures
 
             var before = filter.ToByteArray();
             var key = Encoding.ASCII.GetBytes("one more");
+            var answeredBefore = filter.Test(key);
             for (var attempt = 0; attempt < 3; attempt++)
             {
                 Assert.ThrowsExactly<InvalidOperationException>(() => filter.Add(key));
@@ -311,7 +312,8 @@ namespace TestProbabilisticDataStructures
 
             CollectionAssert.AreEqual(before, filter.ToByteArray(),
                 "a refused add changed the filter");
-            Assert.IsFalse(filter.Test(key), "a refused add left its key in the filter");
+            Assert.AreEqual(answeredBefore, filter.Test(key),
+                "a refused add changed what the filter says about its key");
             Assert.IsTrue(filter.Test(BitConverter.GetBytes(0)),
                 "a key added before the ceiling is no longer found");
         }

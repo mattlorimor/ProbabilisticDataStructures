@@ -39,6 +39,20 @@ namespace ProbabilisticDataStructures
     /// isn't known a priori and memory constraints aren't of particular concern.
     /// For situations where memory is bounded, consider using Inverse or Stable
     /// Bloom Filters.
+    /// <para>
+    /// The growth has a ceiling, and it is not memory. The i-th filter is built at
+    /// <c>fpRate * r^i</c>, and a Bloom filter sizes its hash count from the reciprocal
+    /// of its rate, which is not a number once the rate is below
+    /// <c>1 / double.MaxValue</c>, about 5.6e-309. So the filter holds at most
+    /// <c>floor(ln(fpRate * double.MaxValue) / ln(1 / r)) + 1</c> filters: 3,161 at a
+    /// rate of 1% and a ratio of 0.8, 6,693 at a ratio of 0.9. Each holds about as many
+    /// items as the hint, so at a hint of a thousand that is 3.16 million items. An
+    /// <see cref="Add(ReadOnlySpan{byte})"/> that needs a filter beyond the ceiling
+    /// throws an <see cref="InvalidOperationException"/> before it changes anything, and
+    /// the filter goes on answering queries and can be written. A larger hint raises the
+    /// number of items the ceiling allows in proportion; <see cref="BloomFilter64"/>
+    /// sizes one filter in 64 bits and has no ceiling of this kind.
+    /// </para>
     /// </summary>
     public class ScalableBloomFilter : IFilter, IBinaryPersistable<ScalableBloomFilter>
     {
@@ -60,6 +74,37 @@ namespace ProbabilisticDataStructures
         /// of 0.999999 passes after about 1.7 million adds.
         /// </remarks>
         internal static int MaxFilters => Array.MaxLength;
+
+        /// <summary>
+        /// How many filters a scalable filter with these rates can hold: the i-th is built
+        /// at <c>fpRate * r^i</c>, and that is possible while the rate's reciprocal is a
+        /// number. Never more than <see cref="MaxFilters"/>.
+        /// </summary>
+        /// <remarks>
+        /// Found by the closed form, <c>floor(ln(fpRate * double.MaxValue) / ln(1 / r))
+        /// + 1</c>, and then checked against the arithmetic <see cref="AddFilter"/> uses,
+        /// one step either way, so that a rate which rounds across the edge cannot make
+        /// the two disagree about whether a filter can be built.
+        /// </remarks>
+        internal static int FilterCeiling(double fpRate, double r)
+        {
+            static bool CanBuild(double rate) => rate > 0 && !double.IsInfinity(1 / rate);
+
+            var estimate = Math.Floor(Math.Log(fpRate * double.MaxValue) / -Math.Log(r));
+            var last = (int)Math.Clamp(estimate, -1, MaxFilters - 1);
+
+            while (last >= 0 && !CanBuild(fpRate * Math.Pow(r, last)))
+            {
+                last--;
+            }
+
+            while (last < MaxFilters - 1 && CanBuild(fpRate * Math.Pow(r, last + 1)))
+            {
+                last++;
+            }
+
+            return last + 1;
+        }
         /// <summary>
         /// Tightening ratio
         /// </summary>
@@ -109,6 +154,16 @@ namespace ProbabilisticDataStructures
             Guard.ValidItemCount(hint, nameof(hint));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
             Guard.ValidTighteningRatio(r, nameof(r));
+
+            // Not even the first filter can be built at a rate whose reciprocal is not a
+            // number, and that arrived as an OverflowException from inside the sizing.
+            if (FilterCeiling(fpRate, r) == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(fpRate), fpRate,
+                    $"A false positive rate of {fpRate} is below 1 / double.MaxValue, about " +
+                    "5.6e-309, so its reciprocal is not a number and a Bloom filter at that " +
+                    "rate cannot be sized.");
+            }
 
             this.Filters = new List<PartitionedBloomFilter>();
             this.R = r;
@@ -448,6 +503,20 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal void AddFilter()
         {
+            var ceiling = FilterCeiling(this.FP, this.R);
+            if (this.Filters.Count >= ceiling)
+            {
+                throw new InvalidOperationException(
+                    $"This filter holds {this.Filters.Count} filters, the most its rates " +
+                    $"allow. Each new filter's false positive rate is the last one's times " +
+                    $"{this.R}, and the next would be {this.FP * Math.Pow(this.R, this.Filters.Count):E3}, " +
+                    "whose reciprocal is larger than any double, so no Bloom filter can be " +
+                    "sized for it. Nothing was added and the filter is unchanged; it can " +
+                    "still be queried and written. A larger hint lets the same number of " +
+                    "filters hold more items, and BloomFilter64 sizes one filter in 64 bits " +
+                    "and has no ceiling of this kind.");
+            }
+
             var fpRate = this.FP * Math.Pow(this.R, this.Filters.Count());
             // The hash is passed to the filter rather than set on it afterwards: a
             // filter is only safe to re-hash while empty, and building it with the
