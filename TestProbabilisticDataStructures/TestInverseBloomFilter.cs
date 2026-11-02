@@ -14,6 +14,25 @@ namespace TestProbabilisticDataStructures
         private static byte[] X_BYTES = Encoding.ASCII.GetBytes("x");
 
         /// <summary>
+        /// The slots are one array of references, which holds at most
+        /// <c>Array.MaxLength</c> of them. A capacity past that is refused, naming the
+        /// parameter, before the array is asked for: until now it failed in the
+        /// allocation, with an <see cref="System.OutOfMemoryException"/> just past the
+        /// limit and an <see cref="System.OverflowException"/> from 2^31.
+        /// </summary>
+        [TestMethod]
+        public void TestACapacityNoArrayHoldsIsRefusedBeforeAnythingIsAllocated()
+        {
+            foreach (var capacity in new[]
+                { (uint)System.Array.MaxLength + 1, 3_000_000_000u, uint.MaxValue })
+            {
+                var ex = Assert.ThrowsExactly<System.ArgumentOutOfRangeException>(
+                    () => new InverseBloomFilter(capacity), $"a capacity of {capacity}");
+                Assert.AreEqual("capacity", ex.ParamName);
+            }
+        }
+
+        /// <summary>
         /// Ensures that Capacity returns the correct filter size.
         /// </summary>
         [TestMethod]

@@ -100,6 +100,39 @@ namespace TestProbabilisticDataStructures
             this.testHyperLogLog(0, 4, 17);
         }
 
+        /// <summary>
+        /// The registers are one array of bytes, and the largest power of two an array
+        /// holds is 2^30, so the next is refused, naming the parameter, before the array
+        /// is asked for. It failed in the allocation, with an
+        /// <see cref="OverflowException"/>. A count that is not a power of two is still
+        /// refused first, and as before.
+        /// </summary>
+        [TestMethod]
+        public void TestMoreRegistersThanAnArrayHoldsAreRefused()
+        {
+            var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new HyperLogLog(1u << 31));
+            Assert.AreEqual("m", ex.ParamName);
+
+            Assert.ThrowsExactly<ArgumentException>(() => new HyperLogLog(uint.MaxValue));
+            Assert.ThrowsExactly<ArgumentException>(() => new HyperLogLog((1u << 30) + 1));
+        }
+
+        /// <summary>
+        /// An error so small that its register count passes what a register array holds is
+        /// refused naming the error. The count was rounded up to a power of two and cast
+        /// to a uint, which saturates, so the failure was a complaint that 4294967295 is
+        /// not a power of two.
+        /// </summary>
+        [TestMethod]
+        public void TestAnErrorTooSmallForAnyRegisterArrayIsRefused()
+        {
+            // 1.04 / 1e-5 squared is about 1.1e10 registers, 2^34 once rounded.
+            var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => HyperLogLog.NewDefaultHyperLogLog(1e-5));
+            Assert.AreEqual("e", ex.ParamName);
+        }
+
         [TestMethod]
         public void TestNewDefaultHyperLogLog()
         {

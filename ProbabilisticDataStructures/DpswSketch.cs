@@ -174,7 +174,7 @@ namespace ProbabilisticDataStructures
                 ? new SeededRandom(seed.Value)
                 : SeededRandom.Unpredictable();
 
-            this.substreamSize = (int)Math.Max(1, Math.Ceiling(Math.Pow(window, beta)));
+            this.substreamSize = SubstreamSizeFor(window, beta);
             this.checkpoints = Checkpoints(this.substreamSize, alpha);
 
             // The budget for the j-th checkpoint falls as alpha to the power of j, and
@@ -205,6 +205,17 @@ namespace ProbabilisticDataStructures
                 throw new ArgumentOutOfRangeException(nameof(width),
                     "A sketch needs at least one counter and one row.");
             }
+        }
+
+        /// <summary>
+        /// How many items a substream holds for a window and a substream factor: the
+        /// window raised to the factor, rounded up. A function of its own so that a test
+        /// can reach the sizes where it matters, which would otherwise build the
+        /// checkpoints of a substream of billions.
+        /// </summary>
+        internal static int SubstreamSizeFor(long window, double beta)
+        {
+            return (int)Math.Max(1, Math.Ceiling(Math.Pow(window, beta)));
         }
 
         /// <summary>How many of the most recent items a query covers.</summary>
