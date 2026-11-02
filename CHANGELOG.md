@@ -1011,8 +1011,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   more, and with sixteen of them at 2^54, which take on the order of 10^11 and 10^16 adds
   to a row that narrow. It now ends on the widest stub a chunk
   of 16 counters can keep a pool beside, 27 bits, and the tails arrays hold the rest. Such
-  a sketch is slow to add to, since it lays itself out again on every add, but it is no
-  longer a payload that cannot be read.
+  a sketch is no longer a payload that cannot be read.
   <br><br>
   The fold back after removals added a counter to its copy and took off the record in signed
   `long`s, so a counter that came out at 2^63 or more was negative and folded to nought:
@@ -1073,6 +1072,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A `SublimeCountMinSketch` read back reported the default tuning, not its rows'.** The
   two internal properties behind diagnostics, counters per chunk and stub width, said 68 and
   5 whatever the rows were built with; nothing public read them and the payload is unchanged.
+
+- **A `SublimeCountMinSketch` whose counts are too large for any packing no longer lays
+  itself out again on every add.** A sketch repacks its counters when more than 3 in 100
+  of its chunks have fallen back to tails arrays, and it checked after every add. A sketch
+  holding counts that no packing keeps under that, such as a row of 1,024 counters all at
+  2^27 or more (readable since the fix above), is past it from the moment it is packed.
+  Packing the same counts again puts the same chunks back on tails, so every add repacked
+  the whole sketch: from tens of microseconds an add to a couple of milliseconds, by the
+  sketch's size, where an ordinary add takes about a tenth of a microsecond. It now
+  repacks only after an add that has put a chunk on tails. A sketch that never had more
+  than 3 in 100 of its chunks on tails repacks at exactly the adds it did before, and is
+  unchanged in memory and on the wire. A crowded one can keep a chunk on tails after
+  removals have brought it back within its pool, until its next repacking, where before
+  the next add took it off. (#188)
 
 ## [6.2.0] - 2026-08-19
 

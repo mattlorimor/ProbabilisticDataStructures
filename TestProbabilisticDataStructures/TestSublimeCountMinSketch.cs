@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Reflection;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -259,6 +261,167 @@ namespace TestProbabilisticDataStructures
                     $"Key {key} was added a hundred times but reports " +
                     $"{sketch.Count(Key(key))}.");
             }
+        }
+
+        private static ValeCounterArray[] RowsOf(SublimeCountMinSketch sketch)
+        {
+            var field = typeof(SublimeCountMinSketch).GetField("rows",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(field, "the sketch has no field rows");
+            return (ValeCounterArray[])field.GetValue(sketch)!;
+        }
+
+        /// <summary>
+        /// The counter a key raises in each row, found by adding it to an empty twin.
+        /// </summary>
+        private static int[] ColumnsOf(byte[] key, Func<SublimeCountMinSketch> twin)
+        {
+            var sketch = twin();
+            sketch.Add(key);
+            var rows = RowsOf(sketch);
+            var columns = new int[rows.Length];
+            for (var i = 0; i < rows.Length; i++)
+            {
+                columns[i] = -1;
+                for (var j = 0; j < rows[i].Count; j++)
+                {
+                    if (rows[i].Get(j) != 0)
+                    {
+                        columns[i] = j;
+                    }
+                }
+                Assert.AreNotEqual(-1, columns[i], $"the key raised nothing in row {i}");
+            }
+            return columns;
+        }
+
+        /// <summary>
+        /// Fills the pool of the chunk holding <paramref name="target"/> with as many of the
+        /// shortest extensions as it holds, and leaves the target one count short of needing
+        /// one more.
+        /// </summary>
+        private static void OneCountFromSpilling(ValeCounterArray row, int target)
+        {
+            var first = target / row.CountersPerChunk * row.CountersPerChunk;
+            var shortest = 1UL << row.StubBits;
+            var fit = row.PoolFragments / ValeCounter.ExtensionLength(shortest >> row.StubBits);
+            var filled = 0;
+            for (var j = first; filled < fit; j++)
+            {
+                Assert.IsTrue(j < first + row.CountersPerChunk, "the chunk is too short to fill");
+                if (j != target)
+                {
+                    row.Set(j, shortest);
+                    filled++;
+                }
+            }
+            row.Set(target, shortest - 1);
+        }
+
+        /// <summary>
+        /// A sketch is laid out again at the add that puts more than three in a hundred of its
+        /// chunks on tails, counted over every row, and not at an add that leaves it at or
+        /// under that.
+        /// </summary>
+        /// <remarks>
+        /// The test above shows that crowding is answered; this pins when. Three rows of 4,096
+        /// counters at the starting tuning are 183 chunks, so five on tails are within the
+        /// fraction and six are past it. Four chunks are put on tails by hand, all in the
+        /// first two rows, and two more are packed one count short of spilling, each where a
+        /// different key lands: the first key's add takes the sketch to five and must leave
+        /// the rows as they are, and the second's takes it to six and must lay them out.
+        /// <para>
+        /// Each step straddles a way of getting the rule wrong that every other test passed:
+        /// laying out at any add that puts a chunk on tails, whatever the fraction; taking the
+        /// fraction of one row's chunks rather than all of them, which five already passes;
+        /// and counting only the last row's tails, which here never changes. The keys are
+        /// placed by watching which counters they raise, so the test does not restate how a
+        /// hash picks a column.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestASketchIsLaidOutAgainAtTheAddThatTakesItPastTheFraction()
+        {
+            Func<SublimeCountMinSketch> make = () =>
+                new SublimeCountMinSketch(0.05, 0.5, ValeCounterArray.DefaultCountersPerChunk / 6144.0);
+            var sketch = make();
+            var rows = RowsOf(sketch);
+            Assert.AreEqual(4096, sketch.Width);
+            Assert.AreEqual(3, rows.Length);
+            var perChunk = rows[0].CountersPerChunk;
+            var chunks = rows.Sum(r => r.ChunkCount);
+            Assert.AreEqual(183, chunks, "three rows of 4,096 counters, 68 to a chunk");
+            Assert.IsTrue(5 <= chunks * 0.03 && 6 > chunks * 0.03,
+                "five chunks on tails should be within three in a hundred and six past it");
+
+            // A key whose first-row chunk can be packed, and a second that shares no chunk
+            // with it in any row and whose second-row chunk can be packed.
+            int ChunkOf(int column) => column / perChunk;
+            bool Packable(int column) => ChunkOf(column) < rows[0].ChunkCount - 1;
+            var first = Key(0);
+            var firstColumns = ColumnsOf(first, make);
+            for (var k = 1; !Packable(firstColumns[0]); k++)
+            {
+                first = Key(k);
+                firstColumns = ColumnsOf(first, make);
+            }
+            byte[] second = null;
+            int[] secondColumns = null;
+            for (var k = 1000; second == null; k++)
+            {
+                var columns = ColumnsOf(Key(k), make);
+                if (Packable(columns[1])
+                    && Enumerable.Range(0, 3).All(i => ChunkOf(columns[i]) != ChunkOf(firstColumns[i])))
+                {
+                    second = Key(k);
+                    secondColumns = columns;
+                }
+            }
+
+            // Two chunks on tails in each of the first two rows, away from both keys.
+            for (var i = 0; i < 2; i++)
+            {
+                var spilled = 0;
+                for (var c = 0; spilled < 2; c++)
+                {
+                    if (c == ChunkOf(firstColumns[i]) || c == ChunkOf(secondColumns[i]))
+                    {
+                        continue;
+                    }
+                    for (var j = c * perChunk; j < (c + 1) * perChunk; j++)
+                    {
+                        rows[i].Set(j, 1UL << 40);
+                    }
+                    spilled++;
+                }
+            }
+            OneCountFromSpilling(rows[0], firstColumns[0]);
+            OneCountFromSpilling(rows[1], secondColumns[1]);
+            int OnTails() => RowsOf(sketch).Sum(r => r.ChunksWithTails);
+            Assert.AreEqual(4, OnTails(), "four chunks should be on tails, none in the last row");
+            Assert.AreEqual(0, rows[2].ChunksWithTails);
+
+            sketch.Add(first);
+
+            Assert.AreEqual(5, OnTails(), "the first add should have put its chunk on tails");
+            Assert.AreEqual(4096, sketch.Width);
+            for (var i = 0; i < rows.Length; i++)
+            {
+                Assert.AreSame(rows[i], RowsOf(sketch)[i],
+                    $"row {i} was laid out again with five of {chunks} chunks on tails, " +
+                    "which is within three in a hundred");
+            }
+
+            sketch.Add(second);
+
+            Assert.AreEqual(4096, sketch.Width);
+            for (var i = 0; i < rows.Length; i++)
+            {
+                Assert.AreNotSame(rows[i], RowsOf(sketch)[i],
+                    $"row {i} was not laid out again with six of {chunks} chunks on tails, " +
+                    "which is past three in a hundred");
+            }
+            Assert.IsTrue(sketch.Count(first) >= 1 && sketch.Count(second) >= 1);
         }
 
         /// <summary>

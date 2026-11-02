@@ -597,5 +597,75 @@ namespace TestProbabilisticDataStructures
             }
             Assert.AreEqual(1, raised, "the add should raise one counter, by one");
         }
+
+        /// <summary>
+        /// A row on the best tuning there is, with every chunk on a tails array, takes adds
+        /// without being laid out again.
+        /// </summary>
+        /// <remarks>
+        /// A sketch lays its counters out again once more than three chunks in a hundred
+        /// have fallen back to tails arrays, and it asked that after every add. A row in which
+        /// every counter is this large has all of its chunks on tails from the moment it is
+        /// laid out, at the tuning <c>Tune</c> falls back to when none meets its bound (the
+        /// tests above). Laying the same counts out again picks the same tuning and puts
+        /// the same chunks back on tails, so the next add found it just as crowded, and every
+        /// add laid out the whole sketch: reading every counter, tuning, and rebuilding every
+        /// row by filling each pool until it spilled. That measured from tens of microseconds
+        /// an add to a few milliseconds, on rows of 64 to 16,384 counters, against a tenth of
+        /// a microsecond for an ordinary add.
+        /// <para>
+        /// What is counted is the work and not the time: how many of the adds replaced the
+        /// row. None should, because no add can put on tails a chunk that is already there.
+        /// The guards say the scenario is the one meant -- the fallback tuning, every chunk
+        /// on tails before and after -- that the row took every add, and that replacing the
+        /// row is something this count sees, by widening it once at the end.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        [DataRow(1UL << 27)]
+        [DataRow(1UL << 40)]
+        [DataRow(1UL << 63)]
+        public void TestAddingToARowOfNothingButLargeCountsDoesNotLayItOutAgain(ulong value)
+        {
+            var sketch = SublimeCountMinSketch.ReadFrom(
+                new MemoryStream(WithCounters(Wide().ToByteArray(), _ => value)));
+            var row = RowsOf(sketch)[0];
+            Assert.AreEqual(ValeCounterArray.MinCountersPerChunk, row.CountersPerChunk);
+            Assert.AreEqual(WidestStubAtTheFewestCounters(), row.StubBits);
+            Assert.AreEqual(row.ChunkCount, row.ChunksWithTails, "every chunk should start on tails");
+
+            const int Adds = 256;
+            var laidOutAgain = 0;
+            for (var i = 0; i < Adds; i++)
+            {
+                var before = RowsOf(sketch)[0];
+                sketch.Add(Key(i));
+                if (!ReferenceEquals(before, RowsOf(sketch)[0]))
+                {
+                    laidOutAgain++;
+                }
+            }
+
+            Assert.AreEqual(1024, sketch.Width, "the adds should not have doubled the row");
+            var after = RowsOf(sketch)[0];
+            var taken = 0UL;
+            for (var j = 0; j < 1024; j++)
+            {
+                taken += after.Get(j) - value;
+            }
+            Assert.AreEqual((ulong)Adds, taken, "the row should have taken every add");
+            Assert.AreEqual(after.ChunkCount, after.ChunksWithTails,
+                "every chunk should still be on tails");
+
+            Assert.AreEqual(0, laidOutAgain,
+                $"the row was laid out again on {laidOutAgain} of {Adds} adds, each time at the " +
+                "same tuning and with the same chunks on tails as before");
+
+            // The add that doubles the row lays it out, and that is a new row.
+            SetField(sketch, "expansionLimit", sketch.TotalCount() + 1);
+            sketch.Add(Key(Adds));
+            Assert.AreEqual(2048, sketch.Width, "the last add should have doubled the row");
+            Assert.AreNotSame(after, RowsOf(sketch)[0], "a row laid out again is not the row it was");
+        }
     }
 }
