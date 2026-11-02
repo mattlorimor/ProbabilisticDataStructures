@@ -32,6 +32,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 using System.Linq;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 
@@ -57,12 +58,24 @@ namespace ProbabilisticDataStructures
     /// own copy on <see cref="Add(byte[])"/> so that a caller reusing their buffer cannot
     /// change what it holds. It is not thread-safe: the original swaps the stored
     /// value atomically, and this reads and writes the slot in two steps.
+    ///
+    /// A filter of 2^27 slots or more places an item with its whole 64-bit hash, reduced
+    /// modulo the capacity; a smaller one with the hash's low 32 bits, as it always did.
+    /// Before this every filter used the low 32 bits, and a large one sent more items to
+    /// its first <c>2^32 mod capacity</c> slots, which it then overwrote sooner. Every save
+    /// is format version 9, which records the placement; a filter read back keeps the
+    /// scheme its payload was placed with.
     /// </summary>
     public class InverseBloomFilter : IFilter, IBinaryPersistable<InverseBloomFilter>
     {
         private byte[][] Array { get; set; }
         internal Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
         private uint capacity { get; set; }
+
+        /// <summary>
+        /// How an item's hash becomes the slot it is held in.
+        /// </summary>
+        internal Placement Placement { get; private set; }
 
         /// <summary>
         /// Whether any slot is occupied, which is what decides if the hash can
@@ -106,6 +119,22 @@ namespace ProbabilisticDataStructures
         /// 2,147,483,591 (sixteen gigabytes of slots, before anything is stored in them).
         /// </exception>
         public InverseBloomFilter(uint capacity, Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            : this(capacity, hash, null)
+        {
+        }
+
+        /// <summary>
+        /// Instantiates a filter as the public constructor does, placing its items as
+        /// <paramref name="placement"/> says, or as its capacity calls for when that is
+        /// null.
+        /// </summary>
+        /// <remarks>
+        /// The choice is made by capacity, and a filter large enough for it to matter is a
+        /// gigabyte of empty slots. This lets a test have a small filter place its items
+        /// the way a large one will.
+        /// </remarks>
+        internal InverseBloomFilter(
+            uint capacity, Func<ReadOnlySpan<byte>, ulong>? hash, Placement? placement)
         {
             Guard.ValidItemCount(capacity, nameof(capacity));
 
@@ -121,7 +150,31 @@ namespace ProbabilisticDataStructures
             this.Array = new byte[capacity][];
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.capacity = capacity;
+            this.Placement = placement ?? PlacementFor(capacity);
         }
+
+        /// <summary>
+        /// The placement a new filter of <paramref name="capacity"/> slots is built with.
+        /// </summary>
+        /// <remarks>
+        /// The constructor's choice, reachable on its own so that the capacities at which
+        /// it changes can be checked without allocating filters of those capacities: 64-bit
+        /// values from <see cref="BitPlacement.WideFrom"/> slots, and 32-bit ones, as every
+        /// one always had, below it.
+        /// </remarks>
+        internal static Placement PlacementFor(uint capacity) => BitPlacement.For(capacity);
+
+        /// <summary>
+        /// The slot an item whose hash is <paramref name="hash"/> is held in under
+        /// <paramref name="placement"/>, in a filter of <paramref name="capacity"/> slots.
+        /// </summary>
+        /// <remarks>
+        /// What every operation uses, reachable without a filter so that a test can ask
+        /// it at capacities no test can allocate. One position per item, so the first of
+        /// the scheme's: the hash reduced modulo the capacity, in 32 bits or in 64.
+        /// </remarks>
+        internal static uint SlotOf(ulong hash, Placement placement, uint capacity) =>
+            Positions.FirstOf(hash, placement, capacity);
 
 
         /// <summary>
@@ -254,18 +307,22 @@ namespace ProbabilisticDataStructures
         /// <returns>The array index for the given data</returns>
         private uint Index(ReadOnlySpan<byte> data)
         {
-            var index = this.ComputeHashSum32(data) % this.capacity;
-            return index;
+            return SlotOf(this.Hash(data), this.Placement, this.capacity);
         }
 
         /// <summary>
-        /// Returns a 32-bit hash value for the given data.
+        /// The slots that hold an item, in order, so that a test can hold each item to the
+        /// slot its placement says it goes in.
         /// </summary>
-        /// <param name="data">Data</param>
-        /// <returns>32-bit hash value</returns>
-        private uint ComputeHashSum32(ReadOnlySpan<byte> data)
+        internal IEnumerable<uint> OccupiedSlots()
         {
-            return (uint)(this.Hash(data) & 0xffffffff);
+            for (uint i = 0; i < this.capacity; i++)
+            {
+                if (this.Array[i] is not null)
+                {
+                    yield return i;
+                }
+            }
         }
 
         /// <summary>
@@ -278,6 +335,7 @@ namespace ProbabilisticDataStructures
 
             var payload = new PayloadWriter();
             payload.WriteUInt32(this.capacity);
+            BitPlacement.Write(payload, this.Placement);
 
             // Only the occupied slots, each with its index. This filter is the one that
             // stores the data rather than hashing it, so a full-length run of empties
@@ -306,7 +364,8 @@ namespace ProbabilisticDataStructures
                 stream,
                 StructureId.InverseBloomFilter,
                 PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+                payload.WrittenSpan,
+                PersistenceFormat.ColumnPlacementVersion);
         }
 
         /// <summary>
@@ -380,11 +439,16 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.InverseBloomFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.InverseBloomFilter, out var hashId, budget, Price,
+                stream, StructureId.InverseBloomFilter, out var hashId, out var version, budget, Price,
                 hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var capacity = reader.ReadUInt32();
+            // From the payload, never from the capacity: a version 1 payload of any capacity
+            // was placed with 32-bit values, and a version 9 one says how it was placed. The
+            // slots carry their indexes, so this decides where the filter looks, not where
+            // what it holds is put back.
+            var placement = BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             var occupied = ReadOccupied(ref reader, capacity);
 
             // Every slot is allocated, occupied or not; the occupied ones' data are
@@ -405,6 +469,7 @@ namespace ProbabilisticDataStructures
                 Array = slots,
                 capacity = capacity,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+                Placement = placement,
             };
         }
 
@@ -415,6 +480,7 @@ namespace ProbabilisticDataStructures
         internal static void Price(ref PayloadReader reader, ushort version)
         {
             var capacity = reader.ReadUInt32();
+            BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             var occupied = ReadOccupied(ref reader, capacity);
 
             reader.Budget.Price(SlotsCost(capacity));

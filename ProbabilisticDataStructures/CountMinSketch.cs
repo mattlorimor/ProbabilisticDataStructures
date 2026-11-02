@@ -25,6 +25,19 @@ namespace ProbabilisticDataStructures
     /// space-efficient solutions like the CMS. For approximating set cardinality, refer
     /// to the HyperLogLog.
     /// </summary>
+    /// <remarks>
+    /// A sketch 2^27 columns wide or wider, an epsilon of about 2.03e-8 or finer, places
+    /// its counts with 64-bit hash values; a narrower one places with 32-bit values, as it
+    /// always did. Every save is format version 9, which records the placement in a byte of
+    /// its own, and which libraries before this one cannot read. Before this, every sketch
+    /// placed with 32-bit values, and a wide one gave the first <c>2^32 mod w</c> columns
+    /// of each row more of the stream than the rest, so items counted there were
+    /// overcounted by more than the bound assumes: about 3% more just past 2^27, a quarter
+    /// more at 2^29.8, and half as much again from a third of 2^32. A sketch read back keeps
+    /// the scheme its payload was placed with, so one written before is still that sketch;
+    /// add its items to a new sketch to have them counted evenly. The two schemes do not
+    /// merge.
+    /// </remarks>
     public class CountMinSketch : IBinaryPersistable<CountMinSketch>
     {
         /// <summary>
@@ -61,6 +74,11 @@ namespace ProbabilisticDataStructures
         /// which one it was built with.
         /// </summary>
         internal Func<ReadOnlySpan<byte>, ulong> HashFunction => this.Hash;
+
+        /// <summary>
+        /// How an item's hash becomes the column it is counted in, in each row.
+        /// </summary>
+        internal Placement Placement { get; private set; }
 
         /// <summary>
         /// The most counters a row can hold, which is the most an array holds.
@@ -100,6 +118,21 @@ namespace ProbabilisticDataStructures
         /// once anything has been added, the hash can no longer be replaced.
         /// </param>
         public CountMinSketch(double epsilon, double delta, Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            : this(epsilon, delta, hash, null)
+        {
+        }
+
+        /// <summary>
+        /// Creates a sketch as the public constructor does, placing its counts as
+        /// <paramref name="placement"/> says, or as its width calls for when that is null.
+        /// </summary>
+        /// <remarks>
+        /// The choice is made by width, and a sketch wide enough for it to matter is a
+        /// gigabyte a row. This lets a test have a small sketch place its counts the way a
+        /// wide one will.
+        /// </remarks>
+        internal CountMinSketch(
+            double epsilon, double delta, Func<ReadOnlySpan<byte>, ulong>? hash, Placement? placement)
         {
             Guard.ValidSketchEpsilon(epsilon, nameof(epsilon));
             Guard.ValidSketchDelta(delta, nameof(delta));
@@ -120,7 +153,33 @@ namespace ProbabilisticDataStructures
             this.epsilon = epsilon;
             this.delta = delta;
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
+            this.Placement = placement ?? PlacementFor(width);
         }
+
+        /// <summary>
+        /// The placement a new sketch <paramref name="width"/> columns wide is built with.
+        /// </summary>
+        /// <remarks>
+        /// The constructor's choice, reachable on its own so that the widths at which it
+        /// changes can be checked without allocating sketches of those widths: 64-bit values
+        /// from <see cref="BitPlacement.WideFrom"/> columns, and 32-bit ones, as every sketch
+        /// always had, below it.
+        /// </remarks>
+        internal static Placement PlacementFor(uint width) => BitPlacement.For(width);
+
+        /// <summary>
+        /// The columns <paramref name="data"/> is counted in under
+        /// <paramref name="placement"/>, in a sketch <paramref name="width"/> wide: row
+        /// <c>i</c> takes the <c>i</c>th.
+        /// </summary>
+        /// <remarks>
+        /// What <see cref="Add(ReadOnlySpan{byte})"/> and
+        /// <see cref="Count(ReadOnlySpan{byte})"/> use, reachable without a sketch so that
+        /// a test can ask it at widths no test can allocate.
+        /// </remarks>
+        internal static Positions ColumnsOf(
+            ReadOnlySpan<byte> data, Func<ReadOnlySpan<byte>, ulong> hash, Placement placement, uint width) =>
+            Positions.Of(data, hash, placement, width);
 
         /// <summary>
         /// Returns the relative-accuracy factor, epsilon.
@@ -164,14 +223,12 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Add(byte[])"/>
         public CountMinSketch Add(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var columns = ColumnsOf(data, this.Hash, this.Placement, this.Width);
 
             // Increment count in each row.
             for (uint i = 0; i < this.Depth; i++)
             {
-                this.Matrix[i][(lower + upper * i) % this.Width]++;
+                this.Matrix[i][columns[i]]++;
             }
 
             this.count++;
@@ -194,14 +251,12 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Count(byte[])"/>
         public UInt64 Count(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var columns = ColumnsOf(data, this.Hash, this.Placement, this.Width);
             var count = UInt64.MaxValue;
 
             for (uint i = 0; i < this.Depth; i++)
             {
-                count = Math.Min(count, this.Matrix[i][(lower + upper * i) % this.Width]);
+                count = Math.Min(count, this.Matrix[i][columns[i]]);
             }
 
             return count;
@@ -214,6 +269,13 @@ namespace ProbabilisticDataStructures
         /// <param name="other">The CountMinSketch to merge with the current
         /// instance.</param>
         /// <returns>True if successful.</returns>
+        /// <exception cref="ArgumentException">
+        /// The two were built with different dimensions or different hash functions, or
+        /// their counts were placed by different schemes, so their cells do not count the
+        /// same items. A sketch read from a payload written before format version 9 places
+        /// with 32-bit values whatever its width, and a new sketch 2^27 columns wide or
+        /// wider with 64-bit values, so two such sketches of the same width do not merge.
+        /// </exception>
         public bool Merge(CountMinSketch other)
         {
             ArgumentNullException.ThrowIfNull(other);
@@ -238,6 +300,8 @@ namespace ProbabilisticDataStructures
                     $"and the other is {other.Width}; width follows from epsilon, so the " +
                     "two sketches were built with different ones.", nameof(other));
             }
+
+            BitPlacement.SameColumns(this.Placement, other.Placement, nameof(other));
 
             for (uint i = 0; i < this.Depth; i++)
             {
@@ -293,6 +357,7 @@ namespace ProbabilisticDataStructures
             payload.WriteDouble(this.delta);
             payload.WriteUInt32(this.Width);
             payload.WriteUInt32(this.Depth);
+            BitPlacement.Write(payload, this.Placement);
             payload.WriteUInt64(this.count);
 
             // Row by row, each cell little-endian. The matrix is the bulk of a sketch,
@@ -309,7 +374,8 @@ namespace ProbabilisticDataStructures
                 stream,
                 StructureId.CountMinSketch,
                 PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+                payload.WrittenSpan,
+                PersistenceFormat.ColumnPlacementVersion);
         }
 
         /// <summary>
@@ -383,7 +449,7 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.CountMinSketch);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.CountMinSketch, out var hashId, budget, Price,
+                stream, StructureId.CountMinSketch, out var hashId, out var version, budget, Price,
                 hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
@@ -391,6 +457,9 @@ namespace ProbabilisticDataStructures
             var delta = reader.ReadDouble();
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
+            // From the payload, never from the width: a version 1 payload of any width was
+            // placed with 32-bit values, and a version 9 one says how it was placed.
+            var placement = BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             var count = reader.ReadUInt64();
 
             // The stored dimensions are authoritative, not epsilon and delta. They are
@@ -422,6 +491,7 @@ namespace ProbabilisticDataStructures
                 epsilon = epsilon,
                 delta = delta,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+                Placement = placement,
             };
         }
 
@@ -435,6 +505,7 @@ namespace ProbabilisticDataStructures
             reader.ReadDouble();
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
+            BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             reader.ReadUInt64();
             CheckMatrix(width, depth);
             reader.Budget.Price(RowsCost(width, depth));

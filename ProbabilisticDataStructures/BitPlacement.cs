@@ -5,7 +5,8 @@ namespace ProbabilisticDataStructures
 {
     /// <summary>
     /// How a filter in the Bloom family turns an item's hash into the positions it sets
-    /// and tests.
+    /// and tests, and how a count-min sketch, HeavyKeeper or the inverse filter turns it
+    /// into the columns, buckets or slot it counts or holds it in.
     /// </summary>
     internal enum Placement : byte
     {
@@ -45,11 +46,19 @@ namespace ProbabilisticDataStructures
     /// payload from before version 8 saved again keeps its scheme in the byte, whatever
     /// its size.
     /// </para>
+    /// <para>
+    /// The count-min sketches, HeavyKeeper and the inverse filter reduced a 32-bit value
+    /// modulo their width in the same way, and a heavier column collects more of other
+    /// items' counts, or overwrites its item sooner. They follow the same rule from the same
+    /// width, and record it from format version 9, which is
+    /// <see cref="PersistenceFormat.ColumnPlacementVersion"/>.
+    /// </para>
     /// </remarks>
     internal static class BitPlacement
     {
         /// <summary>
-        /// The fewest positions at which a new filter places with 64-bit values.
+        /// The fewest positions at which a new filter places with 64-bit values, and the
+        /// fewest columns, buckets or slots at which a new sketch does.
         /// </summary>
         /// <remarks>
         /// Chosen from measurement, at the 1% rate the defect was reported at, as the
@@ -68,6 +77,12 @@ namespace ProbabilisticDataStructures
         /// Below it the fold's excess is at most about 0.07% of the rate at 1% and 0.11%
         /// at 0.1%, a fifth of what rounding <c>k</c> up already adds at 1%, which is why
         /// the smaller filters keep the scheme they always had.
+        /// </para>
+        /// <para>
+        /// The sketches take the same threshold. Below it no column takes more than 1/32
+        /// more of the 2^32 values than another, a spread that halves with each halving of
+        /// the width, and a sketch there keeps the scheme it always had, so that what it
+        /// counts and what it writes stay what they were.
         /// </para>
         /// </remarks>
         internal const ulong WideFrom = 1UL << 27;
@@ -94,27 +109,40 @@ namespace ProbabilisticDataStructures
         private const byte WideByte = 1;
 
         /// <summary>
-        /// Writes the placement byte a version 8 payload carries after the fields that
-        /// size the filter.
+        /// Writes the placement byte a payload carries after the fields that size the
+        /// structure: a Bloom filter's from version 8, a sketch's from version 9.
         /// </summary>
         internal static void Write(PayloadWriter payload, Placement placement) =>
             payload.WriteByte(placement == Placement.Wide ? WideByte : NarrowByte);
 
         /// <summary>
-        /// Reads how a payload of <paramref name="version"/> was placed: from its
-        /// placement byte at version 8, and the 32-bit scheme before it, which has no byte.
+        /// Reads how a Bloom filter's payload of <paramref name="version"/> was placed:
+        /// from its placement byte at version 8, and the 32-bit scheme before it, which has
+        /// no byte.
+        /// </summary>
+        /// <exception cref="InvalidDataException">
+        /// The byte names no scheme this library knows.
+        /// </exception>
+        internal static Placement Read(ref PayloadReader reader, ushort version) =>
+            Read(ref reader, version, PersistenceFormat.PlacementVersion);
+
+        /// <summary>
+        /// Reads how a payload of <paramref name="version"/> was placed, for a structure
+        /// that began recording it at <paramref name="since"/>: from its placement byte from
+        /// that version, and the 32-bit scheme before it, which has no byte.
         /// </summary>
         /// <exception cref="InvalidDataException">
         /// The byte names no scheme this library knows.
         /// </exception>
         /// <remarks>
-        /// Never from the size the payload records: a version 1 payload of any size was
-        /// placed with 32-bit values, and reading it as its size would call for would look
-        /// for every item where it was not put.
+        /// Never from the size the payload records: a payload before the byte, of any size,
+        /// was placed with 32-bit values, and reading it as its size would call for would
+        /// look for every item where it was not put. A reader and its price both read the
+        /// byte through this, so a byte naming no scheme stops both at the same place.
         /// </remarks>
-        internal static Placement Read(ref PayloadReader reader, ushort version)
+        internal static Placement Read(ref PayloadReader reader, ushort version, ushort since)
         {
-            if (version < PersistenceFormat.PlacementVersion)
+            if (version < since)
             {
                 return Placement.Narrow;
             }
@@ -162,16 +190,43 @@ namespace ProbabilisticDataStructures
         private static string Describe(Placement placement) => placement == Placement.Wide
             ? "with 64-bit values, as a new filter of 2^27 positions or more is"
             : "with 32-bit values, as a smaller filter, or any written before format version 8, is";
+
+        /// <summary>
+        /// Refuses to combine two sketches whose counts were placed by different schemes.
+        /// </summary>
+        /// <exception cref="ArgumentException">They were.</exception>
+        /// <remarks>
+        /// The same item is counted in different columns under each, so their sum would
+        /// count neither sketch's items where either looks for them: an old payload read back
+        /// and a new sketch of the same width are the case that reaches this.
+        /// </remarks>
+        internal static void SameColumns(Placement mine, Placement theirs, string paramName)
+        {
+            if (mine != theirs)
+            {
+                throw new ArgumentException(
+                    $"Cannot merge a sketch whose counts were placed {DescribeColumns(theirs)} " +
+                    $"into one placed {DescribeColumns(mine)}. The same item is counted in " +
+                    "different columns in each, so their sum would count neither sketch's items " +
+                    "where it looks for them. Add the items to a new sketch instead.",
+                    paramName);
+            }
+        }
+
+        private static string DescribeColumns(Placement placement) => placement == Placement.Wide
+            ? "with 64-bit values, as a new sketch 2^27 columns wide or wider is"
+            : "with 32-bit values, as a narrower sketch, or any written before format version 9, is";
     }
 
     /// <summary>
     /// The positions of one item in a filter, or a partition of one, of <c>m</c>
-    /// positions, under one placement.
+    /// positions, under one placement; or its columns in the rows of a sketch <c>m</c>
+    /// wide, row <c>i</c> taking the <c>i</c>th.
     /// </summary>
     /// <remarks>
-    /// Every filter that places by <see cref="Placement"/> asks this for its positions
+    /// Every structure that places by <see cref="Placement"/> asks this for its positions
     /// rather than computing them itself, so that what a test of it shows is what the
-    /// filters do.
+    /// structures do.
     /// </remarks>
     internal readonly struct Positions
     {
@@ -193,17 +248,49 @@ namespace ProbabilisticDataStructures
         /// <paramref name="placement"/>, among <paramref name="m"/>.
         /// </summary>
         internal static Positions Of(
-            ReadOnlySpan<byte> data, Func<ReadOnlySpan<byte>, ulong> hash, Placement placement, uint m)
+            ReadOnlySpan<byte> data, Func<ReadOnlySpan<byte>, ulong> hash, Placement placement, uint m) =>
+            OfHash(hash(data), hash, placement, m);
+
+        /// <summary>
+        /// The positions of an item whose hash, under <paramref name="function"/>, is
+        /// <paramref name="hash"/>, for a structure that also uses the hash for something
+        /// else and so has it already.
+        /// </summary>
+        /// <remarks>
+        /// The 32-bit scheme splits the hash into its halves, as
+        /// <see cref="Utils.HashKernel(ReadOnlySpan{byte}, Func{ReadOnlySpan{byte}, ulong})"/>
+        /// does. The 64-bit one takes the hash and the hash of its eight little-endian
+        /// bytes, as
+        /// <see cref="Utils.HashKernel128(ReadOnlySpan{byte}, Func{ReadOnlySpan{byte}, ulong})"/>
+        /// does.
+        /// </remarks>
+        internal static Positions OfHash(
+            ulong hash, Func<ReadOnlySpan<byte>, ulong> function, Placement placement, uint m)
         {
             if (placement == Placement.Wide)
             {
-                var wide = Utils.HashKernel128(data, hash);
-                return new Positions(wide.LowerBaseHash, wide.UpperBaseHash, m, wide: true);
+                Span<byte> bytes = stackalloc byte[sizeof(ulong)];
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes, hash);
+                return new Positions(hash, function(bytes), m, wide: true);
             }
 
-            var narrow = Utils.HashKernel(data, hash);
-            return new Positions(narrow.LowerBaseHash, narrow.UpperBaseHash, m, wide: false);
+            return new Positions((uint)hash, (uint)(hash >> 32), m, wide: false);
         }
+
+        /// <summary>
+        /// The first position of an item whose hash is <paramref name="hash"/>, among
+        /// <paramref name="m"/>: the one position a structure that takes one per item
+        /// takes, which is <c>this[0]</c> under the same placement.
+        /// </summary>
+        /// <remarks>
+        /// The first position needs no second value, so this is the hash reduced modulo
+        /// <paramref name="m"/>: its low 32 bits under the 32-bit scheme, all 64 under the
+        /// 64-bit one. Where <paramref name="m"/> is a power of two the two agree.
+        /// </remarks>
+        internal static uint FirstOf(ulong hash, Placement placement, uint m) =>
+            placement == Placement.Wide
+                ? (uint)(hash % m)
+                : (uint)hash % m;
 
         /// <summary>
         /// The <paramref name="i"/>th position, below <c>m</c>.

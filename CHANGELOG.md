@@ -164,6 +164,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and 7.5 with 16-byte items, so what 64-bit placement adds is now about 4 to 5 nanoseconds
   with short items and 5 to 8 with long ones, the second hash and the wider arithmetic.
 
+- **The count-min sketches, HeavyKeeper, the inverse Bloom filter and `DpswSketch` save at
+  format version 9.** Every save of `CountMinSketch`, `PrivateCountMinSketch`,
+  `HeavyKeeper` and `InverseBloomFilter`, whatever its width, is now
+  [format version 9](FORMAT.md#format-versions): the layout each wrote at version 1, with a
+  placement byte after the fields that size it (0 for 32-bit values, 1 for 64-bit ones). A
+  `DpswSketch` writes each of its private sketches' bodies with that byte, so it is version
+  9 too. **Releases up to 6.2.0 refuse every such payload** as written by a later version,
+  small ones included. Payloads that earlier releases wrote still read, with their 32-bit
+  placement, and save again as version 9. A placement byte naming neither scheme is refused
+  with what it holds. A `TopK` keeps version 1: its sketch is in an envelope of its own, and
+  that is version 9. (#192)
+
 ### Fixed
 
 - **`InvertibleBloomLookupTable.TryDecode` could report success with a wrong answer.** It
@@ -856,6 +868,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   draw per add is still made, so the generator's state is unchanged. `P()` still reports
   4,294,967,295 for such a filter. Every cell is emptied on each add, as the loop would
   have done, so the filter remembers only its latest item.
+
+- **Wide count-min sketches, HeavyKeeper arrays and inverse Bloom filters favoured their
+  first columns.** `CountMinSketch`, `PrivateCountMinSketch` and `HeavyKeeper` took an
+  item's column in row `i` as `(low + i * high) mod w` in 32-bit arithmetic, and
+  `InverseBloomFilter` took its slot as the hash's low 32 bits modulo its capacity: the
+  defect above, in structures that reduce to a column of a row. The first `2^32 mod w`
+  columns get `1 / floor(2^32 / w)` more of the stream than the rest: about 3% more just
+  past 2^27 columns, a quarter more at 2^29.8, and half as much again from a third of 2^32
+  to the widest row an array holds. Items counted in those columns collect more of other
+  items' counts, so they are overcounted past `εN` more often than the bound assumes;
+  modelled from the measured columns at 2^29.8, an item's chance in one row was 9% higher
+  there, and in a sketch of five rows one whose every column was a first one failed 54%
+  more often. A HeavyKeeper bucket there is contested by 11% more of the stream, and an
+  inverse filter overwrites what its first slots hold sooner. Below 2^27 the
+  spread is at most 1/32, halving with each halving of the width. Every release is
+  affected.
+  <br><br>
+  A new one 2^27 columns, buckets or slots wide or wider now places with 64-bit values, as
+  the Bloom filters do from the same size: the hash and the hash of its eight bytes, as
+  `BloomFilter64` combines them, and for the inverse filter's one slot the whole hash
+  modulo its capacity. Every narrower one is placed exactly as before. Each save records
+  which, in a placement byte of [format version 9](FORMAT.md#format-versions); see Changed.
+  A structure read back keeps the placement its payload was written with, whatever its
+  width, so one written by an earlier release is the structure it was; to have its items
+  counted evenly, add them to a new one. Two count-min sketches of the same width placed
+  differently refuse to merge, and so do two `TopK`s holding them, with an
+  `ArgumentException` saying so. (#192)
 
 - **`DDSketch` filed a value its 32-bit bucket index could not hold in the last bucket
   there is, and answered with that bucket for all of them.** A bucket is numbered by an

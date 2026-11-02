@@ -1302,6 +1302,13 @@ the count feeds a threshold nothing may slip under, this is the structure that g
 **Look elsewhere if** you want an unbiased estimate rather than an upper bound, or need to
 subtract — that is `CountSketch`, below.
 
+A sketch 2^27 columns wide or wider, an `ε` of about 2.03e-8 or finer, counts with 64-bit
+hash values, so that every column takes an even share of the stream; one read back from a
+payload written before the release after 6.2.0 keeps the 32-bit placement it was written
+with, which favours the first columns of a wide row. `PrivateCountMinSketch`, `HeavyKeeper`
+and `InverseBloomFilter` do the same from the same width. How the two placements differ is
+in [CAPACITY.md](CAPACITY.md#how-the-sketches-place-their-columns).
+
 ```C#
 var sketch = new CountMinSketch(epsilon: 0.001, delta: 0.01);
 sketch.Add(bytes);

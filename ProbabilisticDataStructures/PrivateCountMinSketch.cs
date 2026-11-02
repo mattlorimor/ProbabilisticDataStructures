@@ -40,6 +40,13 @@ namespace ProbabilisticDataStructures
     /// nothing about a system that also publishes the exact stream length, or the same
     /// stream sketched again under a fresh seed.
     /// </para>
+    /// <para>
+    /// <b>Where an item is counted.</b> A sketch 2^27 columns wide or wider places its
+    /// counts with 64-bit hash values, and a narrower one with 32-bit values, exactly as a
+    /// <see cref="CountMinSketch"/> does and for the same reason. Every save is format
+    /// version 9, which records the placement; a sketch read back keeps the scheme its
+    /// payload was placed with.
+    /// </para>
     /// </remarks>
     public class PrivateCountMinSketch : IBinaryPersistable<PrivateCountMinSketch>
     {
@@ -47,9 +54,15 @@ namespace ProbabilisticDataStructures
         private readonly uint width;
         private readonly uint depth;
         private readonly double rho;
+        private readonly Placement placement;
         private ulong count;
 
         private Func<ReadOnlySpan<byte>, ulong> Hash { get; set; }
+
+        /// <summary>
+        /// How an item's hash becomes the column it is counted in, in each row.
+        /// </summary>
+        internal Placement Placement => this.placement;
 
         /// <summary>
         /// The most counters a row can hold, which is the most an array holds. The
@@ -88,6 +101,25 @@ namespace ProbabilisticDataStructures
             uint width, uint depth, double rho,
             ulong? seed = null,
             Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            : this(width, depth, rho, seed, hash, null)
+        {
+        }
+
+        /// <summary>
+        /// Builds a sketch as the public constructor does, placing its counts as
+        /// <paramref name="placement"/> says, or as its width calls for when that is null.
+        /// </summary>
+        /// <remarks>
+        /// The choice is made by width, and a sketch wide enough for it to matter is a
+        /// gigabyte of noise a row. This lets a test have a small sketch place its counts
+        /// the way a wide one will, and a <see cref="DpswSketch"/> pass on what its test
+        /// asks of it.
+        /// </remarks>
+        internal PrivateCountMinSketch(
+            uint width, uint depth, double rho,
+            ulong? seed,
+            Func<ReadOnlySpan<byte>, ulong>? hash,
+            Placement? placement)
         {
             if (width == 0)
             {
@@ -122,6 +154,7 @@ namespace ProbabilisticDataStructures
             this.width = width;
             this.depth = depth;
             this.rho = rho;
+            this.placement = placement ?? PlacementFor(width);
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
 
             // The l2-sensitivity of a Count-Min Sketch is the square root of twice its
@@ -239,11 +272,11 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Add(byte[])"/>
         public PrivateCountMinSketch Add(ReadOnlySpan<byte> data)
         {
-            var kernel = Utils.HashKernel(data, this.Hash);
+            var columns = ColumnsOf(data, this.Hash, this.placement, this.width);
 
             for (uint i = 0; i < this.depth; i++)
             {
-                this.matrix[i][ColumnOf(kernel, i)]++;
+                this.matrix[i][columns[i]]++;
             }
 
             this.count++;
@@ -277,19 +310,41 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Count(byte[])"/>
         public double Count(ReadOnlySpan<byte> data)
         {
-            var kernel = Utils.HashKernel(data, this.Hash);
+            var columns = ColumnsOf(data, this.Hash, this.placement, this.width);
             var smallest = double.MaxValue;
 
             for (uint i = 0; i < this.depth; i++)
             {
-                smallest = Math.Min(smallest, this.matrix[i][ColumnOf(kernel, i)]);
+                smallest = Math.Min(smallest, this.matrix[i][columns[i]]);
             }
 
             return smallest;
         }
 
-        private uint ColumnOf(in HashKernelReturnValue kernel, uint row) =>
-            (uint)((kernel.LowerBaseHash + (kernel.UpperBaseHash * row)) % this.width);
+        /// <summary>
+        /// The placement a new sketch <paramref name="width"/> columns wide is built with.
+        /// </summary>
+        /// <remarks>
+        /// The constructor's choice, reachable on its own so that the widths at which it
+        /// changes can be checked without drawing the noise for sketches of those widths:
+        /// 64-bit values from <see cref="BitPlacement.WideFrom"/> columns, and 32-bit ones,
+        /// as every sketch always had, below it.
+        /// </remarks>
+        internal static Placement PlacementFor(uint width) => BitPlacement.For(width);
+
+        /// <summary>
+        /// The columns <paramref name="data"/> is counted in under
+        /// <paramref name="placement"/>, in a sketch <paramref name="width"/> wide: row
+        /// <c>i</c> takes the <c>i</c>th.
+        /// </summary>
+        /// <remarks>
+        /// What <see cref="Add(ReadOnlySpan{byte})"/> and
+        /// <see cref="Count(ReadOnlySpan{byte})"/> use, reachable without a sketch so that
+        /// a test can ask it at widths no test can allocate.
+        /// </remarks>
+        internal static Positions ColumnsOf(
+            ReadOnlySpan<byte> data, Func<ReadOnlySpan<byte>, ulong> hash, Placement placement, uint width) =>
+            Positions.Of(data, hash, placement, width);
 
         /// <summary>
         /// Writes this sketch to a stream, in the format documented in FORMAT.md.
@@ -316,7 +371,8 @@ namespace ProbabilisticDataStructures
                 stream,
                 StructureId.PrivateCountMinSketch,
                 PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+                payload.WrittenSpan,
+                PersistenceFormat.ColumnPlacementVersion);
         }
 
         /// <summary>
@@ -391,11 +447,11 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.PrivateCountMinSketch);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.PrivateCountMinSketch, out var hashId, budget, Price,
+                stream, StructureId.PrivateCountMinSketch, out var hashId, out var version, budget, Price,
                 hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
-            return ReadBody(ref reader, PersistenceFormat.ResolveOrThrow(hashId, hash));
+            return ReadBody(ref reader, PersistenceFormat.ResolveOrThrow(hashId, hash), version);
         }
 
         /// <summary>
@@ -404,18 +460,19 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
-            PriceBody(ref reader);
+            PriceBody(ref reader, version);
         }
 
         /// <summary>
         /// Prices what <see cref="ReadBody"/> allocates, the matrix, and moves past the
-        /// body. Returns the shape it claims, for a price that checks it as its reader
-        /// does.
+        /// body, laid out as format version <paramref name="version"/> lays it out. Returns
+        /// the shape it claims, for a price that checks it as its reader does.
         /// </summary>
-        internal static (uint Width, uint Depth) PriceBody(ref PayloadReader reader)
+        internal static (uint Width, uint Depth) PriceBody(ref PayloadReader reader, ushort version)
         {
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
+            BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             var rho = reader.ReadDouble();
             reader.ReadUInt64();
             CheckShape(width, depth, rho);
@@ -464,15 +521,22 @@ namespace ProbabilisticDataStructures
             ReadBudget.SmallObject);
 
         /// <summary>
-        /// Reads the body of a sketch from a payload already positioned at one, so that
+        /// Reads the body of a sketch from a payload already positioned at one, laid out as
+        /// format version <paramref name="version"/> lays it out, so that
         /// <see cref="DpswSketch"/> can read the sketches it holds without each one
         /// carrying its own frame.
         /// </summary>
+        /// <remarks>
+        /// The placement comes from the body, never from the width: a body before version 9
+        /// was placed with 32-bit values whatever its width, and one at version 9 says how
+        /// it was placed, so each of a window's sketches reads as it was written.
+        /// </remarks>
         internal static PrivateCountMinSketch ReadBody(
-            ref PayloadReader reader, Func<ReadOnlySpan<byte>, ulong> hash)
+            ref PayloadReader reader, Func<ReadOnlySpan<byte>, ulong> hash, ushort version)
         {
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
+            var placement = BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             var rho = reader.ReadDouble();
             var count = reader.ReadUInt64();
             CheckShape(width, depth, rho);
@@ -518,7 +582,7 @@ namespace ProbabilisticDataStructures
                     "rather than handing back a sketch that guarantees nothing.");
             }
 
-            return new PrivateCountMinSketch(width, depth, rho, count, matrix, hash);
+            return new PrivateCountMinSketch(width, depth, rho, count, matrix, hash, placement);
         }
 
         /// <summary>
@@ -528,7 +592,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private PrivateCountMinSketch(
             uint width, uint depth, double rho, ulong count,
-            double[][] matrix, Func<ReadOnlySpan<byte>, ulong> hash)
+            double[][] matrix, Func<ReadOnlySpan<byte>, ulong> hash, Placement placement)
         {
             this.width = width;
             this.depth = depth;
@@ -536,17 +600,21 @@ namespace ProbabilisticDataStructures
             this.count = count;
             this.matrix = matrix;
             this.Hash = hash;
+            this.placement = placement;
         }
 
         /// <summary>
         /// Writes the body of this sketch into a payload already being written, so that
         /// <see cref="DpswSketch"/> can hold sketches without each carrying its own
         /// frame. The seed is no more written here than it is by <see cref="WriteTo"/>.
+        /// The layout is format version 9's, with the placement byte, so whatever holds it
+        /// is written at version 9 too.
         /// </summary>
         internal void WriteBody(PayloadWriter payload)
         {
             payload.WriteUInt32(this.width);
             payload.WriteUInt32(this.depth);
+            BitPlacement.Write(payload, this.placement);
             payload.WriteDouble(this.rho);
             payload.WriteUInt64(this.count);
 

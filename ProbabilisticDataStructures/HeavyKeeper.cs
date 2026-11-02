@@ -27,6 +27,14 @@ namespace ProbabilisticDataStructures
     /// exceed it. The authors' reference implementation uses C &lt;= nmin, the only
     /// reading consistent with the paper's own Theorem 1, and so does this one.
     /// </para>
+    /// <para>
+    /// Arrays of 2^27 buckets or more place their elements with 64-bit hash values, and
+    /// narrower ones with 32-bit values, as they always did: before this, every structure
+    /// placed with 32-bit values, and a wide one sent the first <c>2^32 mod width</c>
+    /// buckets of each array more of the stream to contest. Every save is format version
+    /// 9, which records the placement; a structure read back keeps the scheme its payload
+    /// was placed with. The fingerprint is the hash's top sixteen bits either way.
+    /// </para>
     /// </remarks>
     public class HeavyKeeper : IBinaryPersistable<HeavyKeeper>
     {
@@ -80,6 +88,11 @@ namespace ProbabilisticDataStructures
         internal Func<ReadOnlySpan<byte>, ulong> HashFunction => this.Hash;
 
         /// <summary>
+        /// How an element's hash becomes the bucket it contests, in each array.
+        /// </summary>
+        internal Placement Placement { get; private set; }
+
+        /// <summary>
         /// Creates a new HeavyKeeper tracking the k most frequent elements, holding
         /// depth arrays of width buckets each.
         /// </summary>
@@ -109,6 +122,21 @@ namespace ProbabilisticDataStructures
         /// </param>
         public HeavyKeeper(uint k, uint width, uint depth = 2, double decay = 1.08,
             ulong? seed = null, Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            : this(k, width, depth, decay, seed, hash, null)
+        {
+        }
+
+        /// <summary>
+        /// Creates a structure as the public constructor does, placing its elements as
+        /// <paramref name="placement"/> says, or as its width calls for when that is null.
+        /// </summary>
+        /// <remarks>
+        /// The choice is made by width, and an array of buckets wide enough for it to
+        /// matter is more than a gigabyte. This lets a test have a small structure place
+        /// its elements the way a wide one will.
+        /// </remarks>
+        internal HeavyKeeper(uint k, uint width, uint depth, double decay,
+            ulong? seed, Func<ReadOnlySpan<byte>, ulong>? hash, Placement? placement)
         {
             Guard.ValidItemCount(k, nameof(k));
             Guard.ValidItemCount(width, nameof(width));
@@ -144,6 +172,7 @@ namespace ProbabilisticDataStructures
             this.elements = new ElementHeap((int)k);
             (this.Fingerprints, this.Counters) = Buckets(width, depth);
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
+            this.Placement = placement ?? PlacementFor(width);
         }
 
         /// <summary>
@@ -153,7 +182,7 @@ namespace ProbabilisticDataStructures
         /// costs nothing until it is used.
         /// </summary>
         private HeavyKeeper(Func<ReadOnlySpan<byte>, ulong> hash,
-            uint k, uint width, uint depth, double decay, ulong seed)
+            uint k, uint width, uint depth, double decay, ulong seed, Placement placement)
         {
             this.k = k;
             this.Width = width;
@@ -163,7 +192,34 @@ namespace ProbabilisticDataStructures
             this.elements = new ElementHeap(0);
             (this.Fingerprints, this.Counters) = Buckets(width, depth);
             this.Hash = hash;
+            this.Placement = placement;
         }
+
+        /// <summary>
+        /// The placement a new structure whose arrays hold <paramref name="width"/>
+        /// buckets is built with.
+        /// </summary>
+        /// <remarks>
+        /// The constructor's choice, reachable on its own so that the widths at which it
+        /// changes can be checked without allocating arrays of those widths: 64-bit values
+        /// from <see cref="BitPlacement.WideFrom"/> buckets, and 32-bit ones, as every one
+        /// always had, below it.
+        /// </remarks>
+        internal static Placement PlacementFor(uint width) => BitPlacement.For(width);
+
+        /// <summary>
+        /// The buckets an element whose hash is <paramref name="hash"/> contests under
+        /// <paramref name="placement"/>, in arrays of <paramref name="width"/>: array
+        /// <c>j</c> takes the <c>j</c>th.
+        /// </summary>
+        /// <remarks>
+        /// What every operation uses, reachable without a structure so that a test can
+        /// ask it at widths no test can allocate. The hash is taken once, by the caller,
+        /// because the fingerprint comes from it as well.
+        /// </remarks>
+        internal static Positions BucketsOf(
+            ulong hash, Func<ReadOnlySpan<byte>, ulong> function, Placement placement, uint width) =>
+            Positions.OfHash(hash, function, placement, width);
 
         /// <summary>
         /// The most buckets in one array: each array is a .NET array.
@@ -208,8 +264,9 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Add(byte[])"/>
         public HeavyKeeper Add(ReadOnlySpan<byte> data)
         {
-            var kernel = Utils.HashKernel(data, this.Hash);
-            var fingerprint = FingerprintOf(kernel);
+            var hash = this.Hash(data);
+            var fingerprint = FingerprintOf(hash);
+            var buckets = BucketsOf(hash, this.Hash, this.Placement, this.Width);
 
             // Tracked elements always earn their increments; everyone else is held
             // to the heap minimum, so a fingerprint collision with a large incumbent
@@ -220,7 +277,7 @@ namespace ProbabilisticDataStructures
             ulong best = 0;
             for (uint j = 0; j < this.Depth; j++)
             {
-                var bucket = this.BucketIndex(kernel, j);
+                var bucket = buckets[j];
                 var count = this.Counters[j][bucket];
 
                 if (count == 0)
@@ -300,13 +357,14 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Count(byte[])"/>
         public ulong Count(ReadOnlySpan<byte> data)
         {
-            var kernel = Utils.HashKernel(data, this.Hash);
-            var fingerprint = FingerprintOf(kernel);
+            var hash = this.Hash(data);
+            var fingerprint = FingerprintOf(hash);
+            var buckets = BucketsOf(hash, this.Hash, this.Placement, this.Width);
 
             ulong best = 0;
             for (uint j = 0; j < this.Depth; j++)
             {
-                var bucket = this.BucketIndex(kernel, j);
+                var bucket = buckets[j];
                 if (this.Fingerprints[j][bucket] == fingerprint
                     && this.Counters[j][bucket] > best)
                 {
@@ -350,20 +408,12 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The bucket the kernel maps to in the jth array.
-        /// </summary>
-        private uint BucketIndex(in HashKernelReturnValue kernel, uint j)
-        {
-            return (kernel.LowerBaseHash + kernel.UpperBaseHash * j) % this.Width;
-        }
-
-        /// <summary>
         /// The fingerprint of the hashed element: the top sixteen bits of its hash,
-        /// which the bucket index -- built from the lower bits -- does not touch.
+        /// whichever way its buckets are placed.
         /// </summary>
-        private static ushort FingerprintOf(in HashKernelReturnValue kernel)
+        private static ushort FingerprintOf(ulong hash)
         {
-            return (ushort)(kernel.UpperBaseHash >> 16);
+            return (ushort)(hash >> 48);
         }
 
         /// <summary>
@@ -386,12 +436,13 @@ namespace ProbabilisticDataStructures
         internal IEnumerable<(uint Array, uint Bucket, ushort Fingerprint)> MappingOf(
             ReadOnlySpan<byte> data)
         {
-            var kernel = Utils.HashKernel(data, this.Hash);
-            var fingerprint = FingerprintOf(kernel);
+            var hash = this.Hash(data);
+            var fingerprint = FingerprintOf(hash);
+            var buckets = BucketsOf(hash, this.Hash, this.Placement, this.Width);
             var mapping = new (uint, uint, ushort)[this.Depth];
             for (uint j = 0; j < this.Depth; j++)
             {
-                mapping[j] = (j, this.BucketIndex(kernel, j), fingerprint);
+                mapping[j] = (j, buckets[j], fingerprint);
             }
             return mapping;
         }
@@ -408,6 +459,7 @@ namespace ProbabilisticDataStructures
             payload.WriteUInt32(this.k);
             payload.WriteUInt32(this.Width);
             payload.WriteUInt32(this.Depth);
+            BitPlacement.Write(payload, this.Placement);
             payload.WriteDouble(this.decay);
             payload.WriteUInt64(this.random.State);
             payload.WriteUInt64(this.N);
@@ -439,7 +491,8 @@ namespace ProbabilisticDataStructures
                 stream,
                 StructureId.HeavyKeeper,
                 PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+                payload.WrittenSpan,
+                PersistenceFormat.ColumnPlacementVersion);
         }
 
         /// <summary>
@@ -513,13 +566,16 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.HeavyKeeper);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.HeavyKeeper, out var hashId, budget, Price,
+                stream, StructureId.HeavyKeeper, out var hashId, out var version, budget, Price,
                 hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var k = reader.ReadUInt32();
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
+            // From the payload, never from the width: a version 1 payload of any width was
+            // placed with 32-bit values, and a version 9 one says how it was placed.
+            var placement = BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             var decay = reader.ReadDouble();
             var randomState = reader.ReadUInt64();
             var n = reader.ReadUInt64();
@@ -527,7 +583,7 @@ namespace ProbabilisticDataStructures
 
             budget.Charge(ArraysCost(width, depth));
             var restored = new HeavyKeeper(PersistenceFormat.ResolveOrThrow(hashId, hash),
-                k, width, depth, decay, randomState)
+                k, width, depth, decay, randomState, placement)
             {
                 N = n,
             };
@@ -576,6 +632,7 @@ namespace ProbabilisticDataStructures
             var k = reader.ReadUInt32();
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
+            BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             var decay = reader.ReadDouble();
             reader.ReadUInt64();
             reader.ReadUInt64();

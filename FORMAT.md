@@ -45,6 +45,7 @@ structure whose layout changes bumps only its own.
 | 6 | the release after 6.2.0 | `CuckooBloomFilter` | the state the random generator began in |
 | 7 | the release after 6.2.0 | `ScalableBloomFilter` | the growth factor, written only by a filter that grows |
 | 8 | the release after 6.2.0 | `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter`, `StableBloomFilter` | a placement byte, and the item count as a `u64`; written by every save |
+| 9 | the release after 6.2.0 | `InverseBloomFilter`, `CountMinSketch`, `HeavyKeeper`, `PrivateCountMinSketch`, `DpswSketch` | a placement byte, in each private sketch body for `DpswSketch`; written by every save |
 
 The table is also the list of what each structure reads. A version belongs to the
 structures named against it, and a structure's reader reads those versions and no
@@ -127,6 +128,32 @@ differently set different bits for the same item, so the filters that merge refu
 merge them. A `ScalableBloomFilter` holds partitioned filters, each in its own
 envelope, so its contained filters are written at version 8 inside a scalable filter at
 version 1 or 7.
+
+Version 9 is the same change for the structures that reduce a hash to one column of a
+row, or one slot: `CountMinSketch`, `PrivateCountMinSketch`, `HeavyKeeper` and
+`InverseBloomFilter`. They had placed with 32-bit values at every width, as the Bloom
+filters had, and from the same width of 2^27 a new one places with 64-bit values, as
+[Bit placement](#bit-placement) describes. Each writes, at version 9, the layout it wrote
+at version 1 with a placement byte after the fields that size it, and nothing else
+changes. The byte means what version 8's does, and a reader refuses any other value in it
+the same way. It is a number of its own because it is a change of its own, made later
+and to other structures: a library that reads version 8 and not 9 refuses these payloads
+as written by a later version, which is what they are.
+
+A `DpswSketch` holds private sketches inline, each as the `PrivateCountMinSketch` body
+below, so its layout changes with that body: at version 9 every body carries its own
+placement byte, and the window's own fields are as they were. Each sketch's byte is read
+for that sketch, so a window can hold sketches placed either way: one read from a payload
+written before version 9 keeps its sketches as they were, and the substreams it begins
+afterwards are new sketches, placed as their width calls for. A `TopK` holds its
+`CountMinSketch` in an envelope of its own, so the sketch carries its own version and
+byte and the top-k's layout is unchanged: its sketch is written at version 9 inside a
+top-k at version 1.
+
+A payload before version 9 has no placement byte and was placed with 32-bit values,
+whatever its width, and reads back that way, and saves again as version 9. Two
+`CountMinSketch`es of the same width placed differently count the same item in different
+columns, so they refuse to merge, and so do two `TopK`s holding them.
 
 A reader refuses a payload whose magic does not match, whose version is not one its
 structure has defined, whose structure id is not the type being read, or whose
@@ -406,9 +433,14 @@ f64     epsilon
 f64     delta
 u32     width
 u32     depth
+u8      placement, 0 for 32-bit values and 1 for 64-bit ones   (version 9 only)
 u64     total count
 u64     depth * width cells, row by row
 ```
+
+Before version 9 there is no placement byte, and the counts were placed with 32-bit
+values. Which column of row `i` an item is counted in is described in
+[Bit placement](#bit-placement), with `m` the width.
 
 The stored `width` and `depth` are authoritative, not `epsilon` and `delta`. They are
 what the sketch indexes by, and recomputing them from the parameters would silently
@@ -526,6 +558,7 @@ state. What a reader does for a field the payload lacks is described in
 
 ```
 u32     capacity
+u8      placement, 0 for 32-bit values and 1 for 64-bit ones   (version 9 only)
 u32     occupied slot count
         per occupied slot:
 u32       slot index
@@ -535,6 +568,11 @@ bytes     the stored data
 Only occupied slots are written. This filter stores the data rather than hashing it, so
 a full-length run of empty slots would be most of a large, mostly idle filter's payload.
 A slot index at or beyond the capacity is refused.
+
+Each entry carries its slot, so the placement does not say where the reader puts what it
+holds; it says where the filter looks for an item afterwards. An item's slot is described
+in [Bit placement](#bit-placement): position 0, with `m` the capacity. Before version 9
+there is no placement byte, and the slots were chosen with 32-bit values.
 
 ### `CuckooBloomFilter` (id 9)
 
@@ -604,6 +642,10 @@ u32     element count
 bytes     the element's data
 u64       its recorded frequency
 ```
+
+The nested sketch is a complete `CountMinSketch` envelope, at whichever version it was
+written: version 1 from releases before the placement byte, version 9 since. The top-k's
+own layout is the same at either, and is version 1.
 
 The number of items added is the nested sketch's count, which is a `u64`. `n` is that
 number held to what a `u32` holds: a structure that has seen more than 4,294,967,295 items
@@ -853,6 +895,7 @@ different one would answer with the wrong values rather than with none.
 u32     k, the number of elements tracked
 u32     width, buckets per array
 u32     depth, the number of arrays
+u8      placement, 0 for 32-bit values and 1 for 64-bit ones   (version 9 only)
 f64     the decay base b
 u64     the decay generator's state
 u64     n, the number of items added
@@ -867,6 +910,10 @@ u64       its recorded frequency
 The tracked elements are re-heaped on read rather than being trusted to arrive in heap
 order, for the same reason `TopK`'s are. The generator's state is stored so a reloaded
 structure resumes its decay sequence rather than replaying it; see below.
+
+An element's bucket in array `j` is described in [Bit placement](#bit-placement), with `m`
+the width; before version 9 there is no placement byte, and the buckets were chosen with
+32-bit values. Its fingerprint is the top sixteen bits of `h` either way.
 
 ### `VarOpt` (id 24)
 
@@ -1173,11 +1220,17 @@ refuses on the way in and so cannot have written.
 ```
 u32     counters per row
 u32     rows
+u8      placement, 0 for 32-bit values and 1 for 64-bit ones   (version 9 only)
 f64     the zero-concentrated privacy budget the noise was drawn for
 u64     items added
         per row, per counter:
 f64       the counter, which is a noise draw plus a count
 ```
+
+Columns are chosen as a `CountMinSketch`'s are, as [Bit placement](#bit-placement)
+describes; before version 9 there is no placement byte, and they were chosen with 32-bit
+values. This is also the body a `DpswSketch` holds, laid out as the window's version lays
+it out.
 
 **The seed is not written, and must never be.** The counters are safe to write because
 they already carry the noise: a payload of them reveals no more than the live sketch
@@ -1220,8 +1273,12 @@ u32     the number of substreams held
 u64       the stream position it begins at
 u32       how many items it holds
           per planned segment, in plan order:
-...         a PrivateCountMinSketch body, exactly as above
+...         a PrivateCountMinSketch body, exactly as above, at the window's version
 ```
+
+A window at version 9 holds version 9 bodies, each with the placement byte of its own
+sketch, and one at version 1 holds version 1 bodies, which have none. The window has no
+placement of its own: each sketch is read as its body says.
 
 **Neither the generator nor the segment plan is written.** The generator is the secret,
 for the reason given above. The segment ranges and their budgets are a pure function of
@@ -1252,6 +1309,9 @@ leanest sketch would be drowned in its own noise, so that a payload is not a way
 it — and every nested sketch carries the all-integers guard above.
 
 ## Bit placement
+
+This section is also where the columns of the count-min sketches, the buckets of
+`HeavyKeeper` and the slots of `InverseBloomFilter` come from, below.
 
 The bits of `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`,
 `PartitionedBloomFilter` and `StableBloomFilter` are positions an item's hash was mapped
@@ -1295,6 +1355,34 @@ is a power of two and largest when `2^32 mod m` is half of `m`, and it shrinks w
 square of `m`'s share of 2^32. Below 2^27 positions it is too small to measure, which is
 why a new filter places with 64-bit values only from there, and keeps the 32-bit form
 below it.
+
+The same two forms place the counts of `CountMinSketch` and `PrivateCountMinSketch`, the
+buckets of `HeavyKeeper` and the slot of `InverseBloomFilter`, with `m` the width or the
+capacity. In a payload before version 9, and in a version 9 payload whose placement byte
+is `0`, they come from 32-bit values; in a version 9 payload whose byte is `1`, from
+64-bit ones. A sketch counts an item in column `position i` of row `i`, for `i = 0 ..
+depth - 1`, and HeavyKeeper's element contests bucket `position j` of array `j`. The
+inverse filter holds an item in one slot, `position 0`:
+
+```
+32-bit:   slot = (h & 0xFFFFFFFF) mod m
+64-bit:   slot = h mod m
+```
+
+which needs no second value. It is the 32-bit rule with the whole hash in place of its
+low half, rather than another reduction such as a multiply and shift, so the two agree
+whenever `m` is a power of two, and a hash function that fills only its low 32 bits still
+places as it did, where a multiply and shift would put every item in slot 0.
+
+In a row the 32-bit form gives the first `2^32 mod m` columns one more of the 2^32 values
+than the rest, `1 / floor(2^32 / m)` more: about 3% just past 2^27, a quarter at 2^29.8,
+and a half from a third of 2^32 to the widest row. A heavier column collects more of
+other items' counts, so the items counted there are overcounted by more than the error
+bound assumes, a contested HeavyKeeper bucket is contested more often, and the inverse
+filter overwrites what its first slots hold sooner. A new sketch, HeavyKeeper or inverse
+filter places with 64-bit values from a width or capacity of 2^27, and with 32-bit values
+below it, where the spread is at most 1/32. The 64-bit form folds too, by at most `m` in
+2^64, which nothing can measure.
 
 ## The random generator's state
 

@@ -555,8 +555,10 @@ namespace TestProbabilisticDataStructures
                 Add = (s, op) => s.Add(K(op.Key)),
                 Query = (s, op) => s.Count(K(op.Key)) + "|" + Describe(s.Elements()),
                 Reset = s => s.Reset(),
+                // u32 k, u32 width, u32 depth, the placement byte, f64 decay, then the
+                // generator at 21.
                 FreshAfterReset = s => new HeavyKeeper(4, 16, 2, 1.08,
-                    seed: GeneratorState(s.ToByteArray(), payloadOffset: 20)),
+                    seed: GeneratorState(s.ToByteArray(), payloadOffset: 21)),
                 Phase = s => s.Elements().Length < 4 ? "heap filling" : "heap full",
                 MinPhases = 2,
             };

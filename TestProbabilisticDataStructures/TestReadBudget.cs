@@ -936,6 +936,50 @@ namespace TestProbabilisticDataStructures
             AssertRefusedForItsShape<DpswSketch>(bytes, Poke(bytes, 56, 0), "holds 0 of a possible");
         }
 
+        /// <summary>
+        /// A placement byte naming no scheme, in each structure that records one from
+        /// version 9, is refused for that under a budget it would also fail: its price
+        /// reads the byte through the check its reader reads it through, and stops there.
+        /// The byte follows the fields that size each one, so a price that walked past it
+        /// would price everything after it.
+        /// </summary>
+        [TestMethod]
+        public void TestAnUnknownPlacementIsRefusedForThatWhateverTheBudget()
+        {
+            // f64 epsilon, f64 delta, u32 width, u32 depth, then the byte at 24.
+            var countMin = Filled(new CountMinSketch(0.001, 0.01), (s, k) => s.Add(k), 100).ToByteArray();
+            AssertRefusedForItsShape<CountMinSketch>(countMin, PokeByte(countMin, 24, 2), "placement 2");
+
+            // u32 width, u32 depth, then the byte at 8.
+            var priv = Filled(new PrivateCountMinSketch(1024, 3, 1.0, seed: 1), (s, k) => s.Add(k), 100).ToByteArray();
+            AssertRefusedForItsShape<PrivateCountMinSketch>(priv, PokeByte(priv, 8, 2), "placement 2");
+
+            // u32 k, u32 width, u32 depth, then the byte at 12.
+            var keeper = Filled(new HeavyKeeper(5, 1024, seed: 1), (s, k) => s.Add(k), 100).ToByteArray();
+            AssertRefusedForItsShape<HeavyKeeper>(keeper, PokeByte(keeper, 12, 2), "placement 2");
+
+            // u32 capacity, then the byte at 4.
+            var inverse = Filled(new InverseBloomFilter(10_000), (f, k) => f.Add(k), 100).ToByteArray();
+            AssertRefusedForItsShape<InverseBloomFilter>(inverse, PokeByte(inverse, 4, 255), "placement 255");
+
+            // The window's header and substream count, 48 bytes; the first substream's
+            // u64 start and u32 count; then its first body's u32 width and u32 depth, and
+            // the body's byte at 68.
+            var window = Filled(
+                new DpswSketch(2000, 1.0, width: 1024, depth: 3, seed: 1), (s, k) => s.Add(k), 5000).ToByteArray();
+            AssertRefusedForItsShape<DpswSketch>(window, PokeByte(window, 68, 2), "placement 2");
+
+            // u32 k, u32 n, the sketch's u32 length, then its envelope: the sketch's byte is
+            // 24 into its payload, which is 14 into the envelope, at 12.
+            var topK = Filled(new TopK(0.001, 0.01, 50), (s, k) => s.Add(k), 2000).ToByteArray();
+            var edited = (byte[])topK.Clone();
+            var length = (int)BinaryPrimitives.ReadUInt32LittleEndian(edited.AsSpan(PayloadStart + 8));
+            var nested = edited.AsSpan(PayloadStart + 12, length).ToArray();
+            nested[PayloadStart + 24] = 2;
+            Reseal(nested).CopyTo(edited, PayloadStart + 12);
+            AssertRefusedForItsShape<TopK>(topK, Reseal(edited), "placement 2");
+        }
+
         /// <summary>A partition whose bucket width disagrees with its data's length.</summary>
         [TestMethod]
         public void TestAPartitionWhoseDataDisagreesWithItsWidthIsRefusedForThat()
