@@ -84,11 +84,19 @@ namespace ProbabilisticDataStructures
         private readonly ReadOnlySpan<byte> payload;
         private int offset;
 
-        internal PayloadReader(ReadOnlySpan<byte> payload)
+        internal PayloadReader(ReadOnlySpan<byte> payload, ReadBudget budget)
         {
             this.payload = payload;
             this.offset = 0;
+            this.Budget = budget;
         }
+
+        /// <summary>
+        /// The allowance the read this payload belongs to draws on, so that code handed
+        /// only the reader -- a nested structure, a body shared between two readers --
+        /// charges the same one.
+        /// </summary>
+        internal ReadBudget Budget { get; }
 
         internal byte ReadByte()
         {

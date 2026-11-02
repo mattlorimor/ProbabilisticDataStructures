@@ -61,7 +61,26 @@ namespace ProbabilisticDataStructures
         /// <returns>The signature that was written.</returns>
         public static SimHashSignature ReadFrom(Stream stream)
         {
-            return Read(stream);
+            return Read(stream, ReadOptions.Default);
+        }
+
+        /// <summary>
+        /// Reads a structure written by <see cref="WriteTo"/>, allocating no more than the
+        /// options' memory budget allows. <see cref="ReadFrom(Stream)"/> reads under
+        /// <see cref="ReadOptions.Default"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static SimHashSignature ReadFrom(Stream stream, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, options);
         }
 
         /// <summary>
@@ -75,15 +94,38 @@ namespace ProbabilisticDataStructures
         public static SimHashSignature ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             ArgumentNullException.ThrowIfNull(hash);
-            return Read(stream);
+            return Read(stream, ReadOptions.Default);
         }
 
-        private static SimHashSignature Read(Stream stream)
+        /// <summary>
+        /// Reads a structure as
+        /// <see cref="ReadFrom(Stream, Func{ReadOnlySpan{byte}, ulong})"/> does, allocating
+        /// no more than the options' memory budget allows.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function, as for the overload without options.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static SimHashSignature ReadFrom(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong> hash, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, options);
+        }
+
+        private static SimHashSignature Read(Stream stream, ReadOptions options)
         {
             ArgumentNullException.ThrowIfNull(stream);
 
+            var budget = ReadBudget.For(options, StructureId.SimHashSignature);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.SimHashSignature, out var hashId);
+                stream, StructureId.SimHashSignature, out var hashId, budget);
 
             if (hashId != HashId.XxHash3_64)
             {
@@ -93,7 +135,7 @@ namespace ProbabilisticDataStructures
                     "different hash functions gives a number that means nothing.");
             }
 
-            var reader = new PayloadReader(payload);
+            var reader = new PayloadReader(payload, budget);
             var value = reader.ReadUInt64();
             reader.ExpectEnd();
 

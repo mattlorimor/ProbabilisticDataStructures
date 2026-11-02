@@ -185,7 +185,8 @@ namespace ProbabilisticDataStructures
         /// structure's reader reads the versions that structure has written and no
         /// others. Accepting every version up to the highest anywhere would read a
         /// version some other structure defined as though it were this one's newest
-        /// layout; <see cref="Read(Stream, StructureId, out HashId, out ushort)"/> refuses
+        /// layout;
+        /// <see cref="Read(Stream, StructureId, out HashId, out ushort, ReadBudget)"/> refuses
         /// it instead, and says which versions it does read.
         /// <para>
         /// Every structure is listed, including those that have only ever written the
@@ -326,9 +327,10 @@ namespace ProbabilisticDataStructures
         /// the structure never defined (a later one included), holds a different
         /// structure, or has been corrupted.
         /// </exception>
-        internal static byte[] Read(Stream stream, StructureId expected, out HashId hash)
+        internal static byte[] Read(
+            Stream stream, StructureId expected, out HashId hash, ReadBudget budget)
         {
-            return Read(stream, expected, out hash, out _);
+            return Read(stream, expected, out hash, out _, budget);
         }
 
         /// <summary>
@@ -341,7 +343,8 @@ namespace ProbabilisticDataStructures
         /// structure, or has been corrupted.
         /// </exception>
         internal static byte[] Read(
-            Stream stream, StructureId expected, out HashId hash, out ushort version)
+            Stream stream, StructureId expected, out HashId hash, out ushort version,
+            ReadBudget budget)
         {
             var header = ReadExactly(stream, HeaderLength, "header");
 
@@ -582,7 +585,10 @@ namespace ProbabilisticDataStructures
             var bytes = reader.ReadBytes();
             using var buffer = new MemoryStream(bytes, writable: false);
 
-            return hash is null ? T.ReadFrom(buffer) : T.ReadFrom(buffer, hash);
+            // The nested structure draws on the same allowance as the one around it, so
+            // that a composite cannot spend its budget once per part.
+            var options = new ReadOptions(reader.Budget);
+            return hash is null ? T.ReadFrom(buffer, options) : T.ReadFrom(buffer, hash, options);
         }
 
         /// <summary>

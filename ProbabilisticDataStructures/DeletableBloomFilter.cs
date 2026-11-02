@@ -331,7 +331,26 @@ namespace ProbabilisticDataStructures
         /// <returns>The filter that was written.</returns>
         public static DeletableBloomFilter ReadFrom(Stream stream)
         {
-            return Read(stream, null);
+            return Read(stream, null, ReadOptions.Default);
+        }
+
+        /// <summary>
+        /// Reads a structure written by <see cref="WriteTo"/>, allocating no more than the
+        /// options' memory budget allows. <see cref="ReadFrom(Stream)"/> reads under
+        /// <see cref="ReadOptions.Default"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static DeletableBloomFilter ReadFrom(Stream stream, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, null, options);
         }
 
         /// <summary>
@@ -344,15 +363,39 @@ namespace ProbabilisticDataStructures
         public static DeletableBloomFilter ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             ArgumentNullException.ThrowIfNull(hash);
-            return Read(stream, hash);
+            return Read(stream, hash, ReadOptions.Default);
         }
 
-        private static DeletableBloomFilter Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        /// <summary>
+        /// Reads a structure as
+        /// <see cref="ReadFrom(Stream, Func{ReadOnlySpan{byte}, ulong})"/> does, allocating
+        /// no more than the options' memory budget allows.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function, as for the overload without options.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static DeletableBloomFilter ReadFrom(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong> hash, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, hash, options);
+        }
+
+        private static DeletableBloomFilter Read(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash, ReadOptions options)
         {
             ArgumentNullException.ThrowIfNull(stream);
 
-            var payload = PersistenceFormat.Read(stream, StructureId.DeletableBloomFilter, out var hashId);
-            var reader = new PayloadReader(payload);
+            var budget = ReadBudget.For(options, StructureId.DeletableBloomFilter);
+            var payload = PersistenceFormat.Read(stream, StructureId.DeletableBloomFilter, out var hashId, budget);
+            var reader = new PayloadReader(payload, budget);
 
             var m = reader.ReadUInt32();
             var k = reader.ReadUInt32();

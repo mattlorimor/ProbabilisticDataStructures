@@ -524,7 +524,27 @@ namespace ProbabilisticDataStructures
         /// Reads a filter written by <see cref="WriteTo"/>.
         /// </summary>
         /// <param name="stream">The stream to read from.</param>
-        public static MementoFilter ReadFrom(Stream stream) => Read(stream, null);
+        public static MementoFilter ReadFrom(Stream stream) =>
+            Read(stream, null, ReadOptions.Default);
+
+        /// <summary>
+        /// Reads a structure written by <see cref="WriteTo"/>, allocating no more than the
+        /// options' memory budget allows. <see cref="ReadFrom(Stream)"/> reads under
+        /// <see cref="ReadOptions.Default"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static MementoFilter ReadFrom(Stream stream, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, null, options);
+        }
 
         /// <summary>
         /// Reads a filter written by <see cref="WriteTo"/>. The filter holds numbers
@@ -536,16 +556,39 @@ namespace ProbabilisticDataStructures
             Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             ArgumentNullException.ThrowIfNull(hash);
-            return Read(stream, hash);
+            return Read(stream, hash, ReadOptions.Default);
+        }
+
+        /// <summary>
+        /// Reads a structure as
+        /// <see cref="ReadFrom(Stream, Func{ReadOnlySpan{byte}, ulong})"/> does, allocating
+        /// no more than the options' memory budget allows.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function, as for the overload without options.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static MementoFilter ReadFrom(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong> hash, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, hash, options);
         }
 
         private static MementoFilter Read(
-            Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+            Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash, ReadOptions options)
         {
             ArgumentNullException.ThrowIfNull(stream);
 
+            var budget = ReadBudget.For(options, StructureId.MementoFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.MementoFilter, out var hashId);
+                stream, StructureId.MementoFilter, out var hashId, budget);
 
             if (hash is not null)
             {
@@ -562,7 +605,7 @@ namespace ProbabilisticDataStructures
                     "written by this structure.");
             }
 
-            var reader = new PayloadReader(payload);
+            var reader = new PayloadReader(payload, budget);
             var added = reader.ReadUInt64();
             var expansions = reader.ReadUInt32();
             var mementoBits = (int)reader.ReadUInt32();

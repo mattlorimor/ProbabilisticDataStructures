@@ -16,6 +16,8 @@
          describes. A spec that has drifted is worse than none: it is read by people
          decoding a payload without this library. -->
     <EmbeddedResource Include="..\FORMAT.md" LogicalName="TestProbabilisticDataStructures.FORMAT.md" />
+    <!-- The README states the default read budget, and a test holds it to the code. -->
+    <EmbeddedResource Include="..\README.md" LogicalName="TestProbabilisticDataStructures.README.md" />
   </ItemGroup>
 
   <ItemGroup>
