@@ -358,6 +358,126 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// The number of filters a scalable filter can hold, worked out here from the
+        /// rates rather than read from the code. The first is at the rate asked for and
+        /// each next is a factor r tighter, and a Bloom filter at a rate needs the
+        /// reciprocal of it for its hash count, which stops being a number when the rate
+        /// is below 1 / double.MaxValue. So the i-th (counting from nought) can be built
+        /// while fp * r^i is at least that, which is i &lt;= ln(fp * double.MaxValue) /
+        /// ln(1 / r).
+        /// </summary>
+        private static int CeilingFor(double fpRate, double r) =>
+            (int)Math.Floor(Math.Log(fpRate * double.MaxValue) / Math.Log(1 / r)) + 1;
+
+        /// <summary>
+        /// Adds distinct keys until one is refused, returning the refusal and how many
+        /// filters the filter held. A hint of one makes each filter fill after a couple of
+        /// keys, so the ceiling is a few thousand adds away rather than millions.
+        /// </summary>
+        private static (Exception Refusal, int Filters) AddUntilRefused(ScalableBloomFilter filter)
+        {
+            for (var i = 0; i < 1_000_000; i++)
+            {
+                try
+                {
+                    filter.Add(BitConverter.GetBytes(i));
+                }
+                catch (Exception e)
+                {
+                    return (e, filter.Filters.Count);
+                }
+            }
+
+            Assert.Fail("a million adds never reached the ceiling");
+            return (null, 0);
+        }
+
+        /// <summary>
+        /// A scalable filter tightens each new filter's rate by r, and the rate runs out:
+        /// fp * r^i falls to where its reciprocal is not a number, and the filter then
+        /// threw an OverflowException from inside the sizing arithmetic. At a rate of 1%
+        /// and a ratio of 0.8 that is the 3,162nd filter -- 3.16 million items at a hint of
+        /// a thousand, measured -- and at a ratio of 0.9 the 6,694th. The count is a closed
+        /// form, restated here, so the filter must stop at exactly it. It is the wall of a
+        /// growth factor of one, which builds every filter for the hint, so the growth is
+        /// passed explicitly: the default grows, and reaches a wall of its own first.
+        /// The ratios here are the ones whose ceilings a suite can reach: the filters hold
+        /// a partition per hash function, and a thousand filters of a thousand partitions
+        /// are a million objects.
+        /// </summary>
+        [TestMethod]
+        [DataRow(0.01, 0.5)]
+        [DataRow(0.01, 0.3)]
+        [DataRow(0.3, 0.5)]
+        [DataRow(1e-100, 0.5)]
+        [DataRow(1e-308, 0.8)]
+        public void TestAScalableFilterThatRunsOutOfRatesIsRefusedNamingTheCeiling(
+            double fpRate, double r)
+        {
+            var ceiling = CeilingFor(fpRate, r);
+            var filter = new ScalableBloomFilter(1, fpRate, r, growth: 1);
+
+            var (refusal, filters) = AddUntilRefused(filter);
+
+            Assert.IsInstanceOfType<InvalidOperationException>(refusal,
+                $"the ceiling was reported as {refusal.GetType().Name}: {refusal.Message}");
+            Assert.AreEqual(ceiling, filters,
+                "the filter did not stop at the number of filters its rates allow");
+            StringAssert.Contains(refusal.Message, ceiling.ToString(),
+                "the refusal should name the ceiling");
+            StringAssert.Contains(refusal.Message, "no finite reciprocal",
+                "the refusal should say it is the rate that ran out");
+            StringAssert.Contains(refusal.Message, "BloomFilter64",
+                "the refusal should name what to use instead");
+        }
+
+        /// <summary>
+        /// The two ceilings the changelog gives, so that the formula above is held to
+        /// numbers someone can check by hand. They were measured too: a thousand-item
+        /// hint at 1% and 0.8 threw on the 3,156,212th add, holding 3,161 filters.
+        /// </summary>
+        [TestMethod]
+        public void TestTheCeilingAtOnePercentIsThreeThousandOneHundredAndSixtyOne()
+        {
+            Assert.AreEqual(3161, CeilingFor(0.01, 0.8));
+            Assert.AreEqual(6693, CeilingFor(0.01, 0.9));
+        }
+
+        /// <summary>
+        /// The filter at its ceiling still writes and reads, and reads back at the ceiling:
+        /// the limit is the rates', not a state of the object. That a refused add leaves
+        /// the filter byte for byte as it was, over repeated attempts of Add and
+        /// TestAndAdd, is held by TestAnAddPastTheCeilingIsRefusedBeforeAnythingChanges.
+        /// </summary>
+        [TestMethod]
+        public void TestAFilterAtItsCeilingRoundTripsAndStillRefuses()
+        {
+            var filter = new ScalableBloomFilter(1, 0.01, 0.5, growth: 1);
+            var (refusal, _) = AddUntilRefused(filter);
+            Assert.IsInstanceOfType<InvalidOperationException>(refusal);
+
+            var restored = Persistence.FromByteArray<ScalableBloomFilter>(filter.ToByteArray());
+            Assert.AreEqual(filter.Filters.Count, restored.Filters.Count);
+            Assert.ThrowsExactly<InvalidOperationException>(
+                () => restored.Add(Encoding.ASCII.GetBytes("more")));
+        }
+
+        /// <summary>
+        /// A first rate whose reciprocal is not a number cannot build even one filter, and
+        /// said so with an OverflowException from the sizing. That is a mistake in the
+        /// rate, and it is reported against it.
+        /// </summary>
+        [TestMethod]
+        public void TestARateWhoseReciprocalIsNotANumberIsRefusedNamingTheRate()
+        {
+            Assert.IsTrue(double.IsInfinity(1 / 1e-320));
+
+            var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new ScalableBloomFilter(10, 1e-320, 0.8));
+            Assert.AreEqual("fpRate", ex.ParamName);
+        }
+
         [TestMethod]
         public void BenchmarkScalableBloomTestAndAdd()
         {

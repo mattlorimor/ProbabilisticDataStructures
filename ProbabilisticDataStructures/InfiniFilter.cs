@@ -113,12 +113,37 @@ namespace ProbabilisticDataStructures
                     "once the address has taken its share.");
             }
 
-            var slots = (uint)Math.Max(4.0,
-                Math.Pow(2, Math.Ceiling(Math.Log2(initialCapacity / ExpansionThreshold))));
-            var quotientBits = (int)Math.Log2(slots);
+            var quotientBits = InitialQuotientBits(initialCapacity);
 
             this.Segments.Add(new InfiniSegment(quotientBits, fingerprintBits));
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
+        }
+
+        /// <summary>
+        /// The most address bits a table has: its slot count is a uint holding 2^q, and
+        /// 2^32 is not one.
+        /// </summary>
+        internal static int MaxQuotientBits => 31;
+
+        /// <summary>
+        /// The most address bits this filter lets a table grow to. It is
+        /// <see cref="MaxQuotientBits"/>; a test lowers it to reach the refusal at the
+        /// limit without building a table of gigabytes.
+        /// </summary>
+        internal int QuotientBitsLimit { get; set; } = MaxQuotientBits;
+
+        /// <summary>
+        /// The address bits the first table gets for an initial capacity: enough slots
+        /// that the capacity fills no more than the expansion threshold of them, a
+        /// power of two, and at least four.
+        /// </summary>
+        internal static int InitialQuotientBits(uint initialCapacity)
+        {
+            // Clamped at the widest table rather than left to a uint that saturates: the
+            // capacity is where the filter starts and not a limit on it, so one that asks
+            // for more than the widest table starts at the widest.
+            var wanted = Math.Ceiling(Math.Log2(initialCapacity / ExpansionThreshold));
+            return (int)Math.Clamp(wanted, 2, MaxQuotientBits);
         }
 
         private InfiniFilter(bool empty)
@@ -230,6 +255,28 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private void Expand()
         {
+            // Refused before anything is built or moved, so that the filter is exactly
+            // what it was. The widest table in the chain decides, which is the first one
+            // -- the tables behind it are narrower by more than the fingerprint they were
+            // made from -- but the check does not rest on that.
+            var widest = 0;
+            foreach (var table in this.Segments)
+            {
+                widest = Math.Max(widest, table.QuotientBits);
+            }
+
+            if (widest + 1 > this.QuotientBitsLimit)
+            {
+                throw new InvalidOperationException(
+                    $"The filter's widest table has {1UL << widest:N0} slots and is at its " +
+                    "expansion threshold, and doubling it would pass the " +
+                    $"{1UL << this.QuotientBitsLimit:N0} a table can have: a table's slot " +
+                    "count is a 32-bit number holding 2^q, and 2^32 is not one. Nothing was " +
+                    "added and the filter is unchanged; it can still be queried and " +
+                    "written, and removing keys makes room for more. To hold more keys, " +
+                    "split them over several filters.");
+            }
+
             ExpandTable(0);
             this.Expansions++;
         }
@@ -545,11 +592,12 @@ namespace ProbabilisticDataStructures
                 var count = reader.ReadUInt32();
                 var words = reader.ReadUInt32();
 
-                if (quotientBits < 2 || quotientBits > 40)
+                if (quotientBits < 2 || quotientBits > MaxQuotientBits)
                 {
                     throw new InvalidDataException(
                         $"Table {i} claims {quotientBits} bits of address, and this " +
-                        "library builds tables between 2 and 40.");
+                        $"library builds tables between 2 and {MaxQuotientBits}: a table's " +
+                        "slot count is a 32-bit number holding 2^q, and 2^32 is not one.");
                 }
                 if (fingerprintBits < 2 || fingerprintBits > 32)
                 {

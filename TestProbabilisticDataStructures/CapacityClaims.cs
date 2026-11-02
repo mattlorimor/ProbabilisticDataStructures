@@ -182,29 +182,59 @@ namespace TestProbabilisticDataStructures
             new Claim("a slot that holds an item is written as an index, a length and the item", () =>
                 Near(Facts["inverse slot bytes"], 16, 0.01)),
 
-            // ---- Where master stops working before it should ---------------------------
-            new Claim("A `BloomFilter` sized for 448,089,842 items at 1%", () =>
+            // ---- Where a limit refuses -----------------------------------------------------
+            new Claim("4,294,967,182 four-bit counters, or 2,147,483,591 eight-bit ones", () =>
+                Buckets.MaxCount(4) == 4_294_967_182 && Buckets.MaxCount(8) == 2_147_483_591
+                && Buckets.MaxCount(1) == uint.MaxValue && Buckets.MaxCount(3) == uint.MaxValue),
+            new Claim("and the filters refuse more against the parameter that chose it", () =>
             {
-                var filter = new BloomFilter(448_089_842, 0.01);
-                return BucketBytes(filter) < (int)TrueBytes(filter.Capacity(), 1)
-                    && Fails(key => filter.Add(key));
+                var n = TestBucketSizes.FirstItemCountSizedAbove(Buckets.MaxCount(8), 0.01);
+                return Assert.Throws<ArgumentOutOfRangeException>(() => new CountingBloomFilter(n, 8, 0.01)).ParamName == "n"
+                    && Assert.Throws<ArgumentOutOfRangeException>(
+                        () => new StableBloomFilter(Buckets.MaxCount(8) + 1, 8, 0.01, seed: 1)).ParamName == "m";
             }),
-            new Claim("a 4-bit `CountingBloomFilter` sized for more than 112,022,460", () =>
+            new Claim("the `Add` that would double it past that throws, with the filter as it was", () =>
             {
-                var filter = new CountingBloomFilter(112_022_461, 4, 0.01);
-                return BucketBytes(filter) < (int)TrueBytes(filter.Capacity(), 4)
-                    && Fails(key => filter.Add(key));
+                var filter = new InfiniFilter(initialCapacity: 3, fingerprintBits: 8) { QuotientBitsLimit = 2 };
+                for (var i = 0; i < 3; i++) filter.Add(Key(i));
+                var before = filter.ToByteArray();
+                var memento = new MementoFilter(2, fingerprintBits: 8, initialCapacity: 3) { QuotientBitsLimit = 2 };
+                for (ulong i = 0; i < 3; i++) memento.Add(i * 1_000);
+                var mementoBefore = memento.ToByteArray();
+                return InfiniFilter.MaxQuotientBits == 31 && MementoFilter.MaxQuotientBits == 31
+                    && Assert.Throws<InvalidOperationException>(() => filter.Add(Key(3))) is not null
+                    && Assert.Throws<InvalidOperationException>(() => memento.Add(3_000)) is not null
+                    && before.AsSpan().SequenceEqual(filter.ToByteArray())
+                    && mementoBefore.AsSpan().SequenceEqual(memento.ToByteArray());
             }),
-            new Claim("a 3-bit `StableBloomFilter` of more than 1,431,655,762 cells", () =>
+            new Claim("so it cannot pass 2^30, and an `Add` that would double it past that throws, with the sketch as it was", () =>
             {
-                var filter = new StableBloomFilter(1_431_655_763, 3, 0.01, seed: 1);
-                return BucketBytes(filter) < (int)TrueBytes(filter.Cells(), 3)
-                    && Fails(key => filter.Add(key));
+                var sketch = new SublimeCountMinSketch(0.5, 0.5, 1.0);
+                typeof(SublimeCountMinSketch).GetField("width", BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .SetValue(sketch, 1 << 30);
+                typeof(SublimeCountMinSketch).GetField("expansionLimit", BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .SetValue(sketch, 1UL);
+                return typeof(SublimeCountMinSketch).GetField("width", BindingFlags.NonPublic | BindingFlags.Instance)!.FieldType == typeof(int)
+                    && SublimeCountMinSketch.MaxWidth == 1 << 30
+                    && Assert.Throws<InvalidOperationException>(() => sketch.Add(Key(1))) is not null
+                    && sketch.TotalCount() == 0;
             }),
-            new Claim("a table of 32 address bits has one slot", () =>
-                new InfiniSegment(32, 8).Slots == 1 && new MementoSegment(32, 8, 8).Slots == 1),
-            new Claim("so its width cannot pass 2^30", () =>
-                typeof(SublimeCountMinSketch).GetField("width", BindingFlags.NonPublic | BindingFlags.Instance)!.FieldType == typeof(int)),
+            new Claim("the constructor refuses a fingerprint and a range that make it wider", () =>
+            {
+                var widest = new MementoFilter(1UL << 32, 28);
+                for (ulong i = 0; i < 200; i++) widest.Add(i * 7919);
+                return Enumerable.Range(0, 200).All(i => widest.Test((ulong)i * 7919))
+                    && Assert.Throws<ArgumentOutOfRangeException>(() => new MementoFilter(1UL << 32, 29)).ParamName == "fingerprintBits";
+            }),
+            new Claim("`WriteTo` of one throws an `InvalidOperationException` naming the size it would be and the size one can be, with the structure unchanged", () =>
+            {
+                var ex = Assert.Throws<InvalidOperationException>(
+                    () => QuotientFilter.CheckWritable((int)((MaxPayload - 16) / 8) + 1));
+                return ex.Message.Contains(MaxPayload.ToString("N0"), StringComparison.Ordinal)
+                    && ex.Message.Contains((MaxPayload + 3).ToString("N0"), StringComparison.Ordinal)
+                    && Assert.Throws<InvalidOperationException>(
+                        () => PayloadWriter.GrownCapacity(1000, int.MaxValue - 1, 10)) is not null;
+            }),
 
             // ---- BloomFilter -------------------------------------------------------------
             new Claim("`m ≈ 1.44 · n · log2(1/fp)` bits", () =>

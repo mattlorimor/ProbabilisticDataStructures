@@ -81,6 +81,14 @@ namespace ProbabilisticDataStructures
 
             var m = Utils.OptimalM(n, fpRate);
             var k = Utils.OptimalK(fpRate);
+
+            // The counters are one array: from four-bit counters up, fewer than the
+            // largest filter a 32-bit count addresses fit it. Refused here against n,
+            // which is what the caller chose, rather than by the array's own count.
+            Buckets.CheckSize(m, b, nameof(n),
+                $"Holding {n:N0} items at a false positive rate of {fpRate} needs " +
+                $"{m:N0} counters of {b} bits",
+                "Use fewer items, a looser false positive rate or narrower counters.");
             this.Buckets =  new Buckets(m, b);
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.m = m;

@@ -75,8 +75,11 @@ namespace TestProbabilisticDataStructures
             StructureId.CountingBloomFilter => () =>
             {
                 var b = byte.Parse(Regex.Match(row.Counts, @"(\d)-bit").Groups[1].Value);
-                TryOptimalM(LargestSound(0.01, b), 0.01, out var m);
-                return AsBuiltByCharge("CountingBloomFilter", TrueBytes(m, b));
+                var payload = PayloadLine("CountingBloomFilter", StructureId.CountingBloomFilter);
+                var most = LargestSound(0.01, b);
+                return payload.Upper(BitsOf(most, 0.01, b)) <= MaxPayload
+                    ? AsBuilt
+                    : Saved(payload, most, n => BitsOf(n, 0.01, b));
             },
             StructureId.DeletableBloomFilter => () =>
             {
@@ -92,7 +95,11 @@ namespace TestProbabilisticDataStructures
             StructureId.StableBloomFilter => () =>
             {
                 var d = byte.Parse(Regex.Match(row.Counts, @"(\d)-bit").Groups[1].Value);
-                return AsBuiltByCharge("StableBloomFilter", TrueBytes(Largest(1, uint.MaxValue, m => BucketsAreSound(m, d)), d));
+                var payload = PayloadLine("StableBloomFilter", StructureId.StableBloomFilter);
+                var most = Largest(1, uint.MaxValue, m => BucketsAreSound(m, d));
+                return payload.Upper(TrueBytes(most, d)) <= MaxPayload
+                    ? AsBuilt
+                    : Saved(payload, most, m => TrueBytes(m, d));
             },
             StructureId.InverseBloomFilter => () =>
             {
