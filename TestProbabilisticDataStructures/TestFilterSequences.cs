@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -444,9 +445,21 @@ namespace TestProbabilisticDataStructures
                 "schedule about it.");
         }
 
-        private static Tally RunAll<T>(Spec<T> spec, string config)
+        private static Tally RunAll<T>(Spec<T> spec, string config,
+            [CallerMemberName] string test = "")
             where T : class, IFilter, IBinaryPersistable<T>
         {
+            // SequencedStructures reads which structure a test sequences off its name, so
+            // the name is held to what the test runs: a test named for one structure that
+            // runs another fails here rather than vouching for the wrong one.
+            Assert.AreEqual(typeof(T).Name, spec.Name,
+                $"the spec is named {spec.Name} but sequences {typeof(T).Name}.");
+            Assert.Contains(test, new[]
+            {
+                $"Test{spec.Name}SequencesMatchTheirTwin",
+                $"Test{spec.Name}SequencesMatchTheirModel",
+            }, $"{test} runs {spec.Name}, and the roster reads the structure from a test's name.");
+
             AssertSpecRunsWhatTheTypeOffers(spec);
 
             var tally = new Tally();
@@ -962,6 +975,29 @@ namespace TestProbabilisticDataStructures
         // ------------------------------------------------------------------ roster
 
         /// <summary>
+        /// The structures this class sequences, for the other sequence files to check
+        /// their exemptions against. Derived from the tests here: a structure is
+        /// sequenced when a test is named for it, and RunAll holds each test to the
+        /// structure its name claims, so the name cannot vouch for a different one.
+        /// </summary>
+        internal static IReadOnlyList<StructureId> SequencedStructures
+        {
+            get
+            {
+                var tests = typeof(TestFilterSequences).GetMethods()
+                    .Where(m => m.GetCustomAttributes(typeof(TestMethodAttribute), false).Length > 0)
+                    .Select(m => m.Name)
+                    .ToHashSet(StringComparer.Ordinal);
+
+                return Enum.GetValues<StructureId>()
+                    .Where(id =>
+                        tests.Contains($"Test{id}SequencesMatchTheirTwin")
+                        || tests.Contains($"Test{id}SequencesMatchTheirModel"))
+                    .ToArray();
+            }
+        }
+
+        /// <summary>
         /// The sweep is named for the Bloom family, so its roster is every persisted
         /// structure whose id says it is one -- a new Bloom variant fails here until it
         /// has a sequence test or a stated reason not to.
@@ -973,23 +1009,17 @@ namespace TestProbabilisticDataStructures
                 .Where(id => id.ToString().Contains("BloomFilter", StringComparison.Ordinal))
                 .ToArray();
 
-            var tests = typeof(TestFilterSequences).GetMethods()
-                .Where(m => m.GetCustomAttributes(typeof(TestMethodAttribute), false).Length > 0)
-                .Select(m => m.Name)
-                .ToArray();
-
-            var covered = family.Where(id =>
-                tests.Contains($"Test{id}SequencesMatchTheirTwin")
-                || tests.Contains($"Test{id}SequencesMatchTheirModel"))
-                .ToHashSet();
+            var covered = SequencedStructures.Where(id => family.Contains(id)).ToHashSet();
 
             // Exemptions are claims, and checked: one naming a structure outside the
-            // family, or one the sweep covers anyway, has gone stale.
+            // family, or one the sweep covers anyway, has gone stale. So has one whose
+            // reason is another file's sequences when that file does not sequence it.
             var exempt = new Dictionary<StructureId, string>
             {
                 [StructureId.CuckooBloomFilter] =
-                    "a fingerprint table that refuses inserts and evicts at random; its " +
-                    "sequence model belongs with the cuckoo and quotient filters'",
+                    $"sequenced by {nameof(TestQuotientFamilySequences)}: a fingerprint " +
+                    "table that refuses inserts and evicts at random; its sequence model " +
+                    "belongs with the cuckoo and quotient filters'",
             };
 
             foreach (var (id, why) in exempt)
@@ -997,6 +1027,9 @@ namespace TestProbabilisticDataStructures
                 Assert.Contains(id, family, $"the exemption for {id} is outside the family");
                 Assert.DoesNotContain(id, covered,
                     $"{id} is exempt ({why}) and covered anyway; the exemption is stale");
+                Assert.Contains(id, TestQuotientFamilySequences.SequencedStructures,
+                    $"{id} is exempt ({why}), but {nameof(TestQuotientFamilySequences)} " +
+                    "does not sequence it, so nothing does");
             }
 
             var missing = family.Where(id => !covered.Contains(id) && !exempt.ContainsKey(id))
