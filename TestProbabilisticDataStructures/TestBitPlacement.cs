@@ -313,7 +313,9 @@ namespace TestProbabilisticDataStructures
             Func<object, Placement> PlacementOf,
             Action<object, byte[]> Add,
             Func<object, byte[], bool> Test,
-            Func<object, IEnumerable<(uint Modulus, uint Index, uint Position, bool Set)>> Cells);
+            Func<object, IEnumerable<(uint Modulus, uint Index, uint Position, bool Set)>> Cells,
+            Func<object, byte[], bool> TestAndAdd,
+            Func<object, byte[], bool> TestAndRemove);
 
         private static IEnumerable<(uint, uint, uint, bool)> Bits(Buckets buckets, uint index = 0)
         {
@@ -332,7 +334,9 @@ namespace TestProbabilisticDataStructures
                 f => ((BloomFilter)f).Placement,
                 (f, k) => ((BloomFilter)f).Add(k),
                 (f, k) => ((BloomFilter)f).Test(k),
-                f => Bits(((BloomFilter)f).Buckets)),
+                f => Bits(((BloomFilter)f).Buckets),
+                (f, k) => ((BloomFilter)f).TestAndAdd(k),
+                null),
             new Kind(nameof(CountingBloomFilter),
                 p => new CountingBloomFilter(100, 4, 0.01, null, p), 1,
                 f => ((CountingBloomFilter)f).ToByteArray(),
@@ -340,7 +344,9 @@ namespace TestProbabilisticDataStructures
                 f => ((CountingBloomFilter)f).Placement,
                 (f, k) => ((CountingBloomFilter)f).Add(k),
                 (f, k) => ((CountingBloomFilter)f).Test(k),
-                f => Bits(((CountingBloomFilter)f).Buckets)),
+                f => Bits(((CountingBloomFilter)f).Buckets),
+                (f, k) => ((CountingBloomFilter)f).TestAndAdd(k),
+                (f, k) => ((CountingBloomFilter)f).TestAndRemove(k)),
             new Kind(nameof(DeletableBloomFilter),
                 p => new DeletableBloomFilter(100, 10, 0.01, null, p), 1,
                 f => ((DeletableBloomFilter)f).ToByteArray(),
@@ -348,7 +354,9 @@ namespace TestProbabilisticDataStructures
                 f => ((DeletableBloomFilter)f).Placement,
                 (f, k) => ((DeletableBloomFilter)f).Add(k),
                 (f, k) => ((DeletableBloomFilter)f).Test(k),
-                f => Bits(((DeletableBloomFilter)f).Buckets)),
+                f => Bits(((DeletableBloomFilter)f).Buckets),
+                (f, k) => ((DeletableBloomFilter)f).TestAndAdd(k),
+                (f, k) => ((DeletableBloomFilter)f).TestAndRemove(k)),
             new Kind(nameof(PartitionedBloomFilter),
                 p => new PartitionedBloomFilter(100, 0.01, null, p), 1,
                 f => ((PartitionedBloomFilter)f).ToByteArray(),
@@ -356,7 +364,9 @@ namespace TestProbabilisticDataStructures
                 f => ((PartitionedBloomFilter)f).Placement,
                 (f, k) => ((PartitionedBloomFilter)f).Add(k),
                 (f, k) => ((PartitionedBloomFilter)f).Test(k),
-                f => ((PartitionedBloomFilter)f).Partitions.SelectMany((partition, i) => Bits(partition, (uint)i))),
+                f => ((PartitionedBloomFilter)f).Partitions.SelectMany((partition, i) => Bits(partition, (uint)i)),
+                (f, k) => ((PartitionedBloomFilter)f).TestAndAdd(k),
+                null),
             // Seeded, so that its payload is reproducible. Its cells decay, so the cells
             // it reports are checked only for the item just added.
             new Kind(nameof(StableBloomFilter),
@@ -366,7 +376,9 @@ namespace TestProbabilisticDataStructures
                 f => ((StableBloomFilter)f).Placement,
                 (f, k) => ((StableBloomFilter)f).Add(k),
                 (f, k) => ((StableBloomFilter)f).Test(k),
-                f => Bits(((StableBloomFilter)f).cells)),
+                f => Bits(((StableBloomFilter)f).cells),
+                (f, k) => ((StableBloomFilter)f).TestAndAdd(k),
+                null),
         };
 
         /// <summary>
@@ -428,6 +440,54 @@ namespace TestProbabilisticDataStructures
                     $"{kind.Name} placed with 32-bit values is not where the restated 32-bit scheme says");
                 Assert.IsFalse(narrowOccupied.SetEquals(occupied),
                     $"{kind.Name} put the same items in the same places either way, so this cannot tell them apart");
+            }
+        }
+
+        /// <summary>
+        /// Every operation of a filter placed with 64-bit values places that way, not only
+        /// adding and testing: building it with <c>TestAndAdd</c> gives exactly the bytes
+        /// <c>Add</c> gives, every item it holds answers as present to <c>TestAndAdd</c>,
+        /// and the filters that remove remove every one of them -- the counting filter all
+        /// the way back to empty.
+        /// </summary>
+        [TestMethod]
+        public void TestEveryOperationOfAWideFilterPlacesTheSameWay()
+        {
+            foreach (var kind in Kinds())
+            {
+                var added = kind.Build(Placement.Wide);
+                var tested = kind.Build(Placement.Wide);
+                foreach (var word in Words)
+                {
+                    kind.Add(added, Key(word));
+                    kind.TestAndAdd(tested, Key(word));
+                }
+
+                CollectionAssert.AreEqual(kind.Write(added), kind.Write(tested),
+                    $"{kind.Name} built with TestAndAdd is not the one built with Add");
+
+                foreach (var word in Words)
+                {
+                    Assert.IsTrue(kind.TestAndAdd(tested, Key(word)),
+                        $"{kind.Name} holding {word} does not say so to TestAndAdd");
+                }
+
+                if (kind.TestAndRemove is null)
+                {
+                    continue;
+                }
+
+                foreach (var word in Words)
+                {
+                    Assert.IsTrue(kind.TestAndRemove(added, Key(word)),
+                        $"{kind.Name} holding {word} did not find it to remove");
+                }
+
+                if (kind.Name == nameof(CountingBloomFilter))
+                {
+                    CollectionAssert.AreEqual(kind.Write(kind.Build(Placement.Wide)), kind.Write(added),
+                        $"{kind.Name} with everything removed is not empty");
+                }
             }
         }
 
