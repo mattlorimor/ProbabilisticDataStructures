@@ -34,9 +34,10 @@ namespace ProbabilisticDataStructures
     /// roughly n-times more memory than traditional Bloom filters.
     /// </summary>
     /// <remarks>
-    /// A filter of 2^27 counters or more places items with 64-bit hash values and is
-    /// written at format version 8, which libraries before this one cannot read; a
-    /// smaller one places with 32-bit values and is written exactly as it always was.
+    /// A filter of 2^27 counters or more places items with 64-bit hash values; a smaller
+    /// one places with 32-bit values, as it always did. Every save is format version 8,
+    /// which records the placement in a byte of its own and the item count in 64 bits, and
+    /// which libraries before this one cannot read.
     /// Placing a large filter with 32-bit values crowds its first counters and raises its
     /// false positive rate, as it does for <see cref="BloomFilter"/>, where the details
     /// are. A filter read back keeps the scheme its payload was placed with, and the two
@@ -63,7 +64,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Number of items added
         /// </summary>
-        private uint count { get; set; }
+        private ulong count { get; set; }
         /// <summary>
         /// Buffer used to cache indices
         /// </summary>
@@ -160,8 +161,13 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Returns the number of items in the filter.
         /// </summary>
-        /// <returns></returns>
-        public uint Count()
+        /// <returns>The number of items added and not removed.</returns>
+        /// <remarks>
+        /// A 64-bit count, so that it crosses 2^32 rather than wrapping to zero, and comes
+        /// back down across it as items are removed. Before the release after 6.2.0 it was
+        /// a <c>uint</c>.
+        /// </remarks>
+        public ulong Count()
         {
             return this.count;
         } 
@@ -335,7 +341,8 @@ namespace ProbabilisticDataStructures
             var payload = new PayloadWriter();
             payload.WriteUInt32(this.m);
             payload.WriteUInt32(this.k);
-            payload.WriteUInt32(this.count);
+            BitPlacement.Write(payload, this.Placement);
+            payload.WriteUInt64(this.count);
             PersistenceFormat.WriteBuckets(payload, this.Buckets);
 
             PersistenceFormat.Write(
@@ -343,7 +350,7 @@ namespace ProbabilisticDataStructures
                 StructureId.CountingBloomFilter,
                 PersistenceFormat.Identify(this.Hash),
                 payload.WrittenSpan,
-                BitPlacement.Version(this.Placement, PersistenceFormat.DefaultVersion));
+                PersistenceFormat.PlacementVersion);
         }
 
         /// <summary>
@@ -422,7 +429,10 @@ namespace ProbabilisticDataStructures
 
             var m = reader.ReadUInt32();
             var k = reader.ReadUInt32();
-            var count = reader.ReadUInt32();
+            // From the payload, never from m: a version 1 payload of any size was placed
+            // with 32-bit values, and a version 8 one says how it was placed.
+            var placement = BitPlacement.Read(ref reader, version);
+            var count = BitPlacement.ReadCount(ref reader, version);
             var buckets = PersistenceFormat.ReadBuckets(ref reader);
             reader.ExpectEnd();
 
@@ -446,9 +456,7 @@ namespace ProbabilisticDataStructures
                 // between calls.
                 indexBuffer = new uint[k],
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
-                // From the version, never from m: a version 1 payload of any size was
-                // placed with 32-bit values.
-                Placement = BitPlacement.At(version),
+                Placement = placement,
             };
         }
 

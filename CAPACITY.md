@@ -94,13 +94,14 @@ and sized for 0.1% it measured 0.173%.
 From the release after 6.2.0, a new filter whose positions are reduced modulo 2^27 or
 more — 16 MiB of bits, about 14 million items at 1%, and for the partitioned filter each
 partition — places them with 64-bit values, exactly as `BloomFilter64` does. At m = 0.75 ·
-2^32 sized for 1% it measured 1.004%, as `BloomFilter64` did. It is written at format
-version 8, which 6.2.0 and earlier refuse. A smaller filter is placed and written as
-before. Below 2^27 the excess is at most about 0.07% of the rate at 1%, too small to
-measure. A filter read from a payload written before the release after 6.2.0 keeps the
-32-bit placement, and the rate that goes with it, whatever its size, and does not merge
-with a new filter of the same size; to have the rate it was sized for, add its items to a
-new filter.
+2^32 sized for 1% it measured 1.004%, as `BloomFilter64` did. A smaller filter is placed
+as before. Below 2^27 the excess is at most about 0.07% of the rate at 1%, too small to
+measure. Every save of these filters, whatever its size, is written at format version 8,
+which records the placement in a byte of its own and the item count in 64 bits, and which
+6.2.0 and earlier refuse. A filter read from a payload written before the release after
+6.2.0 keeps the 32-bit placement, and the rate that goes with it, whatever its size, and
+records it when saved again. It does not merge with a new filter of the same size; to have
+the rate it was sized for, add its items to a new filter.
 
 ## Sized for n items
 

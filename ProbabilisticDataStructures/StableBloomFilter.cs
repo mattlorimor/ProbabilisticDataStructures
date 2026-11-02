@@ -30,9 +30,10 @@ namespace ProbabilisticDataStructures
     /// positives and minimal false negatives.
     /// </summary>
     /// <remarks>
-    /// A filter of 2^27 cells or more places items with 64-bit hash values and is written
-    /// at format version 8, which libraries before this one cannot read; a smaller one
-    /// places with 32-bit values and is written at version 5, exactly as it was. Placing a
+    /// A filter of 2^27 cells or more places items with 64-bit hash values; a smaller one
+    /// places with 32-bit values, as it always did. Every save is format version 8, which
+    /// records the placement in a byte of its own and which libraries before this one
+    /// cannot read; the stable filter has no item count to widen. Placing a
     /// large filter with 32-bit values crowds its first cells and raises its false
     /// positive rate, as it does for <see cref="BloomFilter"/>, where the details are. A
     /// filter read back keeps the scheme its payload was placed with, and
@@ -422,6 +423,7 @@ namespace ProbabilisticDataStructures
             payload.WriteUInt32(this.M);
             payload.WriteUInt32(this.k);
             payload.WriteUInt32(this.p);
+            BitPlacement.Write(payload, this.Placement);
             PersistenceFormat.WriteBuckets(payload, this.cells);
             payload.WriteUInt64(this.random.State);
             payload.WriteUInt64(this.originalRandomState);
@@ -431,7 +433,7 @@ namespace ProbabilisticDataStructures
                 StructureId.StableBloomFilter,
                 PersistenceFormat.Identify(this.Hash),
                 payload.WrittenSpan,
-                BitPlacement.Version(this.Placement, PersistenceFormat.StableOriginalStateVersion));
+                PersistenceFormat.PlacementVersion);
         }
 
         /// <summary>
@@ -511,6 +513,9 @@ namespace ProbabilisticDataStructures
             var m = reader.ReadUInt32();
             var k = reader.ReadUInt32();
             var p = reader.ReadUInt32();
+            // From the payload, never from m: a payload before version 8 of any size was
+            // placed with 32-bit values, and a version 8 one says how it was placed.
+            var placement = BitPlacement.Read(ref reader, version);
             var cells = PersistenceFormat.ReadBuckets(ref reader);
 
             // Version 1 predates the stored generator state. Such a filter resumes with
@@ -559,10 +564,9 @@ namespace ProbabilisticDataStructures
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
                 random = random,
                 originalRandomState = originalRandomState,
-                // From the version, never from m: a payload before version 8 of any size
-                // was placed with 32-bit values. Version 8 is the version 5 layout, which
-                // the two reads above already take it to be.
-                Placement = BitPlacement.At(version),
+                // Version 8 is the version 5 layout with the placement byte, so the two
+                // reads of the generator above already take it to have both states.
+                Placement = placement,
             };
         }
 

@@ -370,7 +370,7 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(20u, f.Hint);
             Assert.AreEqual(3, f.Filters.Count);
             CollectionAssert.AreEqual(new uint[] { 192, 402, 842 }, f.Filters.Select(x => x.BitCount).ToArray());
-            CollectionAssert.AreEqual(new uint[] { 20, 41, 39 }, f.Filters.Select(x => x.Count()).ToArray());
+            CollectionAssert.AreEqual(new ulong[] { 20, 41, 39 }, f.Filters.Select(x => x.Count()).ToArray());
 
             for (int i = 0; i < 100; i++)
             {
@@ -1532,14 +1532,18 @@ namespace TestProbabilisticDataStructures
             AssertBytes("inversebloomfilter-v1.bin", inverse.ToByteArray());
 
             // A filter that adds every filter at its hint writes the layout it always
-            // wrote, version 1, with no growth factor in it.
+            // wrote, version 1, with no growth factor in it. Its contained filters are
+            // partitioned filters in envelopes of their own, which are version 8 since
+            // those began recording their placement and a 64-bit count, so it is pinned to
+            // v1b: the v1 fixture with each contained filter rewritten at version 8 by
+            // hand, outside the library. The v1 fixture is read, above.
             var scalable = new ScalableBloomFilter(20, 0.01, 0.8, 1);
             for (int i = 0; i < 100; i++)
             {
                 scalable.Add(Key($"s{i}"));
             }
 
-            AssertBytes("scalablebloomfilter-v1.bin", scalable.ToByteArray());
+            AssertBytes("scalablebloomfilter-v1b.bin", scalable.ToByteArray());
 
             // One that grows writes version 7. The fixture was assembled from FORMAT.md's
             // layout outside the library's writer -- the outer fields by hand, each
@@ -1551,7 +1555,8 @@ namespace TestProbabilisticDataStructures
                 growing.Add(Key($"s{i}"));
             }
 
-            AssertBytes("scalablebloomfilter-v7.bin", growing.ToByteArray());
+            // And v7b is the v7 fixture with its contained filters rewritten the same way.
+            AssertBytes("scalablebloomfilter-v7b.bin", growing.ToByteArray());
 
             var hll = new HyperLogLog(64);
             for (int i = 0; i < 20; i++)
@@ -1816,7 +1821,9 @@ namespace TestProbabilisticDataStructures
                 ("deletablebloomfilter-v1.bin", 4, 1),
                 ("partitionedbloomfilter-v1.bin", 5, 1),
                 ("scalablebloomfilter-v1.bin", 6, 1),
+                ("scalablebloomfilter-v1b.bin", 6, 1),
                 ("scalablebloomfilter-v7.bin", 6, 7),
+                ("scalablebloomfilter-v7b.bin", 6, 7),
                 ("stablebloomfilter-v1.bin", 7, 1),
                 ("inversebloomfilter-v1.bin", 8, 1),
                 ("cuckoobloomfilter-v1.bin", 9, 1),

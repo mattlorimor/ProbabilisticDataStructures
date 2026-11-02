@@ -315,7 +315,9 @@ namespace TestProbabilisticDataStructures
                 bloom.Add(Key(word));
             }
 
-            CollectionAssert.AreEqual(ReadFixture("bloomfilter-v1.bin"), bloom.ToByteArray(),
+            // Version 8 since the filters began recording their placement and a 64-bit
+            // count; the version 1 fixture is read above.
+            CollectionAssert.AreEqual(ReadFixture("bloomfilter-v8-narrow.bin"), bloom.ToByteArray(),
                 "the bytes written for this filter have changed since the format was introduced");
 
             var sketch = new CountMinSketch(0.01, 0.01);

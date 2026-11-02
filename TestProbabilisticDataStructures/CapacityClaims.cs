@@ -284,24 +284,52 @@ namespace TestProbabilisticDataStructures
             }),
             // 6.2.0 wrote versions up to 4, the second SetSketch construction's, and refuses
             // any above the highest it wrote.
-            new Claim("It is written at format version 8, which 6.2.0 and earlier refuse", () =>
-                new BloomFilter(100, 0.01, null, Placement.Wide).ToByteArray()[4] == 8
-                && PersistenceFormat.WidePlacementVersion == 8
+            new Claim("A smaller filter is placed as before", () =>
+                new BloomFilter(100, 0.01).Placement == Placement.Narrow
+                && new CountingBloomFilter(100, 4, 0.01).Placement == Placement.Narrow
+                && new DeletableBloomFilter(100, 10, 0.01).Placement == Placement.Narrow
+                && new PartitionedBloomFilter(100, 0.01).Placement == Placement.Narrow
+                && new StableBloomFilter(100, 2, 0.01).Placement == Placement.Narrow),
+            new Claim("Below 2^27 the excess is at most about 0.07% of the rate at 1%", () =>
+                Rounds(LargestFoldBelowWide() * 100, 0.07, 2)),
+            // Small and large alike: a small filter of each of the five, placed either way.
+            new Claim("Every save of these filters, whatever its size, is written at format version 8", () =>
+                new[] { Placement.Narrow, Placement.Wide }.All(p =>
+                    new BloomFilter(100, 0.01, null, p).ToByteArray()[4] == 8
+                    && new CountingBloomFilter(100, 4, 0.01, null, p).ToByteArray()[4] == 8
+                    && new DeletableBloomFilter(100, 10, 0.01, null, p).ToByteArray()[4] == 8
+                    && new PartitionedBloomFilter(100, 0.01, null, p).ToByteArray()[4] == 8
+                    && new StableBloomFilter(100, 2, 0.01, null, 1, p).ToByteArray()[4] == 8)),
+            // The plain filter's layout: u32 m, u32 k, the placement byte, the u64 count,
+            // then the bucket array, whose count follows.
+            new Claim("which records the placement in a byte of its own and the item count in 64 bits", () =>
+                new[] { (Placement.Narrow, 0), (Placement.Wide, 1) }.All(p =>
+                {
+                    var filter = new BloomFilter(100, 0.01, null, p.Item1);
+                    for (var i = 0; i < 10; i++) filter.Add(Key(i));
+                    var bytes = filter.ToByteArray();
+                    return bytes[14 + 8] == p.Item2
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(14 + 9)) == 10
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(14 + 17)) == filter.Capacity();
+                })),
+            // 6.2.0 wrote versions up to 4, the second SetSketch construction's, and refuses
+            // any above the highest it wrote.
+            new Claim("and which 6.2.0 and earlier refuse", () =>
+                PersistenceFormat.PlacementVersion == 8
                 && PersistenceFormat.SetSketchVariantVersion == 4
                 && new[] { PersistenceFormat.RandomStateVersion, PersistenceFormat.CuckooPackedVersion }
                     .All(v => v < PersistenceFormat.SetSketchVariantVersion)),
-            new Claim("A smaller filter is placed and written as before", () =>
+            // A version 1 payload, the plain filter's earlier layout: no placement byte and a
+            // u32 count. It reads placed with 32-bit values, and saved again says so.
+            new Claim("keeps the 32-bit placement, and the rate that goes with it, whatever its size, and records it when saved again", () =>
             {
-                var small = new BloomFilter(100, 0.01);
-                return small.Placement == Placement.Narrow
-                    && small.ToByteArray()[4] == 1
-                    && new StableBloomFilter(100, 2, 0.01).ToByteArray()[4] == 5;
+                var old = TestBitPlacement.Downgraded(new BloomFilter(100, 0.01).ToByteArray(), 1, 8, 9);
+                var read = Persistence.FromByteArray<BloomFilter>(old);
+                var again = read.ToByteArray();
+                return System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(old.AsSpan(4)) == 1
+                    && read.Placement == Placement.Narrow
+                    && System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(again.AsSpan(4)) == 8 && again[14 + 8] == 0;
             }),
-            new Claim("Below 2^27 the excess is at most about 0.07% of the rate at 1%", () =>
-                Rounds(LargestFoldBelowWide() * 100, 0.07, 2)),
-            new Claim("keeps the 32-bit placement, and the rate that goes with it, whatever its size", () =>
-                Enumerable.Range(1, 7).All(v => BitPlacement.At((ushort)v) == Placement.Narrow)
-                && BitPlacement.At(8) == Placement.Wide),
             new Claim("does not merge with a new filter of the same size", () =>
             {
                 var old = new BloomFilter(100, 0.01, null, Placement.Narrow);

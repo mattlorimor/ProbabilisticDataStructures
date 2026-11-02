@@ -10,12 +10,12 @@ namespace ProbabilisticDataStructures
     /// </summary>
     /// <remarks>
     /// A filter of 2^27 bits or more, about 14 million items at 1%, places its bits with
-    /// 64-bit hash values, as <see cref="BloomFilter64"/> does, and is written at format
-    /// version 8, which libraries before this one cannot read. A smaller filter places
-    /// with 32-bit values and is written exactly as it always was. Before this, every
-    /// filter placed with 32-bit values, and a large one delivered a higher false
-    /// positive rate than it was sized for: 1.42% at three quarters of 2^32 bits sized
-    /// for 1%. A filter read back keeps the scheme its payload was placed with, so one
+    /// 64-bit hash values, as <see cref="BloomFilter64"/> does; a smaller filter places
+    /// with 32-bit values, as it always did. Every save is format version 8, which records
+    /// the placement in a byte of its own and the item count in 64 bits, and which
+    /// libraries before this one cannot read. Before this, every filter placed with
+    /// 32-bit values, and a large one delivered a higher false positive rate than it was
+    /// sized for: 1.42% at three quarters of 2^32 bits sized for 1%. A filter read back keeps the scheme its payload was placed with, so one
     /// written before is still that filter, rate included; add its items to a new filter
     /// to have the rate it was sized for. The two schemes do not merge.
     /// </remarks>
@@ -40,7 +40,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Number of items added
         /// </summary>
-        private uint count { get; set; }
+        private ulong count { get; set; }
         /// <summary>
         /// How an item's hash becomes the positions it sets and tests.
         /// </summary>
@@ -107,8 +107,12 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Returns the number of items in the filter.
         /// </summary>
-        /// <returns></returns>
-        public uint Count()
+        /// <returns>The number of items added.</returns>
+        /// <remarks>
+        /// A 64-bit count, so that it goes on counting past 2^32 adds rather than wrapping
+        /// to zero. Before the release after 6.2.0 it was a <c>uint</c>.
+        /// </remarks>
+        public ulong Count()
         {
             return this.count;
         }
@@ -251,7 +255,8 @@ namespace ProbabilisticDataStructures
             var payload = new PayloadWriter();
             payload.WriteUInt32(this.m);
             payload.WriteUInt32(this.k);
-            payload.WriteUInt32(this.count);
+            BitPlacement.Write(payload, this.Placement);
+            payload.WriteUInt64(this.count);
             payload.WriteUInt32(this.Buckets.count);
             payload.WriteByte(this.Buckets.BucketSize);
             payload.WriteBytes(this.Buckets.RawData);
@@ -261,7 +266,7 @@ namespace ProbabilisticDataStructures
                 StructureId.BloomFilter,
                 PersistenceFormat.Identify(this.Hash),
                 payload.WrittenSpan,
-                BitPlacement.Version(this.Placement, PersistenceFormat.DefaultVersion));
+                PersistenceFormat.PlacementVersion);
         }
 
         /// <summary>
@@ -340,7 +345,10 @@ namespace ProbabilisticDataStructures
 
             var m = reader.ReadUInt32();
             var k = reader.ReadUInt32();
-            var count = reader.ReadUInt32();
+            // From the payload, never from m: a version 1 payload of any size was placed
+            // with 32-bit values, and a version 8 one says how it was placed.
+            var placement = BitPlacement.Read(ref reader, version);
+            var count = BitPlacement.ReadCount(ref reader, version);
             var bucketCount = reader.ReadUInt32();
             var bucketSize = reader.ReadByte();
             var data = reader.ReadBytes();
@@ -367,9 +375,7 @@ namespace ProbabilisticDataStructures
                 k = k,
                 count = count,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
-                // From the version, never from m: a version 1 payload of any size was
-                // placed with 32-bit values.
-                Placement = BitPlacement.At(version),
+                Placement = placement,
             };
         }
 

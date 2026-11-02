@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 
 namespace ProbabilisticDataStructures
 {
@@ -38,10 +39,11 @@ namespace ProbabilisticDataStructures
     /// peaks fall as <c>1 / (q (q + 1))</c> with <c>q = floor(2^32 / m)</c>. 64-bit values
     /// fold too, by a part in 2^32 at most, which no measurement can see.
     /// <para>
-    /// The scheme a payload was placed with is a meaning of its bits, not of its size,
-    /// so it travels as the format version: version 8 says 64-bit, anything earlier
-    /// 32-bit. A filter placed with 32-bit values goes on writing the version it always
-    /// did, so a library from before version 8 reads every such filter it could build.
+    /// The scheme a payload was placed with is a meaning of its bits, not of its size, so
+    /// it travels with them: from format version 8, every save of these filters carries a
+    /// placement byte, and a payload before version 8 was placed with 32-bit values. A
+    /// payload from before version 8 saved again keeps its scheme in the byte, whatever
+    /// its size.
     /// </para>
     /// </remarks>
     internal static class BitPlacement
@@ -64,10 +66,8 @@ namespace ProbabilisticDataStructures
         /// the worst point further down.
         /// <para>
         /// Below it the fold's excess is at most about 0.07% of the rate at 1% and 0.11%
-        /// at 0.1%, a fifth of what rounding <c>k</c> up already adds at 1%. Lowering the
-        /// threshold would cost libraries from before version 8 the ability to read
-        /// filters of sizes they have always built, for a difference no measurement here
-        /// could see.
+        /// at 0.1%, a fifth of what rounding <c>k</c> up already adds at 1%, which is why
+        /// the smaller filters keep the scheme they always had.
         /// </para>
         /// </remarks>
         internal const ulong WideFrom = 1UL << 27;
@@ -84,22 +84,58 @@ namespace ProbabilisticDataStructures
             positions >= WideFrom ? Placement.Wide : Placement.Narrow;
 
         /// <summary>
-        /// The placement a payload of <paramref name="version"/> was written with.
+        /// The placement byte's value for 32-bit placement.
         /// </summary>
-        /// <remarks>
-        /// From the version alone, never from the size the payload records: a version 1
-        /// payload of any size was placed with 32-bit values, and reading it as its size
-        /// would call for would look for every item where it was not put.
-        /// </remarks>
-        internal static Placement At(ushort version) =>
-            version == PersistenceFormat.WidePlacementVersion ? Placement.Wide : Placement.Narrow;
+        private const byte NarrowByte = 0;
 
         /// <summary>
-        /// The version a filter placed with <paramref name="placement"/> writes, given
-        /// the one its layout calls for otherwise.
+        /// The placement byte's value for 64-bit placement.
         /// </summary>
-        internal static ushort Version(Placement placement, ushort layoutVersion) =>
-            placement == Placement.Wide ? PersistenceFormat.WidePlacementVersion : layoutVersion;
+        private const byte WideByte = 1;
+
+        /// <summary>
+        /// Writes the placement byte a version 8 payload carries after the fields that
+        /// size the filter.
+        /// </summary>
+        internal static void Write(PayloadWriter payload, Placement placement) =>
+            payload.WriteByte(placement == Placement.Wide ? WideByte : NarrowByte);
+
+        /// <summary>
+        /// Reads how a payload of <paramref name="version"/> was placed: from its
+        /// placement byte at version 8, and the 32-bit scheme before it, which has no byte.
+        /// </summary>
+        /// <exception cref="InvalidDataException">
+        /// The byte names no scheme this library knows.
+        /// </exception>
+        /// <remarks>
+        /// Never from the size the payload records: a version 1 payload of any size was
+        /// placed with 32-bit values, and reading it as its size would call for would look
+        /// for every item where it was not put.
+        /// </remarks>
+        internal static Placement Read(ref PayloadReader reader, ushort version)
+        {
+            if (version < PersistenceFormat.PlacementVersion)
+            {
+                return Placement.Narrow;
+            }
+
+            var value = reader.ReadByte();
+            return value switch
+            {
+                NarrowByte => Placement.Narrow,
+                WideByte => Placement.Wide,
+                _ => throw new InvalidDataException(
+                    $"Payload names placement {value}, which this library does not know: " +
+                    $"{NarrowByte} is the 32-bit scheme and {WideByte} the 64-bit one. Reading " +
+                    "it as either would look for every item where it may not have been put."),
+            };
+        }
+
+        /// <summary>
+        /// Reads a filter's item count: a u64 at version 8, a u32 before it.
+        /// </summary>
+        internal static ulong ReadCount(ref PayloadReader reader, ushort version) =>
+            version >= PersistenceFormat.PlacementVersion ? reader.ReadUInt64() : reader.ReadUInt32();
 
         /// <summary>
         /// Refuses to combine two filters whose bits were placed by different schemes.

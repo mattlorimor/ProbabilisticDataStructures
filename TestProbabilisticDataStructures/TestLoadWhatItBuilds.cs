@@ -691,9 +691,10 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual("n", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
                 () => new CountingBloomFilter(n, 8, 0.01)).ParamName);
 
-            // u32 m, u32 k, u32 count, then the buckets: u32 count, u8 width, bytes.
+            // u32 m, u32 k, u8 placement, u64 count, then the buckets: u32 count, u8
+            // width, bytes.
             var bytes = new CountingBloomFilter(1000, 8, 0.01).ToByteArray();
-            AssertBucketLimitIsShared<CountingBloomFilter>(bytes, 0, 12);
+            AssertBucketLimitIsShared<CountingBloomFilter>(bytes, 0, 17);
         }
 
         /// <summary>
@@ -707,9 +708,9 @@ namespace TestProbabilisticDataStructures
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(
                 () => new StableBloomFilter((uint)Array.MaxLength + 1, 8, 0.01, seed: 1));
 
-            // u32 m, u32 k, u32 p, then the buckets.
+            // u32 m, u32 k, u32 p, u8 placement, then the buckets.
             var bytes = new StableBloomFilter(1000, 8, 0.01, seed: 1).ToByteArray();
-            AssertBucketLimitIsShared<StableBloomFilter>(bytes, 0, 12);
+            AssertBucketLimitIsShared<StableBloomFilter>(bytes, 0, 13);
         }
 
         /// <summary>

@@ -198,8 +198,8 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `BloomFilter` | n, fp 0.1% | 298,726,561 | ≈ 298.73 million | as built |
 | `BloomFilter64` | n, fp 1% | memory | ≈ 448.09 million | ≈ 1.79 billion |
 | `BloomFilter64` | n, fp 0.1% | memory | ≈ 298.73 million | ≈ 1.19 billion |
-| `CountingBloomFilter` | n, 4-bit counters, fp 1% | 448,089,830 | ≈ 112.02 million | 448,089,822 |
-| `CountingBloomFilter` | n, 8-bit counters, fp 1% | 224,044,915 | ≈ 56.01 million | 224,044,911 |
+| `CountingBloomFilter` | n, 4-bit counters, fp 1% | 448,089,830 | ≈ 112.02 million | 448,089,821 |
+| `CountingBloomFilter` | n, 8-bit counters, fp 1% | 224,044,915 | ≈ 56.01 million | 224,044,910 |
 | `DeletableBloomFilter` | n, r 1,000, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
 | `PartitionedBloomFilter` | n, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
 | `CuckooBloomFilter` | n, fp 1%, empty | 2,040,109,465 | 510,027,366 | as built |
@@ -250,7 +250,7 @@ building at the scale it describes, which is the measurement as of commit 426348
 | --- | --- | --- | --- | --- |
 | `StableBloomFilter` | m cells, 1-bit cells, fp 1% | 4,294,967,295 | ≈ 4.29 billion | as built |
 | `StableBloomFilter` | m cells, 3-bit cells, fp 1% | 4,294,967,295 | ≈ 1.43 billion | as built |
-| `StableBloomFilter` | m cells, 8-bit cells, fp 1% | 2,147,483,591 | ≈ 536.87 million | 2,147,483,536 |
+| `StableBloomFilter` | m cells, 8-bit cells, fp 1% | 2,147,483,591 | ≈ 536.87 million | 2,147,483,535 |
 | `HyperLogLog` | registers m (a power of two) | 1,073,741,824 | 268,435,456 | as built |
 | `HyperLogLogPlus` | registers 2^p, p up to 18 | 262,144 | any | as built |
 | `UltraLogLog` | registers 2^p, p up to 26 | 67,108,864 | any | as built |
