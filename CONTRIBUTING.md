@@ -18,7 +18,9 @@ worth two minutes of your time before you write the tests rather than after.
   back, and record what you broke in the commit message. `scripts/mutate.sh` does the
   mechanics; see TESTING.md. Commit *before* you start breaking things — the obvious way
   to undo a deliberate break also discards everything else uncommitted, which is why the
-  script refuses to run on a dirty tree rather than trusting anyone to remember.
+  script refuses to run on a dirty tree rather than trusting anyone to remember. With a
+  long list of mutants, `MUTATION_JOBS` runs them in several copies of the commit at
+  once; TESTING.md says what that costs.
 - **Say what survived.** If you tried a mutation and the suite did not catch it, that
   belongs in the commit message too, along with why you decided it was acceptable. A
   documented survivor is worth more than a tidy story.

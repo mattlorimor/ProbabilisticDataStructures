@@ -350,6 +350,48 @@ finished change to its own verification step, and once by losing a fix, re-runni
 harness, and reporting a mutation table measured against the tree without it. Commit
 first — the commit is what the table is describing anyway.
 
+### Several mutants at once
+
+Each mutant waits for the one before it: a build and a run of the whole suite, in one
+tree. Two mutants cannot share a tree, but copies of it can run side by side, and a
+worker with a long list can ask for them:
+
+```bash
+source scripts/mutate.sh
+MUTATION_JOBS=4 mutation_target ProbabilisticDataStructures
+# run_mutation lines exactly as above
+mutation_done
+```
+
+Unset or 1 is the serial run above, unchanged. With 2 or more, `mutation_target` sets up
+copies and what changes is this:
+
+- **Your tree is never touched.** Each copy is a local `git clone` checked out at HEAD,
+  under `$TMPDIR` (`/tmp` when that is unset). It builds the unmodified commit once, so
+  that every mutant after it is an incremental build, and then takes the next unclaimed
+  mutant from one shared queue until none are left. A shared queue rather than a share
+  each, because a mutant that will not compile costs seconds and one that survives costs
+  the whole suite. The copies are removed when the run ends, fails or is interrupted.
+- **`run_mutation` only records the mutation.** `mutation_done` runs them all, then
+  prints the verdicts in the order they were given, in the same format, and the same
+  summary. Nothing prints before that. A `MUTATION_FILTER=... run_mutation` still scopes
+  that one mutation. An edit that does not apply is reported as it is in the serial run,
+  as a `PATTERN ERROR` among the verdicts, since nothing checks it until a copy runs it;
+  `run_mutation` itself returns 0.
+- **The commit is what is measured, so the guard is wider.** The copies hold the
+  committed tests as well as the committed library, so `mutation_target` refuses an
+  uncommitted change to *any* tracked file, not only those under the target. Untracked
+  files are noted, and they are not in the copies.
+- **It costs disk and builds.** Every copy is a clone, a full build of every project in
+  the solution and a full set of test outputs, in a directory that may be memory-backed
+  (point `TMPDIR` somewhere with room if it is). The first mutant in each copy waits for
+  that build, so a list of two or three is slower this way than one at a time.
+
+A build and a test run already use many cores, so copies compete for them instead of
+adding to them. The gain is real and well short of the number of copies, and a count
+above the machine's CPUs is lowered to it. Measure on your own machine before settling
+on a number; a few copies is where to start.
+
 Whole-file sweeps use Stryker.NET, 5.0.0 or later (below). The config carries the
 settings; the scope belongs on the command line, per run:
 
