@@ -42,6 +42,7 @@ structure whose layout changes bumps only its own.
 | 3 | 6.1.0 | `CuckooBloomFilter` | fingerprints packed at their exact bit width |
 | 4 | 6.2.0 | `SetSketch` | the construction, written only for the second one |
 | 5 | the release after 6.2.0 | `StableBloomFilter` | the state the random generator began in |
+| 6 | the release after 6.2.0 | `CuckooBloomFilter` | the state the random generator began in |
 
 The table is also the list of what each structure reads. A version belongs to the
 structures named against it, and a structure's reader reads those versions and no
@@ -76,6 +77,14 @@ it. For version 1 that position is the unpredictable one the filter was given on
 reading. Writing the filter out records that same point, not the position it has reached
 since, so a save and a load never moves where a `Reset` goes. What the payload cannot
 say is the seed the filter was built with, and nothing is guessed at to replace it.
+
+Version 6 is the same change for `CuckooBloomFilter`, for the same reason: its `Reset`
+returns the filter to its original state, the generator included. Only the cuckoo
+filter's version moves, to the next number nothing else had used, and a reader older than
+version 6 refuses such a payload as written by a later version. A version 1, 2 or 3
+payload of the cuckoo filter still reads, and its filter takes the generator position it
+was read at as its original state, exactly as the stable filter's does; the details are
+in [The random generator's state](#the-random-generators-state).
 
 A reader refuses a payload whose magic does not match, whose version is not one its
 structure has defined, whose structure id is not the type being read, or whose
@@ -310,22 +319,45 @@ A slot index at or beyond the capacity is refused.
 ```
 u32     m, the number of buckets
 u32     b, entries per bucket
-u32     f, the fingerprint size in bytes
-u32     count
+u32     f, the fingerprint size         (in bytes before version 3, in bits from version 3)
+u32     count, the number of items held
 u32     n, the capacity in items
 u32     occupied entry count
         per occupied entry:
 u32       bucket index
 u32       entry index
-bytes     the fingerprint
+          the fingerprint               (encoded as described below)
 u64     the random generator's state    (version 2 onwards)
+u64     the state it began in           (version 6 onwards)
 ```
 
 Occupied entries only, for the same reason as above: a filter sized for a load it has
-not reached is mostly empty slots.
+not reached is mostly empty slots. The writer lists them in ascending order of bucket and
+then entry, and a reader places each by the two indexes it carries rather than by its
+position in the list. Which entries are occupied is the list itself, with no bitmap
+beside it. A bucket index at or beyond `m` or an entry index at or beyond `b` is
+refused, as is a payload claiming more occupied entries than `m` buckets of `b` hold.
 
-The generator's state is the last field, and version 1 payloads simply end before it.
-See [The random generator's state](#the-random-generators-state).
+How a fingerprint is written, and what `f` counts, depends on the version:
+
+| Version | `f` counts | One fingerprint |
+| --- | --- | --- |
+| 1, 2 | bytes, from 1 to 8 | `bytes`: a `u32` length that must equal `f`, then that many bytes, least significant first |
+| 3 onwards | bits, from 1 to 64 | the fewest whole bytes that hold `f` bits, which is `f` divided by 8 and rounded up, least significant first, with **no length prefix** |
+
+A fingerprint read from a version 1 or 2 payload is widened to `8 * f` bits, and the
+filter that comes back is the one that was written: the value is the same low bits of
+the same digest, and the bytes hashed to find its partner bucket are the same ones. From
+version 3 the filter holds each fingerprint at exactly `f` bits, so a width that is not a
+multiple of eight leaves the high bits of the last byte zero, and a fingerprint with a
+bit set at or above `f` is refused, since the writer cannot have produced it. A payload
+whose width, in bits, is not between 1 and 64 is refused, as is one with no buckets, no
+entries per bucket, or a bucket count beyond what the reader will allocate for.
+
+The generator's state follows the entries, and version 1 payloads simply end before it.
+The state it began in is the last field, and payloads before version 6 simply end before
+it. What a reader does for a field the payload lacks is described in
+[The random generator's state](#the-random-generators-state).
 
 ### `HyperLogLog` (id 11)
 
@@ -965,9 +997,9 @@ it — and every nested sketch carries the all-integers guard above.
 
 ## The random generator's state
 
-`StableBloomFilter` chooses which cells to decay and `CuckooBloomFilter` chooses which
-entry to evict, one draw per add in each. Both store their generator's position, so a
-restored filter resumes the sequence it was partway through.
+`StableBloomFilter` chooses which cells to decay on each add, and `CuckooBloomFilter`
+chooses which entry to evict when both of an item's buckets are full. Both store their
+generator's position, so a restored filter resumes the sequence it was partway through.
 
 Storing the seed alone would have been simpler and is subtly wrong. The bits come back
 correct either way, but a filter re-seeded on read sits at the start of its sequence
@@ -982,19 +1014,21 @@ That is also why the generator is this library's own SplitMix64 rather than
 changed in 6.0.0 — the seed parameter arrived in 4.0.0, and this is the only breaking
 part of the change.
 
-The stable filter stores a second number, the state its generator began in, because its
-`Reset` returns it to its original state and the generator is part of that. Where the
-generator has got to is no help: it moves with every add, and a filter read back from a
+Both filters store a second number, the state their generator began in, because their
+`Reset` returns them to their original state and the generator is part of that. Where the
+generator has got to is no help: it moves with the draws, and a filter read back from a
 payload would have nothing to return to. The beginning is the seed, widened to 64 bits,
 for a filter given one; the unpredictable state it was built with for one that was not;
-and zero for one made by `NewUnstableBloomFilter`.
+and, for the stable filter only, zero for one made by `NewUnstableBloomFilter`. The stable
+filter writes it from version 5 and the cuckoo filter from version 6.
 
-A payload that predates the field, at version 1 or 2, does not hold it. The reader sets
-the beginning to the position it read the generator at — for version 1, which holds no
-position, the unpredictable one it gave the filter — so the filter resets to the point it
-was read at and records that point when written out again. This is a definition and not a
-recovery: the seed such a filter was built with is not in its payload, and a reader that
-invented one would hand back a sequence the filter never followed.
+A payload that predates the field does not hold it: version 1 or 2 of the stable filter,
+and version 1, 2 or 3 of the cuckoo filter. The reader sets the beginning to the position
+it read the generator at — for version 1, which holds no position, the unpredictable one
+it gave the filter — so the filter resets to the point it was read at and records that
+point when written out again. This is a definition and not a recovery: the seed such a
+filter was built with is not in its payload, and a reader that invented one would hand
+back a sequence the filter never followed.
 
 ## What is not stored
 

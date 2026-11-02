@@ -169,6 +169,14 @@ namespace ProbabilisticDataStructures
         internal const ushort CuckooPackedVersion = 3;
 
         /// <summary>
+        /// The version at which <see cref="CuckooBloomFilter"/> also stores where its
+        /// random generator began, so that <see cref="CuckooBloomFilter.Reset"/> can
+        /// return it there after a save and a load. Earlier payloads hold only the
+        /// position the generator had reached, which cannot say where it started.
+        /// </summary>
+        internal const ushort CuckooOriginalStateVersion = 6;
+
+        /// <summary>
         /// The format versions each structure has defined, which are exactly the ones its
         /// reader reads. This is the one place that says so.
         /// </summary>
@@ -199,7 +207,8 @@ namespace ProbabilisticDataStructures
                 [DefaultVersion, RandomStateVersion, StableOriginalStateVersion],
             [StructureId.InverseBloomFilter] = [DefaultVersion],
             [StructureId.CuckooBloomFilter] =
-                [DefaultVersion, RandomStateVersion, CuckooPackedVersion],
+                [DefaultVersion, RandomStateVersion, CuckooPackedVersion,
+                 CuckooOriginalStateVersion],
             [StructureId.CountMinSketch] = [DefaultVersion],
             [StructureId.HyperLogLog] = [DefaultVersion],
             [StructureId.TopK] = [DefaultVersion],
