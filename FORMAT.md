@@ -252,6 +252,12 @@ so; it does not read the short table as the filter it was meant to be. Any other
 disagrees with the count is refused as corrupt. Sizes that did not wrap are unchanged, and
 read as they always did.
 
+A quotient filter's table can be larger than a payload holds: 2^31 slots at five bits of
+remainder, or 2^30 at thirteen, is 268,435,458 words, and a payload carries at most
+268,435,444. Such a filter can be built and used and not written, and `WriteTo` says so
+with the `InvalidOperationException` of the envelope's ceiling; releases up to 6.2.0 failed
+with an `OverflowException` from computing the table's length in 32 bits.
+
 A size below its limit can still be refused for not being in the payload. Where a reader
 allocates for a count, it first checks that the bytes left could hold that many, so what
 it allocates follows what the payload actually holds rather than what it claims. A sketch

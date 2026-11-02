@@ -79,17 +79,7 @@ namespace ProbabilisticDataStructures
             var needed = (long)length + count;
             var largest = PersistenceFormat.MaxPayloadLength;
 
-            if (needed > largest)
-            {
-                throw new InvalidOperationException(
-                    $"The payload would be {needed:N0} bytes, and the most one can be is " +
-                    $"{largest:N0}: the largest array a .NET runtime holds, " +
-                    $"{Array.MaxLength:N0} bytes, less the {PersistenceFormat.EnvelopeLength} " +
-                    "bytes the envelope adds around it in the same array. The structure is " +
-                    "intact and can still be used, but it is too large to write; the format " +
-                    "has no way to store it. Keep less in it, or split what it holds across " +
-                    "several.");
-            }
+            PersistenceFormat.CheckPayloadLength(needed);
 
             if (needed <= capacity)
             {

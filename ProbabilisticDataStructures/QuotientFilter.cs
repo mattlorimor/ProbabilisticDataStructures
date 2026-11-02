@@ -908,15 +908,29 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The bytes a table of this many words is written as.
+        /// The bytes a table of this many words is written as. In 64 bits: in an int it
+        /// wrapped at 2^28 words, two gibibytes, and the filter then failed to write with
+        /// an OverflowException from the allocation, or compared a payload's bytes with a
+        /// wrapped number.
         /// </summary>
-        internal static int BytesOf(int words) => words * sizeof(ulong);
+        internal static long BytesOf(int words) => (long)words * sizeof(ulong);
 
         /// <summary>
-        /// Refuses a table whose payload would not fit an envelope.
+        /// The bytes of payload besides the table's: three counts and the length of the
+        /// run of bytes the table is written as.
         /// </summary>
+        private const int PayloadOverhead = 4 * sizeof(uint);
+
+        /// <summary>
+        /// Refuses a table whose payload would not fit an envelope, with the exception
+        /// the payload writer gives for any structure too large to write.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">
+        /// The payload would be longer than <see cref="PersistenceFormat.MaxPayloadLength"/>.
+        /// </exception>
         internal static void CheckWritable(int words)
         {
+            PersistenceFormat.CheckPayloadLength(PayloadOverhead + BytesOf(words));
         }
 
         /// <summary>

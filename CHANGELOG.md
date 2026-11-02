@@ -613,6 +613,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   built again from its keys. A table of slots wider than 64 bits, empty or not, is refused
   for its width. Payloads of narrower slots read as they always did.
 
+- **`QuotientFilter.WriteTo` threw an `OverflowException` on filters its own constructor
+  builds.** It sized the byte array for the table as `data.Length * 8` in an `int`, which is
+  negative from 2^28 words, two gibibytes of table. A filter of 2^31 slots with five or more
+  bits of remainder, or 2^30 with thirteen or more, is that large: about 805 million items or
+  more at 1%, 700 million at 0.02%. The reader compared the bytes it was given with the same
+  product. Every release since persistence arrived is affected, for each size it could build.
+  <br><br>
+  The length is computed in 64 bits in both, and a filter whose payload would pass the
+  longest an envelope holds, 2,147,483,573 bytes, now fails to write with the
+  `InvalidOperationException` the payload writer gives for any structure too large to write,
+  naming the size it would be and the size one can be, before anything is allocated. The
+  filter is untouched. The format does not grow to carry a larger table: such a filter can be
+  built and used and cannot be saved. Filters whose payload fits write as they did.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

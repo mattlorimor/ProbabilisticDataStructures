@@ -304,6 +304,28 @@ namespace ProbabilisticDataStructures
         internal static int MaxPayloadLength => Array.MaxLength - EnvelopeLength;
 
         /// <summary>
+        /// Refuses a payload longer than an envelope holds, naming the size it would be and
+        /// the size one can be, before anything is allocated for it.
+        /// </summary>
+        /// <param name="length">The payload's length, in bytes, worked out in 64 bits.</param>
+        /// <exception cref="InvalidOperationException">
+        /// The payload would be longer than <see cref="MaxPayloadLength"/>.
+        /// </exception>
+        internal static void CheckPayloadLength(long length)
+        {
+            if (length > MaxPayloadLength)
+            {
+                throw new InvalidOperationException(
+                    $"The payload would reach {length:N0} bytes, and the most one can be is " +
+                    $"{MaxPayloadLength:N0}: the largest array a .NET runtime holds, " +
+                    $"{Array.MaxLength:N0} bytes, less the {EnvelopeLength} bytes the " +
+                    "envelope adds around it in the same array. The structure is intact and " +
+                    "can still be used, but it is too large to write; the format has no way " +
+                    "to store it. Keep less in it, or split what it holds across several.");
+            }
+        }
+
+        /// <summary>
         /// Wraps a payload in the envelope and writes the whole of it to the stream.
         /// </summary>
         internal static void Write(
