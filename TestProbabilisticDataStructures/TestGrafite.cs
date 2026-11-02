@@ -587,5 +587,116 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(1.0, filter.FalsePositiveRate(ulong.MaxValue), 1e-9,
                 "A range wider than the universe cannot be excluded at all.");
         }
+
+        // ---- What the rate is promised for, and what is stored ----------------------
+
+        /// <summary>
+        /// Keys are hashed into a universe of n * L / e, and the hash works modulo the
+        /// Mersenne prime 2^61 - 1, so the universe is held to 2^61 - 2. A request that
+        /// wants more is built at the cap, and it is not refused: what comes back is a
+        /// filter with no false negatives whose short ranges still have the bound
+        /// n * l / r, and only the headline promise, the rate for ranges of L, is weaker
+        /// than asked for. A caller who passes a huge L to mean "any" and then asks about
+        /// short ranges is served by it, and refusing would strand them. What was wrong
+        /// was that nothing said so. <see cref="Grafite.FalsePositiveRate"/> says what is
+        /// delivered, and these tests pin that it never claims the rate that was asked for
+        /// and not delivered, and that the cap is where the documentation says it is.
+        /// </summary>
+        [TestMethod]
+        public void TestACappedUniverseReportsTheRateItDelivers()
+        {
+            const ulong Cap = (1UL << 61) - 2;
+            var keys = new ulong[] { 1, 2, 3, 4 };
+
+            foreach (var range in new[] { 1UL << 60, ulong.MaxValue })
+            {
+                var filter = Grafite.Build(keys, 0.01, range, seed: 5);
+                Assert.AreEqual(Cap, filter.R, "the cap should be what bound here");
+                Assert.AreEqual(1.0, filter.FalsePositiveRate(range),
+                    "at 2^60 the cap leaves no exclusion at all, and it must say so");
+                Assert.AreEqual(4.0 / (1UL << 61), filter.FalsePositiveRate(1), 1e-25,
+                    "a short range keeps its bound, n * l / r, at the capped r");
+            }
+
+            // Weaker than asked for but not useless: one key, 1e-9 asked for ranges of
+            // 2^40, which wants a universe of 2^70. What it delivers is 2^40 / r.
+            var weaker = Grafite.Build(new ulong[] { 99 }, 1e-9, 1UL << 40, seed: 5);
+            Assert.AreEqual(Cap, weaker.R);
+            Assert.IsGreaterThan(1e-9, weaker.FalsePositiveRate(1UL << 40),
+                "a capped filter must not claim the rate it was asked for and cannot deliver");
+            Assert.AreEqual((1UL << 40) / (double)(1UL << 61),
+                weaker.FalsePositiveRate(1UL << 40), 1e-15);
+
+            // The control: a wide range whose universe fits is not capped, and delivers
+            // the rate asked for. One key at 0.1% for ranges of 2^50 wants about 2^60.
+            var fits = Grafite.Build(new ulong[] { 99 }, 0.001, 1UL << 50, seed: 5);
+            Assert.AreEqual((ulong)Math.Ceiling((double)(1UL << 50) / 0.001), fits.R);
+            Assert.AreEqual(0.001, fits.FalsePositiveRate(1UL << 50), 1e-9);
+        }
+
+        /// <summary>
+        /// A capped filter answers correctly. Keys spread over all of 64 bits, so that
+        /// they sit in several blocks of the capped universe, are all found, and so are
+        /// ranges around them; and points that are not keys are not reported, as the
+        /// capped bound of about 2^-61 per key says they will not be.
+        /// </summary>
+        [TestMethod]
+        public void TestACappedFilterHasNoFalseNegativesAndNoPointFalsePositives()
+        {
+            var random = new Random(7);
+            ulong Next() => ((ulong)random.NextInt64() << 1) ^ (ulong)random.NextInt64();
+
+            var keys = Enumerable.Range(0, 300).Select(_ => Next()).Distinct().ToArray();
+            var filter = Grafite.Build(keys, 0.01, ulong.MaxValue, seed: 11);
+            Assert.AreEqual((1UL << 61) - 2, filter.R, "the cap should be what bound here");
+            Assert.IsTrue(keys.Max() >= filter.R, "the keys should reach past the first block");
+
+            foreach (var key in keys)
+            {
+                Assert.IsTrue(filter.Test(key));
+                Assert.IsTrue(filter.Test(key - Math.Min(key, 700), key + Math.Min(ulong.MaxValue - key, 700)));
+            }
+
+            var known = new HashSet<ulong>(keys);
+            for (var i = 0; i < 3000; i++)
+            {
+                var query = Next();
+                if (!known.Contains(query))
+                {
+                    Assert.IsFalse(filter.Test(query), $"the point {query} is not a key");
+                }
+            }
+        }
+
+        /// <summary>
+        /// A set of no keys wants no universe, whatever range it is asked about.
+        /// </summary>
+        [TestMethod]
+        public void TestNoKeysTakeAnyRange()
+        {
+            var empty = Grafite.Build(Array.Empty<ulong>(), 0.001, ulong.MaxValue);
+            Assert.AreEqual(0UL, empty.Count());
+            Assert.IsFalse(empty.Test(0, ulong.MaxValue));
+            Assert.AreEqual(0.0, empty.FalsePositiveRate(ulong.MaxValue));
+        }
+
+        /// <summary>
+        /// The size in bytes is a count of 64-bit words times eight, and is reported as
+        /// a <c>ulong</c> but was worked out in an <c>int</c>, which wraps and then
+        /// sign-extends: a filter of 2 GiB reported a size near 2^64 bytes, and one of 4
+        /// GiB reported none. A filter that big is gigabytes of words, so the arithmetic
+        /// is held directly, and a small filter is held to the same arithmetic.
+        /// </summary>
+        [TestMethod]
+        public void TestSizeInBytesDoesNotWrapPastTwoGibibytes()
+        {
+            Assert.AreEqual(3_200_000_000UL, Grafite.SizeOfWords(200_000_000, 200_000_000));
+            Assert.AreEqual(2_147_483_648UL, Grafite.SizeOfWords(268_435_456, 0));
+            Assert.AreEqual(16UL * (ulong)Array.MaxLength,
+                Grafite.SizeOfWords(Array.MaxLength, Array.MaxLength));
+
+            var filter = Grafite.Build(RandomKeys(500, 1_000_000, seed: 7), 0.01, 64, seed: 9);
+            Assert.AreEqual((ulong)(filter.Lows.Length + filter.Highs.Length) * 8, filter.SizeInBytes());
+        }
     }
 }

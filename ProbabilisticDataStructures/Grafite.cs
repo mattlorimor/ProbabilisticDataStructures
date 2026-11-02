@@ -599,7 +599,17 @@ namespace ProbabilisticDataStructures
         /// </summary>
         public ulong SizeInBytes()
         {
-            return (ulong)((this.Lows.Length + this.Highs.Length) * 8);
+            return SizeOfWords(this.Lows.Length, this.Highs.Length);
+        }
+
+        /// <summary>
+        /// The bytes in this many words of low bits and of high bits. A function of its
+        /// own so that a test can reach the sizes where the arithmetic matters, which are
+        /// filters of gigabytes.
+        /// </summary>
+        internal static ulong SizeOfWords(int lowWords, int highWords)
+        {
+            return (ulong)((lowWords + highWords) * 8);
         }
 
         /// <summary>
