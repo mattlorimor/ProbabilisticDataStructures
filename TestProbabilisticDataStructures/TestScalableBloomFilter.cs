@@ -40,7 +40,7 @@ namespace TestProbabilisticDataStructures
             f.AddFilter();
             f.AddFilter();
 
-            Assert.AreEqual(f.Filters.Sum(x => (long)x.Capacity()), (long)f.Capacity());
+            Assert.AreEqual((ulong)f.Filters.Sum(x => (long)x.Capacity()), f.Capacity());
             Assert.IsGreaterThan(first, f.Capacity(),
                 "adding filters should increase the total capacity");
         }

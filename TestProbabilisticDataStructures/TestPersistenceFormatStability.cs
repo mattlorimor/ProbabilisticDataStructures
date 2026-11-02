@@ -83,7 +83,7 @@ namespace TestProbabilisticDataStructures
         {
             var f = ScalableBloomFilter.ReadFrom(Fixture("scalablebloomfilter-v1.bin"));
 
-            Assert.AreEqual(1053u, f.Capacity());
+            Assert.AreEqual(1053ul, f.Capacity());
             Assert.AreEqual(7u, f.K());
             var stored = f.Filters.Count;
 
@@ -99,7 +99,7 @@ namespace TestProbabilisticDataStructures
                 f.Add(Key($"s{i}"));
             }
 
-            Assert.IsGreaterThan(1053u, f.Capacity(), "the restored filter did not grow");
+            Assert.IsGreaterThan(1053ul, f.Capacity(), "the restored filter did not grow");
 
             // And it grows the way it always did. A version 1 payload carries no growth
             // factor because every filter then added its filters at the hint, so the

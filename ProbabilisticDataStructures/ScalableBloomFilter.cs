@@ -209,12 +209,20 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Returns the current Scalable Bloom Filter capacity, which is the sum of the
-        /// capacities for the contained series of Bloom filters.
+        /// capacities for the contained series of Bloom filters, in bits.
         /// </summary>
+        /// <remarks>
+        /// A <c>ulong</c>, where each contained filter's own capacity is a <c>uint</c>: no
+        /// one of them can pass 4,294,967,295 bits, but a filter whose contained filters
+        /// grow passes it in total well before it stops growing. In 6.2.0 and earlier
+        /// this returned a <c>uint</c>, and such a total wrapped.
+        /// </remarks>
         /// <returns>The current Scalable Bloom Filter capacity</returns>
-        public uint Capacity()
+        public ulong Capacity()
         {
-            var capacity = 0u;
+            // Summed in 64 bits: each filter's capacity is a uint, so the total of every
+            // filter a list can hold still fits.
+            var capacity = 0ul;
             foreach (var filter in this.Filters)
             {
                 capacity += filter.Capacity();

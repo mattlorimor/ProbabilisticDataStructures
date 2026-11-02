@@ -92,6 +92,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   about 62 million items at a hint of 1,000, 1% and r = 0.8, where one growing by 1
   loaded up to about 2.83 million; both need `ReadOptions` past that. (#171)
 
+- **`ScalableBloomFilter.Capacity()` returns `ulong`, and that is a breaking change.** It
+  returned a `uint` and added up its contained filters' bits in one, so once they came to
+  more than 4,294,967,295 between them it reported the total wrapped to a small number.
+  No contained filter can pass that alone, since each is a 32-bit filter, but together
+  they did, in 6.2.0 as well: at 1% and r = 0.8, a filter with a hint of 10,000 wrapped
+  after about 13.3 million items, and one with a hint of 100,000 after about 40.5
+  million. A growing filter gets there sooner. At a growth of 2, a hint of 1,000, 1% and
+  r = 0.8, its eighteen filters hold 4,460,676,502 bits, which the old arithmetic
+  reported as 165,709,206. Code that keeps the result in a `uint` needs a wider variable
+  or a cast. The method is not on `IFilter`, and no other structure's `Capacity()`
+  changes type: each of those is one filter, which its own type already holds. (#171)
+
 ### Fixed
 
 - **`InvertibleBloomLookupTable.TryDecode` could report success with a wrong answer.** It
