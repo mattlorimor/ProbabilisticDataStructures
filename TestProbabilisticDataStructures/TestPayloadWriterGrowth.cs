@@ -48,6 +48,8 @@ namespace TestProbabilisticDataStructures
         [DataRow(256, 200, 100, 512)]
         [DataRow(1_000, 1_000, 5_000, 6_000)]
         [DataRow(1_000, 10, 5, 1_000)]
+        [DataRow(1_000, 900, 100, 1_000)]
+        [DataRow(1_000, 900, 101, 2_000)]
         [DataRow(1 << 29, 1 << 29, 1, 1 << 30)]
         // From here doubling wraps or does not fit.
         [DataRow(1 << 30, 1 << 30, 1, 2_147_483_573)]
@@ -120,6 +122,23 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual((int)Largest,
                 PayloadWriter.GrownCapacity(
                     1_363_148_812, 1_363_148_812, (int)Largest - 1_363_148_812));
+        }
+
+        /// <summary>
+        /// A length of exactly the largest array is not too large to read into one: it gets
+        /// as far as the memory it would cost, which the default budget refuses before
+        /// anything is allocated. Past it, above, is refused for its size.
+        /// </summary>
+        [TestMethod]
+        public void TestALengthOfExactlyTheLargestArrayIsRefusedForItsCostNotItsSize()
+        {
+            var bytes = new BloomFilter(100, 0.01).ToByteArray();
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(10), (uint)Array.MaxLength);
+
+            var ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<BloomFilter>(bytes));
+            Assert.IsInstanceOfType<ReadBudgetExceededException>(ex.InnerException,
+                $"the length should have reached the budget: {ex.Message}");
         }
 
         /// <summary>

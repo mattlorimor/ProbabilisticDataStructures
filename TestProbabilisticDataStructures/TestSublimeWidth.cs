@@ -39,14 +39,16 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// A chunk begins at its index times 512 bits. Past the chunk that begins at 2^31
-        /// that does not fit an int, and the two rows after the first are the ones that
-        /// wrapped.
+        /// that does not fit an int, and the rows from 4,194,304 are the ones that wrapped.
+        /// The chunk at 8,388,608, counter 570,425,344 at the default tuning, begins at 2^32
+        /// and wrapped to the first bit of the array: a write to it landed on counter 0.
         /// </summary>
         [TestMethod]
         [DataRow(0)]
         [DataRow(1)]
         [DataRow(4_194_303)]
         [DataRow(4_194_304)]
+        [DataRow(8_388_608)]
         [DataRow(15_798_135)]
         [DataRow(67_108_863)]
         public void TestAChunksFirstBitIsCountedInSixtyFourBits(int chunk)
@@ -131,6 +133,35 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(widthLimit, sketch.Width);
             CollectionAssert.AreEqual(before, sketch.ToByteArray(),
                 "a refused add changed the sketch");
+        }
+
+        /// <summary>
+        /// The refusal at the real limit. A row of 2^30 counters is a gibibyte, but the
+        /// refusal is reached before any row is touched, so a sketch told that its rows are
+        /// that wide, and that its next add is the one that widens them, takes it to the
+        /// check without building them. The product it makes is the one that wrapped:
+        /// 2^30 doubled does not fit an int, and a check made in an int found the doubled
+        /// width negative and let the add through to the expansion that overflowed.
+        /// </summary>
+        [TestMethod]
+        public void TestARowAtTheWidestCannotDouble()
+        {
+            var sketch = new SublimeCountMinSketch(0.5, 0.5, 1.0);
+            SetField(sketch, "width", SublimeCountMinSketch.MaxWidth);
+            SetField(sketch, "expansionLimit", 1UL);
+
+            var ex = Assert.ThrowsExactly<InvalidOperationException>(() => sketch.Add(Key(1)));
+            StringAssert.Contains(ex.Message, SublimeCountMinSketch.MaxWidth.ToString("N0"));
+            StringAssert.Contains(ex.Message, (2L * SublimeCountMinSketch.MaxWidth).ToString("N0"));
+            Assert.AreEqual(0UL, sketch.TotalCount());
+        }
+
+        private static void SetField(object target, string name, object value)
+        {
+            var field = target.GetType().GetField(name,
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            Assert.IsNotNull(field, $"the sketch has no field {name}");
+            field.SetValue(target, value);
         }
 
         /// <summary>

@@ -150,6 +150,23 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The array refuses a size itself, not only through the filters that ask first: a
+        /// bucket count one past the limit is refused by the constructor, against its own
+        /// count, before the array it would have allocated -- two gibibytes at the widths
+        /// that bite.
+        /// </summary>
+        [TestMethod]
+        [DataRow((byte)4, 4_294_967_182u)]
+        [DataRow((byte)5, 3_435_973_745u)]
+        [DataRow((byte)8, 2_147_483_591u)]
+        public void TestTheConstructorRefusesMoreBucketsThanAnArrayHolds(byte width, uint largest)
+        {
+            var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new Buckets(largest + 1, width));
+            Assert.AreEqual("count", ex.ParamName);
+        }
+
+        /// <summary>
         /// The widths whose limit is the count type, not the array, are exactly the ones
         /// that never refuse: this keeps the test above from passing on a limit that was
         /// set so high nothing reaches it.
@@ -312,6 +329,62 @@ namespace TestProbabilisticDataStructures
 
             // At the widest bucket the bits are still a ulong: the limit is the arrays.
             Buckets64.CheckSize(largest, 8, "count");
+        }
+
+        /// <summary>
+        /// A reader past the limit of the 64-bit array is refused for it, whatever shape of
+        /// arrays it carries: the arrays it would need are more than there can be, and
+        /// without that check their count is worked out from a number that does not fit.
+        /// </summary>
+        [TestMethod]
+        public void TestRestoreRefusesMoreSixtyFourBitBucketsThanItsArraysHold()
+        {
+            var ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => Buckets64.Restore(Buckets64.MaxCount + 1, 1, Array.Empty<byte[]>()));
+            StringAssert.Contains(ex.Message, "beyond anything this library builds");
+        }
+
+        /// <summary>
+        /// The first item count whose sizing does not fit a ulong is refused as a mistake in
+        /// the count, and the one before it is sized. The sizing rounds to a double, so the
+        /// first refused count sizes to exactly 2^64, which is the edge a comparison that
+        /// let it through would fail on, with an OverflowException from the conversion.
+        /// </summary>
+        [TestMethod]
+        public void TestTheFirstItemCountTooLargeToSizeInBitsIsRefusedNamingN()
+        {
+            bool Refused(ulong n)
+            {
+                try
+                {
+                    Utils.OptimalM64(n, 0.01);
+                    return false;
+                }
+                catch (Exception)
+                {
+                    return true;
+                }
+            }
+
+            ulong low = 1;
+            ulong high = ulong.MaxValue;
+            while (low < high)
+            {
+                var mid = low + (high - low) / 2;
+                if (Refused(mid))
+                {
+                    high = mid;
+                }
+                else
+                {
+                    low = mid + 1;
+                }
+            }
+
+            Assert.IsTrue(Refused(low), "no item count was refused, so this found no edge");
+            Assert.IsFalse(Refused(low - 1));
+            Assert.AreEqual("n", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => Utils.OptimalM64(low, 0.01)).ParamName);
         }
 
         /// <summary>
