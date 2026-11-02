@@ -48,6 +48,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes version 1, readable by earlier libraries. Payloads from earlier versions read as
   filters with a factor of 1, and go on growing that way. (#171)
 
+- **`HyperLogLog.IsSaturated()` says when a sketch is at its ceiling.** It returns true when
+  every register has reached the longest run of zeros the 32-bit hash has room for, which is
+  when `Count()` reports its ceiling, about 2^32 × ln m, and that number is a floor and not
+  an estimate: the sketch has probably seen at least that many items and may have seen far
+  more. Since the fix that made a full sketch report its ceiling rather than 0, nothing in
+  the result said so, and the registers are internal. It is a method, like `FillRatio()` and
+  `Count()`, since it reads every register when the answer is yes. It is not an early
+  warning, and the documentation says so: the error grows from about 2^33 distinct items,
+  and a sketch is more likely than not full only from about 2^33.7 items with 16 registers,
+  2^34.9 with 1,024 and 2^35.3 with 16,384, where the mean estimate is 20%, 7% and 5% low
+  and one doubling of items later 59%, 53% and 52% low. Compare `Count()` with 2^33 for an
+  earlier warning. `HyperLogLogPlus` and `UltraLogLog` have no
+  such member: they use the whole 64-bit hash, and a register reaches its cap only around
+  2^64 items, more than a `ulong` count holds. Nothing stored changes. (#194)
+
 ### Changed
 
 - **The package's minimum `System.IO.Hashing` rises from 10.0.11 to 10.0.14.** A project
