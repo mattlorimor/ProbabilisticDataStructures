@@ -37,7 +37,7 @@ namespace ProbabilisticDataStructures
         private const byte MaxBucketSizeBits = 8;
 
         // The largest C# array to create; the largest power of 2 that C# can support.
-        private const uint maxArraySize = 1U << 30;
+        internal const uint maxArraySize = 1U << 30;
         private byte[][] Data { get; set; }
         private int arrayCount { get; set; }
         private byte bucketSize { get; set; }
@@ -79,38 +79,50 @@ namespace ProbabilisticDataStructures
         /// <exception cref="InvalidDataException">
         /// The data is not shaped the way the count and bucket size imply.
         /// </exception>
+        /// <remarks>
+        /// The arrays read are kept, and checked against the shape the count implies
+        /// without allocating it. Restoring used to allocate that shape, compare, and
+        /// throw it away: a second copy of the filter's bits, and one a payload's count
+        /// alone could size before the comparison refused it.
+        /// </remarks>
         internal static Buckets64 Restore(ulong count, byte bucketSize, byte[][] data)
         {
-            var buckets = new Buckets64(count, bucketSize);
+            ValidBucketSize(bucketSize);
 
-            if (data.Length != buckets.Data.Length)
+            var arrays = count / maxArraySize + 1;
+            if ((ulong)data.Length != arrays)
             {
                 throw new InvalidDataException(
-                    $"{count} buckets of {bucketSize} bits need {buckets.Data.Length} " +
+                    $"{count} buckets of {bucketSize} bits need {arrays} " +
                     $"arrays and {data.Length} were stored.");
             }
 
+            var bytesLeft = (count * bucketSize + 7) / 8;
             for (int i = 0; i < data.Length; i++)
             {
-                if (data[i].Length != buckets.Data[i].Length)
+                var needed = Math.Min(bytesLeft, maxArraySize);
+                if ((ulong)data[i].Length != needed)
                 {
                     throw new InvalidDataException(
-                        $"Array {i} of the bucket data needs {buckets.Data[i].Length} " +
+                        $"Array {i} of the bucket data needs {needed} " +
                         $"bytes and {data[i].Length} were stored.");
                 }
+                bytesLeft -= needed;
             }
 
-            buckets.Data = data;
-            return buckets;
+            return new Buckets64(count, bucketSize, data);
         }
 
-        /// <summary>
-        /// Creates a new Buckets64 with the provided number of buckets where each bucket
-        /// is the specified number of bits.
-        /// </summary>
-        /// <param name="count">Number of buckets.</param>
-        /// <param name="bucketSize">Number of bits per bucket.</param>
-        internal Buckets64(ulong count, byte bucketSize)
+        private Buckets64(ulong count, byte bucketSize, byte[][] data)
+        {
+            this.count = count;
+            this.bucketSize = bucketSize;
+            this.arrayCount = data.Length;
+            this.Data = data;
+            this.Max = (1 << bucketSize) - 1;
+        }
+
+        private static void ValidBucketSize(byte bucketSize)
         {
             if (bucketSize == 0)
             {
@@ -127,6 +139,17 @@ namespace ProbabilisticDataStructures
                     "maximum value is stored in a byte, so wider buckets would allocate " +
                     "the extra space without being able to hold a larger value.");
             }
+        }
+
+        /// <summary>
+        /// Creates a new Buckets64 with the provided number of buckets where each bucket
+        /// is the specified number of bits.
+        /// </summary>
+        /// <param name="count">Number of buckets.</param>
+        /// <param name="bucketSize">Number of bits per bucket.</param>
+        internal Buckets64(ulong count, byte bucketSize)
+        {
+            ValidBucketSize(bucketSize);
 
             this.count = count;
             this.bucketSize = bucketSize;

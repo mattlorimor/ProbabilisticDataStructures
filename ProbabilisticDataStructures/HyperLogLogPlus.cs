@@ -54,7 +54,7 @@ namespace ProbabilisticDataStructures
         /// The largest precision this builds. 2^18 registers gives a relative error near
         /// 0.4%, and the register array is a quarter of a megabyte.
         /// </summary>
-        private const uint MaxPrecision = 18;
+        internal const uint MaxPrecision = 18;
 
         /// <summary>
         /// 1 / (2 ln 2), the limit of the classic alpha as the register count grows.
@@ -239,7 +239,7 @@ namespace ProbabilisticDataStructures
         /// precision 7 the floor changes nothing and the cap is the paper's.
         /// </para>
         /// </remarks>
-        private int MaxSparseEntries =>
+        internal int MaxSparseEntries =>
             Math.Max(InitialSparseCapacity, (int)(this.m / sizeof(ulong)));
 
         /// <summary>
@@ -641,7 +641,26 @@ namespace ProbabilisticDataStructures
         /// <returns>The estimator that was written.</returns>
         public static HyperLogLogPlus ReadFrom(Stream stream)
         {
-            return Read(stream, null);
+            return Read(stream, null, ReadOptions.Default);
+        }
+
+        /// <summary>
+        /// Reads a structure written by <see cref="WriteTo"/>, allocating no more than the
+        /// options' memory budget allows. <see cref="ReadFrom(Stream)"/> reads under
+        /// <see cref="ReadOptions.Default"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static HyperLogLogPlus ReadFrom(Stream stream, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, null, options);
         }
 
         /// <summary>
@@ -655,17 +674,40 @@ namespace ProbabilisticDataStructures
             Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             ArgumentNullException.ThrowIfNull(hash);
-            return Read(stream, hash);
+            return Read(stream, hash, ReadOptions.Default);
+        }
+
+        /// <summary>
+        /// Reads a structure as
+        /// <see cref="ReadFrom(Stream, Func{ReadOnlySpan{byte}, ulong})"/> does, allocating
+        /// no more than the options' memory budget allows.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function, as for the overload without options.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static HyperLogLogPlus ReadFrom(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong> hash, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, hash, options);
         }
 
         private static HyperLogLogPlus Read(
-            Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+            Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash, ReadOptions options)
         {
             ArgumentNullException.ThrowIfNull(stream);
 
+            var budget = ReadBudget.For(options, StructureId.HyperLogLogPlus);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.HyperLogLogPlus, out var hashId);
-            var reader = new PayloadReader(payload);
+                stream, StructureId.HyperLogLogPlus, out var hashId, budget);
+            var reader = new PayloadReader(payload, budget);
 
             var precision = reader.ReadUInt32();
 
@@ -697,6 +739,8 @@ namespace ProbabilisticDataStructures
                 // never exceeds the cap -- a buffer above it with room to spare would
                 // move the conversion point. A payload holding exactly the cap comes back
                 // full, so its first new item converts it and a repeat does not.
+                budget.Charge(ReadBudget.ArrayOf(
+                    (ulong)Math.Max(estimator.InitialSparseEntries, (long)held), sizeof(ulong)));
                 var buffer = new ulong[Math.Max(estimator.InitialSparseEntries, (int)held)];
                 var previous = 0UL;
 

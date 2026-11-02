@@ -108,6 +108,19 @@ namespace ProbabilisticDataStructures
         private const int MaxPoolFragments = 64;
 
         /// <summary>
+        /// The most rows a sketch can have: ceil(ln(1 / delta)) for the smallest delta
+        /// whose reciprocal is still a finite double.
+        /// </summary>
+        /// <remarks>
+        /// Any smaller delta has an infinite reciprocal, and so no row count at all;
+        /// the constructor refuses it rather than converting infinity to one. The
+        /// reader refuses more rows than this, so a sketch the constructor builds is
+        /// one the reader reads. It used to refuse more than sixty-four, which a delta
+        /// of 1e-28 -- an ordinary double -- already passes.
+        /// </remarks>
+        internal static readonly int MaxDepth = (int)Math.Ceiling(Math.Log(double.MaxValue));
+
+        /// <summary>
         /// Creates a sketch whose estimates hold with probability at least 1 - delta
         /// and whose arrays grow as the square root of the stream's length.
         /// </summary>
@@ -175,7 +188,19 @@ namespace ProbabilisticDataStructures
             var wanted = Math.Max(1.0, this.countersPerChunk / sizeFactor);
             this.width = 1 << BitOperations.Log2((uint)Math.Min(wanted, 1 << 30));
 
-            var depth = (uint)Math.Ceiling(Math.Log(1 / delta));
+            var rows = Math.Ceiling(Math.Log(1 / delta));
+            if (rows > MaxDepth)
+            {
+                // Only a delta so small that its reciprocal is infinite gets here, and
+                // turning infinity into a row count used to fail as an overflow from
+                // inside the arithmetic.
+                throw new ArgumentOutOfRangeException(nameof(delta), delta,
+                    $"A delta of {delta} needs ln(1 / delta) rows, and its reciprocal is " +
+                    $"past the largest double. The deepest sketch is {MaxDepth} rows, at " +
+                    $"a delta of about {1 / double.MaxValue}.");
+            }
+
+            var depth = (uint)rows;
             this.rows = new ValeCounterArray[Math.Max(1, depth)];
             for (var i = 0; i < this.rows.Length; i++)
             {
@@ -452,7 +477,26 @@ namespace ProbabilisticDataStructures
         /// <param name="stream">The stream to read from.</param>
         public static SublimeCountMinSketch ReadFrom(Stream stream)
         {
-            return Read(stream, null);
+            return Read(stream, null, ReadOptions.Default);
+        }
+
+        /// <summary>
+        /// Reads a structure written by <see cref="WriteTo"/>, allocating no more than the
+        /// options' memory budget allows. <see cref="ReadFrom(Stream)"/> reads under
+        /// <see cref="ReadOptions.Default"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static SublimeCountMinSketch ReadFrom(Stream stream, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, null, options);
         }
 
         /// <summary>
@@ -464,17 +508,40 @@ namespace ProbabilisticDataStructures
             Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             ArgumentNullException.ThrowIfNull(hash);
-            return Read(stream, hash);
+            return Read(stream, hash, ReadOptions.Default);
+        }
+
+        /// <summary>
+        /// Reads a structure as
+        /// <see cref="ReadFrom(Stream, Func{ReadOnlySpan{byte}, ulong})"/> does, allocating
+        /// no more than the options' memory budget allows.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function, as for the overload without options.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static SublimeCountMinSketch ReadFrom(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong> hash, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, hash, options);
         }
 
         private static SublimeCountMinSketch Read(
-            Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+            Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash, ReadOptions options)
         {
             ArgumentNullException.ThrowIfNull(stream);
 
+            var budget = ReadBudget.For(options, StructureId.SublimeCountMinSketch);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.SublimeCountMinSketch, out var hashId);
-            var reader = new PayloadReader(payload);
+                stream, StructureId.SublimeCountMinSketch, out var hashId, budget);
+            var reader = new PayloadReader(payload, budget);
 
             var delta = reader.ReadDouble();
             var growthExponent = reader.ReadDouble();
@@ -500,11 +567,13 @@ namespace ProbabilisticDataStructures
                     $"Sketch claims a size factor of {sizeFactor}, which has to be " +
                     "a positive number.");
             }
-            if (depth == 0 || depth > 64)
+            // The constructor's own limit, so that every sketch it builds reads back.
+            if (depth == 0 || depth > MaxDepth)
             {
                 throw new InvalidDataException(
-                    $"Sketch claims {depth} rows. A sketch has at least one, and " +
-                    "sixty-four would mean a delta no double can express.");
+                    $"Sketch claims {depth} rows. A sketch has at least one, and more " +
+                    $"than {MaxDepth} would mean a delta whose reciprocal no double can " +
+                    "express.");
             }
             if (width == 0 || width > 1 << 30 || BitOperations.PopCount(width) != 1)
             {
@@ -579,6 +648,10 @@ namespace ProbabilisticDataStructures
         private static ValeCounterArray[] ReadCounters(
             ref PayloadReader reader, int depth, int forWidth)
         {
+            // Each row of plain counts is allocated before it is read.
+            reader.Budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf((ulong)depth, sizeof(long)),
+                ReadBudget.Times((ulong)depth, ReadBudget.ArrayOf((ulong)forWidth, sizeof(ulong)))));
             var values = new ulong[depth][];
             for (var i = 0; i < depth; i++)
             {
@@ -591,6 +664,10 @@ namespace ProbabilisticDataStructures
 
             var (chunkCounters, stub) = Tune(values);
 
+            // And then packed, at the tuning just chosen.
+            reader.Budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf((ulong)depth, sizeof(long)),
+                ReadBudget.Times((ulong)depth, ValeCounterArray.RestoreCost(forWidth, chunkCounters))));
             var rows = new ValeCounterArray[depth];
             for (var i = 0; i < depth; i++)
             {

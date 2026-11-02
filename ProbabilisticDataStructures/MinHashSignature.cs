@@ -26,6 +26,17 @@ namespace ProbabilisticDataStructures
     {
         private readonly ulong[] values;
 
+        /// <summary>
+        /// The longest signature: its values are one array, and no array is longer than
+        /// <see cref="Array.MaxLength"/>.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="MinHash.Signature(string[], int)"/> and the reader both refuse past
+        /// it, so a signature one builds the other reads. The reader used to stop at a
+        /// million, and the factory at nothing short of running out of array.
+        /// </remarks>
+        internal static int MaxValues => Array.MaxLength;
+
         internal MinHashSignature(ulong[] values)
         {
             this.values = values;
@@ -74,7 +85,26 @@ namespace ProbabilisticDataStructures
         /// <returns>The signature that was written.</returns>
         public static MinHashSignature ReadFrom(Stream stream)
         {
-            return Read(stream);
+            return Read(stream, ReadOptions.Default);
+        }
+
+        /// <summary>
+        /// Reads a structure written by <see cref="WriteTo"/>, allocating no more than the
+        /// options' memory budget allows. <see cref="ReadFrom(Stream)"/> reads under
+        /// <see cref="ReadOptions.Default"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static MinHashSignature ReadFrom(Stream stream, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, options);
         }
 
         /// <summary>
@@ -88,14 +118,37 @@ namespace ProbabilisticDataStructures
         public static MinHashSignature ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             ArgumentNullException.ThrowIfNull(hash);
-            return Read(stream);
+            return Read(stream, ReadOptions.Default);
         }
 
-        private static MinHashSignature Read(Stream stream)
+        /// <summary>
+        /// Reads a structure as
+        /// <see cref="ReadFrom(Stream, Func{ReadOnlySpan{byte}, ulong})"/> does, allocating
+        /// no more than the options' memory budget allows.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function, as for the overload without options.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static MinHashSignature ReadFrom(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong> hash, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, options);
+        }
+
+        private static MinHashSignature Read(Stream stream, ReadOptions options)
         {
             ArgumentNullException.ThrowIfNull(stream);
 
-            var payload = PersistenceFormat.Read(stream, StructureId.MinHashSignature, out var hashId);
+            var budget = ReadBudget.For(options, StructureId.MinHashSignature);
+            var payload = PersistenceFormat.Read(stream, StructureId.MinHashSignature, out var hashId, budget);
 
             if (hashId != HashId.XxHash3_64)
             {
@@ -105,16 +158,21 @@ namespace ProbabilisticDataStructures
                     "different hash functions gives a number that means nothing.");
             }
 
-            var reader = new PayloadReader(payload);
+            var reader = new PayloadReader(payload, budget);
 
             var length = reader.ReadUInt32();
-            if (length == 0 || length > PersistenceFormat.MaxNestedCount)
+            if (length == 0 || length > MaxValues)
             {
                 throw new InvalidDataException(
                     $"Signature claims {length} values, which is not a signature this " +
-                    "library builds.");
+                    $"library builds: it builds them 1 to {MaxValues} long.");
             }
 
+            // Checked before the array is sized by it, so a claim cannot cost more than
+            // the payload it came in.
+            reader.RequireHolds(length, sizeof(ulong), "values");
+
+            budget.Charge(ReadBudget.ArrayOf(length, sizeof(ulong)));
             var values = new ulong[length];
             for (uint i = 0; i < length; i++)
             {

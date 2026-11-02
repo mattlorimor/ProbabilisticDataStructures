@@ -514,6 +514,35 @@ rest of a message survives, as it should, and one that deletes the guard does no
 - Round-trip tests must cross the structure's interesting thresholds. The theta
   sketch's trim-boundary bug survived because every round-trip test used sub-trim
   streams; the first sketch to see real volume was the first to fail.
+- **Round-trip at the sizes the constructor allows, not the sizes a test reaches for.**
+  From 3.2.0 until it was fixed, many readers refused sizes above a million as "beyond
+  anything this library builds" while the constructors built far more, and every
+  round-trip test here sat comfortably below the ceiling. `TestLoadWhatItBuilds` now holds
+  each structure to one limit per size, shared by its constructor and its reader, and
+  sweeps `StructureId` for it. Where a structure at or past the old ceiling is too heavy
+  to build in the suite, the test is structural: a small payload's size field is raised,
+  and the reader must refuse it *only* for the bytes it lacks. That is the check a real
+  payload of that size passes, so it shows the size check let the claim through, and
+  the reader checking bytes before allocating is what makes it cheap.
+- **A cost that is charged is held to the cost that is measured.** Every read charges
+  what it is about to allocate against a budget, and those charges are only a defence
+  if they are upper bounds. `TestReadBudget` finds each structure's charge by bisection
+  on the budget -- the smallest it loads under -- and holds the read's allocation, from
+  `GC.GetAllocatedBytesForCurrentThread`, to that plus a stated slack, on a sample large
+  enough that anything missing could not hide in the slack. Two things learned getting
+  there: the counter is exact for what a read allocates, but a collection landing
+  mid-read can add a retired allocation context's worth, so the measurement is the least
+  of five; and the first undercharge found was in the accounting itself, a `params`
+  array allocated by every call that summed the charges.
+- **An exemption names the test that checks its reason.** The same sweep exempts the
+  structures whose readers cap nothing their constructors can reach, and each exemption
+  points at a test asserting why -- the cap is unreachable, or the reader caps nothing.
+  An exemption can assert that a known gap is still open while another branch closes
+  it. `QuotientFilter` was exempt that way, its test building a filter its reader
+  refused; when the constructor fix was merged in, that test failed on the merge, and
+  the structure moved into the declared limits. A number written into FORMAT.md is held
+  the same way, by a test comparing its table of limits with the code in both
+  directions.
 
 ## Deliberately not done
 

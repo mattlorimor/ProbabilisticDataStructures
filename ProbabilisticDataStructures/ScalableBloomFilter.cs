@@ -46,6 +46,20 @@ namespace ProbabilisticDataStructures
         /// Filters with geometrically decreasing error rates
         /// </summary>
         internal List<PartitionedBloomFilter> Filters { get; set; }
+
+        /// <summary>
+        /// The most filters a scalable filter can hold: they are a list, and a list
+        /// holds at most <see cref="Array.MaxLength"/>.
+        /// </summary>
+        /// <remarks>
+        /// There is no constructor argument for this to check. A filter grows by adding
+        /// filters, each at a rate tightened by r, and with r near one it can go on
+        /// adding them until the list itself refuses. The reader accepts as many as
+        /// the list holds, so whatever a filter grew to reads back. It used to stop at
+        /// a million, which a filter with a hint of one, a rate of one half and a ratio
+        /// of 0.999999 passes after about 1.7 million adds.
+        /// </remarks>
+        internal static int MaxFilters => Array.MaxLength;
         /// <summary>
         /// Tightening ratio
         /// </summary>
@@ -270,7 +284,26 @@ namespace ProbabilisticDataStructures
         /// <returns>The filter that was written.</returns>
         public static ScalableBloomFilter ReadFrom(Stream stream)
         {
-            return Read(stream, null);
+            return Read(stream, null, ReadOptions.Default);
+        }
+
+        /// <summary>
+        /// Reads a structure written by <see cref="WriteTo"/>, allocating no more than the
+        /// options' memory budget allows. <see cref="ReadFrom(Stream)"/> reads under
+        /// <see cref="ReadOptions.Default"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static ScalableBloomFilter ReadFrom(Stream stream, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, null, options);
         }
 
         /// <summary>
@@ -283,15 +316,39 @@ namespace ProbabilisticDataStructures
         public static ScalableBloomFilter ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             ArgumentNullException.ThrowIfNull(hash);
-            return Read(stream, hash);
+            return Read(stream, hash, ReadOptions.Default);
         }
 
-        private static ScalableBloomFilter Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        /// <summary>
+        /// Reads a structure as
+        /// <see cref="ReadFrom(Stream, Func{ReadOnlySpan{byte}, ulong})"/> does, allocating
+        /// no more than the options' memory budget allows.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function, as for the overload without options.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static ScalableBloomFilter ReadFrom(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong> hash, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, hash, options);
+        }
+
+        private static ScalableBloomFilter Read(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash, ReadOptions options)
         {
             ArgumentNullException.ThrowIfNull(stream);
 
-            var payload = PersistenceFormat.Read(stream, StructureId.ScalableBloomFilter, out _);
-            var reader = new PayloadReader(payload);
+            var budget = ReadBudget.For(options, StructureId.ScalableBloomFilter);
+            var payload = PersistenceFormat.Read(stream, StructureId.ScalableBloomFilter, out _, budget);
+            var reader = new PayloadReader(payload, budget);
 
             var r = reader.ReadDouble();
             var fp = reader.ReadDouble();
@@ -306,13 +363,20 @@ namespace ProbabilisticDataStructures
                     "least the one it started with, and indexes it on every add.");
             }
 
-            if (filterCount > PersistenceFormat.MaxNestedCount)
+            // As many as the filter can grow to, so that every filter it grows reads
+            // back; then checked against the bytes behind them, each a nested payload,
+            // before the list is sized by the count.
+            if (filterCount > MaxFilters)
             {
                 throw new InvalidDataException(
                     $"Filter claims {filterCount} contained filters, beyond anything " +
-                    "this library builds.");
+                    $"this library builds: it holds them in a list of at most {MaxFilters}.");
             }
+            reader.RequireHolds(
+                filterCount, PersistenceFormat.MinNestedLength, "contained filters");
 
+            budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf(filterCount, sizeof(long)), ReadBudget.SmallObject));
             var filters = new List<PartitionedBloomFilter>((int)filterCount);
             for (uint i = 0; i < filterCount; i++)
             {

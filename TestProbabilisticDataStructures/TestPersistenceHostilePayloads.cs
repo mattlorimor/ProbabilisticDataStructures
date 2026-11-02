@@ -207,7 +207,9 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// TopK's k sizes its heap.
+        /// TopK's k sizes its heap when it is built. One past the most a heap can hold
+        /// is refused; anything up to that is a size the constructor builds, and the
+        /// reader sizes its heap by what the payload holds rather than by k.
         /// </summary>
         [TestMethod]
         public void TestAbsurdTopKSizeIsRefused()
@@ -216,13 +218,15 @@ namespace TestProbabilisticDataStructures
             for (int i = 0; i < 40; i++) t.Add(Key($"w{i % 5}"));
 
             AssertRefused(
-                () => Persistence.FromByteArray<TopK>(PokeUInt32(t.ToByteArray(), 0, 900_000_000)),
+                () => Persistence.FromByteArray<TopK>(
+                    PokeUInt32(t.ToByteArray(), 0, ElementHeap.MaxCapacity + 1u)),
                 "elements");
         }
 
         /// <summary>
         /// A signature's length is both its allocation and the number of hash functions
-        /// it claims were used, so zero is as wrong as absurdly large.
+        /// it claims were used, so zero is as wrong as absurdly large. Absurdly large is
+        /// longer than an array, which is the most the factory builds.
         /// </summary>
         [TestMethod]
         public void TestAbsurdSignatureLengthIsRefused()
@@ -231,7 +235,7 @@ namespace TestProbabilisticDataStructures
 
             AssertRefused(
                 () => Persistence.FromByteArray<MinHashSignature>(
-                    PokeUInt32(bytes, 0, 900_000_000)),
+                    PokeUInt32(bytes, 0, (uint)MinHashSignature.MaxValues + 1)),
                 "not a signature this library builds");
 
             AssertRefused(
@@ -696,8 +700,10 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A width whose product with depth is beyond anything this library builds is
-        /// refused before a single array is allocated for it.
+        /// A width whose buckets the payload does not hold is refused before a single
+        /// array is allocated for it. Two billion buckets is a structure the constructor
+        /// builds, so the size itself is not refused; a few hundred bytes claiming them
+        /// is.
         /// </summary>
         [TestMethod]
         public void TestHeavyKeeperClaimingAbsurdWidthIsRefused()

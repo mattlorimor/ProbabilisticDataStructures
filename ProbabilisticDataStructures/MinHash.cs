@@ -89,7 +89,7 @@ namespace ProbabilisticDataStructures
         /// The bag, or a word in it, is null.
         /// </exception>
         /// <exception cref="ArgumentOutOfRangeException">
-        /// <paramref name="k"/> is not positive.
+        /// <paramref name="k"/> is not positive, or is longer than one array can hold.
         /// </exception>
         /// <remarks>
         /// This is what the estimator is for. Comparing n documents pairwise by
@@ -107,6 +107,12 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(bag);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(k);
+            if (k > MinHashSignature.MaxValues)
+            {
+                throw new ArgumentOutOfRangeException(nameof(k), k,
+                    $"A signature is at most {MinHashSignature.MaxValues} values long: " +
+                    "its values are one array, and that is the most an array holds.");
+            }
 
             var values = new ulong[k];
             for (int i = 0; i < k; i++)

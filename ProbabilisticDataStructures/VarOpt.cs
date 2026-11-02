@@ -107,6 +107,25 @@ namespace ProbabilisticDataStructures
         public uint K => this.k;
 
         /// <summary>
+        /// The most items a sample can keep.
+        /// </summary>
+        /// <remarks>
+        /// Each region -- exact items, threshold items, and the candidates contested
+        /// between them -- is an array of k + 1 slots, allocated whole when the sample
+        /// is made, and no array is longer than <see cref="Array.MaxLength"/>. At
+        /// uint.MaxValue the k + 1 wrapped to nothing and the constructor built a sample
+        /// with no room in it at all.
+        /// <para>
+        /// The constructor and the reader both refuse past this, so a sample one builds
+        /// the other reads. The reader used to stop at a million. It allocates the
+        /// regions whole just as the constructor does, because the sample's arithmetic
+        /// assumes their size, so a payload can ask for a sample as large as the
+        /// constructor would build and no larger.
+        /// </para>
+        /// </remarks>
+        internal static uint MaxK => (uint)Array.MaxLength - 1;
+
+        /// <summary>
         /// The number of items currently held: min(k, items added).
         /// </summary>
         public uint SampleCount => (uint)(this.HeavyCount + this.LightCount);
@@ -150,6 +169,13 @@ namespace ProbabilisticDataStructures
         public VarOpt(uint k, ulong? seed = null)
         {
             Guard.ValidItemCount(k, nameof(k));
+            if (k > MaxK)
+            {
+                throw new ArgumentOutOfRangeException(nameof(k), k,
+                    $"A sample keeps at most {MaxK} items. Each of its regions is an " +
+                    "array with one slot more than it keeps, and an array holds at most " +
+                    $"{Array.MaxLength}.");
+            }
 
             this.k = k;
             this.random = seed is null
@@ -694,7 +720,26 @@ namespace ProbabilisticDataStructures
         /// <returns>The structure that was written.</returns>
         public static VarOpt ReadFrom(Stream stream)
         {
-            return Read(stream, null);
+            return Read(stream, null, ReadOptions.Default);
+        }
+
+        /// <summary>
+        /// Reads a structure written by <see cref="WriteTo"/>, allocating no more than the
+        /// options' memory budget allows. <see cref="ReadFrom(Stream)"/> reads under
+        /// <see cref="ReadOptions.Default"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static VarOpt ReadFrom(Stream stream, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, null, options);
         }
 
         /// <summary>
@@ -707,14 +752,38 @@ namespace ProbabilisticDataStructures
         public static VarOpt ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             ArgumentNullException.ThrowIfNull(hash);
-            return Read(stream, hash);
+            return Read(stream, hash, ReadOptions.Default);
         }
 
-        private static VarOpt Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        /// <summary>
+        /// Reads a structure as
+        /// <see cref="ReadFrom(Stream, Func{ReadOnlySpan{byte}, ulong})"/> does, allocating
+        /// no more than the options' memory budget allows.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function, as for the overload without options.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static VarOpt ReadFrom(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong> hash, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, hash, options);
+        }
+
+        private static VarOpt Read(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash, ReadOptions options)
         {
             ArgumentNullException.ThrowIfNull(stream);
 
-            var payload = PersistenceFormat.Read(stream, StructureId.VarOpt, out var hashId);
+            var budget = ReadBudget.For(options, StructureId.VarOpt);
+            var payload = PersistenceFormat.Read(stream, StructureId.VarOpt, out var hashId, budget);
 
             if (hash is not null)
             {
@@ -732,7 +801,7 @@ namespace ProbabilisticDataStructures
                     "structure.");
             }
 
-            var reader = new PayloadReader(payload);
+            var reader = new PayloadReader(payload, budget);
 
             var k = reader.ReadUInt32();
             var randomState = reader.ReadUInt64();
@@ -747,11 +816,12 @@ namespace ProbabilisticDataStructures
                     "Structure keeps no samples, and a sample of nothing answers " +
                     "nothing; this library never builds one.");
             }
-            if (k > PersistenceFormat.MaxNestedCount)
+            // The constructor's own limit, so that every sample it builds reads back.
+            if (k > MaxK)
             {
                 throw new InvalidDataException(
                     $"Structure claims room for {k} sampled items, beyond anything " +
-                    "this library builds.");
+                    $"this library builds: it keeps at most {MaxK}.");
             }
             if (heavyCount > k || lightCount > k ||
                 heavyCount + (ulong)lightCount > k)
@@ -820,6 +890,9 @@ namespace ProbabilisticDataStructures
                 }
             }
 
+            // Its five regions, k + 1 slots each, whatever the payload holds: the
+            // sample's arithmetic assumes their size.
+            budget.Charge(ReadBudget.Times(5, ReadBudget.ArrayOf((ulong)k + 1, sizeof(long))));
             var restored = new VarOpt(k, randomState)
             {
                 N = n,

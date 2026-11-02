@@ -255,6 +255,39 @@ var filter = BloomFilter.ReadFrom(file, myHashFunction);
 Without it the read fails, deliberately — see above for what a filter restored under the
 wrong hash looks like.
 
+#### Loading files you didn't write
+
+A payload says how large its structure is, and reading it means allocating that
+structure — often far more than the file itself, since a filter that holds little still
+has its whole table. So every read has a **memory budget**: the most it may allocate,
+payload and structure together. A reader works out what a payload will cost from its
+header before allocating anything, and refuses one that would cost more, so a small file
+cannot ask for a machine's memory.
+
+The default is `ReadOptions.DefaultMemoryBudget`, one gibibyte (1,073,741,824 bytes). A
+read holds the payload while it builds the structure, so it costs about the two together,
+and the default reads most structures up to roughly half a gigabyte. A filter whose table
+is mostly empty costs its table, not its file. To read a larger one you trust, pass a
+budget:
+
+```C#
+var filter = BloomFilter.ReadFrom(file, new ReadOptions(4L << 30));
+var mine = BloomFilter.ReadFrom(file, ReadOptions.Unlimited);   // no limit at all
+```
+
+Every structure has these overloads, with and without a hash function, and so does
+`Persistence.FromByteArray<T>`. A payload over its budget throws the same
+`InvalidDataException` as any other payload a reader will not read; its `InnerException`
+is a `ReadBudgetExceededException` saying how many bytes it needs, so code that wants to
+tell a large file from a corrupt one can:
+
+```C#
+catch (InvalidDataException e) when (e.InnerException is ReadBudgetExceededException budget)
+{
+    // budget.RequiredBytes, budget.MemoryBudget
+}
+```
+
 ### Merging
 
 <sup>[↑ Contents](#contents)</sup>

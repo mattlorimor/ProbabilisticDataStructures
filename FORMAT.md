@@ -195,6 +195,85 @@ the inner layout being part of that change.
 Things that are not structures in their own right — a `Buckets`, a top-k's heap — are
 inlined, because there is nothing to read them as.
 
+### Sizes
+
+What a constructor builds, its reader reads. Each size a payload records has one limit,
+and the structure's constructor and its reader both refuse past it — so no payload this
+library wrote is ever refused for its size. Readers once refused sizes above a fixed
+ceiling, most of them a million, as "beyond anything this library builds", while the
+constructors built more. Those payloads, from any version, now read.
+
+A limit is where the structure itself stops working, not a round number: the most
+elements a .NET array holds, 2,147,483,591, or what the structure's own arithmetic can
+address.
+
+| Structure | Size | Largest | Why |
+| --- | --- | --- | --- |
+| `CuckooBloomFilter` | entries, `m` × `b` | 2,147,483,648 | entries are numbered with a `u32`, and the constructor's tables are a power of two; their fingerprints must also fit one array of 64-bit words |
+| `ThetaSketch` | `k` | 1,073,741,795 | the sketch holds up to `2k` values in one array before it trims |
+| `TupleSketch` | `k` | 1,073,741,795 | the same, for its keys |
+| `MinHashSignature` | `k` | 2,147,483,591 | the values are one array |
+| `TopK` | `k` | 2,147,483,587 | the heap's index is a dictionary, whose largest table is the largest prime an array holds |
+| `HeavyKeeper` | `k` | 2,147,483,587 | as `TopK` |
+| `HeavyKeeper` | width | 2,147,483,591 | each array of buckets is one array |
+| `HeavyKeeper` | depth | 2,147,483,591 | the arrays are held in one |
+| `VarOpt` | `k` | 2,147,483,590 | each region is an array of `k + 1` slots |
+| `Grafite` | words of low bits | 2,147,483,591 | they are one array |
+| `Grafite` | words of high bits | 33,554,432 | enough for 2,147,483,647 bits, the most an `int` position addresses |
+| `SetSketch` | `m` | 2,147,483,591 | the registers are one array |
+| `SublimeCountMinSketch` | rows | 710 | `ceil(ln(1 / delta))` at the smallest delta whose reciprocal is a finite double |
+| `ScalableBloomFilter` | filter count | 2,147,483,591 | the filters are a list |
+| `QuotientFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; the reader also reads 32, which earlier constructors wrote as a wrapped one-slot table |
+| `QuotientFilter` | quotient + remainder bits | 64 | a fingerprint is cut from a 64-bit hash |
+| `QuotientFilter` | remainder bits | 61 | a slot is its remainder and three bits of bookkeeping in one 64-bit word; the reader also reads the wider remainders earlier constructors wrote |
+
+A size below its limit can still be refused for not being in the payload. Where a reader
+allocates for a count, it first checks that the bytes left could hold that many, so what
+it allocates follows what the payload actually holds rather than what it claims. A sketch
+claiming a large `k` and holding a few values costs a few values.
+
+Some cannot size by the payload, and allocate what a size says: a cuckoo filter writes
+only its occupied entries but must hold its whole table, a `VarOpt` sample holds its
+regions whole because its arithmetic assumes their size, and a quotient filter's header
+names its table outright. A payload can ask those for as large a structure as the
+constructor would build. What stops a small one asking is the read budget, below.
+
+The envelope bounds everything else: a payload is at most 2,147,483,647 bytes, so a
+structure whose payload would be larger can be built but not written.
+
+### Read budget
+
+Every read has a budget: the most memory, in bytes, reading one payload may allocate — the
+payload itself, the copies made of runs within it, the structure, and any structure nested
+inside it, all from one allowance. A reader works out what each allocation will cost from
+the fields that size it, before making it, and refuses the payload when the allowance
+would be passed. The refusal is an `InvalidDataException` whose inner exception is a
+`ReadBudgetExceededException` naming the bytes needed and the budget.
+
+The default is 1,073,741,824 bytes, one gibibyte (`ReadOptions.DefaultMemoryBudget`).
+`ReadFrom` without options reads under it; the overloads taking `ReadOptions` read under
+any other, or under none. Since a read holds the payload while it builds the structure, it
+costs roughly the structure plus its payload.
+
+The limits in [Sizes](#sizes) are what can be read at all; the budget is what will be read
+without asking. Most limits there are far past the default — a structure at one is
+gigabytes, and loads only with a budget raised to match. What each read is charged:
+
+| Structure | Charged beyond the payload and the runs it copies |
+| --- | --- |
+| `BloomFilter`, `BloomFilter64`, `HyperLogLog`, `HyperLogLogPlus` (dense), `UltraLogLog`, `BinaryFuseFilter`, `BloomierFilter`, `SimHashSignature` | the structure's own copy of its registers or bits, where it keeps one |
+| `CountingBloomFilter`, `DeletableBloomFilter`, `StableBloomFilter` | a scratch buffer of four bytes per hash function |
+| `PartitionedBloomFilter`, `ScalableBloomFilter` | a slot per partition or contained filter; a contained filter is charged as a read of its own |
+| `CuckooBloomFilter` | the whole table, `m` × `b` fingerprints of `f` bits, and a bit per entry, whatever the payload holds |
+| `QuotientFilter` | the whole table, 2^`q` slots of `r` + 3 bits |
+| `VarOpt` | five regions of `k` + 1 slots, eight bytes each |
+| `InverseBloomFilter` | a slot of eight bytes per unit of capacity |
+| `CountMinSketch`, `CountSketch`, `PrivateCountMinSketch`, `SublimeCountMinSketch` | every row, before it is read; Sublime also its packed rows |
+| `TopK`, `HeavyKeeper` | a heap sized by the elements held, not by `k`; HeavyKeeper also its bucket arrays |
+| `ThetaSketch`, `TupleSketch`, `MinHashSignature`, `Grafite`, `SetSketch`, `InvertibleBloomLookupTable`, `DDSketch`, `HyperLogLogPlus` (sparse) | arrays sized by the values the payload carries |
+| `InfiniFilter`, `MementoFilter` | each table twice: as read, and as the segment built from it |
+| `DpswSketch` | its checkpoints, rebuilt from the substream size, and a list of segments per substream; each segment's sketch as above |
+
 ## Payloads
 
 ### `BloomFilter` (id 1)
@@ -336,7 +415,9 @@ not reached is mostly empty slots. The writer lists them in ascending order of b
 then entry, and a reader places each by the two indexes it carries rather than by its
 position in the list. Which entries are occupied is the list itself, with no bitmap
 beside it. A bucket index at or beyond `m` or an entry index at or beyond `b` is
-refused, as is a payload claiming more occupied entries than `m` buckets of `b` hold.
+refused, as is a payload claiming more occupied entries than `m` buckets of `b` hold. A
+reader still allocates the whole table, so it cannot size by what the payload holds; it
+refuses a table past the constructor's limit instead (see [Sizes](#sizes)).
 
 How a fingerprint is written, and what `f` counts, depends on the version:
 
@@ -548,7 +629,9 @@ value at or above theta is refused for the same reason: it was not sampled at th
 estimate applies.
 
 A sketch never holds more than twice what it retains, because that is when it trims, so a
-payload claiming more than `2k` values is refused.
+payload claiming more than `2k` values is refused. That is also what bounds `k`: the
+values are held in one array, so `2k` is at most what an array holds (see
+[Sizes](#sizes)).
 
 ### `SimHashSignature` (id 19)
 
@@ -861,9 +944,11 @@ check the whole chain against the current width: a record claiming a width the d
 that follow it do not require is refused.
 
 A reader also rejects a delta outside nought to one, a growth exponent outside the same
-range, a size factor that is not positive, a row count of zero or sixty-four or more,
-a width that is not a power of two — the low bits of a hash pick the counter — and more
-than thirty records, which would be more counters than a row may hold.
+range, a size factor that is not positive, a row count of zero or past the deepest sketch
+the constructor builds (see [Sizes](#sizes)), a width that is not a power of two — the
+low bits of a hash pick the counter — and more than thirty records, which would be more
+counters than a row may hold. Readers before this limit was shared refused more than
+sixty-four rows, which a delta of `1e-28` already needs.
 
 ### `SetSketch` (id 30)
 
@@ -881,9 +966,10 @@ state: any value no register is below will do, and the registers themselves say 
 should be, so a reader recomputes it rather than trusting a number that could be wrong.
 
 A reader rejects a base at or below one or above two, a rate that is not positive, a
-register count of zero or one that would run to half a gigabyte, a ceiling a two-byte
-register could not hold one more than, and any register above that ceiling — which no
-sketch with these parameters could have written.
+register count of zero or past the constructor's limit (see [Sizes](#sizes)), a ceiling a
+two-byte register could not hold one more than, and any register above that ceiling —
+which no sketch with these parameters could have written. Readers before that limit was
+shared refused more than 2^26 registers, which the constructor had always built.
 
 ### `SetSketch` variants
 
@@ -916,7 +1002,8 @@ keys are not in increasing order is detectably not one of these without stepping
 value between each pair. The sketch is compacted before it is written, so the keys are
 the distinct retained set rather than whatever order they arrived in.
 
-A reader rejects a nominal entry count this library does not build, a policy byte naming
+A reader rejects a nominal entry count this library does not build — zero, or past the
+limit in [Sizes](#sizes) — a policy byte naming
 a way of folding it does not know, more keys held than twice what the sketch retains,
 keys out of increasing order, a key at or above theta — which the sampling that produced
 the rest would have discarded — and a summary that is not a number, which the sketch

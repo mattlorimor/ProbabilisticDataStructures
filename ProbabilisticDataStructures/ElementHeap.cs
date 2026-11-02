@@ -32,6 +32,52 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private readonly Dictionary<ReadOnlyMemory<byte>, int> positions;
 
+        /// <summary>
+        /// The most elements a heap can hold, and so the largest k that
+        /// <see cref="TopK"/> and <see cref="HeavyKeeper"/> can track.
+        /// </summary>
+        /// <remarks>
+        /// The heap is a list and its index a dictionary, both pre-sized to k. A list
+        /// holds at most <see cref="Array.MaxLength"/>. A dictionary sizes its tables to
+        /// primes, and the largest it will use is the largest prime an array can hold,
+        /// which is this -- four short of the list's limit. Asked for more, either one
+        /// fails with an allocation error rather than an explanation.
+        /// <para>
+        /// Both structures' constructors and both their readers refuse past this, so
+        /// whatever either constructor builds, its reader loads. The readers used to
+        /// stop at a million.
+        /// </para>
+        /// </remarks>
+        internal const int MaxCapacity = 0x7FFFFFC3;
+
+        /// <summary>
+        /// An upper bound on what a heap sized for <paramref name="count"/> elements, and
+        /// then given them, allocates beyond their data: the list's array, the index's
+        /// bucket and entry tables, and an <see cref="Element"/> each.
+        /// </summary>
+        /// <remarks>
+        /// A dictionary sizes its tables to the next prime it uses at or above the count,
+        /// never more than about twice it; an entry is a hash, a link, a
+        /// <see cref="ReadOnlyMemory{T}"/> key and an int value, which pad to 32 bytes.
+        /// The data the elements hold are runs a reader copies, and charges, itself.
+        /// </remarks>
+        internal static long RestoreCost(ulong count)
+        {
+            var tableSize = count == 0 ? 0 : 2 * count + 7;
+            return ReadBudget.Sum(
+                ReadBudget.ArrayOf(count, sizeof(long)),
+                ReadBudget.ArrayOf(tableSize, sizeof(int)),
+                ReadBudget.ArrayOf(tableSize, 32),
+                ReadBudget.Times(count, ElementSize),
+                2 * ReadBudget.SmallObject);
+        }
+
+        /// <summary>
+        /// What one <see cref="Element"/> occupies: an object header and method table, a
+        /// <see cref="ReadOnlyMemory{T}"/> and a frequency.
+        /// </summary>
+        private const long ElementSize = 16 + 16 + sizeof(ulong);
+
         internal ElementHeap(int k)
         {
             this.Heap = new List<Element>(k);

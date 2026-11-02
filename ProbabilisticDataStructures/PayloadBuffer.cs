@@ -84,11 +84,19 @@ namespace ProbabilisticDataStructures
         private readonly ReadOnlySpan<byte> payload;
         private int offset;
 
-        internal PayloadReader(ReadOnlySpan<byte> payload)
+        internal PayloadReader(ReadOnlySpan<byte> payload, ReadBudget budget)
         {
             this.payload = payload;
             this.offset = 0;
+            this.Budget = budget;
         }
+
+        /// <summary>
+        /// The allowance the read this payload belongs to draws on, so that code handed
+        /// only the reader -- a nested structure, a body shared between two readers --
+        /// charges the same one.
+        /// </summary>
+        internal ReadBudget Budget { get; }
 
         internal byte ReadByte()
         {
@@ -128,7 +136,45 @@ namespace ProbabilisticDataStructures
                     "single array.");
             }
 
-            return Take((int)count).ToArray();
+            // Bounds-checked first, so a run the payload does not hold is refused as
+            // truncated; then the copy is charged before it is made.
+            var run = Take((int)count);
+            this.Budget.Charge(ReadBudget.ArrayOf(count, 1));
+            return run.ToArray();
+        }
+
+        /// <summary>
+        /// The bytes not yet read.
+        /// </summary>
+        internal int Remaining => this.payload.Length - this.offset;
+
+        /// <summary>
+        /// Refuses a count that the rest of the payload could not hold, before anything
+        /// is allocated for it.
+        /// </summary>
+        /// <param name="count">The count the payload claims.</param>
+        /// <param name="bytesEach">The fewest bytes each counted thing is written in.</param>
+        /// <param name="what">What is being counted, for the message.</param>
+        /// <remarks>
+        /// A reader that allocates for a count before reading what it counts lets a few
+        /// bytes ask for an enormous allocation, and the old defence was a fixed
+        /// ceiling on the count -- which refused payloads this library had written,
+        /// because its constructors built past it. Checking the count against the bytes
+        /// actually present instead lets a reader accept every size its constructor
+        /// builds, since a payload this library wrote holds everything it counts,
+        /// while what the reader allocates still follows the payload's size rather than
+        /// a claim inside it.
+        /// </remarks>
+        internal void RequireHolds(ulong count, int bytesEach, string what)
+        {
+            if (count > (ulong)(this.Remaining / bytesEach))
+            {
+                throw new InvalidDataException(
+                    $"Payload claims {count} {what}, beyond what it can hold: only " +
+                    $"{this.Remaining} bytes remain, and each takes at least " +
+                    $"{bytesEach}. It is truncated or does not have the shape this " +
+                    "structure expects.");
+            }
         }
 
         /// <summary>

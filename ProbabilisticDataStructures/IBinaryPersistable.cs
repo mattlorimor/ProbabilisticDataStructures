@@ -47,6 +47,57 @@ namespace ProbabilisticDataStructures
         /// </param>
         /// <returns>The structure that was written.</returns>
         static abstract TSelf ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash);
+
+        /// <summary>
+        /// Reads a structure written by <see cref="WriteTo"/>, allocating no more than the
+        /// options' memory budget allows.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        /// <exception cref="NotSupportedException">
+        /// The type implements this interface without implementing a budgeted read.
+        /// </exception>
+        /// <remarks>
+        /// Virtual, with a default, rather than abstract, so that a type outside this
+        /// library implementing the interface goes on compiling and loading without it.
+        /// The default refuses rather than reading without a budget: a caller who passed
+        /// one asked for a bound, and quietly not applying it would be worse than saying
+        /// so. Every structure in this library implements it.
+        /// </remarks>
+        static virtual TSelf ReadFrom(Stream stream, ReadOptions options) =>
+            throw new NotSupportedException(
+                $"{typeof(TSelf).Name} does not implement reading under a memory budget. " +
+                "Read it with ReadFrom(Stream), which applies none.");
+
+        /// <summary>
+        /// Reads a structure written by <see cref="WriteTo"/>, using the supplied hash
+        /// function rather than the one named in the payload, and allocating no more than
+        /// the options' memory budget allows.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function the structure was using when it was written.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        /// <exception cref="NotSupportedException">
+        /// The type implements this interface without implementing a budgeted read.
+        /// </exception>
+        static virtual TSelf ReadFrom(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong> hash, ReadOptions options) =>
+            throw new NotSupportedException(
+                $"{typeof(TSelf).Name} does not implement reading under a memory budget. " +
+                "Read it with ReadFrom(Stream, Func<ReadOnlySpan<byte>, ulong>), which " +
+                "applies none.");
     }
 
     /// <summary>
@@ -102,6 +153,58 @@ namespace ProbabilisticDataStructures
 
             using var stream = new MemoryStream(data, writable: false);
             return T.ReadFrom(stream, hash);
+        }
+
+        /// <summary>
+        /// Reads a structure from bytes written by <see cref="ToByteArray{T}"/>,
+        /// allocating no more than the options' memory budget allows.
+        /// </summary>
+        /// <typeparam name="T">The structure's type.</typeparam>
+        /// <param name="data">The bytes to read.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static T FromByteArray<T>(byte[] data, ReadOptions options)
+            where T : IBinaryPersistable<T>
+        {
+            ArgumentNullException.ThrowIfNull(data);
+            ArgumentNullException.ThrowIfNull(options);
+
+            using var stream = new MemoryStream(data, writable: false);
+            return T.ReadFrom(stream, options);
+        }
+
+        /// <summary>
+        /// Reads a structure from bytes written by <see cref="ToByteArray{T}"/>, using
+        /// the supplied hash function rather than the one named in the payload, and
+        /// allocating no more than the options' memory budget allows.
+        /// </summary>
+        /// <typeparam name="T">The structure's type.</typeparam>
+        /// <param name="data">The bytes to read.</param>
+        /// <param name="hash">
+        /// The hash function the structure was using when it was written.
+        /// </param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static T FromByteArray<T>(
+            byte[] data, Func<ReadOnlySpan<byte>, ulong> hash, ReadOptions options)
+            where T : IBinaryPersistable<T>
+        {
+            ArgumentNullException.ThrowIfNull(data);
+            ArgumentNullException.ThrowIfNull(hash);
+            ArgumentNullException.ThrowIfNull(options);
+
+            using var stream = new MemoryStream(data, writable: false);
+            return T.ReadFrom(stream, hash, options);
         }
     }
 }

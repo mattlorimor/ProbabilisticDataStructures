@@ -86,6 +86,34 @@ namespace ProbabilisticDataStructures
         internal int HighBitCount { get; set; }
 
         /// <summary>
+        /// The most bits of high parts a filter can have: they are addressed by int
+        /// positions, and their count is an int.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="Build"/> refuses a key set that would need more, and the reader
+        /// refuses more words of high bits than this many bits fill, so a filter one
+        /// builds the other reads. The reader used to stop at a million words of
+        /// either kind.
+        /// </remarks>
+        internal const int MaxHighBits = int.MaxValue;
+
+        /// <summary>
+        /// The most words of high bits a filter can have: enough for
+        /// <see cref="MaxHighBits"/> bits, as <see cref="Encode"/> sizes them.
+        /// </summary>
+        internal const uint MaxHighWords = MaxHighBits / 64 + 1;
+
+        /// <summary>
+        /// The most words of low bits a filter can have: they are one array.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="Build"/> never comes near this -- its keys are counted in an int
+        /// and the low bits per key shrink as the keys grow -- so it needs no check of
+        /// its own there. The reader's limit is the array's.
+        /// </remarks>
+        internal static uint MaxLowWords => (uint)Array.MaxLength;
+
+        /// <summary>
         /// Running count of zeros at the start of each word of <see cref="Highs"/>,
         /// so a select can binary search rather than scan.
         /// </summary>
@@ -329,8 +357,20 @@ namespace ProbabilisticDataStructures
             this.LowBits = Math.Max(0, BitOperations.Log2(this.R / (ulong)n));
             var lowMask = this.LowBits == 64 ? ulong.MaxValue : (1UL << this.LowBits) - 1;
 
+            // In a long, and refused past an int: the high bits are addressed by int
+            // positions and their count is an int. Summed in an int, this wrapped
+            // negative once the keys numbered in the high hundreds of millions.
+            var wanted = (long)(this.LastCode >> this.LowBits) + n + 1;
+            if (wanted > MaxHighBits)
+            {
+                throw new ArgumentException(
+                    $"{n} keys over this range need {wanted} bits of high parts, past the " +
+                    $"{MaxHighBits} a filter can address. Build several filters over parts " +
+                    "of the key space instead.", "keys");
+            }
+
             this.Lows = new ulong[((long)n * this.LowBits / 64) + 2];
-            var highBits = (int)(this.LastCode >> this.LowBits) + n + 1;
+            var highBits = (int)wanted;
             this.HighBitCount = highBits;
             this.Highs = new ulong[(highBits / 64) + 1];
 
@@ -617,7 +657,26 @@ namespace ProbabilisticDataStructures
         /// <returns>The filter that was written.</returns>
         public static Grafite ReadFrom(Stream stream)
         {
-            return Read(stream, null);
+            return Read(stream, null, ReadOptions.Default);
+        }
+
+        /// <summary>
+        /// Reads a structure written by <see cref="WriteTo"/>, allocating no more than the
+        /// options' memory budget allows. <see cref="ReadFrom(Stream)"/> reads under
+        /// <see cref="ReadOptions.Default"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static Grafite ReadFrom(Stream stream, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, null, options);
         }
 
         /// <summary>
@@ -631,14 +690,38 @@ namespace ProbabilisticDataStructures
         public static Grafite ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             ArgumentNullException.ThrowIfNull(hash);
-            return Read(stream, hash);
+            return Read(stream, hash, ReadOptions.Default);
         }
 
-        private static Grafite Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        /// <summary>
+        /// Reads a structure as
+        /// <see cref="ReadFrom(Stream, Func{ReadOnlySpan{byte}, ulong})"/> does, allocating
+        /// no more than the options' memory budget allows.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function, as for the overload without options.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static Grafite ReadFrom(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong> hash, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, hash, options);
+        }
+
+        private static Grafite Read(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash, ReadOptions options)
         {
             ArgumentNullException.ThrowIfNull(stream);
 
-            var payload = PersistenceFormat.Read(stream, StructureId.Grafite, out var hashId);
+            var budget = ReadBudget.For(options, StructureId.Grafite);
+            var payload = PersistenceFormat.Read(stream, StructureId.Grafite, out var hashId, budget);
 
             if (hash is not null)
             {
@@ -654,7 +737,7 @@ namespace ProbabilisticDataStructures
                     "filter does not hash bytes. It was not written by this structure.");
             }
 
-            var reader = new PayloadReader(payload);
+            var reader = new PayloadReader(payload, budget);
             var filter = new Grafite
             {
                 R = reader.ReadUInt64(),
@@ -707,13 +790,18 @@ namespace ProbabilisticDataStructures
                     $"reduced universe of {filter.R}.");
             }
 
+            // The builder's own limits, so that every filter it builds reads back. Both
+            // arrays are written whole, so each is checked against the bytes behind it
+            // before it is allocated.
             var lowWords = reader.ReadUInt32();
-            if (lowWords > PersistenceFormat.MaxNestedCount)
+            if (lowWords > MaxLowWords)
             {
                 throw new InvalidDataException(
                     $"Filter claims {lowWords} words of low bits, beyond anything " +
-                    "this library builds.");
+                    $"this library builds: they are one array, of at most {MaxLowWords}.");
             }
+            reader.RequireHolds(lowWords, sizeof(ulong), "words of low bits");
+            budget.Charge(ReadBudget.ArrayOf(lowWords, sizeof(ulong)));
             filter.Lows = new ulong[lowWords];
             for (var i = 0; i < lowWords; i++)
             {
@@ -721,12 +809,17 @@ namespace ProbabilisticDataStructures
             }
 
             var highWords = reader.ReadUInt32();
-            if (highWords > PersistenceFormat.MaxNestedCount)
+            if (highWords > MaxHighWords)
             {
                 throw new InvalidDataException(
                     $"Filter claims {highWords} words of high bits, beyond anything " +
-                    "this library builds.");
+                    $"this library builds: its high parts fit in {MaxHighWords}.");
             }
+            reader.RequireHolds(highWords, sizeof(ulong), "words of high bits");
+            // And the select index built over them below, a count per word.
+            budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf(highWords, sizeof(ulong)),
+                ReadBudget.ArrayOf((ulong)highWords + 1, sizeof(int))));
             filter.Highs = new ulong[highWords];
             for (var i = 0; i < highWords; i++)
             {
@@ -735,11 +828,11 @@ namespace ProbabilisticDataStructures
 
             reader.ExpectEnd();
 
-            if (filter.HighBitCount > highWords * 64)
+            if (filter.HighBitCount > highWords * 64L)
             {
                 throw new InvalidDataException(
                     $"Filter claims {filter.HighBitCount} bits of high parts in " +
-                    $"{highWords} words, which hold {highWords * 64}.");
+                    $"{highWords} words, which hold {highWords * 64L}.");
             }
 
             filter.BuildSelectIndex();

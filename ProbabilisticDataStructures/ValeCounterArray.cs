@@ -173,6 +173,24 @@ namespace ProbabilisticDataStructures
         /// <summary>How many counters the array holds.</summary>
         internal int Count => _counterCount;
 
+        /// <summary>
+        /// An upper bound on what an array of <paramref name="counterCount"/> counters,
+        /// <paramref name="countersPerChunk"/> to a chunk, allocates while it is built
+        /// and filled: its chunks, its pool, and -- the worst case, if every chunk's pool
+        /// overflows -- a tails array for every chunk and its place in the dictionary of
+        /// them, growth included.
+        /// </summary>
+        internal static long RestoreCost(int counterCount, int countersPerChunk)
+        {
+            var chunks = (ulong)(((long)counterCount + countersPerChunk - 1) / countersPerChunk);
+            return ReadBudget.Sum(
+                ReadBudget.ArrayOf(chunks * WordsPerChunk, sizeof(ulong)),
+                ReadBudget.ArrayOf(WordsPerChunk, sizeof(ulong)),
+                ReadBudget.Times(chunks, ReadBudget.Sum(
+                    ReadBudget.ArrayOf((ulong)countersPerChunk, sizeof(ulong)), 128)),
+                3 * ReadBudget.SmallObject);
+        }
+
         /// <summary>How many counters share a chunk.</summary>
         internal int CountersPerChunk => _countersPerChunk;
 

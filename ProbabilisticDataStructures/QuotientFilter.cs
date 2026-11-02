@@ -33,14 +33,14 @@ namespace ProbabilisticDataStructures
         private const int MetadataBits = 3;
 
         /// <summary>The bits of hash a fingerprint is cut from.</summary>
-        private const int HashBits = 64;
+        internal const int HashBits = 64;
 
         /// <summary>
         /// The most bits a table can be indexed by. The slot count is a uint holding
         /// 2^q, and 2^32 is one more than a uint holds: the shift by 32 wraps to a shift
         /// by none, and the table comes out one slot.
         /// </summary>
-        private const int MaxQuotientBits = 31;
+        internal const int MaxQuotientBits = 31;
 
         /// <summary>
         /// The most bits a remainder can have. A slot is the remainder and its
@@ -48,12 +48,12 @@ namespace ProbabilisticDataStructures
         /// than that. A wider one writes by shifting a ulong by 64, which wraps to no
         /// shift at all, and puts the whole value into the next word.
         /// </summary>
-        private const int MaxRemainderBits = 64 - MetadataBits;
+        internal const int MaxRemainderBits = 64 - MetadataBits;
 
         /// <summary>
         /// The most items a filter is sized for: the load factor of the largest table.
         /// </summary>
-        private const uint MaxItems = (uint)(LoadFactor * (1UL << MaxQuotientBits));
+        internal const uint MaxItems = (uint)(LoadFactor * (1UL << MaxQuotientBits));
 
         private uint quotientBits;
         private uint remainderBits;
@@ -196,7 +196,7 @@ namespace ProbabilisticDataStructures
             this.remainderMask = remainderBits >= 64 ? ulong.MaxValue : (1UL << (int)remainderBits) - 1;
 
             // One spare word so a slot straddling the end has somewhere to reach.
-            this.data = new ulong[(((long)this.slots * this.bitsPerSlot) >> 6) + 2];
+            this.data = new ulong[TableWords(quotientBits, remainderBits)];
         }
 
         /// <summary>
@@ -773,7 +773,26 @@ namespace ProbabilisticDataStructures
         /// <returns>The filter that was written.</returns>
         public static QuotientFilter ReadFrom(Stream stream)
         {
-            return Read(stream, null);
+            return Read(stream, null, ReadOptions.Default);
+        }
+
+        /// <summary>
+        /// Reads a structure written by <see cref="WriteTo"/>, allocating no more than the
+        /// options' memory budget allows. <see cref="ReadFrom(Stream)"/> reads under
+        /// <see cref="ReadOptions.Default"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static QuotientFilter ReadFrom(Stream stream, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, null, options);
         }
 
         /// <summary>
@@ -787,16 +806,40 @@ namespace ProbabilisticDataStructures
             Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             ArgumentNullException.ThrowIfNull(hash);
-            return Read(stream, hash);
+            return Read(stream, hash, ReadOptions.Default);
         }
 
-        private static QuotientFilter Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        /// <summary>
+        /// Reads a structure as
+        /// <see cref="ReadFrom(Stream, Func{ReadOnlySpan{byte}, ulong})"/> does, allocating
+        /// no more than the options' memory budget allows.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function, as for the overload without options.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static QuotientFilter ReadFrom(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong> hash, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, hash, options);
+        }
+
+        private static QuotientFilter Read(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash, ReadOptions options)
         {
             ArgumentNullException.ThrowIfNull(stream);
 
+            var budget = ReadBudget.For(options, StructureId.QuotientFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.QuotientFilter, out var hashId);
-            var reader = new PayloadReader(payload);
+                stream, StructureId.QuotientFilter, out var hashId, budget);
+            var reader = new PayloadReader(payload, budget);
 
             var quotientBits = reader.ReadUInt32();
             var remainderBits = reader.ReadUInt32();
@@ -812,11 +855,11 @@ namespace ProbabilisticDataStructures
             // size, so it reads back as the filter it was and nothing is guessed. Wider
             // quotients, which a still larger request produced, were refused when they
             // were written and are refused now.
-            if (quotientBits == 0 || quotientBits > 32)
+            if (quotientBits == 0 || quotientBits > MaxQuotientBits + 1)
             {
                 throw new InvalidDataException(
                     $"Filter has {quotientBits} quotient bits, and a table is indexed by " +
-                    "between 1 and 32 of them.");
+                    $"between 1 and {MaxQuotientBits + 1} of them.");
             }
 
             // The constructor stops at the widest remainder a slot can hold, and a payload
@@ -824,14 +867,19 @@ namespace ProbabilisticDataStructures
             // for the finest rates at the smallest sizes, and what it wrote is read as
             // written rather than refused. A fingerprint wider than the hash is refused,
             // as it always was.
-            if (remainderBits == 0 || quotientBits + remainderBits > 64)
+            if (remainderBits == 0 || quotientBits + remainderBits > HashBits)
             {
                 throw new InvalidDataException(
                     $"Filter splits a fingerprint into {quotientBits} quotient and " +
-                    $"{remainderBits} remainder bits, which is not a split of a 64-bit " +
+                    $"{remainderBits} remainder bits, which is not a split of a {HashBits}-bit " +
                     "hash.");
             }
 
+            // The table is allocated whole, from the two widths alone, before the bytes
+            // carried are compared with it.
+            budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf((ulong)TableWords(quotientBits, remainderBits), sizeof(ulong)),
+                ReadBudget.SmallObject));
             var filter = Build(quotientBits, remainderBits, PersistenceFormat.ResolveOrThrow(hashId, hash));
 
             if (count > filter.slots)
@@ -863,6 +911,13 @@ namespace ProbabilisticDataStructures
         /// carries -- the constructor's item count and rate are only ever a way of
         /// arriving at them.
         /// </summary>
+        /// <summary>
+        /// The 64-bit words a table of this split occupies: one slot of remainder and
+        /// metadata per quotient, and two spare words for reads that straddle the end.
+        /// </summary>
+        private static long TableWords(uint quotientBits, uint remainderBits) =>
+            (((long)(1u << (int)quotientBits) * ((int)remainderBits + MetadataBits)) >> 6) + 2;
+
         private static QuotientFilter Build(
             uint quotientBits, uint remainderBits, Func<ReadOnlySpan<byte>, ulong> hash)
         {

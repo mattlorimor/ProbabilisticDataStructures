@@ -207,6 +207,12 @@ namespace ProbabilisticDataStructures
                 throw new ArgumentOutOfRangeException(nameof(registers),
                     "A sketch needs at least one register.");
             }
+            if (registers > MaxRegisters)
+            {
+                throw new ArgumentOutOfRangeException(nameof(registers), registers,
+                    $"A sketch holds at most {MaxRegisters} registers: they are an array, " +
+                    "and that is the most an array holds.");
+            }
             if (double.IsNaN(b) || b <= 1 || b > 2)
             {
                 throw new ArgumentOutOfRangeException(nameof(b),
@@ -241,6 +247,18 @@ namespace ProbabilisticDataStructures
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.SetLowerBound(0);
         }
+
+        /// <summary>
+        /// The most registers a sketch can keep: they are an array, as are the two
+        /// that order their updates, and no array is longer than
+        /// <see cref="Array.MaxLength"/>.
+        /// </summary>
+        /// <remarks>
+        /// The constructor and the reader both refuse past this, so a sketch one builds
+        /// the other reads. The reader used to stop at 2^26, and so refused sketches
+        /// the constructor had built without complaint.
+        /// </remarks>
+        internal static int MaxRegisters => Array.MaxLength;
 
         /// <summary>How many registers the sketch keeps.</summary>
         public int Registers => this.m;
@@ -720,7 +738,26 @@ namespace ProbabilisticDataStructures
         /// <param name="stream">The stream to read from.</param>
         public static SetSketch ReadFrom(Stream stream)
         {
-            return Read(stream, null);
+            return Read(stream, null, ReadOptions.Default);
+        }
+
+        /// <summary>
+        /// Reads a structure written by <see cref="WriteTo"/>, allocating no more than the
+        /// options' memory budget allows. <see cref="ReadFrom(Stream)"/> reads under
+        /// <see cref="ReadOptions.Default"/>.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static SetSketch ReadFrom(Stream stream, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, null, options);
         }
 
         /// <summary>
@@ -732,16 +769,40 @@ namespace ProbabilisticDataStructures
             Stream stream, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             ArgumentNullException.ThrowIfNull(hash);
-            return Read(stream, hash);
+            return Read(stream, hash, ReadOptions.Default);
         }
 
-        private static SetSketch Read(Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash)
+        /// <summary>
+        /// Reads a structure as
+        /// <see cref="ReadFrom(Stream, Func{ReadOnlySpan{byte}, ulong})"/> does, allocating
+        /// no more than the options' memory budget allows.
+        /// </summary>
+        /// <param name="stream">The stream to read from.</param>
+        /// <param name="hash">The hash function, as for the overload without options.</param>
+        /// <param name="options">The most memory the read may allocate.</param>
+        /// <returns>The structure that was written.</returns>
+        /// <exception cref="InvalidDataException">
+        /// Reading the payload would allocate more than the budget allows, among the other
+        /// reasons a payload is refused. Its inner exception is then a
+        /// <see cref="ReadBudgetExceededException"/>.
+        /// </exception>
+        public static SetSketch ReadFrom(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong> hash, ReadOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(hash);
+            ArgumentNullException.ThrowIfNull(options);
+            return Read(stream, hash, options);
+        }
+
+        private static SetSketch Read(
+            Stream stream, Func<ReadOnlySpan<byte>, ulong>? hash, ReadOptions options)
         {
             ArgumentNullException.ThrowIfNull(stream);
 
+            var budget = ReadBudget.For(options, StructureId.SetSketch);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.SetSketch, out var hashId, out var version);
-            var reader = new PayloadReader(payload);
+                stream, StructureId.SetSketch, out var hashId, out var version, budget);
+            var reader = new PayloadReader(payload, budget);
 
             var b = reader.ReadDouble();
             var a = reader.ReadDouble();
@@ -779,11 +840,12 @@ namespace ProbabilisticDataStructures
                     $"Sketch claims a hash rate of {a}, and a rate is a positive " +
                     "number.");
             }
-            if (m == 0 || m > 1 << 26)
+            // The constructor's own limit, so that every sketch it builds reads back.
+            if (m == 0 || m > MaxRegisters)
             {
                 throw new InvalidDataException(
-                    $"Sketch claims {m} registers. A sketch has at least one, and this " +
-                    "many would be half a gigabyte of them.");
+                    $"Sketch claims {m} registers. A sketch has at least one, and at " +
+                    $"most the {MaxRegisters} an array holds.");
             }
             if (q == 0 || q > ushort.MaxValue - 1)
             {
@@ -792,6 +854,14 @@ namespace ProbabilisticDataStructures
                     "and has to hold one more than the ceiling.");
             }
 
+            // Every register is written, so they are checked against the bytes behind
+            // them before the arrays are allocated.
+            reader.RequireHolds(m, sizeof(ushort), "registers");
+
+            // The registers, and the two arrays that order their updates.
+            budget.Charge(ReadBudget.Sum(
+                ReadBudget.ArrayOf(m, sizeof(ushort)),
+                ReadBudget.Times(2, ReadBudget.ArrayOf(m, sizeof(uint)))));
             var sketch = new SetSketch(
                 (int)m, b, a, (int)q,
                 PersistenceFormat.ResolveOrThrow(hashId, hash),
