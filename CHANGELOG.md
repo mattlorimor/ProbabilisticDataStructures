@@ -138,6 +138,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds. A `ScalableBloomFilter` keeps its own version, 1 or 7, and its contained filters,
   each in its own envelope, are version 8.
 
+- **`BloomFilter64`, and the filters placed with 64-bit values, are faster, and every bit
+  is where it was.** `Utils.HashKernel128`, which each of them goes through on every `Add`,
+  `Test` and `TestAndAdd`, wrote the first hash into a `stackalloc`ed eight bytes and
+  hashed those for the second value. A method that does that cannot be inlined and carries
+  a zeroed frame with a stack check, and the call cost several times what the second hash
+  does. The eight bytes are now an inline array in an ordinary local. The bytes hashed are
+  the same, so the second value, the positions and every payload are the same, and
+  FORMAT.md's description of the derivation stands. The `byte[]` overload now calls the
+  `ReadOnlySpan<byte>` one, which cost it nothing.
+  <br><br>
+  Measured on an AMD Ryzen 9 7950X3D under .NET 10 with the default hash, on filters of 2^27
+  positions sized for 1%, so k is 7, in nanoseconds per operation, with the filter held in
+  cache. `Benchmarks/` gains the suites that took these, and one that takes the placement
+  kernel apart:
+
+  | | Add | Test, member | Test, not a member |
+  | --- | --- | --- | --- |
+  | `BloomFilter` placed with 64-bit values, 16-byte items | 45.5 → 31.8 | 42.5 → 23.4 | 28.7 → 11.6 |
+  | `BloomFilter64`, 16-byte items | 77 → 50.1 | 44.6 → 27.8 | 29.9 → 12.4 |
+  | `BloomFilter` placed with 64-bit values, 1,024-byte items | 72 → 64.2 | 66.5 → 56.3 | 61.2 → 46.9 |
+  | `BloomFilter64`, 1,024-byte items | 106 → 92.4 | 72.5 → 61 | 61.4 → 49.9 |
+
+  A `BloomFilter` just below 2^27 positions, which places with 32-bit values, takes 27, 19.6
+  and 7.5 with 16-byte items, so what 64-bit placement adds is now about 4 to 5 nanoseconds
+  with short items and 5 to 8 with long ones, the second hash and the wider arithmetic.
+
 ### Fixed
 
 - **`InvertibleBloomLookupTable.TryDecode` could report success with a wrong answer.** It

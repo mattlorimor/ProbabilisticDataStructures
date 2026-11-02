@@ -1279,6 +1279,14 @@ second = the same hash, of first's eight bytes, least significant first
 position i = ((first + i * second) mod 2^64) mod m,   for i = 0 .. k - 1
 ```
 
+The second value is the hash of the first rather than a fixed mixer of it, such as
+SplitMix64's or Murmur3's finalizer, which would save a few nanoseconds an operation.
+`BloomFilter64` has written payloads this way since before 6.2.0 and cannot change, so
+keeping it means every structure that places with 64-bit values shares one derivation.
+It also follows the hash a caller supplies, a keyed one included, where a mixer is fixed.
+Neither form carries more than 64 bits: the second value is a function of `first` alone
+in both, so two items whose first hashes agree take the same positions.
+
 The 32-bit form reduces a 32-bit value modulo `m`, which gives the first `2^32 mod m`
 positions one more of the 2^32 values than the rest. Those positions fill faster, and a
 query lands on them as often as an item did, so the false positive rate rises: a filter
