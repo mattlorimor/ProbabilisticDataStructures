@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Hashing;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -26,9 +27,10 @@ namespace TestProbabilisticDataStructures
     /// <c>Benchmarks/BloomPlacementStudy.cs</c>.
     /// <para>
     /// A filter of 2^27 positions or more is built with the 64-bit scheme
-    /// <see cref="BloomFilter64"/> uses, and is written at format version 8, which says
-    /// so. Everything smaller is placed, and written, exactly as it always was. What a
-    /// payload was placed with is read from its version and never from its size: a
+    /// <see cref="BloomFilter64"/> uses. Everything smaller is placed exactly as it always
+    /// was. Every save is format version 8, which records the placement in a byte of its
+    /// own and the item count in 64 bits. What a payload was placed with is read from that
+    /// byte, or, before version 8, is the 32-bit scheme, and never from its size: a
     /// version 1 payload of any size was placed with 32-bit values.
     /// </para>
     /// <para>
@@ -353,7 +355,9 @@ namespace TestProbabilisticDataStructures
         private sealed record Kind(
             string Name,
             Func<Placement?, object> Build,
-            ushort NarrowVersion,
+            ushort EarlierVersion,
+            int PlacementOffset,
+            int CountOffset,
             Func<object, byte[]> Write,
             Func<byte[], object> Read,
             Func<object, Placement> PlacementOf,
@@ -374,7 +378,7 @@ namespace TestProbabilisticDataStructures
         private static Kind[] Kinds() => new[]
         {
             new Kind(nameof(BloomFilter),
-                p => new BloomFilter(100, 0.01, null, p), 1,
+                p => new BloomFilter(100, 0.01, null, p), 1, 8, 9,
                 f => ((BloomFilter)f).ToByteArray(),
                 b => Persistence.FromByteArray<BloomFilter>(b),
                 f => ((BloomFilter)f).Placement,
@@ -384,7 +388,7 @@ namespace TestProbabilisticDataStructures
                 (f, k) => ((BloomFilter)f).TestAndAdd(k),
                 null),
             new Kind(nameof(CountingBloomFilter),
-                p => new CountingBloomFilter(100, 4, 0.01, null, p), 1,
+                p => new CountingBloomFilter(100, 4, 0.01, null, p), 1, 8, 9,
                 f => ((CountingBloomFilter)f).ToByteArray(),
                 b => Persistence.FromByteArray<CountingBloomFilter>(b),
                 f => ((CountingBloomFilter)f).Placement,
@@ -394,7 +398,7 @@ namespace TestProbabilisticDataStructures
                 (f, k) => ((CountingBloomFilter)f).TestAndAdd(k),
                 (f, k) => ((CountingBloomFilter)f).TestAndRemove(k)),
             new Kind(nameof(DeletableBloomFilter),
-                p => new DeletableBloomFilter(100, 10, 0.01, null, p), 1,
+                p => new DeletableBloomFilter(100, 10, 0.01, null, p), 1, 8, 9,
                 f => ((DeletableBloomFilter)f).ToByteArray(),
                 b => Persistence.FromByteArray<DeletableBloomFilter>(b),
                 f => ((DeletableBloomFilter)f).Placement,
@@ -404,7 +408,7 @@ namespace TestProbabilisticDataStructures
                 (f, k) => ((DeletableBloomFilter)f).TestAndAdd(k),
                 (f, k) => ((DeletableBloomFilter)f).TestAndRemove(k)),
             new Kind(nameof(PartitionedBloomFilter),
-                p => new PartitionedBloomFilter(100, 0.01, null, p), 1,
+                p => new PartitionedBloomFilter(100, 0.01, null, p), 1, 12, 13,
                 f => ((PartitionedBloomFilter)f).ToByteArray(),
                 b => Persistence.FromByteArray<PartitionedBloomFilter>(b),
                 f => ((PartitionedBloomFilter)f).Placement,
@@ -416,7 +420,7 @@ namespace TestProbabilisticDataStructures
             // Seeded, so that its payload is reproducible. Its cells decay, so the cells
             // it reports are checked only for the item just added.
             new Kind(nameof(StableBloomFilter),
-                p => new StableBloomFilter(1000, 2, 0.01, null, 7, p), 5,
+                p => new StableBloomFilter(1000, 2, 0.01, null, 7, p), 5, 12, -1,
                 f => ((StableBloomFilter)f).ToByteArray(),
                 b => Persistence.FromByteArray<StableBloomFilter>(b),
                 f => ((StableBloomFilter)f).Placement,
@@ -538,27 +542,33 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A filter placed with 64-bit values writes format version 8, which is what says
-        /// so to a reader; a filter placed with 32-bit values writes the version it always
-        /// did, which a library from before version 8 reads.
+        /// Every new save of these filters is format version 8, whatever its size or
+        /// placement, and its placement byte says which scheme placed it: 0 for 32-bit
+        /// values, 1 for 64-bit ones. A small filter from the public constructor is no
+        /// exception.
         /// </summary>
         [TestMethod]
-        public void TestAWideFilterWritesVersionEightAndANarrowOneItsOwnVersion()
+        public void TestEveryNewSaveIsVersionEightAndRecordsItsPlacement()
         {
             foreach (var kind in Kinds())
             {
                 var wide = kind.Build(Placement.Wide);
                 var narrow = kind.Build(Placement.Narrow);
+                var small = kind.Build(null);
                 foreach (var word in Words)
                 {
                     kind.Add(wide, Key(word));
                     kind.Add(narrow, Key(word));
+                    kind.Add(small, Key(word));
                 }
 
-                Assert.AreEqual((ushort)8, VersionOf(kind.Write(wide)), $"{kind.Name} placed with 64-bit values");
-                Assert.AreEqual(kind.NarrowVersion, VersionOf(kind.Write(narrow)), $"{kind.Name} placed with 32-bit values");
-                Assert.AreEqual(kind.NarrowVersion, VersionOf(kind.Write(kind.Build(null))),
-                    $"{kind.Name} built small through the constructor");
+                foreach (var (filter, field, what) in new[]
+                         { (wide, 1, "placed with 64-bit values"), (narrow, 0, "placed with 32-bit values"), (small, 0, "built small") })
+                {
+                    var bytes = kind.Write(filter);
+                    Assert.AreEqual((ushort)8, VersionOf(bytes), $"{kind.Name} {what}");
+                    Assert.AreEqual((byte)field, bytes[Header + kind.PlacementOffset], $"{kind.Name} {what}: its placement byte");
+                }
             }
         }
 
@@ -590,88 +600,121 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A small payload labelled version 8 is read as placed with 64-bit values, and
-        /// the same bytes labelled 1 as placed with 32-bit ones. The version decides, and
-        /// the size does not: these filters are far below the threshold.
+        /// The placement byte, and not the size, says how a version 8 payload was placed:
+        /// these filters are far below the threshold, and a payload whose byte is swapped
+        /// reads back the other way, looking for its items where they were not put. A
+        /// byte naming no scheme is refused with what it holds. A payload from before
+        /// version 8 has no byte, was placed with 32-bit values, reads back that way and
+        /// saves again as version 8.
         /// </summary>
         [TestMethod]
-        public void TestTheVersionAndNotTheSizeSaysHowAPayloadWasPlaced()
+        public void TestThePlacementByteAndNotTheSizeSaysHowAPayloadWasPlaced()
         {
-            foreach (var kind in Kinds().Where(k => k.NarrowVersion == 1))
+            foreach (var kind in Kinds())
             {
-                var empty = kind.Write(kind.Build(Placement.Narrow));
-                Assert.AreEqual(Placement.Narrow, kind.PlacementOf(kind.Read(empty)), $"{kind.Name} at version 1");
-                Assert.AreEqual(Placement.Wide, kind.PlacementOf(kind.Read(Relabeled(empty, 8))), $"{kind.Name} at version 8");
-            }
+                var narrowFilter = kind.Build(Placement.Narrow);
+                var wideFilter = kind.Build(Placement.Wide);
+                foreach (var word in Words)
+                {
+                    kind.Add(narrowFilter, Key(word));
+                    kind.Add(wideFilter, Key(word));
+                }
 
-            var stable = Kinds().Single(k => k.Name == nameof(StableBloomFilter));
-            var cells = stable.Write(stable.Build(Placement.Narrow));
-            Assert.AreEqual(Placement.Narrow, stable.PlacementOf(stable.Read(cells)), "StableBloomFilter at version 5");
-            Assert.AreEqual(Placement.Wide, stable.PlacementOf(stable.Read(Relabeled(cells, 8))), "StableBloomFilter at version 8");
+                var narrow = kind.Write(narrowFilter);
+                var wide = kind.Write(wideFilter);
+                var at = Header + kind.PlacementOffset;
+
+                Assert.AreEqual(Placement.Narrow, kind.PlacementOf(kind.Read(narrow)), $"{kind.Name} placed with 32-bit values");
+                Assert.AreEqual(Placement.Wide, kind.PlacementOf(kind.Read(wide)), $"{kind.Name} placed with 64-bit values");
+
+                foreach (var (bytes, swapped, expected) in new[]
+                         { (narrow, (byte)1, Placement.Wide), (wide, (byte)0, Placement.Narrow) })
+                {
+                    var read = kind.Read(WithByte(bytes, at, swapped));
+                    Assert.AreEqual(expected, kind.PlacementOf(read), $"{kind.Name} with its placement byte swapped");
+                    Assert.IsTrue(Words.Any(word => !kind.Test(read, Key(word))),
+                        $"{kind.Name} read the other way still finds every word, so the byte decided nothing");
+                }
+
+                foreach (var unknown in new byte[] { 2, 255 })
+                {
+                    var ex = Assert.ThrowsExactly<InvalidDataException>(
+                        () => kind.Read(WithByte(narrow, at, unknown)),
+                        $"{kind.Name} read a placement byte of {unknown}, which names no scheme");
+                    StringAssert.Contains(ex.Message, "placement");
+                    StringAssert.Contains(ex.Message, unknown.ToString());
+                }
+
+                var earlier = Downgraded(narrow, kind.EarlierVersion, kind.PlacementOffset, kind.CountOffset);
+                var old = kind.Read(earlier);
+                Assert.AreEqual(Placement.Narrow, kind.PlacementOf(old), $"{kind.Name} at version {kind.EarlierVersion}");
+                foreach (var word in Words)
+                {
+                    Assert.IsTrue(kind.Test(old, Key(word)), $"{kind.Name} at version {kind.EarlierVersion} does not find {word}");
+                }
+                CollectionAssert.AreEqual(narrow, kind.Write(old),
+                    $"{kind.Name} read at version {kind.EarlierVersion} does not save as the version 8 payload of the same filter");
+            }
         }
 
         /// <summary>
         /// A payload written before version 8 was placed with 32-bit values whatever its
         /// size, and reads back that way: a filter at the threshold, placed with 32-bit
-        /// values as a library before version 8 would have built it, writes the version it
-        /// always did, reads back placed as it was, still finds what it held, and writes
-        /// the same bytes again. Reading it as its size calls for would lose its items.
-        /// The filters that merge are then offered a new filter of the same size, placed
-        /// with 64-bit values, and refuse it.
+        /// values as a library before version 8 would have built it and written in that
+        /// library's layout, reads back placed as it was, still finds what it held, and
+        /// saves again as the version 8 payload of the same filter, its placement byte
+        /// saying 32-bit. Reading it as its size calls for would lose its items. The
+        /// filters that merge are then offered a new filter of the same size, placed with
+        /// 64-bit values, and refuse it.
         /// </summary>
         /// <remarks>
-        /// 16 MiB of bits each, the smallest size the rule could be wrong about.
+        /// 16 MiB of bits each, the smallest size the rule could be wrong about. The
+        /// earlier payload is the version 8 one with its placement byte taken out and its
+        /// count narrowed, which is exactly the earlier layout; the fixture tests hold that
+        /// transformation to the bytes earlier releases wrote.
         /// </remarks>
         [TestMethod]
         public void TestAnOldPayloadOfAnySizeKeepsTheThirtyTwoBitScheme()
         {
             var n = SmallestCountReaching(Threshold, 0.01);
             var single = SmallestCountReaching(Threshold, 0.5);
+            var kinds = Kinds().ToDictionary(k => k.Name);
 
-            var large = new (string Name, Func<object> Build, Func<object> Fresh, ushort Version,
-                Func<object, byte[]> Write, Func<byte[], object> Read, Func<object, Placement> PlacementOf,
-                Action<object, byte[]> Add, Func<object, byte[], bool> Test, Action<object, object> Merge)[]
+            var large = new (string Name, Func<object> Build, Func<object> Fresh, Action<object, object> Merge)[]
             {
                 (nameof(BloomFilter),
-                    () => new BloomFilter(n, 0.01, null, Placement.Narrow), () => new BloomFilter(n, 0.01), 1,
-                    f => ((BloomFilter)f).ToByteArray(), b => Persistence.FromByteArray<BloomFilter>(b),
-                    f => ((BloomFilter)f).Placement, (f, k) => ((BloomFilter)f).Add(k), (f, k) => ((BloomFilter)f).Test(k),
+                    () => new BloomFilter(n, 0.01, null, Placement.Narrow), () => new BloomFilter(n, 0.01),
                     (into, from) => ((BloomFilter)into).Merge((BloomFilter)from)),
                 (nameof(CountingBloomFilter),
-                    () => new CountingBloomFilter(n, 1, 0.01, null, Placement.Narrow), () => new CountingBloomFilter(n, 1, 0.01), 1,
-                    f => ((CountingBloomFilter)f).ToByteArray(), b => Persistence.FromByteArray<CountingBloomFilter>(b),
-                    f => ((CountingBloomFilter)f).Placement, (f, k) => ((CountingBloomFilter)f).Add(k), (f, k) => ((CountingBloomFilter)f).Test(k),
+                    () => new CountingBloomFilter(n, 1, 0.01, null, Placement.Narrow), () => new CountingBloomFilter(n, 1, 0.01),
                     (into, from) => ((CountingBloomFilter)into).Merge((CountingBloomFilter)from)),
                 (nameof(DeletableBloomFilter),
-                    () => new DeletableBloomFilter(n + 1, 1, 0.01, null, Placement.Narrow), () => new DeletableBloomFilter(n + 1, 1, 0.01), 1,
-                    f => ((DeletableBloomFilter)f).ToByteArray(), b => Persistence.FromByteArray<DeletableBloomFilter>(b),
-                    f => ((DeletableBloomFilter)f).Placement, (f, k) => ((DeletableBloomFilter)f).Add(k), (f, k) => ((DeletableBloomFilter)f).Test(k),
+                    () => new DeletableBloomFilter(n + 1, 1, 0.01, null, Placement.Narrow), () => new DeletableBloomFilter(n + 1, 1, 0.01),
                     null),
                 (nameof(PartitionedBloomFilter),
-                    () => new PartitionedBloomFilter(single, 0.5, null, Placement.Narrow), () => new PartitionedBloomFilter(single, 0.5), 1,
-                    f => ((PartitionedBloomFilter)f).ToByteArray(), b => Persistence.FromByteArray<PartitionedBloomFilter>(b),
-                    f => ((PartitionedBloomFilter)f).Placement, (f, k) => ((PartitionedBloomFilter)f).Add(k), (f, k) => ((PartitionedBloomFilter)f).Test(k),
+                    () => new PartitionedBloomFilter(single, 0.5, null, Placement.Narrow), () => new PartitionedBloomFilter(single, 0.5),
                     (into, from) => ((PartitionedBloomFilter)into).Merge((PartitionedBloomFilter)from)),
                 (nameof(StableBloomFilter),
-                    () => new StableBloomFilter((uint)Threshold, 1, 0.01, null, 7, Placement.Narrow), () => new StableBloomFilter((uint)Threshold, 1, 0.01), 5,
-                    f => ((StableBloomFilter)f).ToByteArray(), b => Persistence.FromByteArray<StableBloomFilter>(b),
-                    f => ((StableBloomFilter)f).Placement, (f, k) => ((StableBloomFilter)f).Add(k), (f, k) => ((StableBloomFilter)f).Test(k),
+                    () => new StableBloomFilter((uint)Threshold, 1, 0.01, null, 7, Placement.Narrow), () => new StableBloomFilter((uint)Threshold, 1, 0.01),
                     null),
             };
 
-            foreach (var kind in large)
+            foreach (var entry in large)
             {
-                var old = kind.Build();
+                var kind = kinds[entry.Name];
+                var built = entry.Build();
                 foreach (var word in Words)
                 {
-                    kind.Add(old, Key(word));
+                    kind.Add(built, Key(word));
                 }
 
-                var bytes = kind.Write(old);
-                old = null;
-                Assert.AreEqual(kind.Version, VersionOf(bytes), $"{kind.Name} placed with 32-bit values");
+                var current = kind.Write(built);
+                built = null;
+                var earlier = Downgraded(current, kind.EarlierVersion, kind.PlacementOffset, kind.CountOffset);
+                Assert.AreEqual(kind.EarlierVersion, VersionOf(earlier));
 
-                var read = kind.Read(bytes);
+                var read = kind.Read(earlier);
+                earlier = null;
                 Assert.AreEqual(Placement.Narrow, kind.PlacementOf(read), $"{kind.Name} at the threshold, read back");
                 foreach (var word in Words)
                 {
@@ -679,22 +722,181 @@ namespace TestProbabilisticDataStructures
                 }
 
                 var again = kind.Write(read);
-                Assert.IsTrue(bytes.AsSpan().SequenceEqual(again), $"{kind.Name} read back writes other bytes");
-                bytes = null;
+                Assert.IsTrue(current.AsSpan().SequenceEqual(again),
+                    $"{kind.Name} read back does not save as the version 8 payload of the same filter");
+                current = null;
                 again = null;
 
-                if (kind.Merge is not null)
+                if (entry.Merge is not null)
                 {
-                    var fresh = kind.Fresh();
+                    var fresh = entry.Fresh();
                     Assert.AreEqual(Placement.Wide, kind.PlacementOf(fresh), $"a new {kind.Name} at the threshold");
-                    var ex = Assert.ThrowsExactly<ArgumentException>(() => kind.Merge(read, fresh),
+                    var ex = Assert.ThrowsExactly<ArgumentException>(() => entry.Merge(read, fresh),
                         $"{kind.Name} merged a new filter placed with 64-bit values into an old one");
                     StringAssert.Contains(ex.Message, "placed");
-                    ex = Assert.ThrowsExactly<ArgumentException>(() => kind.Merge(fresh, read),
+                    ex = Assert.ThrowsExactly<ArgumentException>(() => entry.Merge(fresh, read),
                         $"{kind.Name} merged an old filter placed with 32-bit values into a new one");
                     StringAssert.Contains(ex.Message, "placed");
                 }
             }
+        }
+
+        // ---- The item count ---------------------------------------------------------------
+
+        private const ulong TwoToThe32 = 1UL << 32;
+
+        /// <summary>
+        /// Sets a filter's item count, which nothing public can, so that a count near 2^32
+        /// does not cost 2^32 adds. Through reflection on the private property, so that it
+        /// says plainly when the property cannot hold the value.
+        /// </summary>
+        private static void SetCount(object filter, ulong value)
+        {
+            var property = filter.GetType().GetProperty("count", BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? throw new InvalidOperationException($"{filter.GetType().Name} has no count");
+            property.SetValue(filter, Convert.ChangeType(value, property.PropertyType));
+        }
+
+        /// <summary>
+        /// The filters that count their items, with how to read the count and, for those
+        /// that remove or merge, how.
+        /// </summary>
+        private static (string Name, Func<object> Build, Func<object, ulong> CountOf, int CountOffset,
+            Func<object, byte[], bool> TestAndRemove, Action<object, object> Merge)[] Counted() => new (string, Func<object>, Func<object, ulong>, int, Func<object, byte[], bool>, Action<object, object>)[]
+        {
+            (nameof(BloomFilter), () => new BloomFilter(100, 0.01), f => ((BloomFilter)f).Count(), 9,
+                null, (a, b) => ((BloomFilter)a).Merge((BloomFilter)b)),
+            (nameof(CountingBloomFilter), () => new CountingBloomFilter(100, 4, 0.01), f => ((CountingBloomFilter)f).Count(), 9,
+                (f, k) => ((CountingBloomFilter)f).TestAndRemove(k), (a, b) => ((CountingBloomFilter)a).Merge((CountingBloomFilter)b)),
+            (nameof(DeletableBloomFilter), () => new DeletableBloomFilter(100, 10, 0.01), f => ((DeletableBloomFilter)f).Count(), 9,
+                (f, k) => ((DeletableBloomFilter)f).TestAndRemove(k), null),
+            (nameof(PartitionedBloomFilter), () => new PartitionedBloomFilter(100, 0.01), f => ((PartitionedBloomFilter)f).Count(), 13,
+                null, (a, b) => ((PartitionedBloomFilter)a).Merge((PartitionedBloomFilter)b)),
+        };
+
+        /// <summary>
+        /// A count crosses 2^32 rather than wrapping to zero: by Add and by TestAndAdd on
+        /// the way up, by TestAndRemove back down for the filters that remove, and by the
+        /// sum a merge takes. A 32-bit count wrapped after 2^32 adds, and a count that
+        /// stuck there instead would under-report once a removal took it down again.
+        /// </summary>
+        [TestMethod]
+        public void TestACountCrossesTwoToTheThirtyTwo()
+        {
+            foreach (var kind in Counted())
+            {
+                var filter = kind.Build();
+                var ops = Kinds().Single(k => k.Name == kind.Name);
+                SetCount(filter, TwoToThe32 - 1);
+
+                ops.Add(filter, Key("past"));
+                Assert.AreEqual(TwoToThe32, kind.CountOf(filter), $"{kind.Name}: Add at 2^32 - 1");
+                ops.TestAndAdd(filter, Key("again"));
+                Assert.AreEqual(TwoToThe32 + 1, kind.CountOf(filter), $"{kind.Name}: TestAndAdd at 2^32");
+
+                if (kind.TestAndRemove is not null)
+                {
+                    Assert.IsTrue(kind.TestAndRemove(filter, Key("again")));
+                    Assert.AreEqual(TwoToThe32, kind.CountOf(filter), $"{kind.Name}: TestAndRemove at 2^32 + 1");
+                    Assert.IsTrue(kind.TestAndRemove(filter, Key("past")));
+                    Assert.AreEqual(TwoToThe32 - 1, kind.CountOf(filter), $"{kind.Name}: TestAndRemove at 2^32, across it");
+                }
+
+                if (kind.Merge is not null)
+                {
+                    var into = kind.Build();
+                    var from = kind.Build();
+                    SetCount(into, TwoToThe32 - 1);
+                    ops.Add(from, Key("one"));
+                    ops.Add(from, Key("two"));
+                    kind.Merge(into, from);
+                    Assert.AreEqual(TwoToThe32 + 1, kind.CountOf(into), $"{kind.Name}: a merge summing past 2^32");
+                }
+            }
+        }
+
+        /// <summary>
+        /// A count past 2^32 is saved as a u64 where FORMAT.md says it is, and reads back
+        /// as itself, so a save and a load never loses the items a filter has counted.
+        /// </summary>
+        [TestMethod]
+        public void TestACountPastTwoToTheThirtyTwoRoundTrips()
+        {
+            foreach (var kind in Counted())
+            {
+                var filter = kind.Build();
+                var ops = Kinds().Single(k => k.Name == kind.Name);
+                foreach (var word in Words)
+                {
+                    ops.Add(filter, Key(word));
+                }
+
+                SetCount(filter, TwoToThe32 + 7);
+                var bytes = ops.Write(filter);
+                Assert.AreEqual(TwoToThe32 + 7,
+                    BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(Header + kind.CountOffset)),
+                    $"{kind.Name} did not save its count as a u64 after its placement byte");
+
+                var read = ops.Read(bytes);
+                Assert.AreEqual(TwoToThe32 + 7, kind.CountOf(read), $"{kind.Name} read back");
+                CollectionAssert.AreEqual(bytes, ops.Write(read), $"{kind.Name} read back writes other bytes");
+            }
+        }
+
+        private const int Header = 14;
+
+        /// <summary>
+        /// The frame with one payload byte changed and the checksum repaired, so that the
+        /// byte is the only thing wrong with it.
+        /// </summary>
+        private static byte[] WithByte(byte[] frame, int offset, byte value)
+        {
+            var bytes = (byte[])frame.Clone();
+            bytes[offset] = value;
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                bytes.AsSpan(bytes.Length - 4),
+                Crc32.HashToUInt32(bytes.AsSpan(4, bytes.Length - 8)));
+            return bytes;
+        }
+
+        /// <summary>
+        /// The payload a release before version 8 wrote for the filter a version 8 payload
+        /// placed with 32-bit values holds: the same fields without the placement byte, the
+        /// count, where there is one, back in a u32, at the version that layout had, with
+        /// the length and checksum to match.
+        /// </summary>
+        internal static byte[] Downgraded(byte[] frame, ushort version, int placementOffset, int countOffset)
+        {
+            var payload = frame.AsSpan(Header, frame.Length - Header - 4);
+            Assert.AreEqual((byte)0, payload[placementOffset],
+                "only a filter placed with 32-bit values was ever written before version 8");
+
+            var body = new List<byte>(payload.Length);
+            body.AddRange(payload[..placementOffset].ToArray());
+            if (countOffset < 0)
+            {
+                body.AddRange(payload[(placementOffset + 1)..].ToArray());
+            }
+            else
+            {
+                Assert.AreEqual(placementOffset + 1, countOffset, "the count does not follow the placement byte");
+                var count = BinaryPrimitives.ReadUInt64LittleEndian(payload[countOffset..]);
+                Assert.IsLessThanOrEqualTo((ulong)uint.MaxValue, count, "a count past 2^32 was never written before version 8");
+                var four = new byte[4];
+                BinaryPrimitives.WriteUInt32LittleEndian(four, (uint)count);
+                body.AddRange(four);
+                body.AddRange(payload[(countOffset + 8)..].ToArray());
+            }
+
+            var result = new byte[Header + body.Count + 4];
+            frame.AsSpan(0, Header).CopyTo(result);
+            BinaryPrimitives.WriteUInt16LittleEndian(result.AsSpan(4), version);
+            BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(10), (uint)body.Count);
+            body.CopyTo(result, Header);
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                result.AsSpan(result.Length - 4),
+                Crc32.HashToUInt32(result.AsSpan(4, result.Length - 8)));
+            return result;
         }
 
         /// <summary>
