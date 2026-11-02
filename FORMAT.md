@@ -259,8 +259,12 @@ regions whole because its arithmetic assumes their size, and a quotient filter's
 names its table outright. A payload can ask those for as large a structure as the
 constructor would build. What stops a small one asking is the read budget, below.
 
-The envelope bounds everything else: a payload is at most 2,147,483,647 bytes, so a
-structure whose payload would be larger can be built but not written.
+The envelope bounds everything else. A payload is written as one array together with the
+envelope's eighteen bytes, so it is at most 2,147,483,573 bytes: the largest array,
+2,147,483,591, less those. A structure whose payload would be larger can be built but not
+written, and `WriteTo` throws an `InvalidOperationException` saying how large the payload
+would have been; the structure is untouched. A reader refuses a length field above
+2,147,483,591, what one array holds, before allocating for it.
 
 ### Read budget
 

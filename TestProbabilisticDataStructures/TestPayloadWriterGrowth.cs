@@ -123,6 +123,27 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// FORMAT.md states the largest payload and the largest length a reader takes, as
+        /// numbers, for someone decoding without this library. A number in a document has
+        /// no build to fail, so it is held to the code here.
+        /// </summary>
+        [TestMethod]
+        public void TestFormatStatesTheLargestPayloadAndTheLargestLengthRead()
+        {
+            using var resource = typeof(TestPayloadWriterGrowth).Assembly
+                .GetManifestResourceStream("TestProbabilisticDataStructures.FORMAT.md");
+            Assert.IsNotNull(resource, "FORMAT.md is not embedded in the test assembly");
+            var specification = new StreamReader(resource).ReadToEnd();
+
+            var invariant = System.Globalization.CultureInfo.InvariantCulture;
+            Assert.AreEqual(Largest, PersistenceFormat.MaxPayloadLength);
+            StringAssert.Contains(specification, Largest.ToString("N0", invariant));
+            StringAssert.Contains(specification, Array.MaxLength.ToString("N0", invariant));
+            Assert.DoesNotContain("2,147,483,647 bytes", specification,
+                "FORMAT.md still gives int.MaxValue as the largest payload");
+        }
+
+        /// <summary>
         /// The reader of the envelope refused a payload length above what an array
         /// holds, but let one between the largest array and int.MaxValue through to
         /// the allocation, which failed inside the runtime with an OutOfMemoryException

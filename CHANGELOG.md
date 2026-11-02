@@ -510,6 +510,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data. Payloads of sizes that did not wrap read as they always did. The format does not
   change, and [FORMAT.md](FORMAT.md#sizes) says which length is refused as the wrapped one.
 
+- **Writing a structure whose payload passed a gibibyte got slower with every field, and
+  one that passed two gibibytes failed without saying why.** The buffer a payload is built
+  in doubled in an `int`, which wraps negative from 1 GiB up, so from there it was exactly
+  as long as what had been written, and each further write -- a count, a seed, the next
+  nested structure -- reallocated the whole buffer and copied the payload into it. Measured
+  with a payload of 1,363,148,812 bytes, a four-byte write took 0.4 s, and so did each
+  one after it. The length a write needed was summed in an `int` as well, so a payload past
+  the largest array failed in whichever way a negative length happens to fail.
+  <br><br>
+  The buffer now doubles up to the largest payload the format holds and reaches it in one
+  copy, so what follows costs nothing. A payload longer than 2,147,483,573 bytes -- the
+  largest array, 2,147,483,591, less the eighteen bytes of envelope it shares the array
+  with -- makes `WriteTo` throw an `InvalidOperationException` naming the size it would have
+  been and the size it can be, and the structure is unchanged. The format does not change
+  and does not grow: a structure that large can be built and used and cannot be written.
+  An envelope that claims a payload length between the largest array and `int.MaxValue` is
+  now refused as one that cannot be read into an array, where it used to fail inside the
+  allocation with an `OutOfMemoryException`.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

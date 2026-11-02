@@ -56,22 +56,55 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// How long the buffer should be once it has to hold <paramref name="count"/> more
-        /// bytes after <paramref name="length"/> that are already written: double what it
-        /// was, so that growing is amortised, or exactly enough if doubling is not.
+        /// bytes after <paramref name="length"/> that are already written: the length it
+        /// has if that is enough; otherwise double it, so that growing is amortised, or
+        /// exactly enough if doubling is not, and never more than a payload can be.
         /// </summary>
         /// <param name="capacity">The buffer's present length.</param>
         /// <param name="length">How many bytes have been written.</param>
         /// <param name="count">How many more are about to be.</param>
+        /// <exception cref="InvalidOperationException">
+        /// The payload would be longer than the largest one that can be written.
+        /// </exception>
+        /// <remarks>
+        /// All of it in 64 bits. In 32, doubling wrapped negative from a gibibyte up and
+        /// the buffer was left exactly full, so that each write after it copied the whole
+        /// payload; and the sum of the length and the write wrapped too, so a payload
+        /// past the largest array failed in whatever way a negative length fails. Doubling
+        /// is clamped to the largest payload, so that the buffer reaches it in one copy and
+        /// every write up to it after that costs nothing.
+        /// </remarks>
         internal static int GrownCapacity(int capacity, int length, int count)
         {
-            return Math.Max(capacity * 2, length + count);
+            var needed = (long)length + count;
+            var largest = PersistenceFormat.MaxPayloadLength;
+
+            if (needed > largest)
+            {
+                throw new InvalidOperationException(
+                    $"The payload would be {needed:N0} bytes, and the most one can be is " +
+                    $"{largest:N0}: the largest array a .NET runtime holds, " +
+                    $"{Array.MaxLength:N0} bytes, less the {PersistenceFormat.EnvelopeLength} " +
+                    "bytes the envelope adds around it in the same array. The structure is " +
+                    "intact and can still be used, but it is too large to write; the format " +
+                    "has no way to store it. Keep less in it, or split what it holds across " +
+                    "several.");
+            }
+
+            if (needed <= capacity)
+            {
+                return capacity;
+            }
+
+            return (int)Math.Max(needed, Math.Min(2L * capacity, largest));
         }
 
         private Span<byte> Reserve(int count)
         {
-            if (this.length + count > this.buffer.Length)
+            var capacity = GrownCapacity(this.buffer.Length, this.length, count);
+            if (capacity != this.buffer.Length)
             {
-                var grown = new byte[GrownCapacity(this.buffer.Length, this.length, count)];
+                var grown = new byte[capacity];
                 this.buffer.AsSpan(0, this.length).CopyTo(grown);
                 this.buffer = grown;
             }
