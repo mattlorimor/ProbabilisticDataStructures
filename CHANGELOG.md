@@ -841,8 +841,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   <br><br>
   The start is now the high half of the 128-bit product of the generator's next 64 bits
   and `m`. Every start and every cell is within 2^-32 of its share, at every size. A
-  run's index is summed in 64 bits. The bounded draws the cuckoo filter, `VarOpt` and
-  `SetSketch` make are unchanged, and so are their sequences.
+  run's index is summed in 64 bits. The bounded draws the cuckoo filter and `SetSketch`
+  make are unchanged, and so are their sequences. `VarOpt`'s changed for the same reason,
+  below.
   <br><br>
   **A seeded stable filter large enough for the draw to differ decays slightly
   differently from 6.2.0.** Each draw gives the start 6.2.0 gave or the cell after it, and
@@ -852,6 +853,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any number of adds the generator stands where it did. A restored filter's stored
   generator state stays valid: the filter resumes the sequence it was partway through,
   and from there its decay is drawn the new way.
+
+- **A large `VarOpt` sample over-represented the oldest part of its stream.** When a
+  contest's drop falls to the light region, one of its items is evicted, and the estimate
+  is unbiased because each is equally likely to go. The item was chosen with a 32-bit
+  multiply-and-shift, which gives each of the `L` slots `floor(2^32 / L)` of the 2^32
+  values or one more. That is exact at a power of two. Otherwise some slots were drawn
+  more often than the rest, up to half as often again once the light region passed
+  2^32 / 3, and an item that settled in a slot drawn less often stayed longer. In a stream
+  whose items are all light, as they are with unit weights once sampling begins, the
+  oldest part of the stream was over-represented and its subset estimates came out high,
+  and the rest a little low. The bias grows with `k`. For the oldest fiftieth of such a
+  stream, where it is largest against the estimate's standard error, it was under a
+  hundredth of that error up to a `k` of ten million, one standard error from about 87
+  million, six at 175 million and hundreds past a billion. These figures come from the two
+  rates and a model of the stream, which a scaled-down simulation of the draw reproduced.
+  The total weight was exact throughout. `VarOpt` shipped in 6.2.0, so 6.2.0 is affected.
+  <br><br>
+  The slot is now the high half of the 128-bit product of the generator's next 64 bits and
+  `L`, so every light item is within 2^-32 of an equal chance of going, at every size.
+  <br><br>
+  **A seeded sample large enough for the draw to differ is not the sample 6.2.0 kept.**
+  Each eviction takes the slot 6.2.0 took or the one after it, and moves in about
+  `L / 2^33` of evictions from the light region: about one in 8,600 with a million light
+  items, and one in 86 with a hundred million. Once one has moved, the samples go on
+  differing. A seeded sample that met no such eviction is the sample 6.2.0 kept, byte for
+  byte, which is still true of the stored fixtures. Each eviction still draws exactly
+  once, so after any stream the generator stands where it did, and a restored sample's
+  stored generator state stays valid: it resumes the sequence it was partway through, and
+  from there evicts the new way. The stored format does not change. (#203)
 
 - **A `StableBloomFilter` with as many hash functions as cells never finished an add.**
   Examples are three cells at 1%, or ten at one in a million. The number of cells an add

@@ -591,16 +591,44 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// The slot of the light item an eviction removes, for the generator's next 64
-        /// bits and a light region of <paramref name="lightCount"/> items.
+        /// bits and a light region of <paramref name="lightCount"/> items: the high half of
+        /// their 128-bit product.
         /// </summary>
         /// <remarks>
-        /// Downsample draws through this, so a test can count the inputs that evict each
-        /// slot without a sample of that size. It is <see cref="SeededRandom.NextBelow"/>,
-        /// written out over the value that method would have drawn.
+        /// Each slot is drawn by floor(2^64 / L) of the 2^64 inputs or by one more, so every
+        /// light item is within 2^-32 of an equal chance of going, at every size the light
+        /// region can reach. The estimate is unbiased because the items there are
+        /// interchangeable and each is equally likely to go, and this is what keeps that
+        /// true of the draw as well as of the paper.
+        /// <para>
+        /// Until the release after 6.2.0 the slot came from
+        /// <see cref="SeededRandom.NextBelow"/>, which multiplies only the top 32 bits.
+        /// That gives each slot floor(2^32 / L) of 2^32 inputs or one more, so once the light
+        /// region passed 2^32 / 3 some slots were drawn half as often again as others. Apart
+        /// from the item kept most recently, which moves into the next slot drawn, an item
+        /// stays where it is until its slot is drawn, so one that settled in a slot drawn
+        /// less often stayed longer. In a stream whose items are all light, as they are with
+        /// unit weights once sampling begins, that over-represented the oldest part of the
+        /// stream, whose estimates came out high, and the rest came out a little low. The
+        /// bias grows with k. For the oldest fiftieth of the stream, where it is largest
+        /// against the estimate's standard error, it was under a hundredth of that error up
+        /// to a k of ten million, one standard error from about 87 million, six at 175
+        /// million and hundreds past a billion. Those figures come from the two counts and a
+        /// model of the stream, which a scaled-down simulation of the draw reproduced. The
+        /// suite does not rebuild them.
+        /// </para>
+        /// <para>
+        /// One input is still drawn per eviction, so after any stream the generator stands
+        /// where it did before, and a payload's stored position means what it meant. The
+        /// slot is the one the 32-bit draw gave, or the slot after it. It moves in about
+        /// L / 2^33 of draws, too few for a small seeded sample to meet one in practice.
+        /// Downsample draws through this so that a test can count the inputs that evict
+        /// each slot without a sample of that size.
+        /// </para>
         /// </remarks>
         internal static uint EvictionSlot(ulong next, uint lightCount)
         {
-            return (uint)(((ulong)(uint)(next >> 32) * lightCount) >> 32);
+            return (uint)Math.BigMul(next, lightCount, out _);
         }
 
         /// <summary>
