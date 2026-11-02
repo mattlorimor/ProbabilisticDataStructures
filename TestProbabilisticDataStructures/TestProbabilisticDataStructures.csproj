@@ -18,6 +18,9 @@
     <EmbeddedResource Include="..\FORMAT.md" LogicalName="TestProbabilisticDataStructures.FORMAT.md" />
     <!-- The README states the default read budget, and a test holds it to the code. -->
     <EmbeddedResource Include="..\README.md" LogicalName="TestProbabilisticDataStructures.README.md" />
+    <!-- What each structure holds. The README's table of it and the notes behind it are
+         held to the library by TestCapacityDocumentation. -->
+    <EmbeddedResource Include="..\CAPACITY.md" LogicalName="TestProbabilisticDataStructures.CAPACITY.md" />
   </ItemGroup>
 
   <ItemGroup>

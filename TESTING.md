@@ -585,6 +585,18 @@ rest of a message survives, as it should, and one that deletes the guard does no
   the structure moved into the declared limits. A number written into FORMAT.md is held
   the same way, by a test comparing its table of limits with the code in both
   directions.
+- **A table of what each structure holds is recomputed, not copied.** The README's table
+  and the notes in CAPACITY.md are held to the library by `TestCapacityDocumentation`.
+  Every cell is worked out again from the sizing code and the limit symbols, and from what
+  a read is charged as the internal `ReadBudget` reports it for a small structure,
+  carried to the size asked about by a line that has to pass through every read it was
+  fitted to -- a structure at its limit is gigabytes, and no test builds one. A cell that
+  cannot be reached that way is marked and held to an estimate, with the reason it is
+  exempt checked in turn. Each sentence of the prose that states a figure is a claim with
+  a check, and a figure of four digits in neither the table nor a claim fails. Whatever
+  the table says about a defect that is open, such as a bucket array truncated by 32-bit
+  arithmetic, is a check on the defect: it fails when the defect is fixed, which is when
+  the number should change.
 
 ## Deliberately not done
 
