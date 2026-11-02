@@ -997,6 +997,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reader took before is refused, the payload holds counts rather than their packing, and
   the format is as it was.
 
+- **An `Add` to a `SublimeCountMinSketch` counter at `ulong.MaxValue` wrapped it to nought,
+  and the estimate with it.** A key's estimate is the smallest of its counters across the
+  rows, so one wrapped counter in one row dropped it to 0, below what it was before the
+  add: an undercount, which a Count-Min sketch never gives. A stream cannot
+  get a counter there, since it takes 2^64 adds, but a payload can hold one (the writer
+  writes every `u64` and the reader takes them) and so can the fold back after removals,
+  which stops at `ulong.MaxValue`. An add to such a counter now leaves it there, as a
+  removal already left a counter at nought. Before this change, a one-row sketch read from
+  a payload with every counter at `ulong.MaxValue` estimated 0 after one add, and a sketch
+  of five rows with one row's counters at `ulong.MaxValue` and the others at 40 estimated
+  0 where 41 is right, whichever row was the saturated one. 6.2.0 could not get there by
+  either road, since it could not read a counter of 2^63 or more and its fold took one to
+  nought; the entry above fixed both, and this is what that left. A sketch with no
+  counter that large is unchanged, in memory and on the wire, and so is the format. A
+  counter that has stopped at the largest count no longer records how far past it the key
+  has gone, so a removal after such an add takes one off the largest count and no more.
+  (#189)
+
 - **A read refused for its budget named a number that did not load it.**
   `ReadBudgetExceededException.RequiredBytes` was the running total at the allocation
   that failed, so a payload was refused at its first allocation the budget did not cover,
