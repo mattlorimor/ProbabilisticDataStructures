@@ -678,6 +678,138 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// The edge to the last double. One key at 0.5 wants a universe of twice the range,
+        /// exactly, so a range of 2^60 wants 2^61 on the nose and is refused: that is the
+        /// first universe the hash cannot address. A range 128 less, the double just below
+        /// 2^60, wants 2^61 - 256, the last one it can, and builds at that universe. These
+        /// are the cases a boundary one too early or one too late gets wrong, which a
+        /// margin of a part in a billion cannot see.
+        /// </summary>
+        [TestMethod]
+        public void TestTheEdgeIsExactToTheLastDouble()
+        {
+            var keys = new ulong[] { 99 };
+
+            var onTheEdge = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => Grafite.Build(keys, 0.5, 1UL << 60, seed: 4));
+            Assert.AreEqual("maxRangeSize", onTheEdge.ParamName);
+
+            var last = Grafite.Build(keys, 0.5, (1UL << 60) - 128, seed: 4);
+            Assert.AreEqual((1UL << 61) - 256, last.R,
+                "the last universe the hash can address is 2^61 - 256 as a double");
+            Assert.AreEqual(0.5, last.FalsePositiveRate((1UL << 60) - 128), 1e-12);
+            Assert.IsTrue(last.Test(99));
+
+            // And the same on the rate side, where one key at a range of one wants 1 / e:
+            // 2^-60 wants a universe of 2^60 and builds, and 2^-61 wants 2^61 on the nose
+            // and does not. The rates are exact in a double, so the edge is exact.
+            var finest = Math.ScaleB(1.0, -60);
+            Assert.AreEqual((1UL << 60), Grafite.Build(keys, finest, 1, seed: 4).R);
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => Grafite.Build(keys, Math.ScaleB(1.0, -61), 1, seed: 4));
+        }
+
+        /// <summary>
+        /// The refusal names the largest range that works, and it is the edge: that range
+        /// builds and the next one is refused, and it lies where the formula puts it, at
+        /// L = 2^61 * e / n to within the rounding of a double. For a rate no range can
+        /// have, the answer is none and the refusal names the rate instead.
+        /// </summary>
+        [TestMethod]
+        public void TestTheRangeTheRefusalNamesIsTheEdgeOfWhatBuilds()
+        {
+            var cases = new (int Keys, double Rate)[]
+            {
+                (4, 0.5), (1, 0.25), (1000, 0.125), (1, 0.001), (300, 0.01), (7, 0.9),
+            };
+
+            foreach (var (keyCount, rate) in cases)
+            {
+                var keys = Enumerable.Range(0, keyCount).Select(i => (ulong)i * 97 + 5).ToArray();
+                var largest = Grafite.LargestRangeSize((ulong)keyCount, rate);
+
+                var edge = Math.ScaleB(1.0, 61) * rate / keyCount;
+                Assert.AreEqual(edge, (double)largest, edge * 1e-12,
+                    $"{keyCount} keys at {rate}: the formula puts the edge at {edge:N0}");
+
+                Assert.IsNotNull(Grafite.Build(keys, rate, largest, seed: 9));
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => Grafite.Build(keys, rate, largest + 1, seed: 9));
+                Assert.AreEqual("maxRangeSize", ex.ParamName);
+                StringAssert.Contains(ex.Message, largest.ToString("N0"),
+                    "the refusal should say how wide a range would have worked");
+            }
+
+            // The alternative the refusal offers has to be one that could work. Four keys at
+            // 0.5 over a range just past the edge would work at a rate just above 0.5; over
+            // 2^60 they would need a rate above two, and there is none.
+            var near = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => Grafite.Build(new ulong[] { 1, 2, 3, 4 }, 0.5, (1UL << 58) + (1UL << 30)));
+            StringAssert.Contains(near.Message, "a rate above about 5.000E-001");
+            var wide = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => Grafite.Build(new ulong[] { 1, 2, 3, 4 }, 0.01, 1UL << 60));
+            StringAssert.Contains(wide.Message, "No rate lets that many keys");
+            Assert.DoesNotContain("rate above", wide.Message);
+
+            // No range at all: a range of one already wants more than the hash addresses.
+            Assert.AreEqual(0UL, Grafite.LargestRangeSize(4, 1e-18));
+            // At 3e-18 a range of one key fits and two do not, so the answer is exactly one.
+            Assert.AreEqual(1UL, Grafite.LargestRangeSize(4, 3e-18));
+            var tooFine = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => Grafite.Build(new ulong[] { 1, 2, 3, 4 }, 1e-18, 1, seed: 9));
+            Assert.AreEqual("falsePositiveRate", tooFine.ParamName);
+            StringAssert.Contains(tooFine.Message, (4 / Math.ScaleB(1.0, 61)).ToString("E3"),
+                "the refusal should say how fine a rate those keys could have had");
+        }
+
+        /// <summary>
+        /// What earlier releases built when they capped a request the builder now refuses
+        /// is still read, written back byte for byte, and answers correctly. Keys spread
+        /// over all of 64 bits, so that they sit in several blocks of the capped universe,
+        /// are all found, and so are ranges around them; and points that are not keys are
+        /// not reported, as the bound of about 2^-61 per key says they will not be. The
+        /// filter is made at the cap directly, since the builder will not.
+        /// </summary>
+        [TestMethod]
+        public void TestAFilterAtTheCapAnEarlierReleaseBuiltReadsAndAnswers()
+        {
+            var random = new Random(7);
+            ulong Next() => ((ulong)random.NextInt64() << 1) ^ (ulong)random.NextInt64();
+
+            var keys = Enumerable.Range(0, 300).Select(_ => Next()).Distinct().ToArray();
+            // The hook itself does not go past the cap, which no release did.
+            Assert.ThrowsExactly<ArgumentException>(
+                () => Grafite.BuildAtUniverse(keys, (1UL << 61) - 1, ulong.MaxValue, seed: 11));
+            Assert.ThrowsExactly<ArgumentException>(
+                () => Grafite.BuildAtUniverse(keys, 1, ulong.MaxValue, seed: 11));
+
+            var built = Grafite.BuildAtUniverse(keys, (1UL << 61) - 2, ulong.MaxValue, seed: 11);
+            Assert.AreEqual((1UL << 61) - 2, built.R);
+            Assert.IsTrue(keys.Max() >= built.R, "the keys should reach past the first block");
+
+            var bytes = built.ToByteArray();
+            var filter = Persistence.FromByteArray<Grafite>(bytes);
+            Assert.AreEqual((1UL << 61) - 2, filter.R);
+            CollectionAssert.AreEqual(bytes, filter.ToByteArray());
+
+            foreach (var key in keys)
+            {
+                Assert.IsTrue(filter.Test(key));
+                Assert.IsTrue(filter.Test(key - Math.Min(key, 700), key + Math.Min(ulong.MaxValue - key, 700)));
+            }
+
+            var known = new HashSet<ulong>(keys);
+            for (var i = 0; i < 3000; i++)
+            {
+                var query = Next();
+                if (!known.Contains(query))
+                {
+                    Assert.IsFalse(filter.Test(query), $"the point {query} is not a key");
+                }
+            }
+        }
+
         private const int PayloadStart = 14;
 
         private static byte[] WithUniverse(byte[] payload, ulong universe)

@@ -57,6 +57,97 @@ namespace ProbabilisticDataStructures
         internal const ulong MaxUniverse = Prime - 1;
 
         /// <summary>
+        /// The first universe the hash cannot address, 2^61, as a double. The largest it can
+        /// is <see cref="MaxUniverse"/>; as a double the one below 2^61 is 2^61 - 256, so
+        /// "less than this" is exactly "at most the cap" for a size that comes from the
+        /// build's arithmetic.
+        /// </summary>
+        private const double FirstUnaddressableUniverse = 2305843009213693952.0;
+
+        /// <summary>
+        /// The reduced universe a request wants, n × L / e, before it is rounded up.
+        /// </summary>
+        internal static double UniverseWanted(ulong keys, ulong maxRangeSize, double falsePositiveRate)
+        {
+            return keys * (double)maxRangeSize / falsePositiveRate;
+        }
+
+        /// <summary>
+        /// Whether the hash can address a universe of this size.
+        /// </summary>
+        internal static bool UniverseFits(double wanted)
+        {
+            return wanted < FirstUnaddressableUniverse;
+        }
+
+        /// <summary>
+        /// The largest range size <see cref="Build"/> accepts for this many keys at this
+        /// rate, or zero if it accepts none: even a range of one key then wants more
+        /// universe than the hash addresses. Found by search against the build's own test
+        /// (<see cref="UniverseFits"/>), since the arithmetic is in doubles and the edge
+        /// is wherever they put it.
+        /// </summary>
+        internal static ulong LargestRangeSize(ulong keys, double falsePositiveRate)
+        {
+            if (!UniverseFits(UniverseWanted(keys, 1, falsePositiveRate)))
+            {
+                return 0;
+            }
+
+            ulong low = 1;
+            ulong high = ulong.MaxValue;
+            while (low < high)
+            {
+                var middle = low + ((high - low + 1) / 2);
+                if (UniverseFits(UniverseWanted(keys, middle, falsePositiveRate)))
+                {
+                    low = middle;
+                }
+                else
+                {
+                    high = middle - 1;
+                }
+            }
+
+            return low;
+        }
+
+        /// <summary>
+        /// Refuses a request whose universe the hash cannot address, saying what would work.
+        /// </summary>
+        private static void RefuseUniverse(
+            ulong keys, ulong maxRangeSize, double falsePositiveRate, double wanted)
+        {
+            var largest = LargestRangeSize(keys, falsePositiveRate);
+
+            if (largest == 0)
+            {
+                // No range size helps: a range of one key is already too much.
+                throw new ArgumentOutOfRangeException(
+                    nameof(falsePositiveRate), falsePositiveRate,
+                    $"{keys:N0} keys at a false positive rate of {falsePositiveRate:R} need a " +
+                    $"reduced universe of about {wanted:E3} even for ranges of one key, and " +
+                    $"the hash addresses at most {MaxUniverse:N0}. The finest rate that many " +
+                    $"keys can have is a little over {keys / FirstUnaddressableUniverse:E3}. " +
+                    "Ask for a coarser rate, or build several filters over parts of the keys.");
+            }
+
+            // The rate that would let this range through, if any does: a rate is a
+            // probability, so a range so wide that it wants one of 1 or more has no rate.
+            var neededRate = keys * (double)maxRangeSize / FirstUnaddressableUniverse;
+            var alternative = neededRate < 1
+                ? $"A wider range needs a rate above about {neededRate:E3}, or fewer keys."
+                : "No rate lets that many keys have a range that wide; use fewer keys.";
+
+            throw new ArgumentOutOfRangeException(
+                nameof(maxRangeSize), maxRangeSize,
+                $"{keys:N0} keys at a false positive rate of {falsePositiveRate:R} for ranges " +
+                $"of {maxRangeSize:N0} need a reduced universe of about {wanted:E3}, and the " +
+                $"hash addresses at most {MaxUniverse:N0}. The largest range that works for " +
+                $"{keys:N0} keys at that rate is {largest:N0}. {alternative}");
+        }
+
+        /// <summary>
         /// The size of the reduced universe, r = n*L/e.
         /// </summary>
         internal ulong R { get; set; }
@@ -177,20 +268,28 @@ namespace ProbabilisticDataStructures
         /// is for reproducing a build, not for production.
         /// </param>
         /// <remarks>
-        /// <b>The rate is held only while n × maxRangeSize / falsePositiveRate stays below
-        /// 2^61 - 1.</b> That is the size of the universe the keys are hashed into, and the
-        /// hash works modulo a prime of that size, so it cannot be wider. A request that
-        /// wants more -- many keys, or a wide range, or a very small rate -- is built with
-        /// the universe at 2^61 - 2 instead, and is not refused. The filter is a good one:
-        /// it has no false negatives, and a range of l keys is still wrong with probability
-        /// at most n × l / (2^61 - 2), which is negligible for points and short ranges. What
-        /// is weaker is the promise for ranges of <paramref name="maxRangeSize"/>, whose rate
-        /// is now n × maxRangeSize / (2^61 - 2), and 1 -- no range that wide is ever
-        /// excluded -- once that reaches one. <see cref="FalsePositiveRate"/> reports what
-        /// the filter delivers, so <c>filter.FalsePositiveRate(maxRangeSize)</c> against the
-        /// rate asked for is the check. A caller who passes a very large range to mean
-        /// "any" and then asks about short ones gets exactly the filter they wanted.
+        /// <b>The universe has to fit the hash.</b> The keys are hashed into a universe of
+        /// n × maxRangeSize / falsePositiveRate, and the hash works modulo the prime
+        /// 2^61 - 1, so the universe is at most 2^61 - 2. A request that needs more -- many
+        /// keys, a wide range or a very small rate -- is refused, and the message says
+        /// what would work: the largest range for that many keys at that rate, or, when
+        /// not even a range of one key fits, the finest rate those keys can have, a little
+        /// over n / 2^61. The limit is the build's own, so the rate asked for is the rate
+        /// <see cref="FalsePositiveRate"/> reports, and not one that was quietly given up.
+        /// Earlier releases built such a filter at the largest universe instead, and one
+        /// they wrote still reads.
+        /// <para>
+        /// For four keys at 1%, ranges can be up to about 5.8e15 keys wide; for a million
+        /// keys at 1%, about 2.3e10; and a point query, a range of one, works for any
+        /// number of keys up to about 2.3e16 at 1%.
+        /// </para>
         /// </remarks>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The rate is not strictly between zero and one, the range is zero, or the universe
+        /// the keys need is past 2^61 - 2: naming <paramref name="maxRangeSize"/> when a
+        /// smaller range would work and <paramref name="falsePositiveRate"/> when no range
+        /// would.
+        /// </exception>
         public static Grafite Build(
             IEnumerable<ulong> keys,
             double falsePositiveRate,
@@ -223,34 +322,74 @@ namespace ProbabilisticDataStructures
                 return filter;
             }
 
-            // r = n * L / e, the reduced universe. Computed in floating point and
-            // clamped: the product overflows for large inputs long before the filter
-            // stops being useful, and the hash works modulo a prime of 2^61 - 1, so it
-            // cannot address a universe wider than MaxUniverse. A request that wants more
-            // is built at the cap and not refused -- see the remarks on Build -- and what
-            // it then delivers is n * l / MaxUniverse for a range of l, which
-            // FalsePositiveRate reports.
-            var wanted = n * (double)maxRangeSize / falsePositiveRate;
-            var r = wanted >= Prime ? MaxUniverse : (ulong)Math.Ceiling(wanted);
-            r = Math.Max(r, 2);
+            // r = n * L / e, the reduced universe. Computed in floating point, because the
+            // product overflows an integer for large inputs long before it stops being a
+            // meaningful request. The hash works modulo a prime of 2^61 - 1, so it cannot
+            // address a universe past MaxUniverse, and a request that wants one is refused
+            // rather than quietly built at the cap, where the rate it delivers is not the
+            // rate that was asked for.
+            var wanted = UniverseWanted(n, maxRangeSize, falsePositiveRate);
+            if (!UniverseFits(wanted))
+            {
+                RefuseUniverse(n, maxRangeSize, falsePositiveRate, wanted);
+            }
+
+            // Under 2^61 as a double means at most 2^61 - 256, so this is within the cap.
+            var r = Math.Max((ulong)Math.Ceiling(wanted), 2);
             filter.R = r;
 
+            filter.Fill(distinct, seed);
+            return filter;
+        }
+
+        /// <summary>
+        /// Builds a filter over a universe of exactly the given size, for tests: what an
+        /// earlier release built when it capped a request the builder now refuses. The
+        /// universe is at most <see cref="MaxUniverse"/>, as every release has held it,
+        /// and a filter made this way writes a payload the reader must go on reading.
+        /// </summary>
+        internal static Grafite BuildAtUniverse(
+            IEnumerable<ulong> keys, ulong universe, ulong maxRangeSize, ulong? seed = null)
+        {
+            var distinct = new SortedSet<ulong>(keys);
+            if (distinct.Count == 0 || universe < 2 || universe > MaxUniverse)
+            {
+                throw new ArgumentException(
+                    "A filter at an exact universe needs keys and a universe from 2 to " +
+                    $"{MaxUniverse}.", nameof(universe));
+            }
+
+            var filter = new Grafite
+            {
+                KeyCount = (ulong)distinct.Count,
+                MaxRange = maxRangeSize,
+                R = universe,
+            };
+            filter.Fill(distinct, seed);
+            return filter;
+        }
+
+        /// <summary>
+        /// Draws the hash and stores the hash codes of the keys, in a filter whose universe
+        /// is set.
+        /// </summary>
+        private void Fill(SortedSet<ulong> distinct, ulong? seed)
+        {
             var random = seed is null
                 ? SeededRandom.Unpredictable()
                 : new SeededRandom(seed.Value);
 
             // c1 must not be zero, or the hash ignores the block entirely.
-            filter.C1 = (random.Next() % (Prime - 1)) + 1;
-            filter.C2 = random.Next() % Prime;
+            this.C1 = (random.Next() % (Prime - 1)) + 1;
+            this.C2 = random.Next() % Prime;
 
             var codes = new SortedSet<ulong>();
             foreach (var key in distinct)
             {
-                codes.Add(filter.HashOf(key));
+                codes.Add(this.HashOf(key));
             }
 
-            filter.Encode(codes);
-            return filter;
+            this.Encode(codes);
         }
 
         /// <summary>
@@ -645,10 +784,11 @@ namespace ProbabilisticDataStructures
         /// than 1.
         /// </summary>
         /// <remarks>
-        /// This is what the filter was built to, and what it holds, not what was asked
-        /// for: when the universe asked for did not fit (see <see cref="Build"/>), the
-        /// filter is built at the largest one that does and this reports the rate that
-        /// gives.
+        /// For a range up to the one the filter was built for this is the rate it was
+        /// built for, to within the rounding of the universe: a request whose universe
+        /// the hash cannot address is refused (see <see cref="Build"/>) and not built at
+        /// something smaller. A range wider than that was built for has a proportionally
+        /// higher rate, up to 1.
         /// </remarks>
         /// <param name="rangeSize">The range size to ask about.</param>
         public double FalsePositiveRate(ulong rangeSize)
@@ -802,6 +942,16 @@ namespace ProbabilisticDataStructures
                 throw new InvalidDataException(
                     "Filter claims a reduced universe of nothing, which every key " +
                     "would hash into and no range could be tested against.");
+            }
+            // The builder's own limit, so that nothing it refuses reads. Every release has
+            // capped the universe here, so a payload written for a request that is now
+            // refused carries exactly this, and reads.
+            if (filter.R > MaxUniverse)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims a reduced universe of {filter.R}, beyond anything this " +
+                    $"library builds: the hash works modulo 2^61 - 1, so it is at most " +
+                    $"{MaxUniverse}.");
             }
             if (filter.C1 == 0 || filter.C1 >= Prime || filter.C2 >= Prime)
             {
