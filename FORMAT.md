@@ -232,6 +232,10 @@ address.
 | `HeavyKeeper` | `k` | 2,147,483,587 | as `TopK` |
 | `HeavyKeeper` | width | 2,147,483,591 | each array of buckets is one array |
 | `HeavyKeeper` | depth | 2,147,483,591 | the arrays are held in one |
+| `CountMinSketch` | width | 2,147,483,591 | each row is one array |
+| `CountMinSketch` | depth | 710 | `ceil(ln(1 / delta))` at the smallest delta whose reciprocal is a finite double |
+| `PrivateCountMinSketch` | width | 2,147,483,591 | each row is one array |
+| `PrivateCountMinSketch` | depth | 2,147,483,591 | the rows are held in one array |
 | `VarOpt` | `k` | 2,147,483,590 | each region is an array of `k + 1` slots |
 | `Grafite` | words of low bits | 2,147,483,591 | they are one array |
 | `Grafite` | words of high bits | 33,554,432 | enough for 2,147,483,647 bits, the most an `int` position addresses |

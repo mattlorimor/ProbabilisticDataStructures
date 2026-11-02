@@ -765,6 +765,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asks about short ones is served by it. The remarks on `Build` and `FalsePositiveRate`,
   the README and CAPACITY.md now say so.
 
+- **`CountMinSketch`, `CountSketch` and `PrivateCountMinSketch` failed inside the
+  allocation of a row instead of refusing a size they could not build.** A row is one
+  array, which holds 2,147,483,591 counters. `CountMinSketch` allowed a width up to
+  2^32 − 1 and failed with an `OutOfMemoryException` just past the limit and an
+  `OverflowException` from 2^31; `CountSketch`, whose width is 1/ε² and not e/ε, shared
+  the guard written for the other, so an epsilon of 1e-5 (ten billion counters) saturated
+  the cast and failed the same way; `PrivateCountMinSketch` had no upper bound on its
+  width or depth. A delta whose reciprocal is infinite, below about 5.56e-309, has no
+  `ln(1/δ)` and was converted to a row count anyway. An epsilon of infinity had a width of
+  none, and built a sketch that divided by zero on its first add.
+  <br><br>
+  Each is now an `ArgumentOutOfRangeException` naming the parameter, before anything is
+  allocated: a width past 2,147,483,591 for all three, a depth past 710 for the first two
+  (the `SublimeCountMinSketch` limit, for the same reason) and past 2,147,483,591 for the
+  private sketch, and an epsilon with no width. The readers of `CountMinSketch` and
+  `PrivateCountMinSketch` refuse a payload that claims more as beyond anything built,
+  before it can ask for a row; `CountSketch`'s reader already checks its cells against its
+  dimensions. FORMAT.md's table of sizes has the four new rows. No size that built before
+  stops building.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

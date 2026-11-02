@@ -63,14 +63,37 @@ namespace ProbabilisticDataStructures
         internal Func<ReadOnlySpan<byte>, ulong> HashFunction => this.Hash;
 
         /// <summary>
+        /// The most counters a row can hold, which is the most an array holds.
+        /// The constructor refuses an epsilon that asks for more, and the reader refuses
+        /// a payload that claims more.
+        /// </summary>
+        internal static uint MaxWidth => Guard.MaxSketchWidth;
+
+        /// <summary>
+        /// The most rows a sketch can have: ceil(ln(1 / delta)) at the smallest delta whose
+        /// reciprocal is a finite double.
+        /// </summary>
+        internal static uint MaxDepth => Guard.MaxSketchRows;
+
+        /// <summary>
         /// Creates a new Count-Min Sketch whose estimates exceed the true count by no
         /// more than epsilon times the total count, with probability at least
         /// 1 - delta. Delta is therefore a probability of failure: a smaller delta is a
         /// deeper, more reliable sketch. Both parameters affect the space and time
         /// complexity.
         /// </summary>
+        /// <remarks>
+        /// Each row is ceil(e / epsilon) counters and is one array, so the widest is
+        /// 2,147,483,591, an epsilon of about 1.27e-9, and a sketch of 16 GiB a row. There
+        /// are ceil(ln(1 / delta)) rows, at most 710, for a delta of about 5.6e-309.
+        /// </remarks>
         /// <param name="epsilon">Relative-accuracy factor</param>
         /// <param name="delta">Probability of exceeding that overestimate</param>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// Epsilon is not positive, or asks for a row no array holds or for none at all.
+        /// Delta is not strictly between zero and one, or is so small that its reciprocal,
+        /// and so the row count, is infinite.
+        /// </exception>
         /// <param name="hash">
         /// The hash function to use, or null for the default. Passing it here is the
         /// only way to have one hash cover everything the structure will ever hold:
@@ -81,8 +104,10 @@ namespace ProbabilisticDataStructures
             Guard.ValidSketchEpsilon(epsilon, nameof(epsilon));
             Guard.ValidSketchDelta(delta, nameof(delta));
 
-            var width = (uint)(Math.Ceiling(Math.E / epsilon));
-            var depth = (uint)(Math.Ceiling(Math.Log(1 / delta)));
+            // Both refused before anything is allocated: a row is one array, and a delta
+            // whose reciprocal is infinite has no row count to convert.
+            var width = Guard.SketchWidth(Math.Ceiling(Math.E / epsilon), epsilon, nameof(epsilon));
+            var depth = Guard.SketchRows(delta, nameof(delta));
             this.Matrix = new UInt64[depth][];
 
             for (int i = 0; i < depth; i++)
@@ -376,6 +401,22 @@ namespace ProbabilisticDataStructures
                     $"Sketch has a {depth} by {width} matrix. A sketch with no rows " +
                     "reports every element as seen ulong.MaxValue times, and one with " +
                     "no columns divides by zero.");
+            }
+
+            // The constructor's own limits, so that every sketch it builds reads back and
+            // a few bytes cannot ask for a row that no array could hold.
+            if (width > MaxWidth)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims rows {width} counters wide, beyond anything this library " +
+                    $"builds: a row is one array, of at most {MaxWidth}.");
+            }
+
+            if (depth > MaxDepth)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims {depth} rows, beyond anything this library builds: it " +
+                    $"builds at most {MaxDepth}, for the smallest delta with a finite reciprocal.");
             }
 
             // Each row is allocated before it is read.

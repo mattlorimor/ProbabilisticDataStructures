@@ -52,9 +52,25 @@ namespace ProbabilisticDataStructures
         private Func<ReadOnlySpan<byte>, ulong> Hash { get; set; }
 
         /// <summary>
+        /// The most counters a row can hold, which is the most an array holds. The
+        /// constructor refuses more and the reader refuses a payload that claims more.
+        /// </summary>
+        internal static uint MaxWidth => (uint)Array.MaxLength;
+
+        /// <summary>
+        /// The most rows a sketch can have: they are held in one array.
+        /// </summary>
+        internal static uint MaxDepth => (uint)Array.MaxLength;
+
+        /// <summary>
         /// Builds a sketch of the given shape, seeded with noise for the given privacy
         /// budget.
         /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The width or the depth is zero, or more than one array holds, 2,147,483,591
+        /// (and a sketch of that size is gigabytes of noise); or the budget is not a
+        /// positive finite number.
+        /// </exception>
         /// <param name="width">How many counters each row holds.</param>
         /// <param name="depth">How many rows, and so how many counters an item touches.</param>
         /// <param name="rho">
@@ -82,6 +98,18 @@ namespace ProbabilisticDataStructures
             {
                 throw new ArgumentOutOfRangeException(nameof(depth),
                     "A sketch with no rows reports every item as seen infinitely often.");
+            }
+            // A row is one array and the rows are one array, so neither can pass what an
+            // array holds. Width had no upper guard and failed in the allocation.
+            if (width > MaxWidth)
+            {
+                throw new ArgumentOutOfRangeException(nameof(width), width,
+                    $"A row of {width} counters is more than the {MaxWidth:N0} one array holds.");
+            }
+            if (depth > MaxDepth)
+            {
+                throw new ArgumentOutOfRangeException(nameof(depth), depth,
+                    $"{depth} rows is more than the {MaxDepth:N0} one array holds.");
             }
             if (double.IsNaN(rho) || rho <= 0 || double.IsInfinity(rho))
             {
@@ -388,6 +416,20 @@ namespace ProbabilisticDataStructures
                     $"Sketch has a {depth} by {width} matrix. A sketch with no rows " +
                     "reports every item as seen infinitely often, and one with no " +
                     "columns divides by zero.");
+            }
+            // The constructor's own limits, so that every sketch it builds reads back and
+            // a few bytes cannot ask for a row that no array could hold.
+            if (width > MaxWidth)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims rows {width} counters wide, beyond anything this library " +
+                    $"builds: a row is one array, of at most {MaxWidth}.");
+            }
+            if (depth > MaxDepth)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims {depth} rows, beyond anything this library builds: " +
+                    $"they are one array, of at most {MaxDepth}.");
             }
             if (double.IsNaN(rho) || rho <= 0 || double.IsInfinity(rho))
             {

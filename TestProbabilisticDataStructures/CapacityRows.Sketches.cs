@@ -195,11 +195,12 @@ namespace TestProbabilisticDataStructures
             StructureId.CountMinSketch, "width w = ⌈e/ε⌉ per row, δ 1% (5 rows)",
             () =>
             {
-                // One past the longest array a row can be: refused when the first row is
-                // allocated, which is before anything of that size exists.
+                // One past the longest array a row can be: refused before anything of that
+                // size is allocated.
                 var epsilon = Math.E / (Array.MaxLength + 0.5);
                 Assert.AreEqual(Array.MaxLength + 1.0, Math.Ceiling(Math.E / epsilon));
-                Assert.Throws<OutOfMemoryException>(() => new CountMinSketch(epsilon, 0.01));
+                Assert.AreEqual((uint)Array.MaxLength, CountMinSketch.MaxWidth);
+                Assert.Throws<ArgumentOutOfRangeException>(() => new CountMinSketch(epsilon, 0.01));
                 return Exact((ulong)Array.MaxLength);
             },
             () =>
@@ -220,7 +221,7 @@ namespace TestProbabilisticDataStructures
             {
                 var epsilon = 1 / Math.Sqrt(Array.MaxLength + 0.5);
                 Assert.AreEqual(Array.MaxLength + 1.0, Math.Ceiling(1.0 / (epsilon * epsilon)));
-                Assert.Throws<OutOfMemoryException>(() => new CountSketch(epsilon, 0.01));
+                Assert.Throws<ArgumentOutOfRangeException>(() => new CountSketch(epsilon, 0.01));
                 return Exact((ulong)Array.MaxLength);
             },
             () =>
@@ -239,7 +240,8 @@ namespace TestProbabilisticDataStructures
             StructureId.PrivateCountMinSketch, "width w per row, depth 5",
             () =>
             {
-                Assert.Throws<OutOfMemoryException>(
+                Assert.AreEqual((uint)Array.MaxLength, PrivateCountMinSketch.MaxWidth);
+                Assert.Throws<ArgumentOutOfRangeException>(
                     () => new PrivateCountMinSketch((uint)Array.MaxLength + 1, 5, 1.0, seed: 1));
                 return Exact((ulong)Array.MaxLength);
             },

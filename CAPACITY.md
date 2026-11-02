@@ -359,15 +359,25 @@ the truth for `N` items added, so a sketch for a stream you expect to reach `N` 
 about the error you can accept divided by `N`. Width is `⌈e/ε⌉` and depth `⌈ln(1/δ)⌉`,
 5 at δ = 1%. A read charges 16 bytes a counter.
 
+A row is one array, so the widest is 2,147,483,591, an `ε` of about 1.27e-9, and the
+constructor refuses a finer one with an `ArgumentOutOfRangeException` naming `epsilon`. The
+depth is at most 710, for a `δ` of about 5.6e-309, whose reciprocal is the largest a
+double holds: a smaller `δ` is refused, naming `delta`. A payload that claims more of
+either is refused as beyond anything built.
+
 ### `CountSketch`
 
 The same, with width `⌈1/ε²⌉`, so a rate ten times finer costs a hundred times the
-width, and counters of 8 bytes that are signed. A read charges 24 bytes a counter.
+width, and counters of 8 bytes that are signed. A read charges 24 bytes a counter. The
+widest row is the same 2,147,483,591, an `ε` of about 2.16e-5, and the depth is limited
+the same way.
 
 ### `PrivateCountMinSketch`
 
 You choose the width and depth directly, and the privacy budget `ρ` sets the noise and
-not the size. A read charges 16 bytes a counter.
+not the size. A read charges 16 bytes a counter. A row is one array and the rows are one
+array, so each is at most 2,147,483,591; a constructor given more refuses it, naming
+`width` or `depth`, and so does the reader.
 
 ### `SublimeCountMinSketch`
 
