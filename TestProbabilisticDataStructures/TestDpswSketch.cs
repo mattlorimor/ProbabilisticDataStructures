@@ -52,6 +52,125 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(50, DpswSketch.SubstreamSizeFor(2500, 0.5));
         }
 
+        /// <summary>
+        /// Every sketch a window holds is a <see cref="PrivateCountMinSketch"/>, so a
+        /// width that one refuses is a window that builds and cannot be used: the
+        /// constructor took it, and the first <c>Add</c> failed from inside the private
+        /// sketch, naming that type, when the first substream began. The window now
+        /// refuses the width itself, naming its own parameter and the limit it shares
+        /// with the sketch.
+        /// </summary>
+        [TestMethod]
+        public void TestAWidthNoPrivateSketchCouldHoldIsRefusedWhenTheWindowIsBuilt()
+        {
+            foreach (var rho in new[] { 1.0, GenerousBudget })
+            {
+                foreach (var past in new[] { PrivateCountMinSketch.MaxWidth + 1, uint.MaxValue })
+                {
+                    var wide = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                        () => new DpswSketch(100, rho, width: past, depth: 5));
+                    Assert.AreEqual("width", wide.ParamName);
+                    StringAssert.Contains(wide.Message,
+                        PrivateCountMinSketch.MaxWidth.ToString("N0"),
+                        "the refusal should say what the limit is");
+                }
+            }
+        }
+
+        /// <summary>
+        /// The same for a depth, with a hazard of its own. The guard on the noise of the
+        /// leanest checkpoint divides the depth by the budget it is left, so the deepest
+        /// shapes are also refused by it, naming <c>alpha</c>. At a budget of 1 that guard
+        /// answers a depth past the limit, and blames the checkpoint factor for a sketch
+        /// that is simply too deep; at a generous one it passes, so only the depth can
+        /// refuse. Both are held to naming <c>depth</c>.
+        /// </summary>
+        [TestMethod]
+        public void TestADepthNoPrivateSketchCouldHoldIsRefusedWhenTheWindowIsBuilt()
+        {
+            foreach (var rho in new[] { 1.0, GenerousBudget })
+            {
+                foreach (var past in new[] { PrivateCountMinSketch.MaxDepth + 1, uint.MaxValue })
+                {
+                    var deep = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                        () => new DpswSketch(100, rho, width: 512, depth: past));
+                    Assert.AreEqual("depth", deep.ParamName,
+                        $"at a budget of {rho} a depth of {past} is refused for something " +
+                        "other than the depth");
+                    StringAssert.Contains(deep.Message,
+                        PrivateCountMinSketch.MaxDepth.ToString("N0"),
+                        "the refusal should say what the limit is");
+                }
+            }
+        }
+
+        /// <summary>
+        /// And every shape a private sketch takes is still taken: the limit is the
+        /// sketch's own, one either side. Nothing is allocated for a sketch until the
+        /// first substream begins, so the shapes at the limit are built here and no sketch
+        /// of them is.
+        /// </summary>
+        [TestMethod]
+        public void TestTheShapesAtThePrivateSketchesLimitStillBuild()
+        {
+            var widest = new DpswSketch(
+                100, GenerousBudget, width: PrivateCountMinSketch.MaxWidth, depth: 5);
+            var deepest = new DpswSketch(
+                100, GenerousBudget, width: 512, depth: PrivateCountMinSketch.MaxDepth);
+            var both = new DpswSketch(
+                100, GenerousBudget,
+                width: PrivateCountMinSketch.MaxWidth, depth: PrivateCountMinSketch.MaxDepth);
+
+            foreach (var window in new[] { widest, deepest, both })
+            {
+                Assert.AreEqual(0, window.SketchesHeld);
+                Assert.AreEqual(0L, window.SizeInBytes);
+            }
+
+            // The ordinary shapes, the smallest and the default.
+            _ = new DpswSketch(100, 1.0, width: 1, depth: 1);
+            _ = new DpswSketch(100, 1.0);
+        }
+
+        /// <summary>
+        /// The refusal comes before anything is built. A window of a billion at the
+        /// default factor has substreams of about two million items, and the checkpoints
+        /// of one are a list of that many offsets, so a constructor that checked the shape
+        /// after sizing them would allocate megabytes to say no. The allocation is the
+        /// least of three runs, as <see cref="TestReadBudget"/> measures a read: the
+        /// first throw of an exception costs more than the ones after it.
+        /// </summary>
+        [TestMethod]
+        public void TestARefusedShapeBuildsNothing()
+        {
+            foreach (var (width, depth) in new[]
+            {
+                (PrivateCountMinSketch.MaxWidth + 1, 5u),
+                (512u, PrivateCountMinSketch.MaxDepth + 1),
+            })
+            {
+                var least = long.MaxValue;
+                for (var run = 0; run < 3; run++)
+                {
+                    var before = GC.GetAllocatedBytesForCurrentThread();
+                    Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                        () => new DpswSketch(1_000_000_000, GenerousBudget, width: width, depth: depth));
+                    least = Math.Min(least, GC.GetAllocatedBytesForCurrentThread() - before);
+                }
+
+                // Checkpoints alone for this window is about eight megabytes.
+                Assert.IsLessThan(64 * 1024, least,
+                    $"a refused {depth} by {width} shape allocated {least:N0} bytes, " +
+                    "which is the checkpoints of a substream: it was built before it was refused");
+            }
+        }
+
+        /// <summary>
+        /// A budget large enough that the noise of the leanest checkpoint stays inside the
+        /// window at the deepest sketch there can be, so only the shape can refuse.
+        /// </summary>
+        private const double GenerousBudget = 1e9;
+
         private static byte[] Key(int i) => Encoding.UTF8.GetBytes("k" + i);
 
         /// <summary>
