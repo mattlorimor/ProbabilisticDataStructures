@@ -250,5 +250,109 @@ namespace TestProbabilisticDataStructures
             }
             Assert.AreEqual(1, raised, "the add should raise one counter, by one");
         }
+
+        /// <summary>
+        /// The widest stub a chunk of the fewest counters can have and still keep the pool
+        /// the array requires: the widest the constructor accepts at that many counters.
+        /// </summary>
+        private static int WidestStubAtTheFewestCounters()
+        {
+            var widest = 0;
+            for (var s = ValeCounterArray.MinStubBits; s <= ValeCounterArray.MaxStubBits; s++)
+            {
+                try
+                {
+                    _ = new ValeCounterArray(
+                        ValeCounterArray.MinCountersPerChunk, ValeCounterArray.MinCountersPerChunk, s);
+                    widest = s;
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                }
+            }
+
+            // The answer is a stub with room to spare either side, so that a search which
+            // stopped at the first or accepted the last would be noticed.
+            Assert.IsTrue(widest > ValeCounterArray.MinStubBits && widest < ValeCounterArray.MaxStubBits,
+                $"a widest stub of {widest} is not a finding");
+            return widest;
+        }
+
+        /// <summary>
+        /// A row in which no tuning satisfies the bound is tuned anyway, to the best of the
+        /// tunings there are.
+        /// </summary>
+        /// <remarks>
+        /// Tuning looks for a layout whose chunks will not spill, and a row in which every
+        /// counter is this large has none: at the fewest counters a chunk keeps a stub of
+        /// at most 27 bits, and sixteen counters of 28 bits or more then want more extension
+        /// than the pool left holds. It answers with "the widest stub with a pool left" at
+        /// the fewest counters -- and the answer it gave, a stub of 32 bits, leaves no pool
+        /// at all, so the array it was meant for refused it with an
+        /// <see cref="ArgumentOutOfRangeException"/> naming a chunk "short of the 24 a chunk
+        /// is required to keep". The widest stub the constructor accepts at that many counters
+        /// is what the comment promised, and the tails arrays carry what the pools cannot.
+        /// <para>
+        /// This is not a defect of the longest counters: 2^27 is the smallest value found to
+        /// do it, in a row of nothing else. It is here because a row of counters of 2^63 and
+        /// more, once it could be tallied, is one of the rows that does.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        [DataRow(1UL << 27)]
+        [DataRow(1UL << 40)]
+        [DataRow(1UL << 62)]
+        [DataRow(1UL << 63)]
+        [DataRow(ulong.MaxValue)]
+        public void TestARowOfNothingButLargeCountsReadsBackAtTheBestTuningThereIs(ulong value)
+        {
+            var payload = WithCounters(Wide().ToByteArray(), _ => value);
+
+            var read = SublimeCountMinSketch.ReadFrom(new MemoryStream(payload));
+
+            CollectionAssert.AreEqual(payload, read.ToByteArray());
+            Assert.AreEqual(value, read.Count(Key(1)));
+            var row = RowsOf(read)[0];
+            Assert.AreEqual(ValeCounterArray.MinCountersPerChunk, row.CountersPerChunk);
+            Assert.AreEqual(WidestStubAtTheFewestCounters(), row.StubBits);
+            for (var j = 0; j < 1024; j++)
+            {
+                Assert.AreEqual(value, row.Get(j), $"counter {j}");
+            }
+        }
+
+        /// <summary>
+        /// The same row, widened by an add rather than read.
+        /// </summary>
+        [TestMethod]
+        [DataRow(1UL << 27)]
+        [DataRow(1UL << 62)]
+        [DataRow(1UL << 63)]
+        [DataRow(ulong.MaxValue - 1)]
+        public void TestWideningARowOfNothingButLargeCountsCopiesThemAcross(ulong value)
+        {
+            var sketch = Wide();
+            var row = RowsOf(sketch)[0];
+            for (var j = 0; j < 1024; j++)
+            {
+                row.Set(j, value);
+            }
+
+            SetField(sketch, "expansionLimit", 1UL);
+            sketch.Add(Key(1));
+
+            Assert.AreEqual(2048, sketch.Width, "the add should have doubled the row");
+            var widened = RowsOf(sketch)[0];
+            var raised = 0;
+            for (var j = 0; j < 1024; j++)
+            {
+                var now = widened.Get(j);
+                Assert.AreEqual(now, widened.Get(j + 1024), $"counter {j} was not copied");
+                Assert.IsTrue(now == value || now == value + 1,
+                    $"counter {j} held {value} and now holds {now}");
+                raised += (int)(now - value);
+            }
+            Assert.AreEqual(1, raised, "the add should raise one counter, by one");
+        }
     }
 }
