@@ -1004,6 +1004,85 @@ namespace TestProbabilisticDataStructures
             AssertRefusedForItsShape<ThetaSketch>(bytes, Poke(bytes, 0, 0), "not a size this");
         }
 
+        // ---- A hash its reader refuses is refused for that, whatever the budget --------
+
+        /// <summary>Where the envelope's header names the hash a payload was written with.</summary>
+        private const int HashIdOffset = 8;
+
+        /// <summary>
+        /// A payload whose header names a hash its reader will not read it with is
+        /// refused for that under any budget, with the refusal it gets under none: under
+        /// a budget too small to hold the payload, and under one byte short of the whole
+        /// read, where it is held and checksummed. Which hash a payload names is in its
+        /// header, and which one it is read with is the caller's to say, so nothing past
+        /// the header bears on it. Refused only once the budget had been raised to the
+        /// total, the payload would have been priced, and held, for a read that cannot
+        /// happen.
+        /// </summary>
+        /// <remarks>
+        /// Two hash ids, both read without a hash supplied, which every reader refuses:
+        /// one no version defines, and the one a function set through <c>SetHash</c> is
+        /// recorded as. A structure that hashes nothing also refuses a hash supplied to
+        /// it, which says nothing about the payload at all.
+        /// </remarks>
+        [TestMethod]
+        [DynamicData(nameof(Structures))]
+        public void TestEveryStructureRefusesAHashItCannotUseWhateverTheBudget(string structure)
+        {
+            var id = Enum.Parse<StructureId>(structure);
+            Assert.IsTrue(Samples.Value.TryGetValue(id, out var sample),
+                $"{id} has no sample to read under a budget. Add one.");
+
+            Assert.IsTrue(RefusedForBudget(() => sample.Read(sample.Bytes, new ReadOptions(1)), out var whole),
+                $"{sample.Name} was not refused under a budget of one byte");
+            var budgets = new[] { 1L, whole.RequiredBytes - 1 };
+
+            foreach (var hash in new[] { (ushort)0xBEEF, (ushort)HashId.Custom })
+            {
+                var bytes = (byte[])sample.Bytes.Clone();
+                BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(HashIdOffset), hash);
+                Reseal(bytes);
+                AssertRefusedAsUnderNoBudget(
+                    $"{sample.Name} naming hash {hash}", options => sample.Read(bytes, options), budgets);
+            }
+
+            if (sample.RefusesAHashBecause is not null)
+            {
+                AssertRefusedAsUnderNoBudget(
+                    $"{sample.Name} read with a hash", options => sample.ReadWithHash(sample.Bytes, options), budgets);
+            }
+        }
+
+        /// <summary>
+        /// A payload damaged in the hash id its header names is refused as damaged when it
+        /// is held, and not for the hash: the hash is checked once the checksum has vouched
+        /// for the header that names it.
+        /// </summary>
+        [TestMethod]
+        public void TestAHeldPayloadDamagedInItsHashIdIsRefusedAsDamaged()
+        {
+            var bytes = (byte[])Samples.Value[StructureId.BloomFilter].Bytes.Clone();
+            bytes[HashIdOffset] ^= 0x40;
+
+            var e = Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<BloomFilter>(bytes, ReadOptions.Unlimited));
+            StringAssert.Contains(e.Message, "checksum does not match");
+        }
+
+        private static void AssertRefusedAsUnderNoBudget(string what, Func<ReadOptions, object> read, long[] budgets)
+        {
+            var unlimited = Assert.ThrowsExactly<InvalidDataException>(
+                () => read(ReadOptions.Unlimited), $"{what} was read");
+
+            foreach (var budget in budgets)
+            {
+                var e = Assert.ThrowsExactly<InvalidDataException>(() => read(new ReadOptions(budget)));
+                Assert.IsNotInstanceOfType<ReadBudgetExceededException>(e.InnerException,
+                    $"{what} under {budget:N0} bytes was refused for its budget, where under none: {unlimited.Message}");
+                Assert.AreEqual(unlimited.Message, e.Message, $"{what} under {budget:N0} bytes");
+            }
+        }
+
         // ---- The default, the options, and the refusal --------------------------------
 
         /// <summary>
