@@ -45,6 +45,38 @@ namespace TestProbabilisticDataStructures
                 "adding filters should increase the total capacity");
         }
 
+        /// <summary>
+        /// The capacity is the bits of every contained filter added up, and a growing
+        /// filter's filters pass what a uint counts well before any one of them does:
+        /// at a growth of 2, a hint of 1,000, 1% and r = 0.8, the eighteen filters at the
+        /// ceiling hold 4,460,676,502 bits between them, the largest 2,291,218,187.
+        /// <para>
+        /// Built cheaply: the sum runs over the list of contained filters, so one filter
+        /// of 9,585,059 bits listed 449 times -- the fewest copies that pass
+        /// uint.MaxValue -- totals 4,303,691,491 bits for one filter's megabyte. A total
+        /// kept in 32 bits wraps to 8,724,195, a saturated one stops at 4,294,967,295,
+        /// and a checked one throws; each is told apart from the sum.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestCapacityCountsPastWhatAUintHolds()
+        {
+            var f = new ScalableBloomFilter(1_000_000, 0.01, 0.8);
+            var filter = f.Filters[0];
+            Assert.AreEqual(9_585_059u, filter.Capacity(), "the contained filter is not the size this test was built around");
+
+            const int Copies = 449;
+            f.Filters = Enumerable.Repeat(filter, Copies).ToList();
+
+            const ulong Expected = 449UL * 9_585_059UL;
+            Assert.IsGreaterThan((ulong)uint.MaxValue, Expected,
+                "the total does not pass what a uint holds, so nothing below is checked");
+            Assert.IsLessThan((ulong)uint.MaxValue, Expected - 9_585_059UL,
+                "one copy fewer should not pass a uint, or the count is not the smallest that does");
+
+            Assert.AreEqual(Expected, f.Capacity(), "the capacity is not the sum of the contained filters' bits");
+        }
+
         // Ensures that K returns the number of hash functions used in each Bloom filter.
         [TestMethod]
         public void TestScalableBloomK()
