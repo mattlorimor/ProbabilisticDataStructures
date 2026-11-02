@@ -26,8 +26,9 @@ namespace ProbabilisticDataStructures
     /// distributed with the xoshiro generators for seeding them. It is used here in its
     /// own right because it suits the requirement exactly: 64 bits of state, no invalid
     /// state to avoid -- zero is an ordinary seed, unlike xorshift, which is stuck at it
-    /// forever -- and it passes BigCrush. Picking an index below a few million asks
-    /// little of a generator, and this asks little in return.
+    /// forever -- and it passes BigCrush. Picking an index asks little of a generator,
+    /// and this asks little in return; how evenly an index is picked is decided by
+    /// <see cref="NextBelow"/>, not by the generator.
     /// </para>
     /// </remarks>
     internal struct SeededRandom
@@ -68,10 +69,20 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <remarks>
         /// Lemire's multiply-and-shift rather than a modulo: it costs a multiply instead
-        /// of a division. Its bias is under one part in 2^32, and the rejection loop
-        /// that would remove the last of it is not worth having for the job this does --
-        /// choosing among at most a few million cells, where a bias that small is far
-        /// beneath the filter's own approximation error.
+        /// of a division. It has no rejection step, so it is exact only for a bound that
+        /// is a power of two. For any other, each value is drawn by floor(2^32 / bound)
+        /// of the 2^32 inputs or by one more. That puts every value within 2^-32 of
+        /// 1/bound, but the two counts differ by a factor of 1 + 1 / floor(2^32 / bound):
+        /// close to one for a small bound, and two once the bound passes 2^31. The
+        /// stable filter's cell count reaches that range, which is why it draws its decay
+        /// with a 64-bit multiply of its own, <see cref="StableBloomFilter.DecayStart"/>,
+        /// and not with this.
+        /// <para>
+        /// Changing this changes more than seeded sequences. <see cref="SetSketch"/>
+        /// shuffles each element's registers with a generator seeded from the element's
+        /// hash, so this decides which registers the elements of a stored sketch went
+        /// to, and a sketch read back has to go on agreeing with it.
+        /// </para>
         /// </remarks>
         internal uint NextBelow(uint bound)
         {

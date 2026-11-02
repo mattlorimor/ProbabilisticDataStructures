@@ -783,6 +783,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an old payload read back and a new filter, with an `ArgumentException` saying so,
   since the same item sets different bits in each.
 
+- **A large `StableBloomFilter` decayed some cells more often than others, and one within
+  a run's length of 2^32 cells decayed some of the wrong ones.** Each add decrements `p`
+  consecutive cells from a randomly drawn start, and the stable point is worked out for
+  every cell being decremented with probability `p/m`. The start was drawn with a 32-bit
+  multiply-and-shift, which gives each start `floor(2^32 / m)` of the 2^32 values or one
+  more. That is exact at a power of two. Past 2^31 cells, some starts were drawn twice as
+  often as others. A cell is reached from `p` starts, so it was decremented at one of two
+  rates up to `1/p` apart, averaging `p/m`. Near the top of the range, where the rates
+  were furthest apart, that put the stable false positive rate above what
+  `FalsePositiveRate()` reports. One-bit cells sized for 1% were 0.4% of the rate over it,
+  for 10% 1.1% and for 50% 3%; two-bit cells sized for 1% were 0.04% over. At a billion
+  cells, one-bit cells sized for 1% were 0.005% over, and below a hundred million every
+  setting checked was under 0.001%. These figures come from the two rates, with Deng and
+  Rafiei's per-cell model, which a scaled-down simulation of the draw reproduced.
+  Separately, a run's index was summed in 32 bits. When `m` is within `p` of 2^32 the sum
+  wrapped, and the end of a run that started near the last cell went to cells
+  `2^32 - m` short of the ones it was meant for. Every release is affected.
+  <br><br>
+  The start is now the high half of the 128-bit product of the generator's next 64 bits
+  and `m`. Every start and every cell is within 2^-32 of its share, at every size. A
+  run's index is summed in 64 bits. The bounded draws the cuckoo filter, `VarOpt` and
+  `SetSketch` make are unchanged, and so are their sequences.
+  <br><br>
+  **A seeded stable filter large enough for the draw to differ decays slightly
+  differently from 6.2.0.** Each draw gives the start 6.2.0 gave or the cell after it, and
+  moves in about `m / 2^33` of draws below a billion cells, about one in 8,600 at a
+  million. A seeded filter that met no such draw is the filter 6.2.0 built, byte for byte,
+  which is still true of the stored fixtures. Each add still draws exactly once, so after
+  any number of adds the generator stands where it did. A restored filter's stored
+  generator state stays valid: the filter resumes the sequence it was partway through,
+  and from there its decay is drawn the new way.
+
+- **A `StableBloomFilter` with as many hash functions as cells never finished an add.**
+  Examples are three cells at 1%, or ten at one in a million. The number of cells an add
+  decrements, `p`, is worked out from `1/k - 1/m`, which is zero for such a filter, so `p`
+  came out as 4,294,967,295. An add then stepped that many times round a ring of a few
+  cells. A payload records `p` and the reader takes it, so a payload holding such a `p`,
+  which 6.2.0 writes for such a filter, read back as a filter that hung on its first add.
+  <br><br>
+  Nothing is refused, and no result changes. A run of `p` cells round a ring of `m` takes
+  every cell down `p / m` times, and the `p mod m` cells from its start once more, none
+  lower than zero. The decay now does exactly that, in at most `min(p, m)` cell updates.
+  It is exact for every cell width and every `p` a payload can hold. A filter whose run
+  is shorter than the filter, which is every ordinary one, decays exactly as before. One
+  draw per add is still made, so the generator's state is unchanged. `P()` still reports
+  4,294,967,295 for such a filter. Every cell is emptied on each add, as the loop would
+  have done, so the filter remembers only its latest item.
+
 - **`DDSketch` filed a value its 32-bit bucket index could not hold in the last bucket
   there is, and answered with that bucket for all of them.** A bucket is numbered by an
   `int`, and the cast saturated. At a relative accuracy of 1e-10 an `int` reaches 2^31

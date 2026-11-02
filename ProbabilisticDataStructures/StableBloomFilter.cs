@@ -622,14 +622,118 @@ namespace ProbabilisticDataStructures
         /// cells are not independent, each cell has a probability of p/m for being
         /// picked at each iteration, which means the properties still hold.
         /// </summary>
+        /// <remarks>
+        /// For a run shorter than the filter, p/m to within 2^-32 / p of itself at every
+        /// size, which <see cref="DecayStart"/> explains. A run as long as the filter or
+        /// longer reaches every cell, and <see cref="DecayRun"/> says how.
+        /// </remarks>
         private void Decrement()
         {
-            var r = this.random.NextBelow(this.M);
-            for (uint i = 0; i < this.p; i++)
+            this.DecayUpdates += DecayRun(this.cells, this.M, this.p, DecayStart(this.random.Next(), this.M));
+        }
+
+        /// <summary>
+        /// The cell updates this filter's decay has made, so a test can hold an add to
+        /// min(p, m) of them: p for an ordinary filter, as the loop always made, and m for
+        /// one whose run is longer than the filter. Not stored with the filter, and not
+        /// returned to zero by <see cref="Reset"/>.
+        /// </summary>
+        internal long DecayUpdates { get; private set; }
+
+        /// <summary>
+        /// Decrements the <paramref name="p"/> consecutive cells of a run that starts at
+        /// <paramref name="start"/>, among <paramref name="m"/>, each by one and no lower
+        /// than zero.
+        /// </summary>
+        /// <remarks>
+        /// A run of p cells around a ring of m goes round p / m whole times and then
+        /// p mod m cells more, so it takes every cell down p / m times and the first
+        /// p mod m from the start once more. Each step is one down and none lower than
+        /// zero, so the steps a cell takes are what matters, not their order, and as many
+        /// as the cell's maximum empty it. This takes each cell down by its count at once,
+        /// in min(p, m) updates, and does exactly what stepping round the ring would.
+        /// A run shorter than the filter is p updates of one each, as it always was.
+        /// <para>
+        /// Without it, a filter with as many hash functions as cells, whose p is
+        /// 4,294,967,295, spent billions of steps on every add, and so did one read from a
+        /// payload holding such a p. A filter like that empties every cell on every add,
+        /// which is what the loop did too, eventually.
+        /// </para>
+        /// <para>
+        /// Decrement runs its decay through this, so a test can run it from any start, at
+        /// any length and cell width, against the plain loop.
+        /// </para>
+        /// </remarks>
+        /// <returns>The cell updates it made, counted as it makes them.</returns>
+        internal static uint DecayRun(Buckets cells, uint m, uint p, uint start)
+        {
+            var laps = p / m;
+            var rest = p % m;
+            var max = (uint)cells.MaxBucketValue();
+            var updates = Math.Min(p, m);
+            uint made = 0;
+            for (uint i = 0; i < updates; i++)
             {
-                var idx = (r + i) % this.M;
-                this.cells.Increment((uint)idx, -1);
+                // laps is at most p / 2 whenever rest is not zero, so this cannot wrap.
+                var steps = laps + (i < rest ? 1u : 0u);
+                cells.Increment(DecayCell(start, i, m), -(int)Math.Min(steps, max));
+                made++;
             }
+
+            return made;
+        }
+
+        /// <summary>
+        /// The cell a decay run starts at, for the generator's next 64 bits and a filter
+        /// of <paramref name="m"/> cells: the high half of their 128-bit product.
+        /// </summary>
+        /// <remarks>
+        /// Each start is drawn by floor(2^64 / m) of the 2^64 inputs or by one more, so
+        /// it is within 2^-32 of its share of the draw. A cell is reached from p
+        /// consecutive starts, and their shares add up to within one input of
+        /// p * 2^64 / m, so every cell is decremented with probability p/m to within
+        /// 2^-32 / p of itself.
+        /// <para>
+        /// Until the release after 6.2.0 the start came from
+        /// <see cref="SeededRandom.NextBelow"/>, which multiplies only the top 32 bits.
+        /// That gives each start floor(2^32 / m) of 2^32 inputs or one more, so past 2^31
+        /// cells some starts were drawn twice as often as others, and each cell was
+        /// decremented at one of two rates up to 1/p apart. At the sizes where they were
+        /// furthest apart, that raised the stable false positive rate above what
+        /// <see cref="FalsePositiveRate"/> says by 0.4% of itself for one-bit cells built
+        /// for 1%, 1.1% for 10% and 3% for 50%, and by 0.04% for two-bit cells at 1%.
+        /// Those figures come from the two rates and Deng and Rafiei's per-cell model,
+        /// which a scaled-down simulation of the draw reproduced. The suite does not
+        /// rebuild them.
+        /// </para>
+        /// <para>
+        /// One input is still drawn per add, so after any number of adds the generator
+        /// stands where it did before, and a payload's stored position means what it
+        /// meant. The start is the one the 32-bit draw gave, or the cell after it. It
+        /// moves in a share of draws that grows with m: about m / 2^33 below a billion
+        /// cells, too few for a small seeded filter to meet one in practice.
+        /// <see cref="SeededRandom.NextBelow"/> itself is unchanged, because other
+        /// structures depend on it, among them <see cref="SetSketch"/>'s stored
+        /// sketches. Decrement draws through this so that a test can count the inputs
+        /// that start a run at each cell without a filter of that size.
+        /// </para>
+        /// </remarks>
+        internal static uint DecayStart(ulong next, uint m)
+        {
+            return (uint)Math.BigMul(next, m, out _);
+        }
+
+        /// <summary>
+        /// The <paramref name="i"/>-th cell of a decay run that starts at
+        /// <paramref name="start"/>, in a filter of <paramref name="m"/> cells.
+        /// </summary>
+        /// <remarks>
+        /// The sum is taken in 64 bits. In 32 it wrapped once m was within p of 2^32, and
+        /// sent the rest of that run 2^32 - m cells short of where it belonged.
+        /// </remarks>
+        internal static uint DecayCell(uint start, uint i, uint m)
+        {
+            return (uint)(((ulong)start + i) % m);
         }
 
         /// <summary>
@@ -651,6 +755,15 @@ namespace ProbabilisticDataStructures
             if (p <= 0)
             {
                 p = 1;
+            }
+
+            // A filter with as many hash functions as cells has 1/k - 1/m = 0, so p is
+            // infinite. The cast below saturated that to uint.MaxValue, and that is the
+            // value kept, written out rather than left to how a cast treats infinity.
+            // DecayRun takes a run that long round the filter in m updates.
+            if (p >= uint.MaxValue)
+            {
+                return uint.MaxValue;
             }
 
             return (uint)p;
