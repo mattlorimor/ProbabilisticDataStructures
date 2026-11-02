@@ -43,6 +43,15 @@ structure whose layout changes bumps only its own.
 | 4 | 6.2.0 | `SetSketch` | the construction, written only for the second one |
 | 5 | the release after 6.2.0 | `StableBloomFilter` | the state the random generator began in |
 
+The table is also the list of what each structure reads. A version belongs to the
+structures named against it, and a structure's reader reads those versions and no
+others. A `BloomFilter` payload labelled version 2 is refused although version 2
+exists, because the Bloom filter has never written it: the header does not describe a
+payload this format produced, and reading it anyway would be guessing which layout it
+meant. The refusal names the structure, the version it was handed and the versions that
+structure reads. A number is given to one change and not reused for another, so a new
+version adds one row here and changes what only the structures named on it read.
+
 A structure writes the version its own layout needs, and the rest go on writing the
 version they always did. Version 2 exists because the stable and cuckoo filters
 gained a stored random-generator state in 6.0.0. Raising every structure's version
@@ -68,9 +77,11 @@ reading. Writing the filter out records that same point, not the position it has
 since, so a save and a load never moves where a `Reset` goes. What the payload cannot
 say is the seed the filter was built with, and nothing is guessed at to replace it.
 
-A reader refuses a payload whose magic does not match, whose version is `0` or greater
-than the version it knows, whose structure id is not the type being read, or whose
-checksum does not match. It also refuses one that does not consume exactly its stated
+A reader refuses a payload whose magic does not match, whose version is not one its
+structure has defined, whose structure id is not the type being read, or whose
+checksum does not match. The versions a structure has not defined include `0`, which is
+reserved and never written, and anything above the highest in the table, which a later
+release wrote. It also refuses one that does not consume exactly its stated
 length, which catches a reader and writer that disagree about a layout while the
 checksum still matches.
 

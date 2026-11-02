@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -56,6 +57,73 @@ namespace TestProbabilisticDataStructures
                 "the document have diverged.");
 
             return sections;
+        }
+
+        // One row of the table of format versions: the version, the release that first
+        // wrote it, and the structures that define it. The release is not read.
+        private static readonly Regex VersionRow =
+            new(@"^\| (?<version>\d+) \| [^|]* \| (?<who>[^|]*) \|", RegexOptions.Multiline);
+
+        /// <summary>
+        /// The table of format versions says, structure by structure, the same versions
+        /// the readers accept. Someone decoding a payload by hand reads that table to
+        /// learn which versions exist for the structure in front of them; a table that
+        /// has drifted from the code sends them to a layout that was never written, or
+        /// tells them a version is unknown that the library reads.
+        /// </summary>
+        [TestMethod]
+        public void TestTheVersionTableIsWhatEachStructureReads()
+        {
+            var spec = Specification();
+            var start = spec.IndexOf("### Format versions", StringComparison.Ordinal);
+            Assert.IsGreaterThanOrEqualTo(0, start, "FORMAT.md has no table of format versions");
+            var end = spec.IndexOf("\n### ", start + 1, StringComparison.Ordinal);
+            var section = spec[start..(end < 0 ? spec.Length : end)];
+
+            var rows = VersionRow.Matches(section);
+            Assert.IsGreaterThan(0, rows.Count,
+                "no rows were found in the table of format versions, so every assertion " +
+                "made about it below is vacuous. The row pattern and the document have diverged.");
+
+            var documented = Enum.GetValues<StructureId>()
+                .ToDictionary(id => id, _ => new List<ushort>());
+            var seenVersions = new HashSet<ushort>();
+
+            foreach (Match row in rows)
+            {
+                var version = ushort.Parse(row.Groups["version"].Value);
+                Assert.IsTrue(seenVersions.Add(version),
+                    $"FORMAT.md lists format version {version} on more than one row");
+
+                var who = row.Groups["who"].Value.Trim();
+                var named = who == "every structure"
+                    ? Enum.GetValues<StructureId>()
+                    : who.Split(',')
+                        .Select(name => name.Trim().Trim('`'))
+                        .Select(name =>
+                        {
+                            Assert.IsTrue(Enum.TryParse<StructureId>(name, out var id)
+                                    && Enum.IsDefined(id),
+                                $"the row for format version {version} names '{name}', " +
+                                "which is not a structure");
+                            return Enum.Parse<StructureId>(name);
+                        })
+                        .ToArray();
+
+                foreach (var id in named)
+                {
+                    documented[id].Add(version);
+                }
+            }
+
+            foreach (var (id, versions) in documented)
+            {
+                CollectionAssert.AreEqual(
+                    PersistenceFormat.ReadableVersions(id).ToArray(),
+                    versions.OrderBy(v => v).ToArray(),
+                    $"FORMAT.md and the reader of {id} disagree about which format " +
+                    "versions it has");
+            }
         }
 
         /// <summary>

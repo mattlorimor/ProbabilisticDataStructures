@@ -635,6 +635,36 @@ namespace TestProbabilisticDataStructures
                 "the stored sketch disagrees with one built the same way now");
         }
 
+        /// <summary>
+        /// The version 4 layout, which added the construction a sketch was built with.
+        /// Hand-assembled from the version 1 fixture rather than written by the library,
+        /// so reading it is held to the layout and not to whatever the writer happens to
+        /// produce: the version 1 payload with the second construction's byte after the
+        /// ceiling, a version of 4, a length one longer and a CRC to match. The registers
+        /// are the ones the version 1 fixture holds, so both read as the same sketch but
+        /// for the construction.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredSetSketchAtVersionFourStillReads()
+        {
+            var sketch = SetSketch.ReadFrom(Fixture("setsketch-v4.bin"));
+            var first = SetSketch.ReadFrom(Fixture("setsketch-v1.bin"));
+
+            Assert.AreEqual(SetSketchVariant.SetSketch2, sketch.Variant);
+            Assert.AreEqual(SetSketchVariant.SetSketch1, first.Variant);
+
+            Assert.AreEqual(512, sketch.Registers);
+            Assert.AreEqual(1.01, sketch.Base);
+            Assert.AreEqual(20.0, sketch.Rate);
+            Assert.AreEqual(40_000, sketch.MaxRegisterValue);
+
+            // The same registers, which a reader that mistook the added byte for the
+            // first of them would shift by one: the estimate comes from them alone, and
+            // is the one the version 1 fixture gives.
+            Assert.AreEqual(first.Cardinality(), sketch.Cardinality(),
+                "the stored sketch's registers were not read as the ones in the payload");
+        }
+
         [TestMethod]
         public void TestStoredSublimeCountMinSketchStillReads()
         {
