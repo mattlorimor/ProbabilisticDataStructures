@@ -800,6 +800,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generator state stays valid: the filter resumes the sequence it was partway through,
   and from there its decay is drawn the new way.
 
+- **A `StableBloomFilter` with as many hash functions as cells never finished an add.**
+  Examples are three cells at 1%, or ten at one in a million. The number of cells an add
+  decrements, `p`, is worked out from `1/k - 1/m`, which is zero for such a filter, so `p`
+  came out as 4,294,967,295. An add then stepped that many times round a ring of a few
+  cells. A payload records `p` and the reader takes it, so a payload holding such a `p`,
+  which 6.2.0 writes for such a filter, read back as a filter that hung on its first add.
+  <br><br>
+  Nothing is refused, and no result changes. A run of `p` cells round a ring of `m` takes
+  every cell down `p / m` times, and the `p mod m` cells from its start once more, none
+  lower than zero. The decay now does exactly that, in at most `min(p, m)` cell updates.
+  It is exact for every cell width and every `p` a payload can hold. A filter whose run
+  is shorter than the filter, which is every ordinary one, decays exactly as before. One
+  draw per add is still made, so the generator's state is unchanged. `P()` still reports
+  4,294,967,295 for such a filter. Every cell is emptied on each add, as the loop would
+  have done, so the filter remembers only its latest item.
+
 - **`DDSketch` filed a value its 32-bit bucket index could not hold in the last bucket
   there is, and answered with that bucket for all of them.** A bucket is numbered by an
   `int`, and the cast saturated. At a relative accuracy of 1e-10 an `int` reaches 2^31

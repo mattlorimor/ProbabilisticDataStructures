@@ -637,14 +637,35 @@ namespace ProbabilisticDataStructures
         /// than zero.
         /// </summary>
         /// <remarks>
+        /// A run of p cells around a ring of m goes round p / m whole times and then
+        /// p mod m cells more, so it takes every cell down p / m times and the first
+        /// p mod m from the start once more. Each step is one down and none lower than
+        /// zero, so the steps a cell takes are what matters, not their order, and as many
+        /// as the cell's maximum empty it. This takes each cell down by its count at once,
+        /// in min(p, m) updates, and does exactly what stepping round the ring would.
+        /// A run shorter than the filter is p updates of one each, as it always was.
+        /// <para>
+        /// Without it, a filter with as many hash functions as cells, whose p is
+        /// 4,294,967,295, spent billions of steps on every add, and so did one read from a
+        /// payload holding such a p. A filter like that empties every cell on every add,
+        /// which is what the loop did too, eventually.
+        /// </para>
+        /// <para>
         /// Decrement runs its decay through this, so a test can run it from any start, at
         /// any length and cell width, against the plain loop.
+        /// </para>
         /// </remarks>
         internal static void DecayRun(Buckets cells, uint m, uint p, uint start)
         {
-            for (uint i = 0; i < p; i++)
+            var laps = p / m;
+            var rest = p % m;
+            var max = (uint)cells.MaxBucketValue();
+            var updates = Math.Min(p, m);
+            for (uint i = 0; i < updates; i++)
             {
-                cells.Increment(DecayCell(start, i, m), -1);
+                // laps is at most p / 2 whenever rest is not zero, so this cannot wrap.
+                var steps = laps + (i < rest ? 1u : 0u);
+                cells.Increment(DecayCell(start, i, m), -(int)Math.Min(steps, max));
             }
         }
 
@@ -720,6 +741,15 @@ namespace ProbabilisticDataStructures
             if (p <= 0)
             {
                 p = 1;
+            }
+
+            // A filter with as many hash functions as cells has 1/k - 1/m = 0, so p is
+            // infinite. The cast below saturated that to uint.MaxValue, and that is the
+            // value kept, written out rather than left to how a cast treats infinity.
+            // DecayRun takes a run that long round the filter in m updates.
+            if (p >= uint.MaxValue)
+            {
+                return uint.MaxValue;
             }
 
             return (uint)p;
