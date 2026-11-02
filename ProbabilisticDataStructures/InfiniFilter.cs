@@ -123,7 +123,7 @@ namespace ProbabilisticDataStructures
         /// The most address bits a table has: its slot count is a uint holding 2^q, and
         /// 2^32 is not one.
         /// </summary>
-        internal const int MaxQuotientBits = 31;
+        internal static int MaxQuotientBits => 31;
 
         /// <summary>
         /// The most address bits this filter lets a table grow to. It is
