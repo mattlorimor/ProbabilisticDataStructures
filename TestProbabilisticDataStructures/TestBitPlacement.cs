@@ -375,6 +375,12 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// The names of the filters these tests hold to their placement, for the roster
+        /// of every structure that carries one.
+        /// </summary>
+        internal static IEnumerable<string> KindNames() => Kinds().Select(k => k.Name);
+
         private static Kind[] Kinds() => new[]
         {
             new Kind(nameof(BloomFilter),

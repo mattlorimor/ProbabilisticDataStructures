@@ -541,31 +541,28 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestTheVersionAfterTheNewestIsRefused()
         {
-            // Nine is one past the newest, version 8. It is written out rather than
+            // Ten is one past the newest, version 9. It is written out rather than
             // computed from the library's ceiling, which is the thing being checked.
-            var stable = Relabeled(ReadFixture("stablebloomfilter-v8-narrow.bin"), 9);
-            var ex = Assert.ThrowsExactly<InvalidDataException>(
-                () => StableBloomFilter.ReadFrom(new MemoryStream(stable)));
-            StringAssert.Contains(ex.Message, "format version 9");
-            StringAssert.Contains(ex.Message, "written by a later version");
+            var newest = new (string Fixture, Func<Stream, object> Read)[]
+            {
+                ("stablebloomfilter-v8-narrow.bin", s => StableBloomFilter.ReadFrom(s)),
+                ("cuckoobloomfilter-v6.bin", s => CuckooBloomFilter.ReadFrom(s)),
+                ("bloomfilter-v8-narrow.bin", s => BloomFilter.ReadFrom(s)),
+                ("scalablebloomfilter-v7.bin", s => ScalableBloomFilter.ReadFrom(s)),
+                ("countminsketch-v9-narrow.bin", s => CountMinSketch.ReadFrom(s)),
+                ("privatecountminsketch-v9-narrow.bin", s => PrivateCountMinSketch.ReadFrom(s)),
+                ("heavykeeper-v9-narrow.bin", s => HeavyKeeper.ReadFrom(s)),
+                ("inversebloomfilter-v9-narrow.bin", s => InverseBloomFilter.ReadFrom(s)),
+                ("dpswsketch-v9-narrow.bin", s => DpswSketch.ReadFrom(s)),
+            };
 
-            var cuckoo = Relabeled(ReadFixture("cuckoobloomfilter-v6.bin"), 9);
-            ex = Assert.ThrowsExactly<InvalidDataException>(
-                () => CuckooBloomFilter.ReadFrom(new MemoryStream(cuckoo)));
-            StringAssert.Contains(ex.Message, "format version 9");
-            StringAssert.Contains(ex.Message, "written by a later version");
-
-            var bloom = Relabeled(ReadFixture("bloomfilter-v8-narrow.bin"), 9);
-            ex = Assert.ThrowsExactly<InvalidDataException>(
-                () => BloomFilter.ReadFrom(new MemoryStream(bloom)));
-            StringAssert.Contains(ex.Message, "format version 9");
-            StringAssert.Contains(ex.Message, "written by a later version");
-
-            var scalable = Relabeled(ReadFixture("scalablebloomfilter-v7.bin"), 9);
-            ex = Assert.ThrowsExactly<InvalidDataException>(
-                () => ScalableBloomFilter.ReadFrom(new MemoryStream(scalable)));
-            StringAssert.Contains(ex.Message, "format version 9");
-            StringAssert.Contains(ex.Message, "written by a later version");
+            foreach (var (fixture, read) in newest)
+            {
+                var bytes = Relabeled(ReadFixture(fixture), 10);
+                var ex = Assert.ThrowsExactly<InvalidDataException>(() => read(new MemoryStream(bytes)), fixture);
+                StringAssert.Contains(ex.Message, "format version 10", fixture);
+                StringAssert.Contains(ex.Message, "written by a later version", fixture);
+            }
         }
 
         /// <summary>
@@ -871,6 +868,247 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(16UL, keeper.Count(Key("flow-11")));
             Assert.AreEqual(0UL, keeper.Count(Key("flow-4")));
             Assert.AreEqual(1UL, keeper.Count(Key("flow-5")));
+            Assert.AreEqual(Placement.Narrow, keeper.Placement);
+        }
+
+        // ---- Version 9: the sketches' placement byte ----------------------------------
+
+        // Where the placement byte sits in each version 9 payload, after the envelope's
+        // fourteen bytes: after f64 epsilon, f64 delta, u32 width and u32 depth for the
+        // count-min sketch; after u32 width and u32 depth for the private sketch, whose
+        // body a DPSW window holds inline; after u32 k, u32 width and u32 depth for
+        // HeavyKeeper; and after u32 capacity for the inverse filter.
+        private const int CountMinPlacement = 24;
+        private const int PrivatePlacement = 8;
+        private const int KeeperPlacement = 12;
+        private const int InversePlacement = 4;
+
+        /// <summary>
+        /// The stored payload with the placement byte at <paramref name="payloadOffset"/>
+        /// saying the other scheme, and the checksum repaired.
+        /// </summary>
+        private static byte[] PlacedTheOtherWay(string fixture, int payloadOffset)
+        {
+            var bytes = ReadFixture(fixture);
+            bytes[14 + payloadOffset] ^= 1;
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                bytes.AsSpan(bytes.Length - 4),
+                Crc32.HashToUInt32(bytes.AsSpan(4, bytes.Length - 8)));
+            return bytes;
+        }
+
+        /// <summary>
+        /// Version 9 is each sketch's version 1 layout with a placement byte after the
+        /// fields that size it -- 0 for 32-bit values, 1 for 64-bit ones. Every save of the
+        /// count-min sketches, HeavyKeeper, the inverse filter and a DPSW window is
+        /// version 9. There are two fixtures of the count-min sketch, one placed each way,
+        /// assembled by hand from FORMAT.md and the two schemes without the library, so that
+        /// reading them holds the reader to the format and not to the writer. The 32-bit
+        /// one is the version 1 fixture saved again; the 64-bit one holds the same stream,
+        /// item{i} added i + 1 times, in the columns the 64-bit scheme gives at a width of
+        /// 272, which is not a power of two. Read with its byte swapped, it counts none of
+        /// it.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredCountMinSketchAtVersionNineStillReads()
+        {
+            foreach (var (fixture, placement) in new[]
+                     { ("countminsketch-v9-narrow.bin", Placement.Narrow), ("countminsketch-v9-wide.bin", Placement.Wide) })
+            {
+                var sketch = CountMinSketch.ReadFrom(Fixture(fixture));
+
+                Assert.AreEqual((272u, 5u), (sketch.Width, sketch.Depth), fixture);
+                Assert.AreEqual(55ul, sketch.TotalCount(), fixture);
+                Assert.AreEqual(0.01, sketch.Epsilon(), fixture);
+                Assert.AreEqual(0.01, sketch.Delta(), fixture);
+                Assert.AreEqual(placement, sketch.Placement, fixture);
+                for (var i = 0; i < 10; i++)
+                {
+                    Assert.AreEqual((ulong)(i + 1), sketch.Count(Key($"item{i}")), $"{fixture} no longer counts item{i}");
+                }
+
+                var other = Persistence.FromByteArray<CountMinSketch>(PlacedTheOtherWay(fixture, CountMinPlacement));
+                Assert.IsTrue(Enumerable.Range(0, 10).Any(i => other.Count(Key($"item{i}")) != (ulong)(i + 1)),
+                    $"{fixture} read as placed the other way still counts every item, so it cannot tell the placements apart");
+            }
+        }
+
+        /// <summary>
+        /// The private sketch's version 9 is its version 1 body with the placement byte
+        /// after the width and depth. The 32-bit fixture is the version 1 fixture saved
+        /// again, and answers as that one does. The 64-bit one was assembled from it by
+        /// hand: its noise is each stored counter less the count the 32-bit scheme put
+        /// there, which comes back exactly, and the same stream counted where the 64-bit
+        /// scheme puts it. The width is 64, a power of two, where the two schemes agree on
+        /// the first row, so the answers placed the other way move only where another row
+        /// sets them -- as they do for item-0.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredPrivateCountMinSketchAtVersionNineStillReads()
+        {
+            var narrow = PrivateCountMinSketch.ReadFrom(Fixture("privatecountminsketch-v9-narrow.bin"));
+            var wide = PrivateCountMinSketch.ReadFrom(Fixture("privatecountminsketch-v9-wide.bin"));
+
+            foreach (var sketch in new[] { narrow, wide })
+            {
+                Assert.AreEqual(64U, sketch.Width);
+                Assert.AreEqual(4U, sketch.Depth);
+                Assert.AreEqual(0.5, sketch.Rho);
+                Assert.AreEqual(5000UL, sketch.TotalCount());
+            }
+
+            Assert.AreEqual(Placement.Narrow, narrow.Placement);
+            Assert.AreEqual(60.99662491197003, narrow.Count(Key("item-0")),
+                "the stored sketch saved again no longer answers as the version 1 one does");
+
+            Assert.AreEqual(Placement.Wide, wide.Placement);
+            Assert.AreEqual(18.383767869097625, wide.Count(Key("item-0")),
+                "the stored sketch placed with 64-bit values no longer answers with the noise it was written with");
+            Assert.AreEqual(81.37182146650557, wide.Count(Key("item-249")),
+                "the stored sketch placed with 64-bit values no longer answers with the noise it was written with");
+
+            var other = Persistence.FromByteArray<PrivateCountMinSketch>(
+                PlacedTheOtherWay("privatecountminsketch-v9-wide.bin", PrivatePlacement));
+            Assert.AreEqual(60.99662491197003, other.Count(Key("item-0")),
+                "placed the other way, the 64-bit fixture should answer from the 32-bit columns, where item-0's " +
+                "smallest counter is the one the version 1 fixture answers with");
+        }
+
+        /// <summary>
+        /// HeavyKeeper's version 9 is its version 1 layout with the placement byte after
+        /// k, the width and the depth. The 32-bit fixture is the version 1 fixture saved
+        /// again, and answers as that one does. The 64-bit one was assembled by hand: ten
+        /// tracked, two arrays of 52, decay 1.08, seed 99, the ten words fed round by round
+        /// so that word i arrives i + 1 times, at a width where no bucket is contested, so
+        /// no decay was drawn and the generator is at its seed. Every count is exact, and
+        /// placed the other way it finds none of them.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredHeavyKeeperAtVersionNineStillReads()
+        {
+            var narrow = HeavyKeeper.ReadFrom(Fixture("heavykeeper-v9-narrow.bin"));
+            Assert.AreEqual(Placement.Narrow, narrow.Placement);
+            Assert.AreEqual(200UL, narrow.N);
+            Assert.HasCount(5, narrow.Elements());
+            Assert.AreEqual(17UL, narrow.Count(Key("flow-0")));
+            Assert.AreEqual(16UL, narrow.Count(Key("flow-11")));
+            Assert.AreEqual(0UL, narrow.Count(Key("flow-4")));
+
+            var wide = HeavyKeeper.ReadFrom(Fixture("heavykeeper-v9-wide.bin"));
+            Assert.AreEqual(Placement.Wide, wide.Placement);
+            Assert.AreEqual(52u, wide.Width);
+            Assert.AreEqual(55UL, wide.N);
+            CollectionAssert.AreEqual(
+                Words.Select((w, i) => (w, (ulong)(i + 1))).ToArray(),
+                wide.Elements().Select(e => (Encoding.ASCII.GetString(e.Data.Span), e.Freq)).ToArray());
+            for (var i = 0; i < Words.Length; i++)
+            {
+                Assert.AreEqual((ulong)(i + 1), wide.Count(Key(Words[i])), $"the stored structure no longer counts {Words[i]}");
+            }
+
+            var other = Persistence.FromByteArray<HeavyKeeper>(PlacedTheOtherWay("heavykeeper-v9-wide.bin", KeeperPlacement));
+            Assert.IsTrue(Words.All(w => other.Count(Key(w)) == 0),
+                "the 64-bit fixture read as placed the other way still finds a word, so it cannot tell the placements apart");
+        }
+
+        /// <summary>
+        /// The inverse filter's version 9 is its version 1 layout with the placement byte
+        /// after the capacity. The 32-bit fixture is the version 1 fixture saved again: a
+        /// capacity of 64, a power of two, where the two schemes give every item the same
+        /// slot, so it answers the same either way. The 64-bit one was assembled by hand: a
+        /// capacity of 100 holding the ten words in the slots the 64-bit hash modulo 100
+        /// gives, all different. Placed the other way it holds none of them.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredInverseBloomFilterAtVersionNineStillReads()
+        {
+            var narrow = InverseBloomFilter.ReadFrom(Fixture("inversebloomfilter-v9-narrow.bin"));
+            Assert.AreEqual(64u, narrow.Capacity());
+            Assert.AreEqual(Placement.Narrow, narrow.Placement);
+            Assert.AreEqual(9, Words.Count(w => narrow.Test(Key(w))));
+
+            var wide = InverseBloomFilter.ReadFrom(Fixture("inversebloomfilter-v9-wide.bin"));
+            Assert.AreEqual(100u, wide.Capacity());
+            Assert.AreEqual(Placement.Wide, wide.Placement);
+            AssertAllPresent(wide.Test);
+
+            var other = Persistence.FromByteArray<InverseBloomFilter>(
+                PlacedTheOtherWay("inversebloomfilter-v9-wide.bin", InversePlacement));
+            Assert.AreEqual(0, Words.Count(w => other.Test(Key(w))),
+                "the 64-bit fixture read as placed the other way still holds a word, so it cannot tell the placements apart");
+        }
+
+        /// <summary>
+        /// A DPSW window's version 9 is its version 1 layout with each private sketch body
+        /// at version 9: the version 1 fixture saved again, with a placement byte saying
+        /// 32-bit in each of its fifty-five bodies. It answers as the version 1 fixture
+        /// does, so every body was read where it is.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredDpswSketchAtVersionNineStillReads()
+        {
+            var sketch = DpswSketch.ReadFrom(Fixture("dpswsketch-v9-narrow.bin"));
+
+            Assert.AreEqual(128L, sketch.Window);
+            Assert.AreEqual(256L, sketch.Position);
+            Assert.AreEqual(55, sketch.SketchesHeld);
+            Assert.IsTrue(sketch.Sketches().All(s => s.Placement == Placement.Narrow));
+            Assert.AreEqual(21.1711091838772, sketch.Count(Key("item-0")),
+                "the stored window saved again no longer answers as the version 1 one does");
+            Assert.AreEqual(6.784935661383209, sketch.Count(Key("item-7")),
+                "the stored window saved again no longer answers as the version 1 one does");
+        }
+
+        /// <summary>
+        /// A top-k keeps its sketch in an envelope of its own, so its own layout did not
+        /// change and it is still version 1. Its write-side fixture, v1b, is the v1 fixture
+        /// with the sketch saved again at version 9, placed with 32-bit values, by the same
+        /// program outside the library; it reads as v1 does.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredTopKWithItsSketchAtVersionNineStillReads()
+        {
+            var t = TopK.ReadFrom(Fixture("topk-v1b.bin"));
+
+            CollectionAssert.AreEqual(
+                new[] { ("t2", 3ul), ("t3", 4ul), ("t4", 5ul) },
+                t.Elements().Select(e => (Encoding.ASCII.GetString(e.Data.Span), e.Freq)).ToArray());
+            Assert.AreEqual(Placement.Narrow, t.Sketch.Placement);
+        }
+
+        /// <summary>
+        /// A payload written before version 9 reads, as it always did, and saves again as
+        /// version 9 with its placement byte saying 32-bit: each version 1 fixture saves as
+        /// the version 9 fixture placed that way, byte for byte, and the top-k's as v1b. The
+        /// earlier fixtures are also exactly the version 9 ones with the placement byte
+        /// taken out, which is what the tests that build an earlier payload rely on. So a
+        /// structure below the threshold counts in the cells it always did and writes the
+        /// counters it always wrote: these are the bytes earlier releases wrote.
+        /// </summary>
+        [TestMethod]
+        public void TestAnEarlierSketchPayloadSavesAgainAsVersionNine()
+        {
+            var earlier = new (string Earlier, string Current, int Placement, Func<byte[], byte[]> Resave)[]
+            {
+                ("countminsketch-v1.bin", "countminsketch-v9-narrow.bin", CountMinPlacement,
+                    b => CountMinSketch.ReadFrom(new MemoryStream(b)).ToByteArray()),
+                ("privatecountminsketch-v1.bin", "privatecountminsketch-v9-narrow.bin", PrivatePlacement,
+                    b => PrivateCountMinSketch.ReadFrom(new MemoryStream(b)).ToByteArray()),
+                ("heavykeeper-v1.bin", "heavykeeper-v9-narrow.bin", KeeperPlacement,
+                    b => HeavyKeeper.ReadFrom(new MemoryStream(b)).ToByteArray()),
+                ("inversebloomfilter-v1.bin", "inversebloomfilter-v9-narrow.bin", InversePlacement,
+                    b => InverseBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray()),
+            };
+
+            foreach (var (old, current, placement, resave) in earlier)
+            {
+                CollectionAssert.AreEqual(ReadFixture(old), TestSketchPlacement.Downgraded(ReadFixture(current), placement),
+                    $"{current} without its placement byte is not {old}");
+                AssertBytes(current, resave(ReadFixture(old)));
+            }
+
+            AssertBytes("dpswsketch-v9-narrow.bin", DpswSketch.ReadFrom(Fixture("dpswsketch-v1.bin")).ToByteArray());
+            AssertBytes("topk-v1b.bin", TopK.ReadFrom(Fixture("topk-v1.bin")).ToByteArray());
         }
 
         [TestMethod]
@@ -974,10 +1212,10 @@ namespace TestProbabilisticDataStructures
                 priv.Add(Key($"item-{i % 250}"));
             }
 
-            // 14 bytes of header, 4 of checksum; body is width, depth (4 each), rho,
-            // count (8 each), then one double per counter.
+            // 14 bytes of header, 4 of checksum; body is width, depth (4 each), the
+            // placement byte, rho, count (8 each), then one double per counter.
             Assert.HasCount(
-                14 + 4 + 4 + 4 + 8 + 8 + (64 * 4 * 8), priv.ToByteArray(),
+                14 + 4 + 4 + 4 + 1 + 8 + 8 + (64 * 4 * 8), priv.ToByteArray(),
                 "the private sketch's payload is no longer exactly its header, shape " +
                 "and counters, so something else is being written -- and the one " +
                 "thing that must never be written is the seed.");
@@ -993,7 +1231,7 @@ namespace TestProbabilisticDataStructures
             // (4 each), position (8), then the substream count (4); each substream is
             // start (8) and held (4) followed by one sketch body per planned segment.
             var planLength = 1 + (2 * (dpsw.Checkpointing.Length - 1));
-            var sketchBody = 4 + 4 + 8 + 8 + (8 * 2 * 8);
+            var sketchBody = 4 + 4 + 1 + 8 + 8 + (8 * 2 * 8);
             var substreams = dpsw.SketchesHeld / planLength;
 
             Assert.AreEqual(dpsw.SketchesHeld, substreams * planLength,
@@ -1426,6 +1664,7 @@ namespace TestProbabilisticDataStructures
             // does. Pinning the exact number keeps a restore that quietly loses one
             // more from passing.
             Assert.AreEqual(9, Words.Count(w => f.Test(Key(w))));
+            Assert.AreEqual(Placement.Narrow, f.Placement);
         }
 
         [TestMethod]
@@ -1529,7 +1768,10 @@ namespace TestProbabilisticDataStructures
             AssertBytes("countingbloomfilter-v8-narrow.bin", counting.ToByteArray());
             AssertBytes("deletablebloomfilter-v8-narrow.bin", deletable.ToByteArray());
             AssertBytes("partitionedbloomfilter-v8-narrow.bin", partitioned.ToByteArray());
-            AssertBytes("inversebloomfilter-v1.bin", inverse.ToByteArray());
+
+            // Version 9 since the sketches and the inverse filter began recording their
+            // placement; the version 1 fixture is read, above.
+            AssertBytes("inversebloomfilter-v9-narrow.bin", inverse.ToByteArray());
 
             // A filter that adds every filter at its hint writes the layout it always
             // wrote, version 1, with no growth factor in it. Its contained filters are
@@ -1575,7 +1817,11 @@ namespace TestProbabilisticDataStructures
                 }
             }
 
-            AssertBytes("topk-v1.bin", topK.ToByteArray());
+            // v1b, not v1: the top-k's own layout is unchanged, but its sketch is in an
+            // envelope of its own, which is version 9 since the count-min sketch began
+            // recording its placement. v1b is the v1 fixture with the sketch rewritten at
+            // version 9 by hand, outside the library; the v1 fixture is read, above.
+            AssertBytes("topk-v1b.bin", topK.ToByteArray());
 
             AssertBytes("minhashsignature-v1.bin", MinHash.Signature(
                 new[] { "alpha", "beta", "gamma", "delta", "epsilon" }, 16).ToByteArray());
@@ -1664,7 +1910,7 @@ namespace TestProbabilisticDataStructures
             {
                 keeper.Add(Key($"flow-{i % 12}"));
             }
-            AssertBytes("heavykeeper-v1.bin", keeper.ToByteArray());
+            AssertBytes("heavykeeper-v9-narrow.bin", keeper.ToByteArray());
 
             var memento = new MementoFilter(
                 maxRangeSize: 64, fingerprintBits: 8, initialCapacity: 16);
@@ -1805,6 +2051,47 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The sketches placed with 64-bit values, as one 2^27 columns wide or more is, write
+        /// the version 9 payloads assembled by hand: the writer is held to the format and the
+        /// restated scheme rather than to itself. The private sketch has no write fixture,
+        /// for the reason <see cref="TestTheNoisyStructuresPinTheirLayoutRatherThanTheirBytes"/>
+        /// gives.
+        /// </summary>
+        [TestMethod]
+        public void TestWritingAWideSketchProducesTheStoredVersionNineBytes()
+        {
+            var sketch = new CountMinSketch(0.01, 0.01, null, Placement.Wide);
+            for (var i = 0; i < 10; i++)
+            {
+                for (var j = 0; j <= i; j++)
+                {
+                    sketch.Add(Key($"item{i}"));
+                }
+            }
+
+            AssertBytes("countminsketch-v9-wide.bin", sketch.ToByteArray());
+
+            var keeper = new HeavyKeeper(10, 52, 2, 1.08, 99, null, Placement.Wide);
+            for (var round = 0; round < Words.Length; round++)
+            {
+                for (var i = round; i < Words.Length; i++)
+                {
+                    keeper.Add(Key(Words[i]));
+                }
+            }
+
+            AssertBytes("heavykeeper-v9-wide.bin", keeper.ToByteArray());
+
+            var inverse = new InverseBloomFilter(100, null, Placement.Wide);
+            foreach (var word in Words)
+            {
+                inverse.Add(Key(word));
+            }
+
+            AssertBytes("inversebloomfilter-v9-wide.bin", inverse.ToByteArray());
+        }
+
+        /// <summary>
         /// The structure id in every stored payload is the one the format assigns, which
         /// is what stops a payload being read as the wrong structure. Reading the byte
         /// directly rather than through the enum, so that renumbering the enum shows up
@@ -1871,6 +2158,18 @@ namespace TestProbabilisticDataStructures
                 ("grafite-v1.bin", 26, 1),
                 ("infinifilter-v1.bin", 27, 1),
                 ("mementofilter-v1.bin", 28, 1),
+                ("countminsketch-v9-narrow.bin", 10, 9),
+                ("countminsketch-v9-wide.bin", 10, 9),
+                ("privatecountminsketch-v1.bin", 32, 1),
+                ("privatecountminsketch-v9-narrow.bin", 32, 9),
+                ("privatecountminsketch-v9-wide.bin", 32, 9),
+                ("heavykeeper-v9-narrow.bin", 23, 9),
+                ("heavykeeper-v9-wide.bin", 23, 9),
+                ("inversebloomfilter-v9-narrow.bin", 8, 9),
+                ("inversebloomfilter-v9-wide.bin", 8, 9),
+                ("dpswsketch-v1.bin", 33, 1),
+                ("dpswsketch-v9-narrow.bin", 33, 9),
+                ("topk-v1b.bin", 12, 1),
             };
 
             foreach (var (fixture, id, version) in expected)
@@ -1895,6 +2194,22 @@ namespace TestProbabilisticDataStructures
                 "the stable filter is not writing the version its layout needs");
             Assert.AreEqual(6, new CuckooBloomFilter(100, 0.01).ToByteArray()[4],
                 "the cuckoo filter is not writing the version its layout needs");
+
+            // The sketches that place by width record their placement from version 9, and
+            // every save of theirs is version 9. The top-k keeps its sketch in an envelope of
+            // its own, so its own version stays 1.
+            Assert.AreEqual(9, new CountMinSketch(0.1, 0.1).ToByteArray()[4],
+                "a small CountMinSketch is not writing the version its layout needs");
+            Assert.AreEqual(9, new PrivateCountMinSketch(16, 2, 1.0, seed: 1).ToByteArray()[4],
+                "a small PrivateCountMinSketch is not writing the version its layout needs");
+            Assert.AreEqual(9, new HeavyKeeper(2, 16).ToByteArray()[4],
+                "a small HeavyKeeper is not writing the version its layout needs");
+            Assert.AreEqual(9, new InverseBloomFilter(16).ToByteArray()[4],
+                "a small InverseBloomFilter is not writing the version its layout needs");
+            Assert.AreEqual(9, new DpswSketch(128, 1.0, width: 8, depth: 2, seed: 1).Add(Key("a")).ToByteArray()[4],
+                "a DpswSketch is not writing the version its layout needs");
+            Assert.AreEqual(1, new TopK(0.1, 0.1, 3).ToByteArray()[4],
+                "a top-k, whose layout did not change, started writing a later format version");
 
             // The scalable filter writes version 7 only when it has a growth factor to
             // record, so one that adds every filter at its hint stays readable by

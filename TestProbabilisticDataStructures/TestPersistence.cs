@@ -292,6 +292,7 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(55ul, sketch.TotalCount());
             Assert.AreEqual(0.01, sketch.Epsilon());
             Assert.AreEqual(0.01, sketch.Delta());
+            Assert.AreEqual(Placement.Narrow, sketch.Placement);
 
             // item{i} was added i + 1 times.
             for (int i = 0; i < 10; i++)
@@ -329,7 +330,9 @@ namespace TestProbabilisticDataStructures
                 }
             }
 
-            CollectionAssert.AreEqual(ReadFixture("countminsketch-v1.bin"), sketch.ToByteArray(),
+            // Version 9 since the sketch began recording its placement; the version 1
+            // fixture is read above, and is this payload without its placement byte.
+            CollectionAssert.AreEqual(ReadFixture("countminsketch-v9-narrow.bin"), sketch.ToByteArray(),
                 "the bytes written for this sketch have changed since the format was introduced");
         }
 
