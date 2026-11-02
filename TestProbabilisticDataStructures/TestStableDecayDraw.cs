@@ -387,6 +387,70 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// An add decrements exactly the run <see cref="StableBloomFilter.DecayStart"/> and
+        /// <see cref="StableBloomFilter.DecayCell"/> name for the generator's next draw,
+        /// and nothing else, so the tests above, which call those two directly, vouch for
+        /// the decay an add does.
+        /// </summary>
+        /// <remarks>
+        /// The 32-bit draw and the 64-bit one agree on all but about m / 2^33 of draws, so
+        /// a filter that drew some other way would agree with this one almost always. Seed
+        /// 7660 at 1,000,003 cells is the first seed whose first draw starts a run one cell
+        /// later than the 32-bit draw did: at 885,279, not 885,278, found by searching the
+        /// seeds in order. The test checks that this is still so before relying on it.
+        /// Every cell starts at its maximum, so the run is the cells one below it, apart
+        /// from the add's own cells, which it sets back to the maximum.
+        /// </remarks>
+        [TestMethod]
+        public void TestAnAddDecaysTheRunDecayStartNames()
+        {
+            const uint m = 1_000_003;
+            const int seed = 7660;
+            var f = new StableBloomFilter(m, 2, 0.01, seed: seed);
+            var max = f.Max;
+            for (uint c = 0; c < m; c++)
+            {
+                f.cells.Set(c, max);
+            }
+
+            var next = new SeededRandom((ulong)seed).Next();
+            var start = StableBloomFilter.DecayStart(next, m);
+            Assert.AreEqual(Narrow(next, m) + 1, start,
+                "this seed's first draw no longer starts a run one cell after the 32-bit draw's, " +
+                "so it cannot tell the two apart");
+
+            var run = new HashSet<uint>();
+            for (uint i = 0; i < f.P(); i++)
+            {
+                run.Add(StableBloomFilter.DecayCell(start, i, m));
+            }
+
+            f.Add(new byte[] { 1, 9, 1 });
+
+            var decayed = new List<uint>();
+            for (uint c = 0; c < m; c++)
+            {
+                var value = f.cells.Get(c);
+                if (value == max)
+                {
+                    continue;
+                }
+
+                Assert.IsTrue(run.Contains(c) && value == max - 1u,
+                    $"cell {c:N0} holds {value} after one add, where the run from {start:N0} " +
+                    $"leaves {max - 1} in its {f.P()} cells and {max} everywhere else");
+                decayed.Add(c);
+            }
+
+            // The add sets its k cells back to the maximum after the decay, so up to k of
+            // the run can show none.
+            Assert.IsGreaterThanOrEqualTo((int)(f.P() - f.K()), decayed.Count,
+                $"only {decayed.Count} of the run's {f.P()} cells were decremented");
+            Assert.IsTrue(decayed.Contains(start),
+                $"the run's first cell, {start:N0}, was not decremented");
+        }
+
+        /// <summary>
         /// The i-th cell of a run that starts at r is r + i, less m once that passes the
         /// last cell: at the end of the largest filters, where r + i passes 2^32, as well as
         /// at sizes where it cannot. Run lengths reach past the longest the constructor picks
