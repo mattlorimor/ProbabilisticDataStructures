@@ -628,10 +628,23 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         private void Decrement()
         {
-            var r = DecayStart(this.random.Next(), this.M);
-            for (uint i = 0; i < this.p; i++)
+            DecayRun(this.cells, this.M, this.p, DecayStart(this.random.Next(), this.M));
+        }
+
+        /// <summary>
+        /// Decrements the <paramref name="p"/> consecutive cells of a run that starts at
+        /// <paramref name="start"/>, among <paramref name="m"/>, each by one and no lower
+        /// than zero.
+        /// </summary>
+        /// <remarks>
+        /// Decrement runs its decay through this, so a test can run it from any start, at
+        /// any length and cell width, against the plain loop.
+        /// </remarks>
+        internal static void DecayRun(Buckets cells, uint m, uint p, uint start)
+        {
+            for (uint i = 0; i < p; i++)
             {
-                this.cells.Increment(DecayCell(r, i, this.M), -1);
+                cells.Increment(DecayCell(start, i, m), -1);
             }
         }
 
