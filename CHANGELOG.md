@@ -741,6 +741,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the quantile walk and merge, whose loops would otherwise wrap past `int.MaxValue`. The
   stored format does not change.
 
+- **`TopK` counted the items added in a 32-bit field that wrapped to zero at 2^32 adds, and
+  wrote it that way.** The count is internal and nothing read it, but a structure that had
+  seen four billion items stored a count of none. The sketch inside has counted in 64 bits
+  all along, so the count is now read from it, and the payload's 32-bit field holds that
+  saturated at 4,294,967,295. A reader takes the count from the sketch and does not use the
+  field, so a payload any version wrote reads the same, and one written below 2^32 items
+  is byte for byte what it was.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

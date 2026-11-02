@@ -176,6 +176,26 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(7UL, Persistence.FromByteArray<TopK>(written).N);
         }
 
+        /// <summary>
+        /// A payload written before this was fixed reads, and reads with the real count.
+        /// Its field is whatever the count was modulo 2^32, which is nothing to rely on, so
+        /// it is the sketch's count that is used: here the sketch has seen 2^32 + 3 items
+        /// and the field says 3, as a structure of that age wrote it.
+        /// </summary>
+        [TestMethod]
+        public void TestTheCountComesFromTheSketchWhateverTheFieldSays()
+        {
+            var topK = new TopK(0.01, 0.01, 3);
+            for (var i = 0; i < 7; i++) topK.Add(BOB_BYTES);
+            var written = topK.ToByteArray();
+
+            var disagreeing = SeenItems(written, 7, 12345);
+            Assert.AreEqual(7UL, Persistence.FromByteArray<TopK>(disagreeing).N);
+
+            var wrapped = SeenItems(written, uint.MaxValue + 4UL, 3);
+            Assert.AreEqual(uint.MaxValue + 4UL, Persistence.FromByteArray<TopK>(wrapped).N);
+        }
+
         [TestMethod]
         public void BenchmarkTopKAdd()
         {

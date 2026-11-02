@@ -509,13 +509,18 @@ bytes   the registers, one byte each
 
 ```
 u32     k, the number of elements tracked
-u32     n, the number of items added
+u32     n, the number of items added, at most 4,294,967,295
 nested  CountMinSketch
 u32     element count
         per element:
 bytes     the element's data
 u64       its recorded frequency
 ```
+
+The number of items added is the nested sketch's count, which is a `u64`. `n` is that
+number held to what a `u32` holds: a structure that has seen more than 4,294,967,295 items
+writes 4,294,967,295, where releases up to 6.2.0 wrote the number modulo 2^32, which is
+zero at exactly that many. A reader takes the number from the sketch and does not use `n`.
 
 The elements are re-heaped on read rather than being trusted to arrive in heap order.
 They are the same elements either way and `Elements()` sorts them, so nothing about the
