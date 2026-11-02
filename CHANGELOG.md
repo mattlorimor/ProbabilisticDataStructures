@@ -1029,6 +1029,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check the hash their own header names, as every other reader does; they had checked
   only the structures inside them, and their header always names the first of those.
 
+- **A `SublimeCountMinSketch` read back reported the default tuning, not its rows'.** The
+  two internal properties behind diagnostics, counters per chunk and stub width, said 68 and
+  5 whatever the rows were built with; nothing public read them and the payload is unchanged.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

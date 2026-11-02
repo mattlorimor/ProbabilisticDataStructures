@@ -663,6 +663,13 @@ namespace ProbabilisticDataStructures
             sketch.rows = ReadCounters(ref reader, (int)depth, (int)width);
             reader.ExpectEnd();
 
+            // The constructor left the defaults, and the rows were built at a tuning chosen
+            // from the counts. The properties describe the rows, not the records of earlier
+            // states, which were tuned separately at their own widths. A sketch has at
+            // least one row, and every row is built at the same tuning.
+            sketch.countersPerChunk = sketch.rows[0].CountersPerChunk;
+            sketch.stubBits = sketch.rows[0].StubBits;
+
             return sketch;
         }
 
