@@ -94,9 +94,9 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// Each constructor chooses by its width, and does so at the threshold: one column
         /// short of it is placed with 32-bit values and the threshold itself with 64-bit
-        /// ones. The count-min sketch and HeavyKeeper add a structure past the threshold in
-        /// counters, two rows of half of it, which is what tells the width from the size.
-        /// The top-k is its sketch's choice.
+        /// ones. The count-min sketch, the private sketch and HeavyKeeper add a structure
+        /// past the threshold in counters, two rows of half of it, which is what tells the
+        /// width from the size. The top-k is its sketch's choice.
         /// </summary>
         [TestMethod]
         [DoNotParallelize]
@@ -124,6 +124,8 @@ namespace TestProbabilisticDataStructures
                 Assert.AreEqual(Placement.Narrow, s.Placement, "PrivateCountMinSketch below"));
             Once(() => new PrivateCountMinSketch(Threshold, 1, 1.0, seed: 1), s =>
                 Assert.AreEqual(Placement.Wide, s.Placement, "PrivateCountMinSketch at"));
+            Once(() => new PrivateCountMinSketch(Half, 2, 1.0, seed: 1), s =>
+                Assert.AreEqual(Placement.Narrow, s.Placement, "PrivateCountMinSketch chose by its counters rather than its width"));
 
             Once(() => new HeavyKeeper(1, Threshold - 1, 1, seed: 1), s =>
                 Assert.AreEqual(Placement.Narrow, s.Placement, "HeavyKeeper below"));
