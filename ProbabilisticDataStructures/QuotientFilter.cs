@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 
 namespace ProbabilisticDataStructures
@@ -30,6 +31,29 @@ namespace ProbabilisticDataStructures
         private const ulong ContinuationBit = 2;
         private const ulong ShiftedBit = 4;
         private const int MetadataBits = 3;
+
+        /// <summary>The bits of hash a fingerprint is cut from.</summary>
+        internal const int HashBits = 64;
+
+        /// <summary>
+        /// The most bits a table can be indexed by. The slot count is a uint holding
+        /// 2^q, and 2^32 is one more than a uint holds: the shift by 32 wraps to a shift
+        /// by none, and the table comes out one slot.
+        /// </summary>
+        internal const int MaxQuotientBits = 31;
+
+        /// <summary>
+        /// The most bits a remainder can have. A slot is the remainder and its
+        /// metadata, read and written through one 64-bit word, so it can be no wider
+        /// than that. A wider one writes by shifting a ulong by 64, which wraps to no
+        /// shift at all, and puts the whole value into the next word.
+        /// </summary>
+        internal const int MaxRemainderBits = 64 - MetadataBits;
+
+        /// <summary>
+        /// The most items a filter is sized for: the load factor of the largest table.
+        /// </summary>
+        internal const uint MaxItems = (uint)(LoadFactor * (1UL << MaxQuotientBits));
 
         private uint quotientBits;
         private uint remainderBits;
@@ -62,25 +86,105 @@ namespace ProbabilisticDataStructures
         /// <param name="n">The number of items the filter is sized for.</param>
         /// <param name="fpRate">The desired false positive rate.</param>
         /// <param name="hash">The hash function to use, or null for the default.</param>
+        /// <remarks>
+        /// The item count sets how many bits of the 64-bit hash pick a slot, and the rate
+        /// sets how many are kept to tell items apart, so a filter for more items cannot
+        /// reach as fine a rate. A fingerprint cannot be wider than the hash it is cut
+        /// from, and a filter that was asked for one wider would answer yes for every
+        /// key, so the constructor refuses what cannot work instead of building it.
+        /// <para>
+        /// With q the bits that pick a slot, which the item count gives as the fewest that
+        /// keep the table under three quarters full, the finest rate is 2^-(64 - q), and
+        /// never finer than 2^-61, which is all a slot can hold beside its three bits of
+        /// bookkeeping. The most items is three quarters of 2^31, because the table's slot
+        /// count is a 32-bit number and 2^32 does not fit it.
+        /// </para>
+        /// </remarks>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// <paramref name="n"/> is zero or more than the largest table is sized for, or
+        /// <paramref name="fpRate"/> is not between zero and one or is finer than a
+        /// filter for <paramref name="n"/> items can reach. The message names the most
+        /// items, or the finest rate, that would have worked.
+        /// </exception>
         public QuotientFilter(uint n, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash = null)
+        {
+            var (quotientBits, remainderBits) = Split(n, fpRate);
+
+            this.Shape(quotientBits, remainderBits);
+            this.Hash = hash ?? Defaults.GetDefaultHashFunction();
+        }
+
+        /// <summary>
+        /// How a fingerprint is split for a given item count and false positive rate:
+        /// the quotient bits that pick a slot, and the remainder bits stored there.
+        /// </summary>
+        /// <remarks>
+        /// The constructor's sizing, reachable on its own so that the largest sizes can
+        /// be checked without allocating the table they describe. It refuses a size no
+        /// filter could work at; every split it returns is one the reader accepts.
+        /// </remarks>
+        internal static (uint QuotientBits, uint RemainderBits) Split(uint n, double fpRate)
         {
             Guard.ValidItemCount(n, nameof(n));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
 
-            // The false positive rate is the chance two fingerprints agree in the
-            // remainder, so the remainder's width sets it.
-            this.remainderBits = (uint)Math.Max(1, Math.Ceiling(Math.Log2(1.0 / fpRate)));
+            if (n > MaxItems)
+            {
+                throw new ArgumentOutOfRangeException(nameof(n), n,
+                    $"A quotient filter can be sized for at most {MaxItems} items. Its " +
+                    $"table has at most 2^{MaxQuotientBits} slots, because the slot count " +
+                    "is kept in 32 bits and the next size up does not fit them, and it " +
+                    "is sized to stay three quarters full. Asked for more, the count " +
+                    "would wrap around and the table would come out far too small.");
+            }
 
             // Enough slots that the table stays under its load factor.
-            this.quotientBits = (uint)Math.Max(1, Math.Ceiling(Math.Log2(n / LoadFactor)));
+            var quotientBits = (uint)Math.Max(1, Math.Ceiling(Math.Log2(n / LoadFactor)));
 
-            this.Shape(this.quotientBits, this.remainderBits);
-            this.Hash = hash ?? Defaults.GetDefaultHashFunction();
+            // The false positive rate is the chance two fingerprints agree in the
+            // remainder, so the remainder's width sets it. It stays a double until it
+            // has been checked: a rate small enough that its reciprocal overflows wants
+            // an infinite width, and what a cast to uint makes of infinity is the
+            // runtime's to decide. This used to be that cast, and the number it gave
+            // went on into the slot arithmetic as a two-bit slot.
+            var wanted = Math.Ceiling(Math.Log2(1.0 / fpRate));
+
+            // What the remainder can have: what the hash leaves after the quotient, and
+            // no more than a slot can carry. Past either, the fingerprint is not cut
+            // from the hash any more, and the filter cannot tell one key from another.
+            var hashRoom = HashBits - (int)quotientBits;
+            var room = Math.Min(MaxRemainderBits, hashRoom);
+
+            if (wanted > room)
+            {
+                var why = hashRoom <= MaxRemainderBits
+                    ? $"The {quotientBits} bits that pick a slot leave {room} of the " +
+                      $"hash's {HashBits} for the remainder."
+                    : $"A slot holds the remainder and {MetadataBits} bits of bookkeeping " +
+                      $"in one {HashBits}-bit word, which leaves {room} for the remainder.";
+                var finest = Math.ScaleB(1.0, -room);
+                var needs = double.IsFinite(wanted)
+                    ? $"{(long)wanted} remainder bits"
+                    : "more remainder bits than a hash has";
+
+                throw new ArgumentOutOfRangeException(nameof(fpRate), fpRate,
+                    "A false positive rate of " +
+                    $"{fpRate.ToString("R", CultureInfo.InvariantCulture)} needs {needs}, " +
+                    $"and a filter sized for {n} items can store no more than {room}. " +
+                    $"{why} The finest rate such a filter can reach is 2^-{room}, which " +
+                    $"is {finest.ToString("R", CultureInfo.InvariantCulture)}.");
+            }
+
+            return (quotientBits, (uint)Math.Max(1, wanted));
         }
 
         /// <summary>
         /// Lays out the table for a given split of the fingerprint.
         /// </summary>
+        /// <remarks>
+        /// Trusts the split it is given. The constructor refuses what cannot work before
+        /// it gets here, and the reader refuses the payloads it will not read.
+        /// </remarks>
         private void Shape(uint quotientBits, uint remainderBits)
         {
             this.quotientBits = quotientBits;
@@ -700,18 +804,31 @@ namespace ProbabilisticDataStructures
             var bytes = reader.ReadBytes();
             reader.ExpectEnd();
 
-            if (quotientBits == 0 || quotientBits > 32)
+            // 32, although the constructor stops at 31 now. Before it refused, a request
+            // for more items than the largest table is sized for came out as a quotient
+            // of 32 bits, whose 1u << 32 wraps to one slot, and the filter was written
+            // that way: 32 here, and the bytes of a one-slot table. Shape wraps it to
+            // the same one slot, and the length check below holds the payload to that
+            // size, so it reads back as the filter it was and nothing is guessed. Wider
+            // quotients, which a still larger request produced, were refused when they
+            // were written and are refused now.
+            if (quotientBits == 0 || quotientBits > MaxQuotientBits + 1)
             {
                 throw new InvalidDataException(
                     $"Filter has {quotientBits} quotient bits, and a table is indexed by " +
-                    "between 1 and 32 of them.");
+                    $"between 1 and {MaxQuotientBits + 1} of them.");
             }
 
-            if (remainderBits == 0 || quotientBits + remainderBits > 64)
+            // The constructor stops at the widest remainder a slot can hold, and a payload
+            // may still say a little more: the old constructor wrote remainders that wide
+            // for the finest rates at the smallest sizes, and what it wrote is read as
+            // written rather than refused. A fingerprint wider than the hash is refused,
+            // as it always was.
+            if (remainderBits == 0 || quotientBits + remainderBits > HashBits)
             {
                 throw new InvalidDataException(
                     $"Filter splits a fingerprint into {quotientBits} quotient and " +
-                    $"{remainderBits} remainder bits, which is not a split of a 64-bit " +
+                    $"{remainderBits} remainder bits, which is not a split of a {HashBits}-bit " +
                     "hash.");
             }
 

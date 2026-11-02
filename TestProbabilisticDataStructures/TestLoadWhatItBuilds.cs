@@ -649,28 +649,77 @@ namespace TestProbabilisticDataStructures
                 PokeUInt32(bytes, FilterCountOffset, (uint)ScalableBloomFilter.MaxFilters));
         }
 
-        // ---- Exemptions, and the tests that check their reasons --------------------
-
         /// <summary>
-        /// Exempt for now. <c>fix/quotient-constructor-limits</c> makes the constructor
-        /// refuse exactly what the reader refuses -- more than 64 bits of quotient and
-        /// remainder, or a table a uint cannot index. Until that lands, this test
-        /// asserts the gap is still there: when the constructor stops building this
-        /// filter, the test fails, and that is the signal to move QuotientFilter out of
-        /// the exemptions and into the declared limits.
+        /// The quotient filter was the other way round: its reader's limits were the
+        /// right ones, and its constructor built past them -- a million items at 5e-14
+        /// split a 64-bit hash into 66 bits and wrote a payload its own reader refused.
+        /// The constructor now refuses that, so the widest split it does build reads
+        /// back: all sixty-four bits, at a small table and at a million items (about
+        /// 12 MiB).
         /// </summary>
         [TestMethod]
-        public void TestQuotientFilterStillBuildsWhatItsReaderRefuses()
+        public void TestQuotientFilterAtItsWidestSplitRoundTrips()
         {
-            // A million items need 21 quotient bits and 5e-14 needs 45 remainder bits:
-            // 66 in all. About 12 MiB.
-            var filter = new QuotientFilter(1_000_000, 5e-14);
-            filter.Add(Key(1));
+            // Six items need three quotient bits, and 2^-61 the widest remainder a slot
+            // holds: 64 in all.
+            var finest = Math.ScaleB(1.0, -QuotientFilter.MaxRemainderBits);
+            var (q, r) = QuotientFilter.Split(6, finest);
+            Assert.AreEqual((uint)QuotientFilter.HashBits, q + r);
 
-            var ex = Assert.ThrowsExactly<InvalidDataException>(
-                () => Persistence.FromByteArray<QuotientFilter>(filter.ToByteArray()));
-            StringAssert.Contains(ex.Message, "not a split of a 64-bit");
+            var small = new QuotientFilter(6, finest);
+            small.Add(Key(1));
+            AssertRoundTrips(small);
+
+            // A million items need 21 quotient bits, and 1.2e-13 needs 43.
+            var large = new QuotientFilter(1_000_000, 1.2e-13);
+            for (var i = 0; i < 100; i++) large.Add(Key(i));
+            var restored = AssertRoundTrips(large);
+            Assert.IsTrue(restored.Test(Key(7)));
         }
+
+        /// <summary>
+        /// The constructor's sizing is reachable on its own through
+        /// <see cref="QuotientFilter.Split"/>, so its edges are checked without
+        /// allocating the tables they describe -- the largest is gigabytes. Every split it
+        /// returns is inside what the reader accepts, and one past the reader's own
+        /// limits is refused. The reader takes a 32-bit quotient as well, one more than
+        /// the constructor builds, because earlier constructors wrote a wrapped one-slot
+        /// table that way; that payload is pinned by its own fixture.
+        /// </summary>
+        [TestMethod]
+        public void TestQuotientFilterLimitIsShared()
+        {
+            // The largest table: q = 31, and one item more is refused.
+            Assert.AreEqual((uint)QuotientFilter.MaxQuotientBits,
+                QuotientFilter.Split(QuotientFilter.MaxItems, 0.5).QuotientBits);
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => QuotientFilter.Split(QuotientFilter.MaxItems + 1, 0.5));
+            Assert.IsLessThanOrEqualTo((ulong)uint.MaxValue, 1UL << QuotientFilter.MaxQuotientBits);
+            Assert.IsGreaterThan((ulong)uint.MaxValue, 1UL << (QuotientFilter.MaxQuotientBits + 1));
+
+            // The widest split: all of the hash at a million items, and one bit more is
+            // refused.
+            var (q, r) = QuotientFilter.Split(1_000_000, Math.ScaleB(1.0, -43));
+            Assert.AreEqual((uint)QuotientFilter.HashBits, q + r);
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => QuotientFilter.Split(1_000_000, Math.ScaleB(1.0, -44)));
+
+            // The widest remainder: what a 64-bit word holds beside three metadata bits.
+            Assert.AreEqual((uint)QuotientFilter.MaxRemainderBits,
+                QuotientFilter.Split(1, Math.ScaleB(1.0, -QuotientFilter.MaxRemainderBits)).RemainderBits);
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => QuotientFilter.Split(1, Math.ScaleB(1.0, -QuotientFilter.MaxRemainderBits - 1)));
+
+            // The reader, one past each of its limits: u32 quotient bits at 0, u32
+            // remainder bits at 4.
+            var bytes = new QuotientFilter(100, 0.01).ToByteArray();
+            AssertRefused<QuotientFilter>(
+                PokeUInt32(bytes, 0, (uint)QuotientFilter.MaxQuotientBits + 2), "quotient bits");
+            AssertRefused<QuotientFilter>(
+                PokeUInt32(bytes, 4, (uint)QuotientFilter.HashBits), "not a split of a");
+        }
+
+        // ---- Exemptions, and the tests that check their reasons --------------------
 
         /// <summary>
         /// Exempt: one pair of constants already bounds the precision for both the
@@ -989,10 +1038,6 @@ namespace TestProbabilisticDataStructures
 
             var exempt = new (StructureId Id, string Why, string VerifiedBy)[]
             {
-                (StructureId.QuotientFilter,
-                    "fix/quotient-constructor-limits makes its constructor refuse what its " +
-                    "reader refuses; until it lands, the gap is asserted to still be open",
-                    nameof(TestQuotientFilterStillBuildsWhatItsReaderRefuses)),
                 (StructureId.HyperLogLogPlus,
                     "its precision is bounded by one pair of constants on both sides, and " +
                     "its sparse form converts to dense long before the reader's cap",
@@ -1047,7 +1092,7 @@ namespace TestProbabilisticDataStructures
             };
 
             var named = declared
-                .SelectMany(d => d.PastTheOldCeiling.Append(d.SharedLimit))
+                .SelectMany(d => d.BuiltLarge.Append(d.SharedLimit))
                 .Concat(exempt.Select(e => e.VerifiedBy));
 
             foreach (var test in named)
@@ -1059,10 +1104,10 @@ namespace TestProbabilisticDataStructures
                     $"the roster names {test}, which is not a test method");
             }
 
-            foreach (var (id, pastTheOldCeiling, _) in declared)
+            foreach (var (id, builtLarge, _) in declared)
             {
-                Assert.IsNotEmpty(pastTheOldCeiling,
-                    $"{id} declares a limit and names nothing built past its old ceiling");
+                Assert.IsNotEmpty(builtLarge,
+                    $"{id} declares a limit and names nothing built large and read back");
             }
 
             StructureRoster.AssertCoversEveryStructure(
@@ -1073,10 +1118,11 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// The structures with a size limit their constructor and reader share, each with
-        /// the tests that build it past where its reader used to stop and the test that
-        /// holds both sides to the limit.
+        /// the tests that build it large and read it back -- past where its reader used
+        /// to stop, or for the quotient filter, whose reader was right, at the widest its
+        /// constructor now builds -- and the test that holds both sides to the limit.
         /// </summary>
-        private static readonly (StructureId Id, string[] PastTheOldCeiling, string SharedLimit)[]
+        private static readonly (StructureId Id, string[] BuiltLarge, string SharedLimit)[]
             Declared =
             {
                 (StructureId.CuckooBloomFilter,
@@ -1120,6 +1166,9 @@ namespace TestProbabilisticDataStructures
                 (StructureId.ScalableBloomFilter,
                     new[] { nameof(TestScalableFilterReaderTakesAFilterCountPastTheOldCeiling) },
                     nameof(TestScalableFilterLimitIsShared)),
+                (StructureId.QuotientFilter,
+                    new[] { nameof(TestQuotientFilterAtItsWidestSplitRoundTrips) },
+                    nameof(TestQuotientFilterLimitIsShared)),
             };
 
         /// <summary>
@@ -1148,6 +1197,9 @@ namespace TestProbabilisticDataStructures
                 [("SetSketch", "`m`")] = (ulong)SetSketch.MaxRegisters,
                 [("SublimeCountMinSketch", "rows")] = (ulong)SublimeCountMinSketch.MaxDepth,
                 [("ScalableBloomFilter", "filter count")] = (ulong)ScalableBloomFilter.MaxFilters,
+                [("QuotientFilter", "quotient bits")] = QuotientFilter.MaxQuotientBits,
+                [("QuotientFilter", "quotient + remainder bits")] = QuotientFilter.HashBits,
+                [("QuotientFilter", "remainder bits")] = QuotientFilter.MaxRemainderBits,
             };
 
             using var resource = typeof(TestLoadWhatItBuilds).Assembly

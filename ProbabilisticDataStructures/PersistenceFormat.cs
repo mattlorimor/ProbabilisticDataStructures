@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Hashing;
+using System.Linq;
 
 namespace ProbabilisticDataStructures
 {
@@ -116,12 +118,6 @@ namespace ProbabilisticDataStructures
         internal static ReadOnlySpan<byte> Magic => "PDS\0"u8;
 
         /// <summary>
-        /// The highest format version this library can read. Readers refuse anything
-        /// above it, since a later version may mean the payload differently.
-        /// </summary>
-        internal const ushort MaxSupportedVersion = 5;
-
-        /// <summary>
         /// The version a payload is written at unless its structure asks for another.
         /// </summary>
         /// <remarks>
@@ -135,7 +131,8 @@ namespace ProbabilisticDataStructures
         /// in a comment is a roster maintained by hand, and this one was wrong for
         /// several releases before anyone read it closely. The versions that exist are
         /// the named constants below, and each is used by the structures that reference
-        /// it -- which the compiler keeps true and a comment cannot.
+        /// it -- which the compiler keeps true and a comment cannot. The table of
+        /// readable versions below is built from them, one entry per structure.
         /// </para>
         /// </remarks>
         internal const ushort DefaultVersion = 1;
@@ -170,6 +167,123 @@ namespace ProbabilisticDataStructures
         /// the same filter they always were.
         /// </summary>
         internal const ushort CuckooPackedVersion = 3;
+
+        /// <summary>
+        /// The version at which <see cref="CuckooBloomFilter"/> also stores where its
+        /// random generator began, so that <see cref="CuckooBloomFilter.Reset"/> can
+        /// return it there after a save and a load. Earlier payloads hold only the
+        /// position the generator had reached, which cannot say where it started.
+        /// </summary>
+        internal const ushort CuckooOriginalStateVersion = 6;
+
+        /// <summary>
+        /// The format versions each structure has defined, which are exactly the ones its
+        /// reader reads. This is the one place that says so.
+        /// </summary>
+        /// <remarks>
+        /// A version is a property of a structure's layout, not of the library, so a
+        /// structure's reader reads the versions that structure has written and no
+        /// others. Accepting every version up to the highest anywhere would read a
+        /// version some other structure defined as though it were this one's newest
+        /// layout; <see cref="Read(Stream, StructureId, out HashId, out ushort)"/> refuses
+        /// it instead, and says which versions it does read.
+        /// <para>
+        /// Every structure is listed, including those that have only ever written the
+        /// first version, so that a structure added without an entry fails loudly rather
+        /// than inheriting one. Adding a version to a structure is one new constant above
+        /// and one more element in its entry here; <see cref="MaxSupportedVersion"/>
+        /// follows from the table. FORMAT.md's version table is held to this one.
+        /// </para>
+        /// </remarks>
+        private static readonly Dictionary<StructureId, ushort[]> Readable = new()
+        {
+            [StructureId.BloomFilter] = [DefaultVersion],
+            [StructureId.BloomFilter64] = [DefaultVersion],
+            [StructureId.CountingBloomFilter] = [DefaultVersion],
+            [StructureId.DeletableBloomFilter] = [DefaultVersion],
+            [StructureId.PartitionedBloomFilter] = [DefaultVersion],
+            [StructureId.ScalableBloomFilter] = [DefaultVersion],
+            [StructureId.StableBloomFilter] =
+                [DefaultVersion, RandomStateVersion, StableOriginalStateVersion],
+            [StructureId.InverseBloomFilter] = [DefaultVersion],
+            [StructureId.CuckooBloomFilter] =
+                [DefaultVersion, RandomStateVersion, CuckooPackedVersion,
+                 CuckooOriginalStateVersion],
+            [StructureId.CountMinSketch] = [DefaultVersion],
+            [StructureId.HyperLogLog] = [DefaultVersion],
+            [StructureId.TopK] = [DefaultVersion],
+            [StructureId.MinHashSignature] = [DefaultVersion],
+            [StructureId.BinaryFuseFilter] = [DefaultVersion],
+            [StructureId.DDSketch] = [DefaultVersion],
+            [StructureId.HyperLogLogPlus] = [DefaultVersion],
+            [StructureId.QuotientFilter] = [DefaultVersion],
+            [StructureId.ThetaSketch] = [DefaultVersion],
+            [StructureId.SimHashSignature] = [DefaultVersion],
+            [StructureId.CountSketch] = [DefaultVersion],
+            [StructureId.InvertibleBloomLookupTable] = [DefaultVersion],
+            [StructureId.BloomierFilter] = [DefaultVersion],
+            [StructureId.HeavyKeeper] = [DefaultVersion],
+            [StructureId.VarOpt] = [DefaultVersion],
+            [StructureId.UltraLogLog] = [DefaultVersion],
+            [StructureId.Grafite] = [DefaultVersion],
+            [StructureId.InfiniFilter] = [DefaultVersion],
+            [StructureId.MementoFilter] = [DefaultVersion],
+            [StructureId.SublimeCountMinSketch] = [DefaultVersion],
+            [StructureId.SetSketch] = [DefaultVersion, SetSketchVariantVersion],
+            [StructureId.TupleSketch] = [DefaultVersion],
+            [StructureId.PrivateCountMinSketch] = [DefaultVersion],
+            [StructureId.DpswSketch] = [DefaultVersion],
+        };
+
+        /// <summary>
+        /// The highest format version any structure defines. A payload above it was
+        /// written by a later version of this library, which may mean it differently,
+        /// and is refused as such.
+        /// </summary>
+        /// <remarks>
+        /// Derived from the table above so that the two cannot disagree. It is not what
+        /// decides whether a payload is read: a version at or below it that the
+        /// structure being read never defined is refused too.
+        /// </remarks>
+        internal static readonly ushort MaxSupportedVersion =
+            Readable.Values.Max(versions => versions.Max());
+
+        /// <summary>
+        /// Every structure's table entry, for a test to hold against the list of
+        /// structures and against FORMAT.md.
+        /// </summary>
+        internal static IReadOnlyDictionary<StructureId, ushort[]> ReadableVersionTable => Readable;
+
+        /// <summary>
+        /// The format versions the reader of a structure accepts.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">
+        /// The structure has no entry in the table, which is a defect in this library
+        /// rather than in any payload.
+        /// </exception>
+        internal static IReadOnlyList<ushort> ReadableVersions(StructureId structure)
+        {
+            return Readable.TryGetValue(structure, out var versions)
+                ? versions
+                : throw new InvalidOperationException(
+                    $"No format versions are declared for {structure}, so nothing of " +
+                    "that type can be read. Give it an entry in the table of readable " +
+                    "versions in PersistenceFormat.");
+        }
+
+        /// <summary>
+        /// Words for a set of versions, as "version 1" or "versions 1, 2 and 5".
+        /// </summary>
+        internal static string DescribeVersions(IReadOnlyList<ushort> versions)
+        {
+            return versions.Count switch
+            {
+                0 => "no version",
+                1 => $"version {versions[0]}",
+                _ => $"versions {string.Join(", ", versions.Take(versions.Count - 1))} " +
+                     $"and {versions[^1]}",
+            };
+        }
 
         private const int MagicLength = 4;
         private const int HeaderLength = 14;
@@ -208,8 +322,9 @@ namespace ProbabilisticDataStructures
         /// in use when it was written.
         /// </summary>
         /// <exception cref="InvalidDataException">
-        /// The stream does not hold a payload of this format, holds a later version of
-        /// it, holds a different structure, or has been corrupted.
+        /// The stream does not hold a payload of this format, holds a format version
+        /// the structure never defined (a later one included), holds a different
+        /// structure, or has been corrupted.
         /// </exception>
         internal static byte[] Read(Stream stream, StructureId expected, out HashId hash)
         {
@@ -221,8 +336,9 @@ namespace ProbabilisticDataStructures
         /// written at, for structures whose payload layout depends on it.
         /// </summary>
         /// <exception cref="InvalidDataException">
-        /// The stream does not hold a payload of this format, holds a later version of
-        /// it, holds a different structure, or has been corrupted.
+        /// The stream does not hold a payload of this format, holds a format version
+        /// the structure never defined (a later one included), holds a different
+        /// structure, or has been corrupted.
         /// </exception>
         internal static byte[] Read(
             Stream stream, StructureId expected, out HashId hash, out ushort version)
@@ -237,11 +353,13 @@ namespace ProbabilisticDataStructures
             }
 
             version = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(4));
+
+            // Before the structure is compared, as it always was: a version this library
+            // has never heard of may lay the header out differently, and then there is
+            // no structure id to trust.
             if (version == 0 || version > MaxSupportedVersion)
             {
-                throw new InvalidDataException(
-                    $"Payload is format version {version}, and this library reads up to " +
-                    $"version {MaxSupportedVersion}. It was written by a later version.");
+                throw RefuseVersion(expected, version);
             }
 
             var structure = (StructureId)BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(6));
@@ -250,6 +368,14 @@ namespace ProbabilisticDataStructures
                 throw new InvalidDataException(
                     $"Payload holds a {Describe(structure)} and was read as a " +
                     $"{Describe(expected)}.");
+            }
+
+            // After it, because which versions are acceptable depends on which structure
+            // this is. A version some other structure defined is not an older or newer
+            // layout of this one, and reading it as one is a guess.
+            if (!ReadableVersions(expected).Contains(version))
+            {
+                throw RefuseVersion(expected, version);
             }
 
             hash = (HashId)BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(8));
@@ -279,6 +405,27 @@ namespace ProbabilisticDataStructures
             }
 
             return payload;
+        }
+
+        /// <summary>
+        /// The refusal for a format version the structure being read does not define,
+        /// which names the structure, the version it was handed and the versions it
+        /// does read.
+        /// </summary>
+        private static InvalidDataException RefuseVersion(StructureId expected, ushort version)
+        {
+            var reads = DescribeVersions(ReadableVersions(expected));
+
+            var why = version == 0
+                ? "Version 0 is reserved and never written."
+                : version > MaxSupportedVersion
+                    ? "It was written by a later version of this library."
+                    : $"{expected} has never been written at that version, so the " +
+                      "header does not describe a payload this library produced.";
+
+            return new InvalidDataException(
+                $"Payload is format version {version}, and {expected} is read at " +
+                $"{reads}. {why}");
         }
 
         /// <summary>

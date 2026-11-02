@@ -497,6 +497,17 @@ rest of a message survives, as it should, and one that deletes the guard does no
   wrote must load forever), `thetasketch-v1b.bin` pins the current writer. A bug fix
   that changes the writer's output regenerates the write fixture and *never* touches
   the read fixture.
+- **A structure reads the format versions it defined, and one table says which.**
+  `PersistenceFormat` lists them per structure, and `TestPersistenceFormatVersions`
+  relabels a valid payload of every structure to each version it never defined, with the
+  CRC repaired so the version is the only lie. It asks for the explanation, not just an
+  exception: the layout checks further down refuse some of these payloads by accident (a
+  stable filter labelled 3 is short a field and dies on its length), so a test that only
+  wanted a throw would pass with the version rule deleted. The roster is `StructureId`,
+  FORMAT.md's table of versions is held to the same table by `TestFormatDocumentation`,
+  and a defined version with no stored fixture fails
+  `TestEveryDefinedVersionHasAStoredPayloadThatReads`. Adding a version to a structure
+  is one entry in the table and one fixture.
 - Corruption is tested exhaustively at distance 1 (every single-bit flip must be
   rejected) plus structured hostile payloads for what bit flips can't reach. This is
   stronger than random fuzzing for the same class and fully reproducible.
@@ -516,10 +527,12 @@ rest of a message survives, as it should, and one that deletes the guard does no
 - **An exemption names the test that checks its reason.** The same sweep exempts the
   structures whose readers cap nothing their constructors can reach, and each exemption
   points at a test asserting why -- the cap is unreachable, or the reader caps nothing.
-  One exemption asserts that a known gap is still open, because another branch closes
-  it: when that lands, the exemption fails, which is the reminder to move the structure
-  into the declared limits. A number written into FORMAT.md is held the same way, by a
-  test comparing its table of limits with the code in both directions.
+  An exemption can assert that a known gap is still open while another branch closes
+  it. `QuotientFilter` was exempt that way, its test building a filter its reader
+  refused; when the constructor fix was merged in, that test failed on the merge, and
+  the structure moved into the declared limits. A number written into FORMAT.md is held
+  the same way, by a test comparing its table of limits with the code in both
+  directions.
 
 ## Deliberately not done
 
