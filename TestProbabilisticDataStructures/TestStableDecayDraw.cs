@@ -81,14 +81,15 @@ namespace TestProbabilisticDataStructures
         /// The 32-bit draw, restated: the top 32 bits of the input, multiplied by m and
         /// shifted down.
         /// </summary>
-        private static uint Narrow(ulong next, uint m) =>
+        internal static uint Narrow(ulong next, uint m) =>
             (uint)(((ulong)(uint)(next >> 32) * m) >> 32);
 
         /// <summary>
         /// How many of the 2^64 inputs start a run at each cell, for one draw and one m,
-        /// with the boundaries found so far kept for reuse.
+        /// with the boundaries found so far kept for reuse. VarOpt's eviction draw is
+        /// counted with this too, in <see cref="TestVarOptEvictionDraw"/>.
         /// </summary>
-        private sealed class InputCounts
+        internal sealed class InputCounts
         {
             private readonly Func<ulong, uint, uint> draw;
             private readonly uint m;
@@ -161,7 +162,7 @@ namespace TestProbabilisticDataStructures
         /// The starts a test looks at: the first and last 64 cells, and 64 more spread
         /// across the rest.
         /// </summary>
-        private static IEnumerable<ulong> SampledStarts(uint m)
+        internal static IEnumerable<ulong> SampledStarts(uint m)
         {
             for (ulong r = 0; r < 64; r++)
             {
@@ -180,7 +181,7 @@ namespace TestProbabilisticDataStructures
         /// where the share is <paramref name="cells"/> * 2^64: a count within one input of
         /// its share is under m away. Over 2^64, it is the error as a fraction of the share.
         /// </summary>
-        private static BigInteger Excess(BigInteger count, uint m, uint cells) =>
+        internal static BigInteger Excess(BigInteger count, uint m, uint cells) =>
             count * m - (BigInteger)cells * (BigInteger)TwoTo64;
 
         private static double Relative(BigInteger excess, uint cells) =>
@@ -190,7 +191,7 @@ namespace TestProbabilisticDataStructures
         /// The starts whose count is more than one input from 2^64 / m, with the worst
         /// relative error among them.
         /// </summary>
-        private static (int Uneven, int Checked, double Worst) StartsOffTheirShare(
+        internal static (int Uneven, int Checked, double Worst) StartsOffTheirShare(
             Func<ulong, uint, uint> draw, uint m)
         {
             var counts = new InputCounts(draw, m);
