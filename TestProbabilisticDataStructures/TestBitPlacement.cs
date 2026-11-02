@@ -235,6 +235,52 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The bucket array's limit is the same whichever way a filter places: the counting
+        /// and stable filters refuse a size past <c>Buckets.MaxCount</c> placed either way,
+        /// against the same parameter and with the same words as the public constructor.
+        /// </summary>
+        /// <remarks>
+        /// Through the public constructors this cannot tell the placements apart, because
+        /// every size past the limit is far past 2^27 and so places with 64-bit values; a
+        /// check skipped for 32-bit placement would pass every public test. The internal
+        /// constructor reaches a 32-bit filter of that size, which is what a payload
+        /// written before version 8 describes, so it is held here. Each is refused before
+        /// anything is allocated.
+        /// </remarks>
+        [TestMethod]
+        public void TestBothPlacementsRefuseWhatTheBucketLimitRefuses()
+        {
+            var limit = (ulong)Buckets.MaxCount(8);
+            var n = SmallestCountReaching(limit + 1, 0.01);
+            Assert.IsGreaterThan(Threshold, limit, "the limit is not past the threshold, so this checks nothing about it");
+
+            var counting = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new CountingBloomFilter(n, 8, 0.01));
+            Assert.AreEqual("n", counting.ParamName);
+            foreach (var placement in new[] { Placement.Narrow, Placement.Wide })
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => new CountingBloomFilter(n, 8, 0.01, null, placement),
+                    $"CountingBloomFilter placed {placement} built past the bucket limit");
+                Assert.AreEqual(counting.ParamName, ex.ParamName);
+                Assert.AreEqual(counting.Message, ex.Message);
+            }
+
+            var cells = (uint)limit + 1;
+            var stable = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new StableBloomFilter(cells, 8, 0.01, seed: 1));
+            Assert.AreEqual("m", stable.ParamName);
+            foreach (var placement in new[] { Placement.Narrow, Placement.Wide })
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => new StableBloomFilter(cells, 8, 0.01, null, 1, placement),
+                    $"StableBloomFilter placed {placement} built past the bucket limit");
+                Assert.AreEqual(stable.ParamName, ex.ParamName);
+                Assert.AreEqual(stable.Message, ex.Message);
+            }
+        }
+
+        /// <summary>
         /// The smallest item count whose filter, at this rate, has at least this many bits.
         /// </summary>
         private static uint SmallestCountReaching(ulong bits, double fpRate)
