@@ -561,6 +561,229 @@ namespace TestProbabilisticDataStructures
         }
 
 
+        // ---- A bucket index is a 32-bit integer ---------------------------------------
+
+        /// <summary>
+        /// The log of the bucket ratio, as the sketch works it out. Restated here from
+        /// the paper's gamma = (1+a)/(1-a) rather than read back from the sketch.
+        /// </summary>
+        private static double LogGammaOf(double accuracy)
+        {
+            return Math.Log((1 + accuracy) / (1 - accuracy));
+        }
+
+        /// <summary>
+        /// A value whose bucket index an int cannot hold is refused, where it used to
+        /// be filed in the last bucket an int has. At a relative accuracy of 1e-10 an
+        /// int counts 2^31 buckets of 2e-10 each, so only values from about 0.65 to
+        /// 1.54 have a bucket: {1000, 2000, 1e6} all landed in the one at int.MaxValue
+        /// and every quantile of them answered 1.536.
+        /// </summary>
+        [TestMethod]
+        public void TestAValueTheBucketIndexCannotHoldIsRefusedNotSaturated()
+        {
+            // On an empty sketch, where it used to be accepted without a word.
+            var values = new[] { 1000.0, 2000.0, 1e6, -1000.0, 1e-3, -1e-3 };
+            foreach (var value in values)
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => new DDSketch(1e-10).Add(value),
+                    $"{value} has no bucket at an accuracy of 1e-10");
+                Assert.AreEqual("value", ex.ParamName);
+            }
+
+            // And on one that holds something: used to fail in the allocation instead.
+            var sketch = new DDSketch(1e-10);
+            sketch.Add(1.0);
+            foreach (var value in values)
+            {
+                Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => sketch.Add(value));
+            }
+
+            // Refusing changed nothing: the one value that was added is still all there is.
+            Assert.AreEqual(1UL, sketch.Count());
+            Assert.AreEqual(1.0, sketch.Min());
+            Assert.AreEqual(1.0, sketch.Max());
+            Assert.AreEqual(1.0, sketch.Quantile(0.5), 1e-9);
+        }
+
+        /// <summary>
+        /// The range ends exactly where an int does. The values below sit half a bucket
+        /// inside and half a bucket outside each end, so a limit that is a bucket early
+        /// or late, or on the wrong side of a sign, is on the wrong side of one of them.
+        /// </summary>
+        [TestMethod]
+        public void TestTheIndexRangeEndsWhereAnIntEnds()
+        {
+            const double accuracy = 1e-9;
+            var logGamma = LogGammaOf(accuracy);
+
+            // ln(v) / ln(gamma) is the index before it is rounded up, so the exponent is
+            // that quotient: -0.5 past an end rounds to the end's own bucket, and 0.5 past
+            // it to the first bucket an int does not have.
+            var cases = new (double Exponent, bool Held)[]
+            {
+                (int.MaxValue - 0.5, true),
+                (int.MaxValue + 0.5, false),
+                (int.MinValue - 0.5, true),
+                (int.MinValue - 1.5, false),
+            };
+
+            foreach (var (exponent, held) in cases)
+            {
+                var value = Math.Exp(exponent * logGamma);
+                var sketch = new DDSketch(accuracy);
+
+                if (held)
+                {
+                    sketch.Add(value);
+                    Assert.AreEqual(1UL, sketch.Count());
+                    Assert.AreEqual(value, sketch.Quantile(0.5), value * 2 * accuracy,
+                        $"a value in the bucket at index {Math.Ceiling(exponent)} came back wrong");
+                }
+                else
+                {
+                    Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                        () => sketch.Add(value),
+                        $"a value at exponent {exponent} is past the end of the indices");
+                    Assert.AreEqual(0UL, sketch.Count());
+                }
+            }
+        }
+
+        /// <summary>
+        /// Every positive double has a bucket once the accuracy is coarse enough that an
+        /// int reaches the smallest of them: 744.44 / ln(gamma) buckets below one, so
+        /// ln(gamma) of 3.47e-7 and an accuracy of about 1.74e-7. Each extreme goes in a
+        /// sketch of its own, since one store holding both is an array of billions. Below
+        /// the line the smallest is refused while the largest, 709.78 / ln(gamma), still
+        /// has a bucket: the line is drawn by the index, not by the accuracy alone.
+        /// </summary>
+        [TestMethod]
+        public void TestEveryDoubleHasABucketFromAboutOneAndAHalfTenMillionth()
+        {
+            foreach (var accuracy in new[] { 1.8e-7, 1e-6, 1e-3, 0.5 })
+            {
+                foreach (var value in new[]
+                    { double.Epsilon, double.MaxValue, -double.Epsilon, -double.MaxValue })
+                {
+                    var sketch = new DDSketch(accuracy);
+                    sketch.Add(value);
+                    Assert.AreEqual(1UL, sketch.Count(), $"{value} at an accuracy of {accuracy}");
+                    Assert.AreEqual(value, sketch.Min());
+                }
+            }
+
+            var tooFine = new DDSketch(1.7e-7);
+            foreach (var value in new[] { double.Epsilon, -double.Epsilon })
+            {
+                Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => tooFine.Add(value));
+            }
+
+            tooFine.Add(double.MaxValue);
+            tooFine.Add(-double.MaxValue);
+            Assert.AreEqual(2UL, tooFine.Count());
+        }
+
+        /// <summary>
+        /// A range of buckets no array could hold is refused, where it used to fail inside
+        /// the allocation of the store with an <see cref="OverflowException"/>. Indices
+        /// at both ends of the int range are 2^32 buckets apart, and an array holds fewer
+        /// than 2^31. The sketch is left as it was.
+        /// </summary>
+        [TestMethod]
+        public void TestARangeNoArrayCouldHoldIsRefusedNotOverflowed()
+        {
+            const double accuracy = 1e-9;
+            var logGamma = LogGammaOf(accuracy);
+            var top = Math.Exp((int.MaxValue - 0.5) * logGamma);
+            var bottom = Math.Exp((int.MinValue - 0.5) * logGamma);
+
+            var sketch = new DDSketch(accuracy);
+            sketch.Add(top);
+
+            // Index 0 is 2^31 buckets below it, which is one more than an array holds
+            // with room to spare.
+            var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => sketch.Add(1.0));
+            Assert.AreEqual("value", ex.ParamName);
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => sketch.Add(bottom));
+            Assert.AreEqual(1UL, sketch.Count());
+            Assert.AreEqual(top, sketch.Quantile(0.5), top * 2 * accuracy);
+
+            // The same from the other side, and for the negative store.
+            var fromBelow = new DDSketch(accuracy);
+            fromBelow.Add(bottom);
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => fromBelow.Add(top));
+            var negative = new DDSketch(accuracy);
+            negative.Add(-top);
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => negative.Add(-1.0));
+        }
+
+        /// <summary>
+        /// Merging two sketches whose buckets are too far apart for one array is refused
+        /// before either is changed, rather than after one store has taken the merge and
+        /// the other has overflowed.
+        /// </summary>
+        [TestMethod]
+        public void TestMergingBucketsNoArrayCouldHoldChangesNothing()
+        {
+            const double accuracy = 1e-9;
+            var top = Math.Exp((int.MaxValue - 0.5) * LogGammaOf(accuracy));
+
+            var high = new DDSketch(accuracy);
+            high.Add(top);
+            high.Add(-1.0);
+
+            var low = new DDSketch(accuracy);
+            low.Add(1.0);
+            low.Add(-top);
+
+            var before = high.ToByteArray();
+            Assert.ThrowsExactly<ArgumentException>(() => high.Merge(low));
+            CollectionAssert.AreEqual(before, high.ToByteArray(),
+                "a merge that was refused changed the sketch it was merging into");
+        }
+
+        /// <summary>
+        /// An accuracy so fine that (1+a)/(1-a) is exactly 1 has no bucket ratio: every
+        /// value is infinitely many buckets from the next, and the index of any value but
+        /// one is infinity. It cannot work at all, so it is refused where it was built.
+        /// The finest that can, 6e-17, has a ratio of one part in 4.5 quadrillion, and is
+        /// still built.
+        /// </summary>
+        [TestMethod]
+        public void TestAnAccuracyFinerThanAnyBucketRatioIsRefused()
+        {
+            foreach (var bad in new[] { 5.5e-17, 1e-20, 1e-300, double.Epsilon })
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => new DDSketch(bad), $"an accuracy of {bad}");
+                Assert.AreEqual("relativeAccuracy", ex.ParamName);
+            }
+
+            var finest = new DDSketch(6e-17);
+            finest.Add(1.0);
+            Assert.AreEqual(1.0, finest.Quantile(0.5), 1e-9);
+        }
+
+        /// <summary>
+        /// The reader holds a payload to what the constructor builds, so an accuracy no
+        /// sketch is built at is refused as a payload and not as an argument.
+        /// </summary>
+        [TestMethod]
+        public void TestAPayloadWithAnAccuracyNoSketchIsBuiltAtIsRefused()
+        {
+            var sketch = new DDSketch(0.01);
+            for (var i = 1; i <= 100; i++) sketch.Add(i);
+
+            var bytes = sketch.ToByteArray();
+            System.Buffers.Binary.BinaryPrimitives.WriteDoubleLittleEndian(
+                bytes.AsSpan(14), 1e-20);
+            RepairChecksum(bytes);
+
+            AssertRefused(bytes, "relative accuracy");
+        }
+
         /// <summary>
         /// The bucket pipeline held to the paper's printed formulas -- Masson, Rim
         /// and Lee, "DDSketch" (VLDB 2019), section 2, verified against the paper
