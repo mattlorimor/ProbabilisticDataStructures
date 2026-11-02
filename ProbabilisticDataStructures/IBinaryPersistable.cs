@@ -29,9 +29,10 @@ namespace ProbabilisticDataStructures
         /// <param name="stream">The stream to read from.</param>
         /// <returns>The structure that was written.</returns>
         /// <exception cref="InvalidDataException">
-        /// The payload is not one of these, is a later format version, is a different
-        /// structure, is corrupted, or was written while a hash function set through
-        /// SetHash was in use. The last case needs the overload that supplies one.
+        /// The payload is not one of these, is a format version this structure never
+        /// defined (a later one included), is a different structure, is corrupted, or
+        /// was written while a hash function set through SetHash was in use. The last
+        /// case needs the overload that supplies one.
         /// </exception>
         static abstract TSelf ReadFrom(Stream stream);
 

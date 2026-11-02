@@ -497,6 +497,17 @@ rest of a message survives, as it should, and one that deletes the guard does no
   wrote must load forever), `thetasketch-v1b.bin` pins the current writer. A bug fix
   that changes the writer's output regenerates the write fixture and *never* touches
   the read fixture.
+- **A structure reads the format versions it defined, and one table says which.**
+  `PersistenceFormat` lists them per structure, and `TestPersistenceFormatVersions`
+  relabels a valid payload of every structure to each version it never defined, with the
+  CRC repaired so the version is the only lie. It asks for the explanation, not just an
+  exception: the layout checks further down refuse some of these payloads by accident (a
+  stable filter labelled 3 is short a field and dies on its length), so a test that only
+  wanted a throw would pass with the version rule deleted. The roster is `StructureId`,
+  FORMAT.md's table of versions is held to the same table by `TestFormatDocumentation`,
+  and a defined version with no stored fixture fails
+  `TestEveryDefinedVersionHasAStoredPayloadThatReads`. Adding a version to a structure
+  is one entry in the table and one fixture.
 - Corruption is tested exhaustively at distance 1 (every single-bit flip must be
   rejected) plus structured hostile payloads for what bit flips can't reach. This is
   stronger than random fuzzing for the same class and fully reproducible.
