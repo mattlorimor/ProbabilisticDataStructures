@@ -879,6 +879,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Build` and in CAPACITY.md. The format is unchanged; widening the identity would change
   it, and has not been done.
 
+- **`DDSketch.WriteTo` failed with an `OverflowException`, or ran off the end of an array,
+  for a sign of 2^28 buckets or more.** A sign's run of buckets was copied into a byte array
+  sized `buckets * 8` in an `int`, which is negative from 268,435,456 buckets (two gibibytes
+  of counts) and wraps to a small positive length from 2^29, so the loop that filled it
+  failed with an `ArgumentOutOfRangeException` instead. The constructor allows a run of
+  2,147,483,591 buckets, so a sketch could be built and used that could not be written, and
+  said so as an overflow. The length is now counted in 64 bits, and a sketch whose payload
+  would pass 2,147,483,573 bytes, the most an envelope holds, throws the
+  `InvalidOperationException` every structure too large to write throws, naming the size it
+  would be and the size one can be, before anything is allocated and with the sketch
+  unchanged. That is 268,435,439 buckets between both signs, since the two share a payload.
+  Every payload that wrote before is byte-identical, and the reader needed no change: it
+  divides the bytes it is given by eight and multiplies nothing.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

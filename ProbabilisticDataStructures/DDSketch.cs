@@ -116,9 +116,12 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// The bytes a run of this many buckets is written as: a count of eight bytes for
-        /// each. The old arithmetic, an int product, until the fix.
+        /// each. In 64 bits: in an int it wrapped at 2^28 buckets, two gibibytes of counts,
+        /// and the sketch then failed to write with an OverflowException from the
+        /// allocation, or from 2^29 sized the array for a fraction of the run and ran off
+        /// the end of it filling it.
         /// </summary>
-        internal static long BytesOf(long span) => unchecked((int)span * sizeof(ulong));
+        internal static long BytesOf(long span) => span * sizeof(ulong);
 
         /// <summary>
         /// The bytes of payload besides the counts: the five fixed fields, then an index of
@@ -134,10 +137,16 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Refuses a sketch whose payload would not fit an envelope, with the exception the
-        /// payload writer gives for any structure too large to write. Nothing yet.
+        /// payload writer gives for any structure too large to write, before anything is
+        /// allocated for it. The two signs share the one payload, so it is the length of
+        /// both runs together that is held to the limit.
         /// </summary>
+        /// <exception cref="InvalidOperationException">
+        /// The payload would be longer than <see cref="PersistenceFormat.MaxPayloadLength"/>.
+        /// </exception>
         internal static void CheckWritable(long positiveSpan, long negativeSpan)
         {
+            PersistenceFormat.CheckPayloadLength(PayloadLength(positiveSpan, negativeSpan));
         }
 
         /// <summary>
@@ -382,6 +391,12 @@ namespace ProbabilisticDataStructures
         /// Writes the sketch to a stream.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
+        /// <exception cref="InvalidOperationException">
+        /// The payload would be longer than <see cref="PersistenceFormat.MaxPayloadLength"/>,
+        /// which a sketch holding enough buckets, between its two signs, can be: the counts
+        /// are eight bytes a bucket. The sketch is intact and can still be used, and nothing
+        /// is written.
+        /// </exception>
         public void WriteTo(Stream stream)
         {
             ArgumentNullException.ThrowIfNull(stream);
@@ -651,7 +666,11 @@ namespace ProbabilisticDataStructures
                     return;
                 }
 
-                var span = this.MaxIndex - this.MinIndex + 1;
+                // The caller has refused a run too long for a payload (CheckWritable), which
+                // is far fewer buckets than an int holds, so the cast and the offsets below
+                // cannot overflow; the checked cast is there so that a caller who had not
+                // would fail rather than write a short run.
+                var span = checked((int)this.Span);
                 var bytes = new byte[BytesOf(span)];
 
                 for (var i = 0; i < span; i++)
