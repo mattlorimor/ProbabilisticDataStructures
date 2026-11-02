@@ -762,6 +762,13 @@ namespace TestProbabilisticDataStructures
         /// that claims more, and one that claims exactly that is refused for what the
         /// list would cost. (<see cref="TestDpswSketch"/> holds the sizing rule to its
         /// edge, one item either side.)
+        /// <para>
+        /// The sketches a window holds are private sketches, so its width and depth are
+        /// limited by theirs, and by the same symbols rather than a second pair: the
+        /// constructor refuses one past each, naming its own parameter; the reader refuses
+        /// a payload that claims one past each, as beyond anything built, and reads the
+        /// limit itself.
+        /// </para>
         /// </summary>
         [TestMethod]
         public void TestDpswSketchLimitIsShared()
@@ -782,6 +789,40 @@ namespace TestProbabilisticDataStructures
                     PokeUInt32(wide, 24, (uint)DpswSketch.MaxSubstreamSize)));
             Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
                 "a payload at the limit should be refused for what it costs, not its size");
+
+            // The shape of the sketches it holds is the private sketch's, the same symbols.
+            Assert.AreEqual("width", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new DpswSketch(100, 1.0, width: PrivateCountMinSketch.MaxWidth + 1)).ParamName);
+            Assert.AreEqual("depth", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new DpswSketch(100, 1.0, depth: PrivateCountMinSketch.MaxDepth + 1)).ParamName);
+
+            // The u32 width at 28 and the u32 depth at 32, after the substream size. Written
+            // at two budgets, because the deepest shape is also refused by the guard on the
+            // noise of the leanest checkpoint, which at a budget of 1 sees a depth past the
+            // limit first and refuses it for that.
+            foreach (var rho in new[] { 1.0, 1e9 })
+            {
+                var shaped = new DpswSketch(100, rho, seed: 1).ToByteArray();
+
+                AssertRefused<DpswSketch>(
+                    PokeUInt32(shaped, 28, PrivateCountMinSketch.MaxWidth + 1), PastTheLimit);
+                AssertRefused<DpswSketch>(
+                    PokeUInt32(shaped, 32, PrivateCountMinSketch.MaxDepth + 1), PastTheLimit);
+                AssertRefused<DpswSketch>(PokeUInt32(shaped, 28, uint.MaxValue), PastTheLimit);
+                AssertRefused<DpswSketch>(PokeUInt32(shaped, 32, uint.MaxValue), PastTheLimit);
+            }
+
+            // At the limit the reader accepts, and writes back what it read: a window that
+            // has begun no substream holds no sketch, so there is nothing to allocate. The
+            // budget is generous so that the deepest shape is not refused for its noise.
+            var generous = new DpswSketch(100, 1e9, seed: 1).ToByteArray();
+            foreach (var offset in new[] { 28, 32 })
+            {
+                var limit = PokeUInt32(generous, offset, (uint)Array.MaxLength);
+                var restored = Persistence.FromByteArray<DpswSketch>(limit);
+                Assert.IsTrue(limit.AsSpan().SequenceEqual(restored.ToByteArray()),
+                    "a window of the largest shape does not write the bytes it was read from");
+            }
         }
 
         /// <summary>
@@ -1485,6 +1526,8 @@ namespace TestProbabilisticDataStructures
                 [("PrivateCountMinSketch", "depth")] = PrivateCountMinSketch.MaxDepth,
                 [("InverseBloomFilter", "capacity")] = InverseBloomFilter.MaxCapacity,
                 [("DpswSketch", "items in a substream")] = (ulong)DpswSketch.MaxSubstreamSize,
+                [("DpswSketch", "width")] = PrivateCountMinSketch.MaxWidth,
+                [("DpswSketch", "depth")] = PrivateCountMinSketch.MaxDepth,
                 [("VarOpt", "`k`")] = VarOpt.MaxK,
                 [("Grafite", "words of low bits")] = Grafite.MaxLowWords,
                 [("Grafite", "words of high bits")] = Grafite.MaxHighWords,
