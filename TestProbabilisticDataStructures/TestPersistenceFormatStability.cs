@@ -943,6 +943,41 @@ namespace TestProbabilisticDataStructures
                 "a refusal of a payload this library wrote should say why it exists");
         }
 
+        /// <summary>
+        /// 6.2.0 and every release before it could build a bucket array for a filter
+        /// whose bits came to 2^32 or more, with a byte count worked out in 32 bits and
+        /// wrapped: a table of a few kilobytes, or none, for a filter of hundreds of
+        /// megabytes. The filter's adds threw wherever they landed past the table, after
+        /// setting what lay before it. The three stored payloads are what the
+        /// constructors wrote for 448,089,842 items at 1%, for 56,011,471 items of
+        /// eight-bit counters at 1%, and for 1,431,655,763 three-bit stable cells, each
+        /// empty because an add to one could not be relied on to finish.
+        /// <para>
+        /// The table is not the filter, and the payload does not say which of its
+        /// buckets were lost, so reading it would be guessing. It is refused, and the
+        /// refusal says where the payload came from.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestStoredFiltersWhoseBucketBytesWrappedAreRefusedWithTheirCause()
+        {
+            var stored = new (string Name, Func<Stream, object> Read)[]
+            {
+                ("bloomfilter-wrapped-v1.bin", s => BloomFilter.ReadFrom(s)),
+                ("countingbloomfilter-wrapped-v1.bin", s => CountingBloomFilter.ReadFrom(s)),
+                ("stablebloomfilter-wrapped-v5.bin", s => StableBloomFilter.ReadFrom(s)),
+            };
+
+            foreach (var (name, read) in stored)
+            {
+                var ex = Assert.ThrowsExactly<InvalidDataException>(
+                    () => read(Fixture(name)), name);
+
+                StringAssert.Contains(ex.Message, "32 bits",
+                    $"the refusal of {name} should say why the table is short");
+            }
+        }
+
         [TestMethod]
         public void TestStoredSimHashSignatureStillReads()
         {
@@ -1424,6 +1459,9 @@ namespace TestProbabilisticDataStructures
                 ("varopt-v1.bin", 24, 1),
                 ("varopt-exact-v1.bin", 24, 1),
                 ("varopt-badmerge-v1.bin", 24, 1),
+                ("bloomfilter-wrapped-v1.bin", 1, 1),
+                ("countingbloomfilter-wrapped-v1.bin", 3, 1),
+                ("stablebloomfilter-wrapped-v5.bin", 7, 5),
                 ("ultraloglog-v1.bin", 25, 1),
                 ("grafite-v1.bin", 26, 1),
                 ("infinifilter-v1.bin", 27, 1),
