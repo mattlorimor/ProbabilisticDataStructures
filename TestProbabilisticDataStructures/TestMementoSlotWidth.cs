@@ -97,7 +97,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         [DataRow(32, 29, 65)]
         [DataRow(32, 30, 66)]
-        [DataRow(29, 32, 66)]
+        [DataRow(29, 32, 65)]
         [DataRow(32, 32, 68)]
         public void TestASlotWiderThanSixtyFourBitsIsRefusedNamingTheFingerprint(
             int rangeBits, int fingerprintBits, int slotBits)

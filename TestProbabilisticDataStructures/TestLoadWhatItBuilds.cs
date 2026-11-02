@@ -1335,6 +1335,7 @@ namespace TestProbabilisticDataStructures
                 [("ScalableBloomFilter", "filter count")] = (ulong)ScalableBloomFilter.MaxFilters,
                 [("InfiniFilter", "quotient bits")] = (ulong)InfiniFilter.MaxQuotientBits,
                 [("MementoFilter", "quotient bits")] = (ulong)MementoFilter.MaxQuotientBits,
+                [("MementoFilter", "bits of a slot")] = (ulong)MementoSegment.MaxSlotBits,
                 [("QuotientFilter", "quotient bits")] = QuotientFilter.MaxQuotientBits,
                 [("QuotientFilter", "quotient + remainder bits")] = QuotientFilter.HashBits,
                 [("QuotientFilter", "remainder bits")] = QuotientFilter.MaxRemainderBits,

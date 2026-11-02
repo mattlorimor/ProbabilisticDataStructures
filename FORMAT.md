@@ -231,6 +231,7 @@ address.
 | `StableBloomFilter` | bytes of cells, `m` × `d` bits, rounded up | 2,147,483,591 | the cells are one array, as the counters are |
 | `InfiniFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; a filter stops expanding there |
 | `MementoFilter` | quotient bits | 31 | as `InfiniFilter` |
+| `MementoFilter` | bits of a slot | 64 | a slot is held in a 64-bit word: three bits of metadata, and a field of the fingerprint, one bit for its age counter and the memento |
 | `QuotientFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; the reader also reads 32, which earlier constructors wrote as a wrapped one-slot table |
 | `QuotientFilter` | quotient + remainder bits | 64 | a fingerprint is cut from a 64-bit hash |
 | `QuotientFilter` | remainder bits | 61 | a slot is its remainder and three bits of bookkeeping in one 64-bit word; the reader also reads the wider remainders earlier constructors wrote |
@@ -942,8 +943,16 @@ The count is written in memento-sized pieces, an all-ones piece meaning "add thi
 read another", so a small count costs as much as one memento and a large one still fits.
 
 A reader rejects an impossible memento width, a chain of no tables or absurdly many, a
-table with more than 31 bits of address (as `InfiniFilter`'s), a table with more entries
-than slots, and a word count disagreeing with the shape claimed.
+table with more than 31 bits of address (as `InfiniFilter`'s), a table whose slots are wider
+than 64 bits, a table with more entries than slots, and a word count disagreeing with the
+shape claimed.
+
+A slot of exactly 64 bits — the fingerprint plus the memento width come to 60 — was written
+by releases up to and including 6.2.0 with a mask of zero, which dropped every write: the
+table counted each key and held none. Such a payload has a positive entry count and no
+word with a bit set, which no table holding an entry can have, and a reader refuses it with
+that said instead of reading a filter that denies every key it claims to hold. A table of
+wider slots was never usable either, and is refused for its width, empty or not.
 
 ### `SublimeCountMinSketch` (id 29)
 

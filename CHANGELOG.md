@@ -589,6 +589,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capacity past three quarters of 2^31 starts the first table at the widest, as it did,
   now by a rule and not by a saturating conversion. No size that worked is refused.
 
+- **A `MementoFilter` whose slots came to 64 bits stored no key at all, and one past 64 lost
+  almost every key.** A slot is three bits of metadata and a field of the fingerprint, a bit
+  for its age counter and the memento, so `fingerprintBits` + the range's bits + 4. Its mask
+  was `(1UL << bits) - 1`, and a `ulong` shifts by its count mod 64, so at exactly 64 bits
+  the mask was zero and every write was masked away: `Add` counted the key and stored
+  nothing, and `Test` answered no. `new MementoFilter(1UL << 32, 28)` and `new
+  MementoFilter(1UL << 28, 32)` each found 0 of 200 keys added. At 65 bits it found 1 of 200;
+  at 66 an add threw `InvalidOperationException` from an insert that found no slot to write.
+  Every release since `MementoFilter` shipped in 6.2.0 is affected. `InfiniFilter` has the
+  same shape and cannot reach it: its slot is the fingerprint and four bits, 36 at most.
+  <br><br>
+  The mask is right for 64 bits, and a filter with a slot of 64 bits holds its keys, finds
+  them, removes them and reads back. The constructor refuses a slot past 64, since it would
+  straddle three words, with an `ArgumentOutOfRangeException` naming `fingerprintBits` and
+  giving the widest fingerprint for the range and the widest range for the fingerprint. No
+  size that worked is refused: every slot that held a key is 63 bits or fewer.
+  <br><br>
+  **A payload an earlier version wrote for a slot of 64 bits is now refused.** It says the
+  table holds entries and every word of it is zero, which is what the dropped writes left;
+  nothing in it can be recovered, and reading it would give a filter that says it holds keys
+  and denies each of them. The reader says where it came from, and the filter has to be
+  built again from its keys. A table of slots wider than 64 bits, empty or not, is refused
+  for its width. Payloads of narrower slots read as they always did.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added
