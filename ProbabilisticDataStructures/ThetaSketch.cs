@@ -76,6 +76,14 @@ namespace ProbabilisticDataStructures
         public ThetaSketch(uint nominalEntries)
         {
             Guard.ValidItemCount(nominalEntries, nameof(nominalEntries));
+            if (nominalEntries > MaxNominalEntries)
+            {
+                throw new ArgumentOutOfRangeException(nameof(nominalEntries), nominalEntries,
+                    $"A sketch can retain at most {MaxNominalEntries} values. It holds up " +
+                    "to twice what it retains before it trims, in one array, and an array " +
+                    $"holds at most {Array.MaxLength}.");
+            }
+
             this.nominalEntries = nominalEntries;
             this.values = new ulong[this.Capacity(0)];
             this.Hash = Defaults.GetDefaultHashFunction();
@@ -144,10 +152,15 @@ namespace ProbabilisticDataStructures
             other.EnsureCompact();
 
             var theta = Math.Min(this.theta, other.theta);
-            var merged = new ulong[this.held + other.held];
+
+            // Never more than the limit. Values arrive smallest first, and a union
+            // holding the limit or more trims to the smallest k anyway, so the ones
+            // past it could only be discarded -- and both sides together can hold
+            // more than an array, or an int, can count.
+            var merged = new ulong[Math.Min((long)this.held + other.held, this.Limit)];
             int i = 0, j = 0, n = 0;
 
-            while (i < this.held || j < other.held)
+            while ((i < this.held || j < other.held) && n < merged.Length)
             {
                 ulong value;
 
@@ -400,11 +413,12 @@ namespace ProbabilisticDataStructures
             var theta = reader.ReadUInt64();
             var held = reader.ReadUInt32();
 
-            if (nominalEntries == 0 || nominalEntries > PersistenceFormat.MaxNestedCount)
+            // The constructor's own limit, so that every sketch it builds reads back.
+            if (nominalEntries == 0 || nominalEntries > MaxNominalEntries)
             {
                 throw new InvalidDataException(
                     $"Sketch retains {nominalEntries} values, which is not a size this " +
-                    "library builds.");
+                    $"library builds: it builds them retaining 1 to {MaxNominalEntries}.");
             }
 
             // A sketch trims once it reaches twice its retained size, so it never holds
@@ -415,6 +429,11 @@ namespace ProbabilisticDataStructures
                     $"Sketch holds {held} values and retains {nominalEntries}, and one " +
                     "never holds more than twice what it retains.");
             }
+
+            // The buffer is sized by what is held, so a large k costs nothing here; what
+            // is held is checked against the bytes behind it first, so a claim cannot
+            // cost more than the payload it came in.
+            reader.RequireHolds(held, sizeof(ulong), "values");
 
             var sketch = new ThetaSketch(nominalEntries)
             {
@@ -472,6 +491,23 @@ namespace ProbabilisticDataStructures
         {
             return this.theta / 18446744073709551616.0;
         }
+
+        /// <summary>
+        /// The most values a sketch can be asked to retain.
+        /// </summary>
+        /// <remarks>
+        /// A sketch holds up to twice what it retains before it trims, in one buffer, and
+        /// no array is longer than <see cref="Array.MaxLength"/>. Past this the buffer
+        /// cannot grow to twice k. A little further the size computation itself wraps:
+        /// from 2^30 the constructor threw an overflow from inside the arithmetic, and
+        /// from 2^31 it built a sketch with no buffer at all, which failed on its first
+        /// add.
+        /// <para>
+        /// The constructor and the reader both refuse past it, so a sketch one builds
+        /// the other reads. The reader used to stop at a million.
+        /// </para>
+        /// </remarks>
+        internal static uint MaxNominalEntries => (uint)Array.MaxLength / 2;
 
         /// <summary>The most values the sketch ever holds before trimming.</summary>
         private int Limit => (int)(2 * this.nominalEntries);
@@ -536,7 +572,10 @@ namespace ProbabilisticDataStructures
 
             if (distinct > this.values.Length / 2 && this.values.Length < this.Limit)
             {
-                Array.Resize(ref this.values, Math.Min(this.values.Length * 2, this.Limit));
+                // Doubled in a long: at 2^30 values an int doubling wraps negative,
+                // and the resize that follows throws.
+                Array.Resize(ref this.values,
+                    (int)Math.Min(2L * this.values.Length, this.Limit));
             }
         }
 

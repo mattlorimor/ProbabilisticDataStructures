@@ -1,9 +1,12 @@
 using System;
 using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Hashing;
 using System.Linq;
-using System.Text;
+using System.Numerics;
+using System.Reflection;
+using System.Text.RegularExpressions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 
@@ -303,5 +306,885 @@ namespace TestProbabilisticDataStructures
 
         private static Grafite SmallGrafite() =>
             Grafite.Build(Enumerable.Range(0, 1000).Select(i => (ulong)i * 97), 0.01, 16, seed: 7);
+
+        // ---- One limit, shared by the constructor and the reader ------------------
+        //
+        // Each test below holds a structure's constructor and reader to the same
+        // limit from both sides: one past it, both refuse; at it, the reader accepts.
+        // The reader is shown accepting the limit itself wherever that is cheap --
+        // because it sizes what it allocates by what the payload holds, a payload
+        // claiming the limit costs nothing, or is refused only for the bytes it is
+        // missing. And each limit is pinned to the arithmetic it comes from, worked out
+        // here independently, so that moving the shared symbol moves a test too.
+
+        /// <summary>
+        /// Asserts a reader refused a payload, and that the message names the reason.
+        /// </summary>
+        private static void AssertRefused<T>(byte[] payload, string expected)
+            where T : IBinaryPersistable<T>
+        {
+            var ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<T>(payload));
+            StringAssert.Contains(ex.Message, expected);
+        }
+
+        /// <summary>What every reader says when a size is past its constructor's limit.</summary>
+        private const string PastTheLimit = "beyond anything this library builds";
+
+        /// <summary>
+        /// Structural for the table itself: the largest the filter allows is 2^31
+        /// entries, gigabytes of fingerprints, and a filter read back allocates its
+        /// table whole whether or not anything is in it -- the payload holds only the
+        /// occupied entries, so there is nothing to size by. The constructor and the
+        /// reader both ask <see cref="CuckooBloomFilter.GeometryProblem"/>, so the limit
+        /// is checked there at both of its edges, and each side is shown refusing one
+        /// table past it.
+        /// </summary>
+        [TestMethod]
+        public void TestCuckooFilterLimitIsShared()
+        {
+            // The largest power of two a uint numbers, since the constructor's tables
+            // are power-of-two bucket counts of four entries each.
+            Assert.IsTrue(BitOperations.IsPow2(CuckooBloomFilter.MaxEntries));
+            Assert.IsLessThanOrEqualTo((ulong)uint.MaxValue, CuckooBloomFilter.MaxEntries);
+            Assert.IsGreaterThan((ulong)uint.MaxValue, 2 * CuckooBloomFilter.MaxEntries);
+
+            // Both of the limit's edges. In entries: 2^29 buckets of four is exactly
+            // the limit, and 2^30 is past it. In words: 2^31 entries at 63 bits fit one
+            // array of 64-bit words, and at 64 bits they need one more than it holds.
+            Assert.IsNull(CuckooBloomFilter.GeometryProblem(1UL << 29, 4, 63));
+            Assert.IsNotNull(CuckooBloomFilter.GeometryProblem(1UL << 30, 4, 1));
+            Assert.IsNull(CuckooBloomFilter.GeometryProblem(CuckooBloomFilter.MaxEntries, 1, 1));
+            Assert.IsNotNull(CuckooBloomFilter.GeometryProblem(CuckooBloomFilter.MaxEntries + 1, 1, 1));
+            Assert.IsNotNull(CuckooBloomFilter.GeometryProblem(1UL << 29, 4, 64));
+
+            // The constructor, past each. 2^29 * 3.8 items is the most whose buckets
+            // round up to 2^29; one more rounds to 2^30, which master built with an
+            // occupancy map of no entries at all that failed on its first add. And at
+            // 1e-19 the fingerprints are 64 bits, too many words at 2^29 buckets.
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new CuckooBloomFilter(2_040_109_466, 0.5));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new CuckooBloomFilter(2_000_000_000, 1e-19));
+
+            // The reader, one table past the limit: u32 bucket count at 0, four entries.
+            var bytes = new CuckooBloomFilter(1000, 0.01).ToByteArray();
+            AssertRefused<CuckooBloomFilter>(PokeUInt32(bytes, 0, 1u << 30), PastTheLimit);
+        }
+
+        /// <summary>
+        /// A sketch at the limit costs only what it holds, so the whole promise runs
+        /// here: built at the limit, written, read back.
+        /// </summary>
+        [TestMethod]
+        public void TestThetaSketchLimitIsShared()
+        {
+            // Twice the limit fits one array, and twice one more does not.
+            var max = ThetaSketch.MaxNominalEntries;
+            Assert.IsLessThanOrEqualTo((long)Array.MaxLength, 2L * max);
+            Assert.IsGreaterThan((long)Array.MaxLength, 2L * (max + 1));
+
+            var sketch = new ThetaSketch(max);
+            for (var i = 0; i < 100; i++) sketch.Add(Key(i));
+            AssertRoundTrips(sketch);
+
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new ThetaSketch(max + 1));
+            AssertRefused<ThetaSketch>(
+                PokeUInt32(sketch.ToByteArray(), 0, max + 1), "not a size this library builds");
+        }
+
+        /// <summary>The tuple sketch, as the theta sketch.</summary>
+        [TestMethod]
+        public void TestTupleSketchLimitIsShared()
+        {
+            var max = TupleSketch.MaxNominalEntries;
+            Assert.IsLessThanOrEqualTo((long)Array.MaxLength, 2L * max);
+            Assert.IsGreaterThan((long)Array.MaxLength, 2L * (max + 1));
+
+            var sketch = new TupleSketch(max);
+            for (var i = 0; i < 100; i++) sketch.Add(Key(i), 1.0 + i);
+            AssertRoundTrips(sketch);
+
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new TupleSketch(max + 1));
+            AssertRefused<TupleSketch>(
+                PokeUInt32(sketch.ToByteArray(), 0, max + 1), "not a size this library builds");
+        }
+
+        /// <summary>
+        /// Structural at the limit itself: a signature that long is sixteen gigabytes.
+        /// The reader accepts the length and refuses the payload only for the values it
+        /// does not hold.
+        /// </summary>
+        [TestMethod]
+        public void TestMinHashSignatureLimitIsShared()
+        {
+            // Its values are one array.
+            Assert.AreEqual(Array.MaxLength, MinHashSignature.MaxValues);
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => MinHash.Signature(new[] { "a" }, MinHashSignature.MaxValues + 1));
+
+            var bytes = MinHash.Signature(new[] { "a", "b" }, 8).ToByteArray();
+            AssertRefused<MinHashSignature>(
+                PokeUInt32(bytes, 0, (uint)MinHashSignature.MaxValues + 1),
+                "not a signature this library builds");
+            AssertRefusedOnlyForMissingBytes<MinHashSignature>(
+                PokeUInt32(bytes, 0, (uint)MinHashSignature.MaxValues));
+        }
+
+        /// <summary>
+        /// The most a heap holds is the largest prime an array can hold, because the
+        /// dictionary beside it sizes its tables to primes. Found here by trial division
+        /// rather than read back from the constant.
+        /// </summary>
+        private static void AssertIsTheLargestPrimeAnArrayHolds(int value)
+        {
+            static bool IsPrime(long n)
+            {
+                if (n < 2) return false;
+                for (long d = 2; d * d <= n; d++)
+                {
+                    if (n % d == 0) return false;
+                }
+                return true;
+            }
+
+            Assert.IsTrue(IsPrime(value), $"{value} is not prime");
+            Assert.IsLessThanOrEqualTo(Array.MaxLength, value);
+            for (long n = value + 1L; n <= Array.MaxLength; n++)
+            {
+                Assert.IsFalse(IsPrime(n), $"{n} is a larger prime that an array holds");
+            }
+        }
+
+        /// <summary>
+        /// The reader sizes its heap by the elements the payload holds, so a payload
+        /// claiming the largest k reads back here at no cost.
+        /// </summary>
+        [TestMethod]
+        public void TestTopKLimitIsShared()
+        {
+            AssertIsTheLargestPrimeAnArrayHolds(ElementHeap.MaxCapacity);
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new TopK(0.1, 0.5, ElementHeap.MaxCapacity + 1u));
+
+            var topK = new TopK(0.1, 0.5, 3);
+            for (var i = 0; i < 40; i++) topK.Add(Key(i % 5));
+            var bytes = topK.ToByteArray();
+
+            // u32 k at 0.
+            AssertRefused<TopK>(PokeUInt32(bytes, 0, ElementHeap.MaxCapacity + 1u), PastTheLimit);
+
+            var widest = Persistence.FromByteArray<TopK>(
+                PokeUInt32(bytes, 0, ElementHeap.MaxCapacity));
+            CollectionAssert.AreEqual(
+                topK.Elements().Select(e => e.Freq).ToArray(),
+                widest.Elements().Select(e => e.Freq).ToArray());
+            Assert.AreEqual((uint)ElementHeap.MaxCapacity,
+                BinaryPrimitives.ReadUInt32LittleEndian(widest.ToByteArray().AsSpan(PayloadStart)));
+        }
+
+        /// <summary>
+        /// Three limits: k, as TopK's, and the width and depth of the bucket arrays.
+        /// Structural at the widest and deepest tables, which are tens of gigabytes;
+        /// the reader accepts each and refuses the payload only for the buckets it does
+        /// not hold.
+        /// </summary>
+        [TestMethod]
+        public void TestHeavyKeeperLimitsAreShared()
+        {
+            // Each array of buckets is an array, and so is the array of them.
+            Assert.AreEqual((uint)Array.MaxLength, HeavyKeeper.MaxWidth);
+            Assert.AreEqual((uint)Array.MaxLength, HeavyKeeper.MaxDepth);
+
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new HeavyKeeper(ElementHeap.MaxCapacity + 1u, 4));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new HeavyKeeper(4, HeavyKeeper.MaxWidth + 1));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new HeavyKeeper(4, 4, HeavyKeeper.MaxDepth + 1));
+
+            var keeper = new HeavyKeeper(3, 64, seed: 1);
+            for (var i = 0; i < 40; i++) keeper.Add(Key(i % 5));
+            var bytes = keeper.ToByteArray();
+
+            // u32 k at 0, u32 width at 4, u32 depth at 8.
+            AssertRefused<HeavyKeeper>(PokeUInt32(bytes, 0, ElementHeap.MaxCapacity + 1u), PastTheLimit);
+            AssertRefused<HeavyKeeper>(PokeUInt32(bytes, 4, HeavyKeeper.MaxWidth + 1), PastTheLimit);
+            AssertRefused<HeavyKeeper>(PokeUInt32(bytes, 8, HeavyKeeper.MaxDepth + 1), PastTheLimit);
+
+            var widest = Persistence.FromByteArray<HeavyKeeper>(
+                PokeUInt32(bytes, 0, ElementHeap.MaxCapacity));
+            CollectionAssert.AreEqual(
+                keeper.Elements().Select(e => e.Freq).ToArray(),
+                widest.Elements().Select(e => e.Freq).ToArray());
+
+            AssertRefusedOnlyForMissingBytes<HeavyKeeper>(PokeUInt32(bytes, 4, HeavyKeeper.MaxWidth));
+            AssertRefusedOnlyForMissingBytes<HeavyKeeper>(PokeUInt32(bytes, 8, HeavyKeeper.MaxDepth));
+        }
+
+        /// <summary>
+        /// Structural at the limit: a sample allocates its regions whole, k + 1 slots
+        /// each, whether read back or built, so one at the limit is tens of gigabytes.
+        /// What shows the reader accepting the limit is a sampling payload, which holds
+        /// exactly k items by construction: with k raised to the limit, the size check
+        /// passes and the check that a sampling reservoir is full is what refuses it.
+        /// </summary>
+        [TestMethod]
+        public void TestVarOptLimitIsShared()
+        {
+            // Each region is an array of k + 1 slots.
+            Assert.AreEqual((long)Array.MaxLength, VarOpt.MaxK + 1L);
+
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new VarOpt(VarOpt.MaxK + 1, 1));
+            // Where k + 1 wraps to nothing, and master built a sample with no room.
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new VarOpt(uint.MaxValue, 1));
+
+            var sample = new VarOpt(4, 1);
+            for (var i = 0; i < 100; i++) sample.Add(Key(i), 1.0 + i);
+            var bytes = sample.ToByteArray();
+
+            // u32 k at 0.
+            AssertRefused<VarOpt>(PokeUInt32(bytes, 0, VarOpt.MaxK + 1), PastTheLimit);
+            AssertRefused<VarOpt>(PokeUInt32(bytes, 0, VarOpt.MaxK), "is sampling with");
+        }
+
+        /// <summary>
+        /// Structural throughout: a filter at either limit is beyond any suite, and so is
+        /// the key set that would make <see cref="Grafite.Build"/> refuse for too many
+        /// high bits -- hundreds of millions of keys. The reader accepts each count at
+        /// its limit and refuses the payload only for the words it does not hold.
+        /// <para>
+        /// The high-word limit is a compile-time constant, so its value is pinned by
+        /// <see cref="TestFormatDocumentsEveryLimit"/> against the number FORMAT.md
+        /// derives, rather than by an assertion the compiler can evaluate.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestGrafiteLimitsAreShared()
+        {
+            // The low parts are one array.
+            Assert.AreEqual((uint)Array.MaxLength, Grafite.MaxLowWords);
+
+            const int LowWordsOffset = 68;
+            var bytes = SmallGrafite().ToByteArray();
+            var lowWords = BinaryPrimitives.ReadUInt32LittleEndian(
+                bytes.AsSpan(PayloadStart + LowWordsOffset));
+            var highWordsOffset = LowWordsOffset + 4 + (int)lowWords * 8;
+
+            AssertRefused<Grafite>(
+                PokeUInt32(bytes, LowWordsOffset, Grafite.MaxLowWords + 1), PastTheLimit);
+            AssertRefused<Grafite>(
+                PokeUInt32(bytes, highWordsOffset, Grafite.MaxHighWords + 1), PastTheLimit);
+
+            AssertRefusedOnlyForMissingBytes<Grafite>(
+                PokeUInt32(bytes, LowWordsOffset, Grafite.MaxLowWords));
+            AssertRefusedOnlyForMissingBytes<Grafite>(
+                PokeUInt32(bytes, highWordsOffset, Grafite.MaxHighWords));
+        }
+
+        /// <summary>
+        /// Structural at the limit, where a sketch is twenty gigabytes of arrays.
+        /// </summary>
+        [TestMethod]
+        public void TestSetSketchLimitIsShared()
+        {
+            // The registers are an array.
+            Assert.AreEqual(Array.MaxLength, SetSketch.MaxRegisters);
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new SetSketch(SetSketch.MaxRegisters + 1));
+
+            // f64 b, f64 a, then the register count.
+            var bytes = new SetSketch(16).ToByteArray();
+            AssertRefused<SetSketch>(
+                PokeUInt32(bytes, 16, (uint)SetSketch.MaxRegisters + 1), "an array holds");
+            AssertRefusedOnlyForMissingBytes<SetSketch>(
+                PokeUInt32(bytes, 16, (uint)SetSketch.MaxRegisters));
+        }
+
+        /// <summary>
+        /// The deepest sketch is small, so it is built and read back here: the smallest
+        /// delta whose reciprocal is a finite double gives exactly the limit.
+        /// </summary>
+        [TestMethod]
+        public void TestSublimeCountMinSketchLimitIsShared()
+        {
+            Assert.AreEqual((int)Math.Ceiling(Math.Log(double.MaxValue)), SublimeCountMinSketch.MaxDepth);
+
+            var deepest = new SublimeCountMinSketch(1e-308);
+            Assert.AreEqual(SublimeCountMinSketch.MaxDepth, deepest.Depth);
+            for (var i = 0; i < 100; i++) deepest.Add(Key(i));
+            AssertRoundTrips(deepest);
+
+            // Smaller still, the reciprocal is infinite and there is no row count.
+            Assert.IsTrue(double.IsPositiveInfinity(1 / double.Epsilon));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new SublimeCountMinSketch(double.Epsilon));
+
+            // f64 delta, f64 growth exponent, f64 size factor, then the row count.
+            AssertRefused<SublimeCountMinSketch>(
+                PokeUInt32(deepest.ToByteArray(), 24, (uint)SublimeCountMinSketch.MaxDepth + 1),
+                "rows");
+        }
+
+        /// <summary>
+        /// There is no constructor argument here: a scalable filter grows by adding
+        /// filters to a list until the list refuses, so its limit is the list's.
+        /// Structural at the limit, where the list alone would be sixteen gigabytes of
+        /// references.
+        /// </summary>
+        [TestMethod]
+        public void TestScalableFilterLimitIsShared()
+        {
+            Assert.AreEqual(Array.MaxLength, ScalableBloomFilter.MaxFilters);
+
+            const int FilterCountOffset = 8 + 8 + 8 + 4;
+            var filter = new ScalableBloomFilter(100, 0.01, 0.8);
+            for (var i = 0; i < 500; i++) filter.Add(Key(i));
+            var bytes = filter.ToByteArray();
+
+            AssertRefused<ScalableBloomFilter>(
+                PokeUInt32(bytes, FilterCountOffset, (uint)ScalableBloomFilter.MaxFilters + 1),
+                PastTheLimit);
+            AssertRefusedOnlyForMissingBytes<ScalableBloomFilter>(
+                PokeUInt32(bytes, FilterCountOffset, (uint)ScalableBloomFilter.MaxFilters));
+        }
+
+        // ---- Exemptions, and the tests that check their reasons --------------------
+
+        /// <summary>
+        /// Exempt for now. <c>fix/quotient-constructor-limits</c> makes the constructor
+        /// refuse exactly what the reader refuses -- more than 64 bits of quotient and
+        /// remainder, or a table a uint cannot index. Until that lands, this test
+        /// asserts the gap is still there: when the constructor stops building this
+        /// filter, the test fails, and that is the signal to move QuotientFilter out of
+        /// the exemptions and into the declared limits.
+        /// </summary>
+        [TestMethod]
+        public void TestQuotientFilterStillBuildsWhatItsReaderRefuses()
+        {
+            // A million items need 21 quotient bits and 5e-14 needs 45 remainder bits:
+            // 66 in all. About 12 MiB.
+            var filter = new QuotientFilter(1_000_000, 5e-14);
+            filter.Add(Key(1));
+
+            var ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<QuotientFilter>(filter.ToByteArray()));
+            StringAssert.Contains(ex.Message, "not a split of a 64-bit");
+        }
+
+        /// <summary>
+        /// Exempt: one pair of constants already bounds the precision for both the
+        /// constructor and the reader, and the sparse count the reader caps cannot get
+        /// near the cap -- the sparse form converts to dense past a size set by the
+        /// precision, and is largest at the widest precision.
+        /// </summary>
+        [TestMethod]
+        public void TestHyperLogLogPlusCannotReachItsReaderCaps()
+        {
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new HyperLogLogPlus(HyperLogLogPlus.MaxPrecision + 1));
+
+            var widest = new HyperLogLogPlus(HyperLogLogPlus.MaxPrecision);
+            Assert.IsLessThan((int)PersistenceFormat.MaxNestedCount, widest.MaxSparseEntries);
+
+            for (var i = 0; i < 1000; i++) widest.Add(Key(i));
+            AssertRoundTrips(widest);
+        }
+
+        /// <summary>
+        /// Exempt: the partition count is the hash count, ceil(log2(1 / rate)), and for
+        /// any rate whose reciprocal is a finite double that is at most
+        /// ceil(log2(double.MaxValue)) -- far below the reader's cap. A rate whose
+        /// reciprocal is infinite is refused by the constructor rather than built.
+        /// </summary>
+        [TestMethod]
+        public void TestPartitionedFilterCannotReachItsPartitionCap()
+        {
+            var bound = Math.Ceiling(Math.Log2(double.MaxValue));
+            Assert.IsLessThan((double)PersistenceFormat.MaxNestedCount, bound);
+
+            var tightest = new PartitionedBloomFilter(1, 1e-308);
+            Assert.AreEqual((uint)bound, tightest.K());
+            tightest.Add(Key(1));
+            AssertRoundTrips(tightest);
+
+            Assert.Throws<SystemException>(() => new PartitionedBloomFilter(1, double.Epsilon));
+        }
+
+        /// <summary>
+        /// Exempt: the arrays a 64-bit filter's buckets are split into hold 2^30 buckets
+        /// each, so the reader's cap on how many there are is reached only by a filter
+        /// whose bits alone are more than any payload holds -- an envelope carries at
+        /// most int.MaxValue bytes. Below that, nothing caps it: one past the old
+        /// ceiling in buckets reads back.
+        /// </summary>
+        [TestMethod]
+        public void TestBloomFilter64CannotReachItsArrayCap()
+        {
+            var bytesAtTheCap = (ulong)PersistenceFormat.MaxNestedCount * Buckets64.maxArraySize / 8;
+            Assert.IsGreaterThan((ulong)int.MaxValue, bytesAtTheCap);
+
+            var filter = new BloomFilter64(OldCap, 0.01);
+            for (var i = 0; i < 100; i++) filter.Add(Key(i));
+            Assert.IsGreaterThan((ulong)OldCap, filter.Capacity());
+            AssertRoundTrips(filter);
+        }
+
+        /// <summary>
+        /// Exempt: InfiniFilter's reader caps its chain, its address bits and its
+        /// fingerprints, and its constructor cannot reach any of the three. The
+        /// fingerprint range is the same on both sides. A table's slots are counted in
+        /// a uint, so no working table has more address bits than a uint has. And the
+        /// chain gains a table about once per factor of four in the items, measured
+        /// here at the fastest it grows -- the narrowest fingerprint and the smallest
+        /// start -- so the cap would take more items than <c>Added</c> can count.
+        /// </summary>
+        [TestMethod]
+        public void TestInfiniFilterCannotReachItsReaderCaps()
+        {
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new InfiniFilter(1, 1));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new InfiniFilter(1, 33));
+            Assert.AreEqual(typeof(uint),
+                typeof(InfiniSegment).GetProperty(nameof(InfiniSegment.Slots), BindingFlags.Instance | BindingFlags.NonPublic)!.PropertyType);
+
+            var filter = new InfiniFilter(1, fingerprintBits: 2);
+            for (var i = 0; i < 1 << 16; i++) filter.Add(Key(i));
+            AssertChainGrowsByFours(filter.Segments.Count, 1 << 16);
+            AssertRoundTrips(filter);
+        }
+
+        /// <summary>
+        /// Exempt: MementoFilter's reader caps the same three things as InfiniFilter's,
+        /// for the same reasons, and its memento width besides, which the constructor
+        /// derives from a range it refuses past 2^32.
+        /// </summary>
+        [TestMethod]
+        public void TestMementoFilterCannotReachItsReaderCaps()
+        {
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new MementoFilter(256, 1));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new MementoFilter(256, 33));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new MementoFilter((1UL << 32) + 1));
+            Assert.AreEqual(typeof(uint),
+                typeof(MementoSegment).GetProperty(nameof(MementoSegment.Slots), BindingFlags.Instance | BindingFlags.NonPublic)!.PropertyType);
+
+            var filter = new MementoFilter(2, fingerprintBits: 2, initialCapacity: 1);
+            for (var i = 0; i < 1 << 16; i++) filter.Add((ulong)i * 7919);
+            AssertChainGrowsByFours(filter.Segments.Count, 1 << 16);
+            AssertRoundTrips(filter);
+        }
+
+        /// <summary>
+        /// The chain of tables is at most one longer than log4 of the items: measured
+        /// at the fastest growth, sixteen thousand items gave five tables and four
+        /// million gave eight. Sixty-four would need 4^63 items.
+        /// </summary>
+        private static void AssertChainGrowsByFours(int tables, int items)
+        {
+            Assert.IsGreaterThan(1, tables, "the chain never grew, so this measured nothing");
+            Assert.IsLessThanOrEqualTo(Math.Log(items, 4) + 1, (double)tables);
+        }
+
+        /// <summary>
+        /// Exempt: the value width is bounded to the same range by the builder and the
+        /// reader, and nothing else in the reader is capped. The widest values read
+        /// back.
+        /// </summary>
+        [TestMethod]
+        public void TestBloomierFilterCannotReachItsReaderCaps()
+        {
+            var pairs = Enumerable.Range(0, 100)
+                .Select(i => new System.Collections.Generic.KeyValuePair<byte[], ulong>(Key(i), (ulong)i))
+                .ToArray();
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => BloomierFilter.Build(pairs, 0));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => BloomierFilter.Build(pairs, 41));
+            AssertRoundTrips(BloomierFilter.Build(pairs, 40));
+        }
+
+        /// <summary>
+        /// Exempt: UltraLogLog's precision is bounded by the same pair of constants on
+        /// both sides, and its registers are a run the payload holds. A precision whose
+        /// registers pass the old ceiling reads back.
+        /// </summary>
+        [TestMethod]
+        public void TestUltraLogLogCannotReachItsReaderCaps()
+        {
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new UltraLogLog(UltraLogLog.MaxPrecision + 1));
+
+            var wide = new UltraLogLog(20);
+            for (var i = 0; i < 1000; i++) wide.Add(Key(i));
+            AssertRoundTrips(wide);
+        }
+
+        /// <summary>
+        /// Exempt: a SimHash signature is one 64-bit value, with no size anywhere in it.
+        /// </summary>
+        [TestMethod]
+        public void TestSimHashSignatureHasNoSize()
+        {
+            Assert.HasCount(PayloadStart + sizeof(ulong) + sizeof(uint),
+                new SimHashSignature(42).ToByteArray());
+        }
+
+        // Exempt, each: the reader caps no size at all -- every count it reads is the
+        // length of data that follows it, or is checked against the structure's own
+        // shape. Each is built past the old ceiling in its largest dimension and read
+        // back, which is what would fail if a cap were added in the old style.
+
+        /// <summary>About 9.6 million bits.</summary>
+        [TestMethod]
+        public void TestBloomFilterReadsPastTheOldCeiling()
+        {
+            var filter = new BloomFilter(OldCap, 0.01);
+            for (var i = 0; i < 100; i++) filter.Add(Key(i));
+            Assert.IsGreaterThan(OldCap, filter.Capacity());
+            AssertRoundTrips(filter);
+        }
+
+        /// <summary>About 9.6 million four-bit buckets.</summary>
+        [TestMethod]
+        public void TestCountingBloomFilterReadsPastTheOldCeiling()
+        {
+            var filter = new CountingBloomFilter(OldCap, 4, 0.01);
+            for (var i = 0; i < 100; i++) filter.Add(Key(i));
+            Assert.IsGreaterThan(OldCap, filter.Capacity());
+            AssertRoundTrips(filter);
+        }
+
+        /// <summary>About 9.6 million bits.</summary>
+        [TestMethod]
+        public void TestDeletableBloomFilterReadsPastTheOldCeiling()
+        {
+            var filter = new DeletableBloomFilter(OldCap, 1000, 0.01);
+            for (var i = 0; i < 100; i++) filter.Add(Key(i));
+            Assert.IsGreaterThan(OldCap, filter.Capacity());
+            AssertRoundTrips(filter);
+        }
+
+        /// <summary>A million and one eight-bit cells.</summary>
+        [TestMethod]
+        public void TestStableBloomFilterReadsPastTheOldCeiling()
+        {
+            var filter = new StableBloomFilter(OldCap + 1, 8, 0.01, seed: 1);
+            for (var i = 0; i < 100; i++) filter.Add(Key(i));
+            Assert.IsGreaterThan(OldCap, filter.Cells());
+            AssertRoundTrips(filter);
+        }
+
+        /// <summary>A million and one slots.</summary>
+        [TestMethod]
+        public void TestInverseBloomFilterReadsPastTheOldCeiling()
+        {
+            var filter = new InverseBloomFilter(OldCap + 1);
+            for (var i = 0; i < 100; i++) filter.Add(Key(i));
+            Assert.IsGreaterThan(OldCap, filter.Capacity());
+            AssertRoundTrips(filter);
+        }
+
+        /// <summary>A million and one counters in a row.</summary>
+        [TestMethod]
+        public void TestCountMinSketchReadsPastTheOldCeiling()
+        {
+            var sketch = new CountMinSketch(Math.E / (OldCap + 1), 0.5);
+            for (var i = 0; i < 100; i++) sketch.Add(Key(i));
+            Assert.IsGreaterThan(OldCap, sketch.Width);
+            AssertRoundTrips(sketch);
+        }
+
+        /// <summary>A little over a million counters in a row.</summary>
+        [TestMethod]
+        public void TestCountSketchReadsPastTheOldCeiling()
+        {
+            var sketch = new CountSketch(0.000999, 0.5);
+            for (var i = 0; i < 100; i++) sketch.Add(Key(i));
+            Assert.IsGreaterThan(OldCap, sketch.Width());
+            AssertRoundTrips(sketch);
+        }
+
+        /// <summary>A million and one keys, so more than a million fingerprints.</summary>
+        [TestMethod]
+        public void TestBinaryFuseFilterReadsPastTheOldCeiling()
+        {
+            var filter = BinaryFuseFilter.Build(Enumerable.Range(0, (int)OldCap + 1).Select(i => Key(i)));
+            Assert.IsGreaterThan(OldCap, filter.ArrayLengthChosen);
+            AssertRoundTrips(filter);
+        }
+
+        /// <summary>
+        /// Two values a hundred orders of magnitude apart at a fine accuracy span more
+        /// than a million buckets.
+        /// </summary>
+        [TestMethod]
+        public void TestDDSketchReadsPastTheOldCeiling()
+        {
+            var sketch = new DDSketch(0.0001);
+            sketch.Add(1.0);
+            sketch.Add(1e100);
+            Assert.IsGreaterThan((long)OldCap, (long)sketch.BucketsAllocated());
+            AssertRoundTrips(sketch);
+        }
+
+        /// <summary>More than a million cells.</summary>
+        [TestMethod]
+        public void TestInvertibleBloomLookupTableReadsPastTheOldCeiling()
+        {
+            var table = new InvertibleBloomLookupTable(OldCap, 8);
+            for (var i = 0; i < 100; i++) table.Add(Key(i));
+            Assert.IsGreaterThan(OldCap, table.Cells());
+            AssertRoundTrips(table);
+        }
+
+        /// <summary>A million and one counters in a row.</summary>
+        [TestMethod]
+        public void TestPrivateCountMinSketchReadsPastTheOldCeiling()
+        {
+            var sketch = new PrivateCountMinSketch(OldCap + 1, 1, 1.0, seed: 1);
+            for (var i = 0; i < 100; i++) sketch.Add(Key(i));
+            AssertRoundTrips(sketch);
+        }
+
+        /// <summary>Its sketches a million and one counters wide.</summary>
+        [TestMethod]
+        public void TestDpswSketchReadsPastTheOldCeiling()
+        {
+            var sketch = new DpswSketch(100, 1.0, width: OldCap + 1, depth: 1, seed: 1);
+            for (var i = 0; i < 10; i++) sketch.Add(Key(i));
+            AssertRoundTrips(sketch);
+        }
+
+        /// <summary>A million and one registers would not be a power of two; 2^20 is.</summary>
+        [TestMethod]
+        public void TestHyperLogLogReadsPastTheOldCeiling()
+        {
+            var estimator = new HyperLogLog(1u << 20);
+            for (var i = 0; i < 100; i++) estimator.Add(Key(i));
+            Assert.IsGreaterThan(OldCap, 1u << 20);
+            AssertRoundTrips(estimator);
+        }
+
+        // ---- The roster -------------------------------------------------------------
+
+        /// <summary>
+        /// Every structure either declares the limits its constructor and reader share
+        /// or is exempt, with the reason and the test that checks the reason.
+        /// </summary>
+        /// <remarks>
+        /// The roster is <see cref="StructureId"/>, which a structure cannot leave itself
+        /// off of, so a new one fails here until it is placed. A declared structure names
+        /// two kinds of test: one building it past where its reader used to stop, and one
+        /// holding its constructor and reader to one limit. An exemption names the test
+        /// that checks its reason, so that when the reason stops being true -- a constructor
+        /// learns to build past a cap, say -- the exemption fails as loudly as a gap would.
+        /// Each named test has to exist and be a test, so an entry pointing at something
+        /// renamed fails rather than silently vouching for nothing.
+        /// </remarks>
+        [TestMethod]
+        public void TestEveryStructureLoadsWhatItsConstructorBuilds()
+        {
+            var declared = Declared;
+
+            const string NoCap =
+                "its reader caps no size: every count it reads is the length of data " +
+                "that follows, or is checked against the structure's own shape";
+
+            var exempt = new (StructureId Id, string Why, string VerifiedBy)[]
+            {
+                (StructureId.QuotientFilter,
+                    "fix/quotient-constructor-limits makes its constructor refuse what its " +
+                    "reader refuses; until it lands, the gap is asserted to still be open",
+                    nameof(TestQuotientFilterStillBuildsWhatItsReaderRefuses)),
+                (StructureId.HyperLogLogPlus,
+                    "its precision is bounded by one pair of constants on both sides, and " +
+                    "its sparse form converts to dense long before the reader's cap",
+                    nameof(TestHyperLogLogPlusCannotReachItsReaderCaps)),
+                (StructureId.PartitionedBloomFilter,
+                    "its partition count is ceil(log2(1 / rate)), which no rate with a " +
+                    "finite reciprocal brings near the reader's cap",
+                    nameof(TestPartitionedFilterCannotReachItsPartitionCap)),
+                (StructureId.BloomFilter64,
+                    "its arrays hold 2^30 buckets each, so the reader's cap on their number " +
+                    "is reached only by a filter no payload can hold",
+                    nameof(TestBloomFilter64CannotReachItsArrayCap)),
+                (StructureId.InfiniFilter,
+                    "its fingerprint range is the constructor's, its slots are a uint's, " +
+                    "and its chain would need more items than it can count to reach the cap",
+                    nameof(TestInfiniFilterCannotReachItsReaderCaps)),
+                (StructureId.MementoFilter,
+                    "as InfiniFilter, and its memento width comes from a range the " +
+                    "constructor bounds",
+                    nameof(TestMementoFilterCannotReachItsReaderCaps)),
+                (StructureId.BloomierFilter,
+                    "its value width is bounded to the same range by the builder and the " +
+                    "reader, and nothing else is capped",
+                    nameof(TestBloomierFilterCannotReachItsReaderCaps)),
+                (StructureId.UltraLogLog,
+                    "its precision is bounded by one pair of constants on both sides",
+                    nameof(TestUltraLogLogCannotReachItsReaderCaps)),
+                (StructureId.SimHashSignature,
+                    "it is one 64-bit value and has no size",
+                    nameof(TestSimHashSignatureHasNoSize)),
+                (StructureId.BloomFilter, NoCap, nameof(TestBloomFilterReadsPastTheOldCeiling)),
+                (StructureId.CountingBloomFilter, NoCap,
+                    nameof(TestCountingBloomFilterReadsPastTheOldCeiling)),
+                (StructureId.DeletableBloomFilter, NoCap,
+                    nameof(TestDeletableBloomFilterReadsPastTheOldCeiling)),
+                (StructureId.StableBloomFilter, NoCap,
+                    nameof(TestStableBloomFilterReadsPastTheOldCeiling)),
+                (StructureId.InverseBloomFilter, NoCap,
+                    nameof(TestInverseBloomFilterReadsPastTheOldCeiling)),
+                (StructureId.CountMinSketch, NoCap,
+                    nameof(TestCountMinSketchReadsPastTheOldCeiling)),
+                (StructureId.CountSketch, NoCap, nameof(TestCountSketchReadsPastTheOldCeiling)),
+                (StructureId.BinaryFuseFilter, NoCap,
+                    nameof(TestBinaryFuseFilterReadsPastTheOldCeiling)),
+                (StructureId.DDSketch, NoCap, nameof(TestDDSketchReadsPastTheOldCeiling)),
+                (StructureId.InvertibleBloomLookupTable, NoCap,
+                    nameof(TestInvertibleBloomLookupTableReadsPastTheOldCeiling)),
+                (StructureId.PrivateCountMinSketch, NoCap,
+                    nameof(TestPrivateCountMinSketchReadsPastTheOldCeiling)),
+                (StructureId.DpswSketch, NoCap, nameof(TestDpswSketchReadsPastTheOldCeiling)),
+                (StructureId.HyperLogLog, NoCap, nameof(TestHyperLogLogReadsPastTheOldCeiling)),
+            };
+
+            var named = declared
+                .SelectMany(d => d.PastTheOldCeiling.Append(d.SharedLimit))
+                .Concat(exempt.Select(e => e.VerifiedBy));
+
+            foreach (var test in named)
+            {
+                var method = typeof(TestLoadWhatItBuilds).GetMethod(test);
+                Assert.IsNotNull(method, $"the roster names {test}, which is not a test here");
+                Assert.IsNotEmpty(
+                    method.GetCustomAttributes(typeof(TestMethodAttribute), false),
+                    $"the roster names {test}, which is not a test method");
+            }
+
+            foreach (var (id, pastTheOldCeiling, _) in declared)
+            {
+                Assert.IsNotEmpty(pastTheOldCeiling,
+                    $"{id} declares a limit and names nothing built past its old ceiling");
+            }
+
+            StructureRoster.AssertCoversEveryStructure(
+                "load what it builds",
+                declared.Select(d => d.Id),
+                exempt.Select(e => (e.Id, e.Why)).ToArray());
+        }
+
+        /// <summary>
+        /// The structures with a size limit their constructor and reader share, each with
+        /// the tests that build it past where its reader used to stop and the test that
+        /// holds both sides to the limit.
+        /// </summary>
+        private static readonly (StructureId Id, string[] PastTheOldCeiling, string SharedLimit)[]
+            Declared =
+            {
+                (StructureId.CuckooBloomFilter,
+                    new[] { nameof(TestCuckooFilterPastTheOldBucketCeilingRoundTrips) },
+                    nameof(TestCuckooFilterLimitIsShared)),
+                (StructureId.ThetaSketch,
+                    new[] { nameof(TestThetaSketchPastTheOldCeilingRoundTrips) },
+                    nameof(TestThetaSketchLimitIsShared)),
+                (StructureId.TupleSketch,
+                    new[] { nameof(TestTupleSketchPastTheOldCeilingRoundTrips) },
+                    nameof(TestTupleSketchLimitIsShared)),
+                (StructureId.MinHashSignature,
+                    new[] { nameof(TestMinHashSignaturePastTheOldCeilingRoundTrips) },
+                    nameof(TestMinHashSignatureLimitIsShared)),
+                (StructureId.TopK,
+                    new[] { nameof(TestTopKPastTheOldCeilingRoundTrips) },
+                    nameof(TestTopKLimitIsShared)),
+                (StructureId.VarOpt,
+                    new[] { nameof(TestVarOptPastTheOldCeilingRoundTrips) },
+                    nameof(TestVarOptLimitIsShared)),
+                (StructureId.HeavyKeeper,
+                    new[]
+                    {
+                        nameof(TestHeavyKeeperPastTheOldTrackedCeilingRoundTrips),
+                        nameof(TestHeavyKeeperPastTheOldBucketCeilingRoundTrips),
+                    },
+                    nameof(TestHeavyKeeperLimitsAreShared)),
+                (StructureId.Grafite,
+                    new[]
+                    {
+                        nameof(TestGrafiteReaderTakesLowWordsPastTheOldCeiling),
+                        nameof(TestGrafiteReaderTakesHighWordsPastTheOldCeiling),
+                    },
+                    nameof(TestGrafiteLimitsAreShared)),
+                (StructureId.SetSketch,
+                    new[] { nameof(TestSetSketchReaderTakesARegisterCountPastTheOldCeiling) },
+                    nameof(TestSetSketchLimitIsShared)),
+                (StructureId.SublimeCountMinSketch,
+                    new[] { nameof(TestSublimeCountMinSketchPastTheOldRowCeilingRoundTrips) },
+                    nameof(TestSublimeCountMinSketchLimitIsShared)),
+                (StructureId.ScalableBloomFilter,
+                    new[] { nameof(TestScalableFilterReaderTakesAFilterCountPastTheOldCeiling) },
+                    nameof(TestScalableFilterLimitIsShared)),
+            };
+
+        /// <summary>
+        /// FORMAT.md's table of sizes states every limit as a number, for someone
+        /// decoding a payload without this library. A number in a document has no build
+        /// to fail, so it is held here to the symbol the code shares, in both
+        /// directions: every row is a limit the code has, at the value the code has, and
+        /// every structure that declares a limit has a row.
+        /// </summary>
+        [TestMethod]
+        public void TestFormatDocumentsEveryLimit()
+        {
+            var expected = new Dictionary<(string Structure, string Size), ulong>
+            {
+                [("CuckooBloomFilter", "entries, `m` × `b`")] = CuckooBloomFilter.MaxEntries,
+                [("ThetaSketch", "`k`")] = ThetaSketch.MaxNominalEntries,
+                [("TupleSketch", "`k`")] = TupleSketch.MaxNominalEntries,
+                [("MinHashSignature", "`k`")] = (ulong)MinHashSignature.MaxValues,
+                [("TopK", "`k`")] = ElementHeap.MaxCapacity,
+                [("HeavyKeeper", "`k`")] = ElementHeap.MaxCapacity,
+                [("HeavyKeeper", "width")] = HeavyKeeper.MaxWidth,
+                [("HeavyKeeper", "depth")] = HeavyKeeper.MaxDepth,
+                [("VarOpt", "`k`")] = VarOpt.MaxK,
+                [("Grafite", "words of low bits")] = Grafite.MaxLowWords,
+                [("Grafite", "words of high bits")] = Grafite.MaxHighWords,
+                [("SetSketch", "`m`")] = (ulong)SetSketch.MaxRegisters,
+                [("SublimeCountMinSketch", "rows")] = (ulong)SublimeCountMinSketch.MaxDepth,
+                [("ScalableBloomFilter", "filter count")] = (ulong)ScalableBloomFilter.MaxFilters,
+            };
+
+            using var resource = typeof(TestLoadWhatItBuilds).Assembly
+                .GetManifestResourceStream("TestProbabilisticDataStructures.FORMAT.md");
+            Assert.IsNotNull(resource, "FORMAT.md is not embedded in the test assembly");
+            var specification = new StreamReader(resource).ReadToEnd();
+
+            var documented = Regex.Matches(specification,
+                    @"^\| `(?<structure>\w+)` \| (?<size>[^|]+?) \| (?<limit>[0-9,]+) \|",
+                    RegexOptions.Multiline)
+                .ToDictionary(
+                    m => (m.Groups["structure"].Value, m.Groups["size"].Value),
+                    m => ulong.Parse(m.Groups["limit"].Value.Replace(",", "")));
+
+            Assert.IsNotEmpty(documented,
+                "no rows of the sizes table were found in FORMAT.md, so nothing was checked");
+
+            foreach (var (row, stated) in documented)
+            {
+                Assert.IsTrue(expected.TryGetValue(row, out var inCode),
+                    $"FORMAT.md states a limit for {row.Item1}'s {row.Item2}, which the " +
+                    "code does not have, or which is named differently here");
+                Assert.AreEqual(inCode, stated,
+                    $"FORMAT.md states {row.Item1}'s {row.Item2} as {stated:N0}, and the " +
+                    $"code's limit is {inCode:N0}");
+            }
+
+            foreach (var row in expected.Keys)
+            {
+                Assert.IsTrue(documented.ContainsKey(row),
+                    $"FORMAT.md's sizes table has no row for {row.Item1}'s {row.Item2}");
+            }
+
+            CollectionAssert.AreEquivalent(
+                Declared.Select(d => d.Id.ToString()).ToArray(),
+                expected.Keys.Select(k => k.Structure).Distinct().ToArray(),
+                "the structures with a documented limit are not the ones that declare one");
+        }
     }
 }

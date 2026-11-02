@@ -151,16 +151,15 @@ namespace ProbabilisticDataStructures
             // for 100,000 items allocated 122 MB while holding nothing, against 124 KB
             // for a Bloom filter of the same capacity and rate.
             var m = Power2((uint)Math.Ceiling(n / (b * LoadFactor)));
-            var entries = (ulong)m * b;
-            var words = WordsFor(entries, bits);
-            if (words > int.MaxValue)
+            if (GeometryProblem(m, b, bits) is { } problem)
             {
                 throw new ArgumentOutOfRangeException(nameof(n), n,
-                    $"A filter for {n} items at this rate needs {entries * bits} bits " +
-                    "of fingerprints, which cannot be held in a single array.");
+                    $"A filter for {n} items at this rate needs {m} buckets of {b} " +
+                    $"entries at {bits} bits, and {problem}");
             }
 
-            this.Fingerprints = new ulong[words];
+            var entries = (ulong)m * b;
+            this.Fingerprints = new ulong[WordsFor(entries, bits)];
             this.Occupied = new Buckets((uint)entries, 1);
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.random = seed is null
@@ -464,12 +463,6 @@ namespace ProbabilisticDataStructures
                     "anything.");
             }
 
-            if (m > PersistenceFormat.MaxNestedCount)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims {m} buckets, beyond anything this library builds.");
-            }
-
             // Version 2 and earlier recorded a width in bytes; version 3 records it in
             // bits. A filter written before packing restores at eight bits per stored
             // byte, which reproduces exactly the fingerprints it held: the value is
@@ -484,16 +477,20 @@ namespace ProbabilisticDataStructures
                     "between 1 and 64 -- the bits a hash supplies.");
             }
 
-            var entries = (ulong)m * b;
-            var words = WordsFor(entries, bits);
-            if (words > int.MaxValue)
+            // The same limit the constructor applies, so that every filter it builds
+            // reads back. The table has to be allocated whole even when the payload
+            // holds no entries -- only occupied entries are written -- so a payload
+            // can ask for as large a table as the constructor would build, and no
+            // larger.
+            if (GeometryProblem(m, b, bits) is { } problem)
             {
                 throw new InvalidDataException(
-                    $"Filter claims {m} buckets of {b} entries at {bits} bits, which " +
-                    "cannot be held in a single array.");
+                    $"Filter claims {m} buckets of {b} entries at {bits} bits, beyond " +
+                    $"anything this library builds: {problem}");
             }
 
-            var fingerprints = new ulong[words];
+            var entries = (ulong)m * b;
+            var fingerprints = new ulong[WordsFor(entries, bits)];
             var occupancy = new Buckets((uint)entries, 1);
 
             var occupied = reader.ReadUInt32();
@@ -941,6 +938,48 @@ namespace ProbabilisticDataStructures
         private static ulong WordsFor(ulong entries, uint bits)
         {
             return ((entries * bits + 63) / 64) + 1;
+        }
+
+        /// <summary>
+        /// The most entries a filter can have: its buckets times the entries in each.
+        /// </summary>
+        /// <remarks>
+        /// Entries are numbered with a uint -- the occupancy bitmap is indexed by one,
+        /// and so is the arithmetic that finds an entry's place -- and the constructor
+        /// makes power-of-two bucket counts of four entries each, so its tables have a
+        /// power of two entries. This is the largest power of two a uint holds; the
+        /// next table up would number its entries past the end of the type.
+        /// <para>
+        /// The constructor and the reader both test against it, through
+        /// <see cref="GeometryProblem"/>, so every filter one builds the other reads.
+        /// </para>
+        /// </remarks>
+        internal const ulong MaxEntries = 1UL << 31;
+
+        /// <summary>
+        /// Why a table of this shape cannot be built, or null if it can. Shared by the
+        /// constructor and the reader, which is what keeps them from disagreeing.
+        /// </summary>
+        /// <param name="buckets">The number of buckets.</param>
+        /// <param name="entriesPerBucket">The entries in each.</param>
+        /// <param name="bits">The width of a fingerprint.</param>
+        internal static string? GeometryProblem(ulong buckets, ulong entriesPerBucket, uint bits)
+        {
+            // Both come from u32 fields, so the product cannot wrap a ulong.
+            var entries = buckets * entriesPerBucket;
+            if (entries > MaxEntries)
+            {
+                return $"that is {entries} entries, past the {MaxEntries} a filter can " +
+                    "number with a uint.";
+            }
+
+            if (WordsFor(entries, bits) > (ulong)Array.MaxLength)
+            {
+                return $"{entries * bits} bits of fingerprints are more 64-bit words " +
+                    $"than the {Array.MaxLength} one array holds.";
+            }
+
+            return null;
         }
 
         /// <summary>

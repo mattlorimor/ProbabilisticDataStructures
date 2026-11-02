@@ -32,6 +32,24 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private readonly Dictionary<ReadOnlyMemory<byte>, int> positions;
 
+        /// <summary>
+        /// The most elements a heap can hold, and so the largest k that
+        /// <see cref="TopK"/> and <see cref="HeavyKeeper"/> can track.
+        /// </summary>
+        /// <remarks>
+        /// The heap is a list and its index a dictionary, both pre-sized to k. A list
+        /// holds at most <see cref="Array.MaxLength"/>. A dictionary sizes its tables to
+        /// primes, and the largest it will use is the largest prime an array can hold,
+        /// which is this -- four short of the list's limit. Asked for more, either one
+        /// fails with an allocation error rather than an explanation.
+        /// <para>
+        /// Both structures' constructors and both their readers refuse past this, so
+        /// whatever either constructor builds, its reader loads. The readers used to
+        /// stop at a million.
+        /// </para>
+        /// </remarks>
+        internal const int MaxCapacity = 0x7FFFFFC3;
+
         internal ElementHeap(int k)
         {
             this.Heap = new List<Element>(k);

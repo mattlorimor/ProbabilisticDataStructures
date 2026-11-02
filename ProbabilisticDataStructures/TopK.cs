@@ -34,6 +34,12 @@ namespace ProbabilisticDataStructures
             Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
             Guard.ValidItemCount(k, nameof(k));
+            if (k > ElementHeap.MaxCapacity)
+            {
+                throw new ArgumentOutOfRangeException(nameof(k), k,
+                    $"A top-k can track at most {ElementHeap.MaxCapacity} elements, the " +
+                    "most its heap and the index beside it can hold.");
+            }
 
             this.Cms = new CountMinSketch(epsilon, delta, hash);
             this.K = k;
@@ -242,11 +248,12 @@ namespace ProbabilisticDataStructures
                     "the first add.");
             }
 
-            if (k > PersistenceFormat.MaxNestedCount)
+            // The constructor's own limit, so that every structure it builds reads back.
+            if (k > ElementHeap.MaxCapacity)
             {
                 throw new InvalidDataException(
                     $"Structure claims room for {k} elements, beyond anything this " +
-                    "library builds.");
+                    $"library builds: it tracks at most {ElementHeap.MaxCapacity}.");
             }
 
             var sketch = PersistenceFormat.ReadNested<CountMinSketch>(ref reader, hash);
@@ -258,7 +265,11 @@ namespace ProbabilisticDataStructures
                     $"Structure holds {elementCount} elements with room for {k}.");
             }
 
-            var heap = new ElementHeap((int)k);
+            // Sized by what is held, not by k: the heap grows as elements arrive, so a
+            // structure read back behaves as it did, and a large k costs nothing until
+            // it is used. Each element is its length, at least, and its frequency.
+            reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
+            var heap = new ElementHeap((int)elementCount);
             for (uint i = 0; i < elementCount; i++)
             {
                 var data = reader.ReadBytes();

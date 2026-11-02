@@ -107,6 +107,25 @@ namespace ProbabilisticDataStructures
         public uint K => this.k;
 
         /// <summary>
+        /// The most items a sample can keep.
+        /// </summary>
+        /// <remarks>
+        /// Each region -- exact items, threshold items, and the candidates contested
+        /// between them -- is an array of k + 1 slots, allocated whole when the sample
+        /// is made, and no array is longer than <see cref="Array.MaxLength"/>. At
+        /// uint.MaxValue the k + 1 wrapped to nothing and the constructor built a sample
+        /// with no room in it at all.
+        /// <para>
+        /// The constructor and the reader both refuse past this, so a sample one builds
+        /// the other reads. The reader used to stop at a million. It allocates the
+        /// regions whole just as the constructor does, because the sample's arithmetic
+        /// assumes their size, so a payload can ask for a sample as large as the
+        /// constructor would build and no larger.
+        /// </para>
+        /// </remarks>
+        internal static uint MaxK => (uint)Array.MaxLength - 1;
+
+        /// <summary>
         /// The number of items currently held: min(k, items added).
         /// </summary>
         public uint SampleCount => (uint)(this.HeavyCount + this.LightCount);
@@ -150,6 +169,13 @@ namespace ProbabilisticDataStructures
         public VarOpt(uint k, ulong? seed = null)
         {
             Guard.ValidItemCount(k, nameof(k));
+            if (k > MaxK)
+            {
+                throw new ArgumentOutOfRangeException(nameof(k), k,
+                    $"A sample keeps at most {MaxK} items. Each of its regions is an " +
+                    "array with one slot more than it keeps, and an array holds at most " +
+                    $"{Array.MaxLength}.");
+            }
 
             this.k = k;
             this.random = seed is null
@@ -747,11 +773,12 @@ namespace ProbabilisticDataStructures
                     "Structure keeps no samples, and a sample of nothing answers " +
                     "nothing; this library never builds one.");
             }
-            if (k > PersistenceFormat.MaxNestedCount)
+            // The constructor's own limit, so that every sample it builds reads back.
+            if (k > MaxK)
             {
                 throw new InvalidDataException(
                     $"Structure claims room for {k} sampled items, beyond anything " +
-                    "this library builds.");
+                    $"this library builds: it keeps at most {MaxK}.");
             }
             if (heavyCount > k || lightCount > k ||
                 heavyCount + (ulong)lightCount > k)

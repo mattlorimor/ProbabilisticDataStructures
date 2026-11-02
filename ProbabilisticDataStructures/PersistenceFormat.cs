@@ -443,7 +443,27 @@ namespace ProbabilisticDataStructures
         /// them, so that a corrupted length cannot ask for an enormous allocation
         /// before the read that would have failed gets a chance to.
         /// </summary>
+        /// <remarks>
+        /// Only for counts no constructor can come near. It used to bound sizes that
+        /// constructors do build -- buckets, retained entries, signature lengths, heap
+        /// sizes -- and so refused, as "beyond anything this library builds", payloads
+        /// this library had written. Those readers now share one limit per structure
+        /// with the structure's constructor, and check a count against the bytes
+        /// actually present (<see cref="PayloadReader.RequireHolds"/>) before
+        /// allocating for it.
+        /// <para>
+        /// What is left here is held to that by tests rather than by this comment: each
+        /// remaining use is an exemption in <c>TestLoadWhatItBuilds</c>, with the reason
+        /// its constructor cannot reach the ceiling, and the reason is checked.
+        /// </para>
+        /// </remarks>
         internal const uint MaxNestedCount = 1_000_000;
+
+        /// <summary>
+        /// The fewest bytes a structure written by <see cref="WriteNested"/> takes: its
+        /// length prefix and an envelope around an empty payload.
+        /// </summary>
+        internal const int MinNestedLength = sizeof(uint) + HeaderLength + ChecksumLength;
 
         private static byte[] ReadExactly(Stream stream, int count, string what)
         {

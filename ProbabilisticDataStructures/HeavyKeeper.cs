@@ -115,6 +115,25 @@ namespace ProbabilisticDataStructures
             Guard.ValidItemCount(depth, nameof(depth));
             Guard.ValidDecayBase(decay, nameof(decay));
 
+            if (k > ElementHeap.MaxCapacity)
+            {
+                throw new ArgumentOutOfRangeException(nameof(k), k,
+                    $"A HeavyKeeper can track at most {ElementHeap.MaxCapacity} elements, " +
+                    "the most its heap and the index beside it can hold.");
+            }
+            if (width > MaxWidth)
+            {
+                throw new ArgumentOutOfRangeException(nameof(width), width,
+                    $"An array of buckets holds at most {MaxWidth}, the most an array " +
+                    "can.");
+            }
+            if (depth > MaxDepth)
+            {
+                throw new ArgumentOutOfRangeException(nameof(depth), depth,
+                    $"A HeavyKeeper holds at most {MaxDepth} arrays of buckets, the most " +
+                    "an array of them can.");
+            }
+
             this.k = k;
             this.Width = width;
             this.Depth = depth;
@@ -123,14 +142,54 @@ namespace ProbabilisticDataStructures
                 ? SeededRandom.Unpredictable()
                 : new SeededRandom(seed.Value);
             this.elements = new ElementHeap((int)k);
-            this.Fingerprints = new ushort[depth][];
-            this.Counters = new ulong[depth][];
+            (this.Fingerprints, this.Counters) = Buckets(width, depth);
+            this.Hash = hash ?? Defaults.GetDefaultHashFunction();
+        }
+
+        /// <summary>
+        /// Used only by <see cref="Read"/>, which has checked every argument against the
+        /// limits the public constructor applies. The heap starts empty: the reader
+        /// sizes it by the elements the payload holds rather than by k, so a large k
+        /// costs nothing until it is used.
+        /// </summary>
+        private HeavyKeeper(Func<ReadOnlySpan<byte>, ulong> hash,
+            uint k, uint width, uint depth, double decay, ulong seed)
+        {
+            this.k = k;
+            this.Width = width;
+            this.Depth = depth;
+            this.decay = decay;
+            this.random = new SeededRandom(seed);
+            this.elements = new ElementHeap(0);
+            (this.Fingerprints, this.Counters) = Buckets(width, depth);
+            this.Hash = hash;
+        }
+
+        /// <summary>
+        /// The most buckets in one array: each array is a .NET array.
+        /// </summary>
+        /// <remarks>
+        /// The constructor and the reader both refuse past this, and past
+        /// <see cref="MaxDepth"/>, so a structure one builds the other reads. The
+        /// reader used to stop at a million buckets in all, width times depth.
+        /// </remarks>
+        internal static uint MaxWidth => (uint)Array.MaxLength;
+
+        /// <summary>
+        /// The most arrays of buckets: they are held in an array of their own.
+        /// </summary>
+        internal static uint MaxDepth => (uint)Array.MaxLength;
+
+        private static (ushort[][], ulong[][]) Buckets(uint width, uint depth)
+        {
+            var fingerprints = new ushort[depth][];
+            var counters = new ulong[depth][];
             for (var j = 0; j < depth; j++)
             {
-                this.Fingerprints[j] = new ushort[width];
-                this.Counters[j] = new ulong[width];
+                fingerprints[j] = new ushort[width];
+                counters[j] = new ulong[width];
             }
-            this.Hash = hash ?? Defaults.GetDefaultHashFunction();
+            return (fingerprints, counters);
         }
 
         /// <summary>
@@ -426,11 +485,13 @@ namespace ProbabilisticDataStructures
                     "Structure tracks no elements, and indexes its empty heap on the " +
                     "first add.");
             }
-            if (k > PersistenceFormat.MaxNestedCount)
+            // The constructor's own limits, so that every structure it builds reads back.
+            if (k > ElementHeap.MaxCapacity)
             {
                 throw new InvalidDataException(
                     $"Structure claims room for {k} tracked elements, beyond " +
-                    "anything this library builds.");
+                    $"anything this library builds: it tracks at most " +
+                    $"{ElementHeap.MaxCapacity}.");
             }
             if (width == 0 || depth == 0)
             {
@@ -438,11 +499,12 @@ namespace ProbabilisticDataStructures
                     "Structure claims arrays with no buckets, and every insertion " +
                     "indexes one.");
             }
-            if ((ulong)width * depth > PersistenceFormat.MaxNestedCount)
+            if (width > MaxWidth || depth > MaxDepth)
             {
                 throw new InvalidDataException(
-                    $"Structure claims {(ulong)width * depth} buckets, beyond " +
-                    "anything this library builds.");
+                    $"Structure claims {depth} arrays of {width} buckets, beyond " +
+                    $"anything this library builds: at most {MaxDepth} arrays of " +
+                    $"{MaxWidth}.");
             }
             if (double.IsNaN(decay) || double.IsInfinity(decay) || decay <= 1.0)
             {
@@ -451,8 +513,13 @@ namespace ProbabilisticDataStructures
                     "bucket could hold anything; this library never builds one.");
             }
 
-            var restored = new HeavyKeeper(k, width, depth, decay, randomState,
-                PersistenceFormat.ResolveOrThrow(hashId, hash))
+            // Every bucket is written, a fingerprint and a counter, so the arrays are
+            // checked against the bytes behind them before they are allocated.
+            reader.RequireHolds(
+                (ulong)width * depth, sizeof(ushort) + sizeof(ulong), "buckets");
+
+            var restored = new HeavyKeeper(PersistenceFormat.ResolveOrThrow(hashId, hash),
+                k, width, depth, decay, randomState)
             {
                 N = n,
             };
@@ -478,6 +545,11 @@ namespace ProbabilisticDataStructures
                 throw new InvalidDataException(
                     $"Structure holds {elementCount} elements with room for {k}.");
             }
+
+            // Sized by what is held, not by k: the heap grows as elements arrive. Each
+            // element is its length, at least, and its frequency.
+            reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
+            restored.elements = new ElementHeap((int)elementCount);
             for (uint i = 0; i < elementCount; i++)
             {
                 var data = reader.ReadBytes();

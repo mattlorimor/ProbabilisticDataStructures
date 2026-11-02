@@ -37,7 +37,7 @@ namespace ProbabilisticDataStructures
         private const byte MaxBucketSizeBits = 8;
 
         // The largest C# array to create; the largest power of 2 that C# can support.
-        private const uint maxArraySize = 1U << 30;
+        internal const uint maxArraySize = 1U << 30;
         private byte[][] Data { get; set; }
         private int arrayCount { get; set; }
         private byte bucketSize { get; set; }

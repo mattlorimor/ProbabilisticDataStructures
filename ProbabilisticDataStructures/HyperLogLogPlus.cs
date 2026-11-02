@@ -54,7 +54,7 @@ namespace ProbabilisticDataStructures
         /// The largest precision this builds. 2^18 registers gives a relative error near
         /// 0.4%, and the register array is a quarter of a megabyte.
         /// </summary>
-        private const uint MaxPrecision = 18;
+        internal const uint MaxPrecision = 18;
 
         /// <summary>
         /// 1 / (2 ln 2), the limit of the classic alpha as the register count grows.
@@ -239,7 +239,7 @@ namespace ProbabilisticDataStructures
         /// precision 7 the floor changes nothing and the cap is the paper's.
         /// </para>
         /// </remarks>
-        private int MaxSparseEntries =>
+        internal int MaxSparseEntries =>
             Math.Max(InitialSparseCapacity, (int)(this.m / sizeof(ulong)));
 
         /// <summary>

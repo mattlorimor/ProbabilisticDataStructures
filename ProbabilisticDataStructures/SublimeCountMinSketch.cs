@@ -108,6 +108,19 @@ namespace ProbabilisticDataStructures
         private const int MaxPoolFragments = 64;
 
         /// <summary>
+        /// The most rows a sketch can have: ceil(ln(1 / delta)) for the smallest delta
+        /// whose reciprocal is still a finite double.
+        /// </summary>
+        /// <remarks>
+        /// Any smaller delta has an infinite reciprocal, and so no row count at all;
+        /// the constructor refuses it rather than converting infinity to one. The
+        /// reader refuses more rows than this, so a sketch the constructor builds is
+        /// one the reader reads. It used to refuse more than sixty-four, which a delta
+        /// of 1e-28 -- an ordinary double -- already passes.
+        /// </remarks>
+        internal static readonly int MaxDepth = (int)Math.Ceiling(Math.Log(double.MaxValue));
+
+        /// <summary>
         /// Creates a sketch whose estimates hold with probability at least 1 - delta
         /// and whose arrays grow as the square root of the stream's length.
         /// </summary>
@@ -175,7 +188,19 @@ namespace ProbabilisticDataStructures
             var wanted = Math.Max(1.0, this.countersPerChunk / sizeFactor);
             this.width = 1 << BitOperations.Log2((uint)Math.Min(wanted, 1 << 30));
 
-            var depth = (uint)Math.Ceiling(Math.Log(1 / delta));
+            var rows = Math.Ceiling(Math.Log(1 / delta));
+            if (rows > MaxDepth)
+            {
+                // Only a delta so small that its reciprocal is infinite gets here, and
+                // turning infinity into a row count used to fail as an overflow from
+                // inside the arithmetic.
+                throw new ArgumentOutOfRangeException(nameof(delta), delta,
+                    $"A delta of {delta} needs ln(1 / delta) rows, and its reciprocal is " +
+                    $"past the largest double. The deepest sketch is {MaxDepth} rows, at " +
+                    $"a delta of about {1 / double.MaxValue}.");
+            }
+
+            var depth = (uint)rows;
             this.rows = new ValeCounterArray[Math.Max(1, depth)];
             for (var i = 0; i < this.rows.Length; i++)
             {
@@ -500,11 +525,13 @@ namespace ProbabilisticDataStructures
                     $"Sketch claims a size factor of {sizeFactor}, which has to be " +
                     "a positive number.");
             }
-            if (depth == 0 || depth > 64)
+            // The constructor's own limit, so that every sketch it builds reads back.
+            if (depth == 0 || depth > MaxDepth)
             {
                 throw new InvalidDataException(
-                    $"Sketch claims {depth} rows. A sketch has at least one, and " +
-                    "sixty-four would mean a delta no double can express.");
+                    $"Sketch claims {depth} rows. A sketch has at least one, and more " +
+                    $"than {MaxDepth} would mean a delta whose reciprocal no double can " +
+                    "express.");
             }
             if (width == 0 || width > 1 << 30 || BitOperations.PopCount(width) != 1)
             {

@@ -26,6 +26,17 @@ namespace ProbabilisticDataStructures
     {
         private readonly ulong[] values;
 
+        /// <summary>
+        /// The longest signature: its values are one array, and no array is longer than
+        /// <see cref="Array.MaxLength"/>.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="MinHash.Signature(string[], int)"/> and the reader both refuse past
+        /// it, so a signature one builds the other reads. The reader used to stop at a
+        /// million, and the factory at nothing short of running out of array.
+        /// </remarks>
+        internal static int MaxValues => Array.MaxLength;
+
         internal MinHashSignature(ulong[] values)
         {
             this.values = values;
@@ -108,12 +119,16 @@ namespace ProbabilisticDataStructures
             var reader = new PayloadReader(payload);
 
             var length = reader.ReadUInt32();
-            if (length == 0 || length > PersistenceFormat.MaxNestedCount)
+            if (length == 0 || length > MaxValues)
             {
                 throw new InvalidDataException(
                     $"Signature claims {length} values, which is not a signature this " +
-                    "library builds.");
+                    $"library builds: it builds them 1 to {MaxValues} long.");
             }
+
+            // Checked before the array is sized by it, so a claim cannot cost more than
+            // the payload it came in.
+            reader.RequireHolds(length, sizeof(ulong), "values");
 
             var values = new ulong[length];
             for (uint i = 0; i < length; i++)

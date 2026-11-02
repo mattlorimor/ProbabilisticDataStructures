@@ -503,6 +503,23 @@ rest of a message survives, as it should, and one that deletes the guard does no
 - Round-trip tests must cross the structure's interesting thresholds. The theta
   sketch's trim-boundary bug survived because every round-trip test used sub-trim
   streams; the first sketch to see real volume was the first to fail.
+- **Round-trip at the sizes the constructor allows, not the sizes a test reaches for.**
+  From 3.2.0 until it was fixed, many readers refused sizes above a million as "beyond
+  anything this library builds" while the constructors built far more, and every
+  round-trip test here sat comfortably below the ceiling. `TestLoadWhatItBuilds` now holds
+  each structure to one limit per size, shared by its constructor and its reader, and
+  sweeps `StructureId` for it. Where a structure at or past the old ceiling is too heavy
+  to build in the suite, the test is structural: a small payload's size field is raised,
+  and the reader must refuse it *only* for the bytes it lacks. That is the check a real
+  payload of that size passes, so it shows the size check let the claim through, and
+  the reader checking bytes before allocating is what makes it cheap.
+- **An exemption names the test that checks its reason.** The same sweep exempts the
+  structures whose readers cap nothing their constructors can reach, and each exemption
+  points at a test asserting why -- the cap is unreachable, or the reader caps nothing.
+  One exemption asserts that a known gap is still open, because another branch closes
+  it: when that lands, the exemption fails, which is the reminder to move the structure
+  into the declared limits. A number written into FORMAT.md is held the same way, by a
+  test comparing its table of limits with the code in both directions.
 
 ## Deliberately not done
 

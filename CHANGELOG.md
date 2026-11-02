@@ -286,6 +286,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its beginning is the unpredictable one the filter was given on reading, as before. The
   layout is in [FORMAT.md](FORMAT.md).
 
+- **A structure built past its reader's size ceiling now reads back.** Readers bound what
+  a payload can make them allocate, and many did it by refusing any size above a fixed
+  ceiling — a million for most, 2^26 registers for `SetSketch`, 64 rows for
+  `SublimeCountMinSketch` — as "beyond anything this library builds". The constructors
+  built past it without complaint, so a structure saved fine and its own payload was then
+  refused: a `ThetaSketch` or `TupleSketch` retaining more than a million; a `TopK`,
+  `HeavyKeeper` or `VarOpt` with k above a million; a `HeavyKeeper` with more than a
+  million buckets; a `CuckooBloomFilter` for 1,992,295 items or more, whose buckets round
+  up past a million; a `MinHash.Signature` longer than a million; a `Grafite` filter of
+  more than a million words of either kind; a `SetSketch` of more than 2^26 registers; a
+  `SublimeCountMinSketch` at a delta below e^-64, about 1.6e-28, which needs a 65th row;
+  and a `ScalableBloomFilter` grown past a million filters. Every release since persistence arrived in 3.2.0 is affected,
+  for each structure it had.
+  <br><br>
+  Each structure now has one limit for each size it records, shared by its constructor
+  and its reader, so whatever a constructor builds its reader loads. A limit is where the
+  structure itself stops working — mostly the largest .NET array — rather than a round
+  number, and [FORMAT.md](FORMAT.md#sizes) lists them. Readers also check a count against
+  the bytes actually present before allocating for it, so a payload claiming a large size
+  costs what it holds rather than what it claims. A cuckoo filter's table and a `VarOpt`
+  sample's regions have to be allocated whole, so for those a payload can ask for as
+  large a structure as the constructor would build, and no larger.
+  <br><br>
+  **Some constructors now refuse sizes they used to accept, each one a size that did not
+  work**, and now say why with an `ArgumentOutOfRangeException`:
+  `CuckooBloomFilter` past 2,040,109,465 items, which built a filter with no room to mark
+  an entry occupied that failed on its first add, or at a rate tight enough that its
+  fingerprints outgrow one array; `ThetaSketch` and `TupleSketch` retaining more than
+  1,073,741,795, which from 2^30 threw an `OverflowException` and from 2^31 failed on the
+  first add; `VarOpt` keeping more than 2,147,483,590, which at `uint.MaxValue` built a
+  sample with no room in it; `SublimeCountMinSketch` at a delta whose reciprocal is
+  infinite, which threw an `OverflowException`; and `TopK` and `HeavyKeeper` past
+  2,147,483,587 tracked, `HeavyKeeper` arrays, `SetSketch` registers and
+  `MinHash.Signature` lengths past what an array holds, each of which failed inside the
+  runtime with an allocation error. `Grafite.Build` now refuses a key set needing more
+  high bits than an `int` addresses — hundreds of millions of keys — whose count wrapped
+  negative. The theta and tuple sketches' buffers also doubled, and their unions summed,
+  in an `int` that overflowed for retained sizes past 2^29; both are now computed in a
+  `long`, and a union no longer allocates past the size it trims to.
+  <br><br>
+  The stored format does not change. Payloads that were refused for their size now load,
+  and every other refusal stands.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

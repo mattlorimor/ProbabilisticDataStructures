@@ -75,6 +75,13 @@ namespace ProbabilisticDataStructures
         public TupleSketch(uint nominalEntries, SummaryPolicy policy = SummaryPolicy.Sum)
         {
             Guard.ValidItemCount(nominalEntries, nameof(nominalEntries));
+            if (nominalEntries > MaxNominalEntries)
+            {
+                throw new ArgumentOutOfRangeException(nameof(nominalEntries), nominalEntries,
+                    $"A sketch can retain at most {MaxNominalEntries} keys. It holds up to " +
+                    "twice what it retains before it trims, in one array, and an array " +
+                    $"holds at most {Array.MaxLength}.");
+            }
 
             if (!Enum.IsDefined(policy))
             {
@@ -233,11 +240,15 @@ namespace ProbabilisticDataStructures
             other.EnsureCompact();
 
             var theta = Math.Min(this.theta, other.theta);
-            var keys = new ulong[this.held + other.held];
+
+            // Never more than the limit, as in the theta sketch's union: keys arrive
+            // smallest first, a union holding the limit or more trims to the smallest
+            // k, and both sides together can hold more than an int can count.
+            var keys = new ulong[Math.Min((long)this.held + other.held, this.Limit)];
             var folded = new double[keys.Length];
             int i = 0, j = 0, n = 0;
 
-            while (i < this.held || j < other.held)
+            while ((i < this.held || j < other.held) && n < keys.Length)
             {
                 ulong key;
                 double summary;
@@ -426,6 +437,18 @@ namespace ProbabilisticDataStructures
             return this.theta / 18446744073709551616.0;
         }
 
+        /// <summary>
+        /// The most keys a sketch can be asked to retain.
+        /// </summary>
+        /// <remarks>
+        /// The same bound as <see cref="ThetaSketch.MaxNominalEntries"/>, for the same
+        /// reason: a sketch holds up to twice what it retains before it trims, in one
+        /// array for its keys and one for their summaries, and no array is longer than
+        /// <see cref="Array.MaxLength"/>. The constructor and the reader both refuse
+        /// past it, so a sketch one builds the other reads.
+        /// </remarks>
+        internal static uint MaxNominalEntries => (uint)Array.MaxLength / 2;
+
         private int Limit => (int)(2 * this.nominalEntries);
 
         /// <summary>
@@ -505,7 +528,8 @@ namespace ProbabilisticDataStructures
 
             if (distinct > this.values.Length / 2 && this.values.Length < this.Limit)
             {
-                var grown = Math.Min(this.values.Length * 2, this.Limit);
+                // Doubled in a long: at 2^30 keys an int doubling wraps negative.
+                var grown = (int)Math.Min(2L * this.values.Length, this.Limit);
                 Array.Resize(ref this.values, grown);
                 Array.Resize(ref this.summaries, grown);
             }
@@ -610,11 +634,12 @@ namespace ProbabilisticDataStructures
             var theta = reader.ReadUInt64();
             var held = reader.ReadUInt32();
 
-            if (nominalEntries == 0 || nominalEntries > PersistenceFormat.MaxNestedCount)
+            // The constructor's own limit, so that every sketch it builds reads back.
+            if (nominalEntries == 0 || nominalEntries > MaxNominalEntries)
             {
                 throw new InvalidDataException(
                     $"Sketch retains {nominalEntries} keys, which is not a size this " +
-                    "library builds.");
+                    $"library builds: it builds them retaining 1 to {MaxNominalEntries}.");
             }
 
             if (!Enum.IsDefined(policy))
@@ -632,6 +657,10 @@ namespace ProbabilisticDataStructures
                     $"Sketch holds {held} keys and retains {nominalEntries}, and one " +
                     "never holds more than twice what it retains.");
             }
+
+            // Each key is written with its summary. Checked before the buffers are
+            // sized by it, so a claim cannot cost more than the payload it came in.
+            reader.RequireHolds(held, sizeof(ulong) + sizeof(double), "keys");
 
             var sketch = new TupleSketch(nominalEntries, policy)
             {

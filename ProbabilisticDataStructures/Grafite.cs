@@ -86,6 +86,34 @@ namespace ProbabilisticDataStructures
         internal int HighBitCount { get; set; }
 
         /// <summary>
+        /// The most bits of high parts a filter can have: they are addressed by int
+        /// positions, and their count is an int.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="Build"/> refuses a key set that would need more, and the reader
+        /// refuses more words of high bits than this many bits fill, so a filter one
+        /// builds the other reads. The reader used to stop at a million words of
+        /// either kind.
+        /// </remarks>
+        internal const int MaxHighBits = int.MaxValue;
+
+        /// <summary>
+        /// The most words of high bits a filter can have: enough for
+        /// <see cref="MaxHighBits"/> bits, as <see cref="Encode"/> sizes them.
+        /// </summary>
+        internal const uint MaxHighWords = MaxHighBits / 64 + 1;
+
+        /// <summary>
+        /// The most words of low bits a filter can have: they are one array.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="Build"/> never comes near this -- its keys are counted in an int
+        /// and the low bits per key shrink as the keys grow -- so it needs no check of
+        /// its own there. The reader's limit is the array's.
+        /// </remarks>
+        internal static uint MaxLowWords => (uint)Array.MaxLength;
+
+        /// <summary>
         /// Running count of zeros at the start of each word of <see cref="Highs"/>,
         /// so a select can binary search rather than scan.
         /// </summary>
@@ -329,8 +357,20 @@ namespace ProbabilisticDataStructures
             this.LowBits = Math.Max(0, BitOperations.Log2(this.R / (ulong)n));
             var lowMask = this.LowBits == 64 ? ulong.MaxValue : (1UL << this.LowBits) - 1;
 
+            // In a long, and refused past an int: the high bits are addressed by int
+            // positions and their count is an int. Summed in an int, this wrapped
+            // negative once the keys numbered in the high hundreds of millions.
+            var wanted = (long)(this.LastCode >> this.LowBits) + n + 1;
+            if (wanted > MaxHighBits)
+            {
+                throw new ArgumentException(
+                    $"{n} keys over this range need {wanted} bits of high parts, past the " +
+                    $"{MaxHighBits} a filter can address. Build several filters over parts " +
+                    "of the key space instead.", "keys");
+            }
+
             this.Lows = new ulong[((long)n * this.LowBits / 64) + 2];
-            var highBits = (int)(this.LastCode >> this.LowBits) + n + 1;
+            var highBits = (int)wanted;
             this.HighBitCount = highBits;
             this.Highs = new ulong[(highBits / 64) + 1];
 
@@ -707,13 +747,17 @@ namespace ProbabilisticDataStructures
                     $"reduced universe of {filter.R}.");
             }
 
+            // The builder's own limits, so that every filter it builds reads back. Both
+            // arrays are written whole, so each is checked against the bytes behind it
+            // before it is allocated.
             var lowWords = reader.ReadUInt32();
-            if (lowWords > PersistenceFormat.MaxNestedCount)
+            if (lowWords > MaxLowWords)
             {
                 throw new InvalidDataException(
                     $"Filter claims {lowWords} words of low bits, beyond anything " +
-                    "this library builds.");
+                    $"this library builds: they are one array, of at most {MaxLowWords}.");
             }
+            reader.RequireHolds(lowWords, sizeof(ulong), "words of low bits");
             filter.Lows = new ulong[lowWords];
             for (var i = 0; i < lowWords; i++)
             {
@@ -721,12 +765,13 @@ namespace ProbabilisticDataStructures
             }
 
             var highWords = reader.ReadUInt32();
-            if (highWords > PersistenceFormat.MaxNestedCount)
+            if (highWords > MaxHighWords)
             {
                 throw new InvalidDataException(
                     $"Filter claims {highWords} words of high bits, beyond anything " +
-                    "this library builds.");
+                    $"this library builds: its high parts fit in {MaxHighWords}.");
             }
+            reader.RequireHolds(highWords, sizeof(ulong), "words of high bits");
             filter.Highs = new ulong[highWords];
             for (var i = 0; i < highWords; i++)
             {
@@ -735,11 +780,11 @@ namespace ProbabilisticDataStructures
 
             reader.ExpectEnd();
 
-            if (filter.HighBitCount > highWords * 64)
+            if (filter.HighBitCount > highWords * 64L)
             {
                 throw new InvalidDataException(
                     $"Filter claims {filter.HighBitCount} bits of high parts in " +
-                    $"{highWords} words, which hold {highWords * 64}.");
+                    $"{highWords} words, which hold {highWords * 64L}.");
             }
 
             filter.BuildSelectIndex();

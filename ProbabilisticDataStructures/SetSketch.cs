@@ -207,6 +207,12 @@ namespace ProbabilisticDataStructures
                 throw new ArgumentOutOfRangeException(nameof(registers),
                     "A sketch needs at least one register.");
             }
+            if (registers > MaxRegisters)
+            {
+                throw new ArgumentOutOfRangeException(nameof(registers), registers,
+                    $"A sketch holds at most {MaxRegisters} registers: they are an array, " +
+                    "and that is the most an array holds.");
+            }
             if (double.IsNaN(b) || b <= 1 || b > 2)
             {
                 throw new ArgumentOutOfRangeException(nameof(b),
@@ -241,6 +247,18 @@ namespace ProbabilisticDataStructures
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.SetLowerBound(0);
         }
+
+        /// <summary>
+        /// The most registers a sketch can keep: they are an array, as are the two
+        /// that order their updates, and no array is longer than
+        /// <see cref="Array.MaxLength"/>.
+        /// </summary>
+        /// <remarks>
+        /// The constructor and the reader both refuse past this, so a sketch one builds
+        /// the other reads. The reader used to stop at 2^26, and so refused sketches
+        /// the constructor had built without complaint.
+        /// </remarks>
+        internal static int MaxRegisters => Array.MaxLength;
 
         /// <summary>How many registers the sketch keeps.</summary>
         public int Registers => this.m;
@@ -779,11 +797,12 @@ namespace ProbabilisticDataStructures
                     $"Sketch claims a hash rate of {a}, and a rate is a positive " +
                     "number.");
             }
-            if (m == 0 || m > 1 << 26)
+            // The constructor's own limit, so that every sketch it builds reads back.
+            if (m == 0 || m > MaxRegisters)
             {
                 throw new InvalidDataException(
-                    $"Sketch claims {m} registers. A sketch has at least one, and this " +
-                    "many would be half a gigabyte of them.");
+                    $"Sketch claims {m} registers. A sketch has at least one, and at " +
+                    $"most the {MaxRegisters} an array holds.");
             }
             if (q == 0 || q > ushort.MaxValue - 1)
             {
@@ -791,6 +810,10 @@ namespace ProbabilisticDataStructures
                     $"Sketch claims a ceiling of {q}, and a register holds two bytes " +
                     "and has to hold one more than the ceiling.");
             }
+
+            // Every register is written, so they are checked against the bytes behind
+            // them before the arrays are allocated.
+            reader.RequireHolds(m, sizeof(ushort), "registers");
 
             var sketch = new SetSketch(
                 (int)m, b, a, (int)q,
