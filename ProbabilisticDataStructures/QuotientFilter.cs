@@ -750,7 +750,8 @@ namespace ProbabilisticDataStructures
             payload.WriteUInt32(this.remainderBits);
             payload.WriteUInt32(this.count);
 
-            var bytes = new byte[this.data.Length * sizeof(ulong)];
+            CheckWritable(this.data.Length);
+            var bytes = new byte[BytesOf(this.data.Length)];
             for (var i = 0; i < this.data.Length; i++)
             {
                 BinaryPrimitives.WriteUInt64LittleEndian(
@@ -888,11 +889,11 @@ namespace ProbabilisticDataStructures
                     $"Filter claims {count} entries and has {filter.slots} slots.");
             }
 
-            if (bytes.Length != filter.data.Length * sizeof(ulong))
+            if (bytes.Length != BytesOf(filter.data.Length))
             {
                 throw new InvalidDataException(
                     $"Filter has {filter.slots} slots of {filter.bitsPerSlot} bits, " +
-                    $"needing {filter.data.Length * sizeof(ulong)} bytes, and carries " +
+                    $"needing {BytesOf(filter.data.Length)} bytes, and carries " +
                     $"{bytes.Length}.");
             }
 
@@ -907,10 +908,31 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Builds a filter from the two bit widths directly, which is what a payload
-        /// carries -- the constructor's item count and rate are only ever a way of
-        /// arriving at them.
+        /// The bytes a table of this many words is written as. In 64 bits: in an int it
+        /// wrapped at 2^28 words, two gibibytes, and the filter then failed to write with
+        /// an OverflowException from the allocation, or compared a payload's bytes with a
+        /// wrapped number.
         /// </summary>
+        internal static long BytesOf(int words) => (long)words * sizeof(ulong);
+
+        /// <summary>
+        /// The bytes of payload besides the table's: three counts and the length of the
+        /// run of bytes the table is written as.
+        /// </summary>
+        private const int PayloadOverhead = 4 * sizeof(uint);
+
+        /// <summary>
+        /// Refuses a table whose payload would not fit an envelope, with the exception
+        /// the payload writer gives for any structure too large to write.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">
+        /// The payload would be longer than <see cref="PersistenceFormat.MaxPayloadLength"/>.
+        /// </exception>
+        internal static void CheckWritable(int words)
+        {
+            PersistenceFormat.CheckPayloadLength(PayloadOverhead + BytesOf(words));
+        }
+
         /// <summary>
         /// The 64-bit words a table of this split occupies: one slot of remainder and
         /// metadata per quotient, and two spare words for reads that straddle the end.
@@ -918,6 +940,11 @@ namespace ProbabilisticDataStructures
         private static long TableWords(uint quotientBits, uint remainderBits) =>
             (((long)(1u << (int)quotientBits) * ((int)remainderBits + MetadataBits)) >> 6) + 2;
 
+        /// <summary>
+        /// Builds a filter from the two bit widths directly, which is what a payload
+        /// carries -- the constructor's item count and rate are only ever a way of
+        /// arriving at them.
+        /// </summary>
         private static QuotientFilter Build(
             uint quotientBits, uint remainderBits, Func<ReadOnlySpan<byte>, ulong> hash)
         {

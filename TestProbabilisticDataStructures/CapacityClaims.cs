@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using System.Reflection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -157,10 +158,54 @@ namespace TestProbabilisticDataStructures
                 "the largest excess below 2^27 is at a filter of more than 13 million items, and telling it from no excess at 1% takes more than a billion probes of each",
                 () => LastNarrow() > 13_000_000
                     && 9 * 0.99 / (0.01 * Math.Pow(LargestFoldBelowWide(), 2)) > 1_000_000_000),
-            ("by +3.2% at 2^28 and +13% at 2^30, and returns 0 from 2^33",
-                "the least of them is 268,435,456 distinct items to add",
-                () => 1UL << 28 == 268_435_456),
+            ("overestimated past about 143 million distinct items, by +3.2% at 2^28 and +13% at 2^30, and returned 0 from about 5.7 billion (2^32.4)",
+                "they describe the estimator before its large-range correction was removed, which the library no longer has: " +
+                "a state past the old threshold now counts its raw estimate, and a full sketch its ceiling rather than 0",
+                () =>
+                {
+                    var oldBand = new HyperLogLog(16);
+                    Array.Fill(oldBand.RegisterState, (byte)27);
+                    return oldBand.Count() == (ulong)(0.673 * 16 * Math.Pow(2, 27))
+                        && 0.673 * 16 * Math.Pow(2, 27) > Math.Pow(2, 32) / 30
+                        && FullHyperLogLog(1024).Count() > 0;
+                }),
         };
+
+        // ---- HyperLogLog ----------------------------------------------------------------
+
+        /// <summary>A sketch whose every register is capped, built through the update Add uses.</summary>
+        private static HyperLogLog FullHyperLogLog(uint m)
+        {
+            var q = 32 - BitOperations.Log2(m);
+            var full = new HyperLogLog(m);
+            for (uint j = 0; j < m; j++)
+            {
+                full.AddHash(m == 1 ? 0u : j << q);
+            }
+
+            return full;
+        }
+
+        /// <summary>
+        /// The relative error of a HyperLogLog of <paramref name="m"/> registers at
+        /// <paramref name="n"/> distinct items, over Poisson-sampled sketches built through
+        /// the update hook, as <see cref="TestHyperLogLogRange"/> builds them: the mean, its
+        /// standard error, and the spread as a multiple of the nominal 1.04/sqrt(m).
+        /// </summary>
+        private static (double Mean, double StandardError, double Ratio) HyperLogLogError(
+            uint m, int trials, double n, int seed)
+        {
+            var random = new Random(seed);
+            var errors = new double[trials];
+            for (var t = 0; t < trials; t++)
+            {
+                errors[t] = (TestHyperLogLogRange.PoissonSketch(m, n, random).Count() - n) / n;
+            }
+
+            var mean = errors.Average();
+            var spread = Math.Sqrt(errors.Sum(e => (e - mean) * (e - mean)) / (trials - 1));
+            return (mean, spread / Math.Sqrt(trials), spread / (1.04 / Math.Sqrt(m)));
+        }
 
         private static readonly MethodInfo SublimeLimit = typeof(SublimeCountMinSketch)
             .GetMethod("LimitFor", BindingFlags.NonPublic | BindingFlags.Instance)!;
@@ -271,43 +316,62 @@ namespace TestProbabilisticDataStructures
                     return true;
                 }
             }),
-            new Claim("estimate corrects for collisions in a 32-bit space from about 143 million", () =>
-            {
-                var exp32 = (double)typeof(HyperLogLog).GetField("Exp32", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
-                return Rounds(exp32 / 30 / 1e6, 143, 0);
-            }),
-            new Claim("A raw estimate past 2^32 makes `Count()` return 0", () =>
-            {
-                var estimator = new HyperLogLog(1024);
-                Array.Fill(estimator.RegisterState, (byte)30);
-                return estimator.Count() == 0;
-            }),
             new Claim("a slot that holds an item is written as an index, a length and the item", () =>
                 Near(Facts["inverse slot bytes"], 16, 0.01)),
 
-            // ---- Where master stops working before it should ---------------------------
-            new Claim("A `BloomFilter` sized for 448,089,842 items at 1%", () =>
+            // ---- Where a limit refuses -----------------------------------------------------
+            new Claim("4,294,967,182 four-bit counters, or 2,147,483,591 eight-bit ones", () =>
+                Buckets.MaxCount(4) == 4_294_967_182 && Buckets.MaxCount(8) == 2_147_483_591
+                && Buckets.MaxCount(1) == uint.MaxValue && Buckets.MaxCount(3) == uint.MaxValue),
+            new Claim("and the filters refuse more against the parameter that chose it", () =>
             {
-                var filter = new BloomFilter(448_089_842, 0.01);
-                return BucketBytes(filter) < (int)TrueBytes(filter.Capacity(), 1)
-                    && Fails(key => filter.Add(key));
+                var n = TestBucketSizes.FirstItemCountSizedAbove(Buckets.MaxCount(8), 0.01);
+                return Assert.Throws<ArgumentOutOfRangeException>(() => new CountingBloomFilter(n, 8, 0.01)).ParamName == "n"
+                    && Assert.Throws<ArgumentOutOfRangeException>(
+                        () => new StableBloomFilter(Buckets.MaxCount(8) + 1, 8, 0.01, seed: 1)).ParamName == "m";
             }),
-            new Claim("a 4-bit `CountingBloomFilter` sized for more than 112,022,460", () =>
+            new Claim("the `Add` that would double it past that throws, with the filter as it was", () =>
             {
-                var filter = new CountingBloomFilter(112_022_461, 4, 0.01);
-                return BucketBytes(filter) < (int)TrueBytes(filter.Capacity(), 4)
-                    && Fails(key => filter.Add(key));
+                var filter = new InfiniFilter(initialCapacity: 3, fingerprintBits: 8) { QuotientBitsLimit = 2 };
+                for (var i = 0; i < 3; i++) filter.Add(Key(i));
+                var before = filter.ToByteArray();
+                var memento = new MementoFilter(2, fingerprintBits: 8, initialCapacity: 3) { QuotientBitsLimit = 2 };
+                for (ulong i = 0; i < 3; i++) memento.Add(i * 1_000);
+                var mementoBefore = memento.ToByteArray();
+                return InfiniFilter.MaxQuotientBits == 31 && MementoFilter.MaxQuotientBits == 31
+                    && Assert.Throws<InvalidOperationException>(() => filter.Add(Key(3))) is not null
+                    && Assert.Throws<InvalidOperationException>(() => memento.Add(3_000)) is not null
+                    && before.AsSpan().SequenceEqual(filter.ToByteArray())
+                    && mementoBefore.AsSpan().SequenceEqual(memento.ToByteArray());
             }),
-            new Claim("a 3-bit `StableBloomFilter` of more than 1,431,655,762 cells", () =>
+            new Claim("so it cannot pass 2^30, and an `Add` that would double it past that throws, with the sketch as it was", () =>
             {
-                var filter = new StableBloomFilter(1_431_655_763, 3, 0.01, seed: 1);
-                return BucketBytes(filter) < (int)TrueBytes(filter.Cells(), 3)
-                    && Fails(key => filter.Add(key));
+                var sketch = new SublimeCountMinSketch(0.5, 0.5, 1.0);
+                typeof(SublimeCountMinSketch).GetField("width", BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .SetValue(sketch, 1 << 30);
+                typeof(SublimeCountMinSketch).GetField("expansionLimit", BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .SetValue(sketch, 1UL);
+                return typeof(SublimeCountMinSketch).GetField("width", BindingFlags.NonPublic | BindingFlags.Instance)!.FieldType == typeof(int)
+                    && SublimeCountMinSketch.MaxWidth == 1 << 30
+                    && Assert.Throws<InvalidOperationException>(() => sketch.Add(Key(1))) is not null
+                    && sketch.TotalCount() == 0;
             }),
-            new Claim("a table of 32 address bits has one slot", () =>
-                new InfiniSegment(32, 8).Slots == 1 && new MementoSegment(32, 8, 8).Slots == 1),
-            new Claim("so its width cannot pass 2^30", () =>
-                typeof(SublimeCountMinSketch).GetField("width", BindingFlags.NonPublic | BindingFlags.Instance)!.FieldType == typeof(int)),
+            new Claim("the constructor refuses a fingerprint and a range that make it wider", () =>
+            {
+                var widest = new MementoFilter(1UL << 32, 28);
+                for (ulong i = 0; i < 200; i++) widest.Add(i * 7919);
+                return Enumerable.Range(0, 200).All(i => widest.Test((ulong)i * 7919))
+                    && Assert.Throws<ArgumentOutOfRangeException>(() => new MementoFilter(1UL << 32, 29)).ParamName == "fingerprintBits";
+            }),
+            new Claim("`WriteTo` of one throws an `InvalidOperationException` naming the size it would be and the size one can be, with the structure unchanged", () =>
+            {
+                var ex = Assert.Throws<InvalidOperationException>(
+                    () => QuotientFilter.CheckWritable((int)((MaxPayload - 16) / 8) + 1));
+                return ex.Message.Contains(MaxPayload.ToString("N0"), StringComparison.Ordinal)
+                    && ex.Message.Contains((MaxPayload + 3).ToString("N0"), StringComparison.Ordinal)
+                    && Assert.Throws<InvalidOperationException>(
+                        () => PayloadWriter.GrownCapacity(1000, int.MaxValue - 1, 10)) is not null;
+            }),
 
             // ---- BloomFilter -------------------------------------------------------------
             new Claim("`m ≈ 1.44 · n · log2(1/fp)` bits", () =>
@@ -444,11 +508,125 @@ namespace TestProbabilisticDataStructures
             new Claim("Its five regions are `k + 1` slots each", () => Near(Slope("VarOpt empty"), 40, 0.01)),
 
             // ---- HyperLogLog and the estimators ---------------------------------------------
-            new Claim("2^32 distinct items, 4,294,967,296", () =>
+            new Claim("so a register records a run of at most 32 − log2 m zeros", () =>
+                // An all-zero remainder is the longest run there is, and the register keeps it plus one.
+                new[] { 0, 4, 10, 14, 20 }.All(b =>
+                {
+                    var hll = new HyperLogLog(1u << b);
+                    hll.AddHash(0);
+                    return hll.RegisterState[0] == 32 - b + 1;
+                })),
+            new Claim("One hash value in 2^32 caps any given register, so after n distinct items each register has " +
+                "reached that cap with probability 1 − e^(−n/2^32), whatever m is", () =>
+                // Exhaustively, at register counts small enough in remainder to enumerate: of the 2^q
+                // remainders that land on register 0, exactly one caps it, and it is picked with
+                // probability 2^-b, so a hash caps a given register with probability 2^-32 at every m.
+                // After n independent hashes that is 1 - (1 - 2^-32)^n, which is the exponential to
+                // within a part in a billion even at 2^33.
+                new[] { 16, 20, 24 }.All(b =>
+                {
+                    var q = 32 - b;
+                    var hll = new HyperLogLog(1u << b);
+                    for (var remainder = (1u << q) - 1; remainder >= 1; remainder--)
+                    {
+                        hll.AddHash(remainder);
+                    }
+
+                    var belowCap = hll.RegisterState[0] <= q;
+                    hll.AddHash(0);
+                    return belowCap && hll.RegisterState[0] == q + 1;
+                })
+                && Math.Abs(Math.Pow(1 - Math.ScaleB(1.0, -32), Math.ScaleB(1.0, 33)) - Math.Exp(-2)) < 1e-9),
+            new Claim("A register holds what a wider hash would have given it, cut off at the cap", () =>
             {
-                var exp32 = (double)typeof(HyperLogLog).GetField("Exp32", BindingFlags.NonPublic | BindingFlags.Static)!.GetValue(null)!;
-                return exp32 == 4_294_967_296.0;
+                // A 64-bit value's low 32 bits are what the sketch sees. A wider hash would carry the
+                // run on into the other 32; the register must be that run, capped at q + 1, which is
+                // why two items whose 32 bits collide move it alike unless the run reaches the cap.
+                var random = new Random(178);
+                var bytes = new byte[8];
+                var capped = 0;
+                var uncapped = 0;
+                foreach (var b in new[] { 4, 10, 14 })
+                {
+                    var m = 1u << b;
+                    var q = 32 - b;
+                    var hll = new HyperLogLog(m);
+                    for (var i = 0; i < 20_000; i++)
+                    {
+                        random.NextBytes(bytes);
+                        var v = BitConverter.ToUInt64(bytes);
+                        var index = (uint)(v >> 59) & (m - 1);
+                        var remainder = (uint)v & ((1u << q) - 1);
+                        var low = (index << q) | (remainder >> random.Next(q + 1));
+
+                        hll.RegisterState[index] = 0;
+                        hll.AddHash(low);
+
+                        var wide = ((ulong)(low << b) << 32) | ((v >> 32) << b);
+                        var run = wide == 0 ? 65 : BitOperations.LeadingZeroCount(wide) + 1;
+                        if (hll.RegisterState[index] != Math.Min(run, q + 1))
+                        {
+                            return false;
+                        }
+
+                        if (run > q) capped++; else uncapped++;
+                    }
+                }
+
+                return capped > 1000 && uncapped > 1000;
             }),
+            new Claim("`Count()` accounts for the capped registers", () =>
+            {
+                // Half the registers capped: the estimate is the tau-corrected one, which counting
+                // a capped register as a plain 2^-(q+1) would miss by more than a tenth.
+                var hll = new HyperLogLog(16);
+                for (var i = 0; i < 16; i++)
+                {
+                    hll.RegisterState[i] = (byte)(i < 8 ? 29 : 28);
+                }
+
+                var expected = TestHyperLogLogRange.ExpectedEstimate(hll.RegisterState);
+                var asPlain = 0.673 * 256 / ((8 * Math.Pow(2, -28)) + (8 * Math.Pow(2, -29)));
+                return Math.Abs(hll.Count() - expected) <= 1 && Math.Abs(asPlain - expected) / expected > 0.1;
+            }),
+            new Claim("With 16 registers or more the estimate stays close to its nominal error up to about 2^33 " +
+                "distinct items, 8,589,934,592", () =>
+                // At 2^33, over Poisson-sampled sketches: the mean within four standard errors and
+                // the spread within the window TestSketchBounds holds the small range to.
+                1UL << 33 == 8_589_934_592
+                && new[] { (16u, 4096), (1024u, 256), (16384u, 64) }.All(s =>
+                {
+                    var (mean, standardError, ratio) = HyperLogLogError(s.Item1, s.Item2, Math.Pow(2, 33), 33 + (int)s.Item1);
+                    return Math.Abs(mean) <= 4 * standardError && ratio >= 0.75 && ratio <= 1.35;
+                })),
+            new Claim("to about 1.5–2 times nominal at 2^34 with 1,024 registers or more", () =>
+                new[] { (1024u, 256), (16384u, 64) }.All(s =>
+                {
+                    var (_, _, ratio) = HyperLogLogError(s.Item1, s.Item2, Math.Pow(2, 34), 34 + (int)s.Item1);
+                    return ratio >= 1.4 && ratio <= 2.1;
+                })),
+            new Claim("about 2^32 × ln m: 11,280,826,639 with 16 registers, 29,737,154,114 with 1,024 and " +
+                "41,673,492,339 with 16,384", () =>
+                FullHyperLogLog(16).Count() == 11_280_826_639
+                && FullHyperLogLog(1024).Count() == 29_737_154_114
+                && FullHyperLogLog(16384).Count() == 41_673_492_339
+                && new[] { 16u, 1024u, 16384u }.All(m =>
+                    Math.Abs(FullHyperLogLog(m).Count() / (Math.Pow(2, 32) * Math.Log(m)) - 1) < 0.06)),
+            new Claim("Below 16 registers the ceiling is under 2^33; with one register it is 1,490,120,207", () =>
+                new[] { 1u, 2u, 4u, 8u }.All(m => FullHyperLogLog(m).Count() < 1UL << 33)
+                && FullHyperLogLog(16).Count() > 1UL << 33
+                && FullHyperLogLog(1).Count() == 1_490_120_207),
+            new Claim("It never reports 0 once anything has been added", () =>
+                // One hash at every register count to 2^16, landing on registers at every place
+                // a single item can leave them, and every register capped.
+                Enumerable.Range(0, 17).All(b =>
+                    new[] { 0u, 1u, 0x80000000u, 0xFFFFFFFFu, 0x12345678u }.All(hash =>
+                    {
+                        var hll = new HyperLogLog(1u << b);
+                        hll.AddHash(hash);
+                        return hll.Count() >= 1;
+                    })
+                    && FullHyperLogLog(1u << b).Count() >= 1UL << b)),
             new Claim("The largest is about half a megabyte", () =>
                 Rounds(ChargeLine.Known["HyperLogLogPlus"].At(1 << 18) / 1_000_000, 0.5, 1)),
             new Claim("a read is charged three times the registers", () =>

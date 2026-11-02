@@ -1179,6 +1179,63 @@ namespace TestProbabilisticDataStructures
                 "a refusal of a payload this library wrote should say why it exists");
         }
 
+        /// <summary>
+        /// 6.2.0 and every release before it could build a bucket array for a filter
+        /// whose bits came to 2^32 or more, with a byte count worked out in 32 bits and
+        /// wrapped: a table of a few kilobytes, or none, for a filter of hundreds of
+        /// megabytes. The filter's adds threw wherever they landed past the table, after
+        /// setting what lay before it. The three stored payloads are what the
+        /// constructors wrote for 448,089,842 items at 1%, for 56,011,471 items of
+        /// eight-bit counters at 1%, and for 1,431,655,763 three-bit stable cells, each
+        /// empty because an add to one could not be relied on to finish.
+        /// <para>
+        /// The table is not the filter, and the payload does not say which of its
+        /// buckets were lost, so reading it would be guessing. It is refused, and the
+        /// refusal says where the payload came from.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestStoredFiltersWhoseBucketBytesWrappedAreRefusedWithTheirCause()
+        {
+            var stored = new (string Name, Func<Stream, object> Read)[]
+            {
+                ("bloomfilter-wrapped-v1.bin", s => BloomFilter.ReadFrom(s)),
+                ("countingbloomfilter-wrapped-v1.bin", s => CountingBloomFilter.ReadFrom(s)),
+                ("stablebloomfilter-wrapped-v5.bin", s => StableBloomFilter.ReadFrom(s)),
+            };
+
+            foreach (var (name, read) in stored)
+            {
+                var ex = Assert.ThrowsExactly<InvalidDataException>(
+                    () => read(Fixture(name)), name);
+
+                StringAssert.Contains(ex.Message, "32 bits",
+                    $"the refusal of {name} should say why the table is short");
+            }
+        }
+
+        /// <summary>
+        /// 6.2.0 and every release before it built a Memento filter whose slots are 64
+        /// bits -- a 32-bit range with a 28-bit fingerprint, say -- with a mask that
+        /// shifted a ulong by 64 and so came to zero. Every key it was given was counted and
+        /// none stored. The stored payload is that filter after 200 keys: it says 200 are
+        /// held, in a table whose every word is zero. It answers no to all of them.
+        /// <para>
+        /// Nothing in it can be recovered, and reading it would hand back a filter that
+        /// claims to hold keys and says it does not, which is the one thing a filter must not
+        /// do. It is refused, and the refusal says where the payload came from.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestStoredMementoFilterThatLostEveryKeyIsRefusedWithItsCause()
+        {
+            var ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => MementoFilter.ReadFrom(Fixture("mementofilter-lostkeys-v1.bin")));
+
+            StringAssert.Contains(ex.Message, "mask",
+                "the refusal should say why the table is empty");
+        }
+
         [TestMethod]
         public void TestStoredSimHashSignatureStillReads()
         {
@@ -1716,6 +1773,10 @@ namespace TestProbabilisticDataStructures
                 ("varopt-v1.bin", 24, 1),
                 ("varopt-exact-v1.bin", 24, 1),
                 ("varopt-badmerge-v1.bin", 24, 1),
+                ("mementofilter-lostkeys-v1.bin", 28, 1),
+                ("bloomfilter-wrapped-v1.bin", 1, 1),
+                ("countingbloomfilter-wrapped-v1.bin", 3, 1),
+                ("stablebloomfilter-wrapped-v5.bin", 7, 5),
                 ("ultraloglog-v1.bin", 25, 1),
                 ("grafite-v1.bin", 26, 1),
                 ("infinifilter-v1.bin", 27, 1),

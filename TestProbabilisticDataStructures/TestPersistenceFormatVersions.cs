@@ -33,6 +33,16 @@ namespace TestProbabilisticDataStructures
         private const string FixturePrefix = "TestProbabilisticDataStructures.fixtures.";
 
         /// <summary>
+        /// Why the stored payloads of filters sized past 2^32 bits are refused: their
+        /// table is the one a byte count wrapped in 32 bits allocated, shorter than the
+        /// filter it describes.
+        /// </summary>
+        private const string WrappedBucketBytes =
+            "written by 6.2.0 for a filter so large that its byte count wrapped in 32 " +
+            "bits, which left a table too short to be the filter, and refused with its " +
+            "cause rather than read as the broken one it was";
+
+        /// <summary>
         /// The frame with another format version in its header and the checksum
         /// repaired, so that the only thing wrong with it is the version, and what
         /// refuses it is the reader's rule about versions and not the CRC.
@@ -240,6 +250,13 @@ namespace TestProbabilisticDataStructures
                 ["varopt-badmerge-v1.bin"] =
                     "written by 6.2.0 after a merge that left it holding a wrong sample, " +
                     "and refused with its cause rather than read as if it were sound",
+                ["mementofilter-lostkeys-v1.bin"] =
+                    "written by 6.2.0 for slots of 64 bits, whose mask came to zero, so that " +
+                    "it counts 200 keys and holds none; refused with its cause rather than " +
+                    "read as a filter that denies what it says it holds",
+                ["bloomfilter-wrapped-v1.bin"] = WrappedBucketBytes,
+                ["countingbloomfilter-wrapped-v1.bin"] = WrappedBucketBytes,
+                ["stablebloomfilter-wrapped-v5.bin"] = WrappedBucketBytes,
             };
 
             var names = typeof(TestPersistenceFormatVersions).Assembly

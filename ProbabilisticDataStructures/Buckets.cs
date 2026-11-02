@@ -88,10 +88,39 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         internal static Buckets Restore(uint count, byte bucketSize, byte[] data)
         {
+            var most = MaxCount(bucketSize);
+            if (count > most)
+            {
+                throw new InvalidDataException(
+                    $"{count:N0} buckets of {bucketSize} bits would take " +
+                    $"{DataLength(count, bucketSize):N0} bytes, and one array holds at most " +
+                    $"{MaxDataBytes:N0}, which at {bucketSize} bits is {most:N0} buckets. " +
+                    "That is beyond anything this library builds.");
+            }
+
             var needed = DataLength(count, bucketSize);
 
             if (data.Length != needed)
             {
+                // The one wrong length with a history. Every version before this
+                // worked the byte count out in 32 bits, so a table of 2^32 bits or more
+                // was built with the count's low bits and no more: a few megabytes of the
+                // hundreds the buckets need, or none. That is the length stored here
+                // when the count is right and the array is short by exactly that.
+                var wrapped = unchecked((count * bucketSize + 7) / 8);
+                if ((uint)data.Length == wrapped)
+                {
+                    throw new InvalidDataException(
+                        $"{count:N0} buckets of {bucketSize} bits need {needed:N0} bytes " +
+                        $"and {data.Length:N0} were stored. That is what the byte count " +
+                        "comes to when it is worked out in 32 bits and wraps, which is how " +
+                        "an earlier version of this library sized the table of a filter " +
+                        "this large: too short to hold its buckets, so that an add landing " +
+                        "past its end threw after setting the buckets before it. The " +
+                        "payload does not say which buckets were lost, so it is not read. " +
+                        "Build the filter again from the data it was made from.");
+                }
+
                 throw new InvalidDataException(
                     $"{count} buckets of {bucketSize} bits need {needed} " +
                     $"bytes and {data.Length} were stored.");
@@ -107,8 +136,65 @@ namespace ProbabilisticDataStructures
         /// <param name="count">Number of buckets.</param>
         /// <param name="bucketSize">Number of bits per bucket.</param>
         internal Buckets(uint count, byte bucketSize)
-            : this(count, bucketSize, new byte[DataLength(count, bucketSize)])
+            : this(count, bucketSize, Allocate(count, bucketSize))
         {
+        }
+
+        /// <summary>
+        /// The empty array a new Buckets starts with, after the size has been checked.
+        /// </summary>
+        private static byte[] Allocate(uint count, byte bucketSize)
+        {
+            CheckSize(count, bucketSize, nameof(count));
+            return new byte[DataLength(count, bucketSize)];
+        }
+
+        /// <summary>
+        /// The most bytes one bucket array holds: the most elements a .NET array does.
+        /// </summary>
+        internal static long MaxDataBytes => Array.MaxLength;
+
+        /// <summary>
+        /// The most buckets of a width one array holds: every one of its bytes, at eight
+        /// bits apiece, divided by the width -- or the most the count type holds, where
+        /// that comes first, as it does for one-bit buckets and up to three.
+        /// </summary>
+        /// <param name="bucketSize">Number of bits per bucket.</param>
+        internal static uint MaxCount(byte bucketSize)
+        {
+            ValidBucketSize(bucketSize);
+
+            return (uint)Math.Min((ulong)uint.MaxValue, (ulong)MaxDataBytes * 8 / bucketSize);
+        }
+
+        /// <summary>
+        /// Refuses a size this type cannot build, naming the parameter the caller knows
+        /// it by.
+        /// </summary>
+        /// <param name="count">Number of buckets.</param>
+        /// <param name="bucketSize">Number of bits per bucket.</param>
+        /// <param name="paramName">The parameter the refusal is reported against.</param>
+        /// <param name="request">
+        /// What was asked for, as the caller knows it, in place of the bare count of
+        /// buckets: a sentence's worth, without its full stop.
+        /// </param>
+        /// <param name="remedy">What the caller can change, as a sentence.</param>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The buckets would not fit one array, or the width is not one this type holds.
+        /// </exception>
+        internal static void CheckSize(
+            uint count, byte bucketSize, string paramName,
+            string? request = null, string? remedy = null)
+        {
+            var most = MaxCount(bucketSize);
+            if (count > most)
+            {
+                throw new ArgumentOutOfRangeException(paramName, count,
+                    $"{request ?? $"{count:N0} buckets of {bucketSize} bits"}. Together " +
+                    $"that is {DataLength(count, bucketSize):N0} bytes, and one array " +
+                    $"holds at most {MaxDataBytes:N0}: at {bucketSize} bits, " +
+                    $"{most:N0} buckets.{(remedy is null ? "" : " " + remedy)}");
+            }
         }
 
         private Buckets(uint count, byte bucketSize, byte[] data)
@@ -123,7 +209,20 @@ namespace ProbabilisticDataStructures
         /// The bytes <paramref name="count"/> buckets of <paramref name="bucketSize"/>
         /// bits occupy, refusing a bucket size this type cannot hold.
         /// </summary>
-        private static long DataLength(uint count, byte bucketSize)
+        /// <remarks>
+        /// In 64 bits. In 32 it wrapped at 2^32 bits, 512 MiB of one-bit buckets, and
+        /// allocated the wrapped length: a table too short for its buckets, which the
+        /// first add to land past its end found out. No limit is applied here; this is
+        /// the arithmetic, and <see cref="CheckSize"/> is where a size is refused.
+        /// </remarks>
+        internal static long DataLength(uint count, byte bucketSize)
+        {
+            ValidBucketSize(bucketSize);
+
+            return (long)(((ulong)count * bucketSize + 7) / 8);
+        }
+
+        private static void ValidBucketSize(byte bucketSize)
         {
             if (bucketSize == 0)
             {
@@ -140,8 +239,16 @@ namespace ProbabilisticDataStructures
                     "maximum value is stored in a byte, so wider buckets would allocate " +
                     "the extra space without being able to hold a larger value.");
             }
+        }
 
-            return (count * bucketSize + 7) / 8;
+        /// <summary>
+        /// Where in the bit array a bucket begins. A ulong because past a bucket whose
+        /// bits begin at 2^32 a uint wraps, and a bucket array of more than 512 MiB then
+        /// reads and writes the wrong bytes.
+        /// </summary>
+        internal static ulong BitOffset(uint bucket, byte bucketSize)
+        {
+            return (ulong)bucket * bucketSize;
         }
 
         /// <summary>
@@ -166,14 +273,15 @@ namespace ProbabilisticDataStructures
         /// <returns>The modified bucket.</returns>
         internal Buckets Increment(uint bucket, int delta)
         {
-            int val = (int)(GetBits(bucket * this.bucketSize, this.bucketSize) + delta);
+            var offset = BitOffset(bucket, this.bucketSize);
+            int val = (int)(GetBits(offset, this.bucketSize) + delta);
 
             if (val > this.Max)
                 val = this.Max;
             else if (val < 0)
                 val = 0;
 
-            SetBits((uint)bucket * (uint)this.bucketSize, this.bucketSize, (uint)val);
+            SetBits(offset, this.bucketSize, (uint)val);
             return this;
         }
 
@@ -189,7 +297,7 @@ namespace ProbabilisticDataStructures
             if (value > this._max)
                 value = this._max;
 
-            SetBits(bucket * this.bucketSize, this.bucketSize, value);
+            SetBits(BitOffset(bucket, this.bucketSize), this.bucketSize, value);
             return this;
         }
 
@@ -200,7 +308,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The specified bucket.</returns>
         internal uint Get(uint bucket)
         {
-            return GetBits(bucket * this.bucketSize, this.bucketSize);
+            return GetBits(BitOffset(bucket, this.bucketSize), this.bucketSize);
         }
 
         /// <summary>
@@ -282,7 +390,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The Buckets object the reset operation was performed on.</returns>
         internal Buckets Reset()
         {
-            this.Data = new byte[(this.count * this.bucketSize + 7) / 8];
+            this.Data = new byte[DataLength(this.count, this.bucketSize)];
             return this;
         }
 
@@ -292,16 +400,16 @@ namespace ProbabilisticDataStructures
         /// <param name="offset">The position to start reading at.</param>
         /// <param name="length">The distance to read from the offset.</param>
         /// <returns>The bits at the specified offset and length.</returns>
-        internal uint GetBits(uint offset, int length)
+        internal uint GetBits(ulong offset, int length)
         {
-            uint byteIndex = offset / 8;
+            ulong byteIndex = offset / 8;
             int byteOffset = (int)(offset % 8);
 
             if ((byteOffset + length) > 8)
             {
                 int rem = 8 - byteOffset;
                 return GetBits(offset, rem)
-                    | (GetBits((uint)(offset + rem), length - rem) << rem);
+                    | (GetBits(offset + (ulong)rem, length - rem) << rem);
             }
 
             int bitMask = (1 << length) - 1;
@@ -314,16 +422,16 @@ namespace ProbabilisticDataStructures
         /// <param name="offset">The position to start writing at.</param>
         /// <param name="length">The distance to write from the offset.</param>
         /// <param name="bits">The bits to write.</param>
-        internal void SetBits(uint offset, int length, uint bits)
+        internal void SetBits(ulong offset, int length, uint bits)
         {
-            uint byteIndex = offset / 8;
+            ulong byteIndex = offset / 8;
             int byteOffset = (int)(offset % 8);
 
             if ((byteOffset + length) > 8)
             {
                 int rem = 8 - byteOffset;
                 SetBits(offset, (byte)rem, bits);
-                SetBits((uint)(offset + rem), length - rem, bits >> rem);
+                SetBits(offset + (ulong)rem, length - rem, bits >> rem);
                 return;
             }
 

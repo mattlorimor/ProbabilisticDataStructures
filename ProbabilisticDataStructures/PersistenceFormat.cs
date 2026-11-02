@@ -312,6 +312,41 @@ namespace ProbabilisticDataStructures
         private const int ChecksumLength = 4;
 
         /// <summary>
+        /// The bytes the envelope adds around a payload: its header and its checksum.
+        /// </summary>
+        internal const int EnvelopeLength = HeaderLength + ChecksumLength;
+
+        /// <summary>
+        /// The longest payload an envelope can hold. A payload is written as one array
+        /// together with the envelope around it, so it is the largest array less the
+        /// envelope; the length field is a <c>u32</c>, which would allow more, and no
+        /// array does.
+        /// </summary>
+        internal static int MaxPayloadLength => Array.MaxLength - EnvelopeLength;
+
+        /// <summary>
+        /// Refuses a payload longer than an envelope holds, naming the size it would be and
+        /// the size one can be, before anything is allocated for it.
+        /// </summary>
+        /// <param name="length">The payload's length, in bytes, worked out in 64 bits.</param>
+        /// <exception cref="InvalidOperationException">
+        /// The payload would be longer than <see cref="MaxPayloadLength"/>.
+        /// </exception>
+        internal static void CheckPayloadLength(long length)
+        {
+            if (length > MaxPayloadLength)
+            {
+                throw new InvalidOperationException(
+                    $"The payload would reach {length:N0} bytes, and the most one can be is " +
+                    $"{MaxPayloadLength:N0}: the largest array a .NET runtime holds, " +
+                    $"{Array.MaxLength:N0} bytes, less the {EnvelopeLength} bytes the " +
+                    "envelope adds around it in the same array. The structure is intact and " +
+                    "can still be used, but it is too large to write; the format has no way " +
+                    "to store it. Keep less in it, or split what it holds across several.");
+            }
+        }
+
+        /// <summary>
         /// Wraps a payload in the envelope and writes the whole of it to the stream.
         /// </summary>
         internal static void Write(
@@ -405,7 +440,7 @@ namespace ProbabilisticDataStructures
             hash = (HashId)BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(8));
 
             var length = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(10));
-            if (length > int.MaxValue)
+            if (length > Array.MaxLength)
             {
                 throw new InvalidDataException(
                     $"Payload claims a length of {length} bytes, which cannot be read " +

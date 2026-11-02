@@ -47,6 +47,23 @@ namespace ProbabilisticDataStructures
     /// isn't known a priori and memory constraints aren't of particular concern.
     /// For situations where memory is bounded, consider using Inverse or Stable
     /// Bloom Filters.
+    /// <para>
+    /// The growth has a ceiling, and it is not memory. The i-th filter is built at
+    /// <c>fpRate * r^i</c>, and a Bloom filter sizes its hash count from the reciprocal
+    /// of its rate, which is not a number once the rate is below
+    /// <c>1 / double.MaxValue</c>, about 5.6e-309. At a growth factor of 1, where that is
+    /// what runs out, the filter holds at most
+    /// <c>floor(ln(fpRate * double.MaxValue) / ln(1 / r)) + 1</c> filters: 3,161 at a
+    /// rate of 1% and a ratio of 0.8, 6,693 at a ratio of 0.9, each holding about as
+    /// many items as the hint, so 3.16 million items at a hint of a thousand. A filter
+    /// that grows stops sooner, when the next one would be built for more items than a
+    /// contained filter is sized for or needs more bits than it addresses, unless its
+    /// ratio is small enough that the rate runs out first. An
+    /// <see cref="Add(ReadOnlySpan{byte})"/> that needs a filter beyond the ceiling
+    /// throws an <see cref="InvalidOperationException"/> before it changes anything, and
+    /// the filter goes on answering queries and can be written. <see cref="BloomFilter64"/>
+    /// sizes one filter in 64 bits and has no ceiling of this kind.
+    /// </para>
     /// </summary>
     public class ScalableBloomFilter : IFilter, IBinaryPersistable<ScalableBloomFilter>
     {
@@ -70,6 +87,7 @@ namespace ProbabilisticDataStructures
         /// more than a contained filter's 32 bits address.
         /// </remarks>
         internal static int MaxFilters => Array.MaxLength;
+
         /// <summary>
         /// Tightening ratio
         /// </summary>
@@ -185,6 +203,22 @@ namespace ProbabilisticDataStructures
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
             Guard.ValidTighteningRatio(r, nameof(r));
             Guard.ValidGrowthFactor(growth, nameof(growth));
+
+            // Not even the first filter can be built at a rate whose reciprocal is not a
+            // number, and that arrived as an OverflowException from inside the sizing. It
+            // is asked of the function NextCapacity asks for every filter after the first,
+            // so the two cannot disagree about which rates have none.
+            try
+            {
+                _ = Utils.OptimalK(fpRate);
+            }
+            catch (OverflowException)
+            {
+                throw new ArgumentOutOfRangeException(nameof(fpRate), fpRate,
+                    $"A false positive rate of {fpRate} is below 1 / double.MaxValue, about " +
+                    "5.6e-309, so its reciprocal is not a number and a Bloom filter at that " +
+                    "rate cannot be sized.");
+            }
 
             this.Filters = new List<PartitionedBloomFilter>();
             this.R = r;

@@ -117,10 +117,50 @@ namespace ProbabilisticDataStructures
 
             this.MementoBits = (int)Math.Ceiling(Math.Log2(maxRangeSize));
 
-            var slots = (uint)Math.Max(4.0,
-                Math.Pow(2, Math.Ceiling(Math.Log2(initialCapacity / ExpansionThreshold))));
+            var slotBits = MementoSegment.SlotBits(fingerprintBits, this.MementoBits);
+            if (slotBits > MementoSegment.MaxSlotBits)
+            {
+                var widest = MementoSegment.MaxSlotBits;
+                throw new ArgumentOutOfRangeException(nameof(fingerprintBits),
+                    fingerprintBits,
+                    $"A fingerprint of {fingerprintBits} bits and a range of " +
+                    $"{maxRangeSize:N0} -- a memento of {this.MementoBits} bits -- make a slot " +
+                    $"of {slotBits} bits: three of metadata, and a field of the fingerprint, " +
+                    $"a bit for its age counter and the memento. A slot is held in a 64-bit " +
+                    $"word, so it can be at most {widest}. For this range, a fingerprint of " +
+                    $"at most {widest - 4 - this.MementoBits} bits; for this fingerprint, a " +
+                    $"range of at most 2^{widest - 4 - fingerprintBits}.");
+            }
+
             this.Segments.Add(new MementoSegment(
-                (int)Math.Log2(slots), fingerprintBits, this.MementoBits));
+                InitialQuotientBits(initialCapacity), fingerprintBits, this.MementoBits));
+        }
+
+        /// <summary>
+        /// The most address bits a table has: its slot count is a uint holding 2^q, and
+        /// 2^32 is not one.
+        /// </summary>
+        internal static int MaxQuotientBits => 31;
+
+        /// <summary>
+        /// The most address bits this filter lets a table grow to. It is
+        /// <see cref="MaxQuotientBits"/>; a test lowers it to reach the refusal at the
+        /// limit without building a table of gigabytes.
+        /// </summary>
+        internal int QuotientBitsLimit { get; set; } = MaxQuotientBits;
+
+        /// <summary>
+        /// The address bits the first table gets for an initial capacity: enough slots
+        /// that the capacity fills no more than the expansion threshold of them, a
+        /// power of two, and at least four.
+        /// </summary>
+        internal static int InitialQuotientBits(uint initialCapacity)
+        {
+            // Clamped at the widest table rather than left to a uint that saturates: the
+            // capacity is where the filter starts and not a limit on it, so one that asks
+            // for more than the widest table starts at the widest.
+            var wanted = Math.Ceiling(Math.Log2(initialCapacity / ExpansionThreshold));
+            return (int)Math.Clamp(wanted, 2, MaxQuotientBits);
         }
 
         private MementoFilter(bool empty)
@@ -335,6 +375,28 @@ namespace ProbabilisticDataStructures
 
         private void Expand()
         {
+            // Refused before anything is built or moved, so that the filter is exactly
+            // what it was. The widest table in the chain decides, which is the first one
+            // -- the tables behind it are narrower by more than the fingerprint they were
+            // made from -- but the check does not rest on that.
+            var widest = 0;
+            foreach (var table in this.Segments)
+            {
+                widest = Math.Max(widest, table.QuotientBits);
+            }
+
+            if (widest + 1 > this.QuotientBitsLimit)
+            {
+                throw new InvalidOperationException(
+                    $"The filter's widest table has {1UL << widest:N0} slots and is at its " +
+                    "expansion threshold, and doubling it would pass the " +
+                    $"{1UL << this.QuotientBitsLimit:N0} a table can have: a table's slot " +
+                    "count is a 32-bit number holding 2^q, and 2^32 is not one. Nothing was " +
+                    "added and the filter is unchanged; it can still be queried and " +
+                    "written, and removing keys makes room for more. To hold more keys, " +
+                    "split them over several filters.");
+            }
+
             ExpandTable(0);
             this.Expansions++;
         }
@@ -645,11 +707,12 @@ namespace ProbabilisticDataStructures
                 var count = reader.ReadUInt32();
                 var words = reader.ReadUInt32();
 
-                if (quotientBits < 2 || quotientBits > 40)
+                if (quotientBits < 2 || quotientBits > MaxQuotientBits)
                 {
                     throw new InvalidDataException(
                         $"Table {i} claims {quotientBits} bits of address, and this " +
-                        "library builds tables between 2 and 40.");
+                        $"library builds tables between 2 and {MaxQuotientBits}: a table's " +
+                        "slot count is a 32-bit number holding 2^q, and 2^32 is not one.");
                 }
                 if (fingerprintBits < 2 || fingerprintBits > 32)
                 {
@@ -663,6 +726,19 @@ namespace ProbabilisticDataStructures
                         $"Table {i} would need {quotientBits + fingerprintBits} bits " +
                         "of hash to address and fingerprint a block, and a hash has " +
                         "sixty-four.");
+                }
+
+                // Before the shape is worked out from them, since a slot wider than a
+                // word is a shape no table has.
+                var slotBits = MementoSegment.SlotBits(fingerprintBits, mementoBits);
+                if (slotBits > MementoSegment.MaxSlotBits)
+                {
+                    throw new InvalidDataException(
+                        $"Table {i} has slots of {slotBits} bits -- a {fingerprintBits}-bit " +
+                        $"fingerprint, a {mementoBits}-bit memento and what holds them -- and " +
+                        $"a slot is held in a 64-bit word, so none is wider than " +
+                        $"{MementoSegment.MaxSlotBits}. No version of this library built a " +
+                        "table of slots this wide that could hold a key.");
                 }
 
                 var slots = 1u << quotientBits;
@@ -687,9 +763,26 @@ namespace ProbabilisticDataStructures
                     ReadBudget.Times(2, ReadBudget.ArrayOf(words, sizeof(ulong))),
                     ReadBudget.SmallObject));
                 var data = new ulong[words];
+                var anyBitSet = false;
                 for (var w = 0; w < words; w++)
                 {
                     data[w] = reader.ReadUInt64();
+                    anyBitSet |= data[w] != 0;
+                }
+
+                // The one table with a history. A slot of exactly 64 bits was written with
+                // a mask of zero, so such a table counted every key it was given and stored
+                // none: its count is positive and its words are all zero, which no table
+                // that holds an entry can be, since an entry sets its slot's metadata.
+                if (slotBits == MementoSegment.MaxSlotBits && count > 0 && !anyBitSet)
+                {
+                    throw new InvalidDataException(
+                        $"Table {i} counts {count} entries and every word of it is zero. " +
+                        "Slots of 64 bits were written by earlier versions of this library " +
+                        "with a mask that came to zero, so such a table counted each key it " +
+                        "was given and stored none, and this is one. Nothing in it can be " +
+                        "recovered, and reading it would give a filter that says it holds " +
+                        "keys and denies them all. Build the filter again from the keys.");
                 }
 
                 filter.Segments.Add(MementoSegment.Restore(

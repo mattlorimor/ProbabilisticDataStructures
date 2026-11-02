@@ -402,16 +402,19 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A table whose address and fingerprint together outrun the hash could not
-        /// have been built by any insertion.
+        /// A table with more bits of address than a slot count holds could not have been
+        /// built by any insertion. This used to be refused only because its word count,
+        /// worked out from a slot count that had wrapped, disagreed; it is the width that
+        /// is refused now. (An address and a fingerprint together outrunning the hash
+        /// cannot be reached past this: 31 and 32 bits are 63.)
         /// </summary>
         [TestMethod]
-        public void TestInfiniFilterWithMoreBitsThanTheHashIsRefused()
+        public void TestInfiniFilterWithMoreAddressBitsThanATableHoldsIsRefused()
         {
             var bytes = PokeUInt32(InfiniFilterPayload(), 16, 39);
             AssertRefused(
                 () => Persistence.FromByteArray<InfiniFilter>(bytes),
-                "carries");
+                "bits of address");
         }
 
         /// <summary>

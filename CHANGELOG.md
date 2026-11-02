@@ -524,14 +524,200 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The stored format does not change. Payloads that were refused for their size now load,
   and every other refusal stands.
 
-- **A `ScalableBloomFilter` at its ceiling refuses the add with an
-  `InvalidOperationException` that says why, before anything changes.** A filter growing
-  by 1 threw an `OverflowException` from inside its sizing once the tightened rate
-  passed what a double holds, about 3.16 million items at a hint of 1,000, 1% and
-  r = 0.8. A growing filter would have thrown an `ArgumentOutOfRangeException` for a
-  parameter the caller never passed, recommending `ScalableBloomFilter` itself. The
-  refusal now names the filter that could not be built, the reason, what the filter
-  holds, and what would hold more; the filter is as it was and goes on answering. (#171)
+- **A `BloomFilter`, `CountingBloomFilter` or `StableBloomFilter` sized past 2^32 bits was
+  built with a table too short for it, and failed on an add.** The bucket array's byte
+  count was worked out in 32 bits, so it wrapped at 512 MiB of one-bit buckets, 128 MiB
+  of eight-bit ones. `new BloomFilter(448_089_842, 0.01)` allocated no bits at all and its
+  first `Add` threw `IndexOutOfRangeException`. `new CountingBloomFilter(117_623_547, 4,
+  0.01)` allocated 26.8 MB of the 564 MB it needs, and an add that landed past the end
+  threw after setting the counters before it, leaving the filter half updated: in 200 of
+  200 adds. A `StableBloomFilter` of 1,431,655,763 three-bit cells got none. The counting
+  filter starts to do this at about 112 million items at 1% with four-bit counters, and at
+  about 56 million with eight-bit ones. Every release is affected, for each filter it had.
+  A bucket's position in the table was also a `uint` product that wrapped at the same
+  size, so even a table of the right length would have been read and written at the wrong
+  bytes.
+  <br><br>
+  The sizes are now worked out in 64 bits, and a filter works up to the most its table can
+  be: one .NET array, 2,147,483,591 bytes. For a `BloomFilter`, `PartitionedBloomFilter`
+  and `DeletableBloomFilter`, whose buckets are one bit, that is more than their 32-bit
+  count addresses, so nothing changes about how large they can be. A
+  `CountingBloomFilter` or `StableBloomFilter` of four-bit buckets or wider stops at
+  4,294,967,182 buckets at four bits and 2,147,483,591 at eight, and the constructor now
+  refuses a size past that with an `ArgumentOutOfRangeException` naming `n` or `m`. No size
+  that worked before is refused. `BloomFilter64` and its 64-bit arrays are refused at a
+  count whose arrays would not fit the array that holds them, about 2.3e18 bits, where an
+  array count cast to an `int` wrapped, and `Utils.OptimalM64` says that a bit count
+  beyond a `ulong` is a mistake in the item count where it threw an `OverflowException`.
+  <br><br>
+  **A payload written by an earlier version for a filter this large is now refused.** It
+  holds the wrapped table, and the count it records is the filter's real one: a Bloom
+  filter of 4,294,967,294 buckets stored with no bytes. Nothing in it says which buckets
+  were lost, and the filter that wrote it could not use it, so reading it would be
+  guessing; the reader says what happened and the filter has to be built again from the
+  data. Payloads of sizes that did not wrap read as they always did. The format does not
+  change, and [FORMAT.md](FORMAT.md#sizes) says which length is refused as the wrapped one.
+
+- **Writing a structure whose payload passed a gibibyte got slower with every field, and
+  one that passed two gibibytes failed without saying why.** The buffer a payload is built
+  in doubled in an `int`, which wraps negative from 1 GiB up, so from there it was exactly
+  as long as what had been written, and each further write -- a count, a seed, the next
+  nested structure -- reallocated the whole buffer and copied the payload into it. Measured
+  with a payload of 1,363,148,812 bytes, a four-byte write took 0.4 s, and so did each
+  one after it. The length a write needed was summed in an `int` as well, so a payload past
+  the largest array failed in whichever way a negative length happens to fail.
+  <br><br>
+  The buffer now doubles up to the largest payload the format holds and reaches it in one
+  copy, so what follows costs nothing. A payload longer than 2,147,483,573 bytes -- the
+  largest array, 2,147,483,591, less the eighteen bytes of envelope it shares the array
+  with -- makes `WriteTo` throw an `InvalidOperationException` naming the size it would have
+  been and the size it can be, and the structure is unchanged. The format does not change
+  and does not grow: a structure that large can be built and used and cannot be written.
+  An envelope that claims a payload length between the largest array and `int.MaxValue` is
+  now refused as one that cannot be read into an array, where it used to fail inside the
+  allocation with an `OutOfMemoryException`.
+
+- **A `ScalableBloomFilter` at its ceiling threw an `OverflowException` from inside the
+  sizing arithmetic, with no hint of why. It now refuses the add with an
+  `InvalidOperationException` that says why, before anything changes.** A filter growing by
+  1 adds a filter at a tighter false positive rate each time the last one fills, the i-th at
+  the rate times r^i, and the rate runs out: below 1 / `double.MaxValue`, about 5.6e-309, a
+  filter's hash count cannot be worked out. At a rate of 1% and a ratio of 0.8 that is the
+  3,162nd filter, which a hint of a thousand reaches after 3,156,212 items (measured), and
+  at a ratio of 0.9 the 6,694th. A growing filter would have thrown an
+  `ArgumentOutOfRangeException` for a parameter the caller never passed, recommending
+  `ScalableBloomFilter` itself. Every release is affected, for the growth it had. The failing
+  add changed nothing, since the filter is built before it is listed, so the filter that threw
+  could still be queried and written.
+  <br><br>
+  The refusal is one `InvalidOperationException` for every way the next filter can fail: a
+  rate with no finite reciprocal, a capacity past what a contained filter is sized for, or
+  more bits than one addresses. It names the filter that could not be built, the reason, what
+  the filter holds, and what would hold more (a larger hint or growth factor, a ratio nearer
+  one, or a `BloomFilter64`); the filter is as it was and goes on answering. Where the rate is
+  what runs out, at a growth factor of 1, the ceiling is `floor(ln(rate × double.MaxValue) /
+  ln(1 / r)) + 1` filters, 3,161 at 1% and 0.8 and 6,693 at 0.9, which the class
+  documentation gives; a growing filter stops sooner than that, at a few dozen filters,
+  unless its ratio is small. A constructor given a first rate whose reciprocal is not a
+  number, so that not even the first filter can be built, now throws an
+  `ArgumentOutOfRangeException` naming `fpRate`. (#171)
+
+- **A `SublimeCountMinSketch` row wider than about 285 million counters read and wrote the
+  wrong place, and threw `IndexOutOfRangeException` for most keys.** A row's counters sit in
+  chunks of one cache line, and a counter was found by the bit its chunk begins at,
+  `chunk * 512` in an `int`, which wraps at 2^22 chunks. A sketch built with a size factor
+  of 1e-9, which starts each row at 2^30 counters and 963 MiB, threw from its first `Add`
+  and from `Count`; at 2^29 about half its keys worked and the rest threw, and an `Add`
+  that threw on a later row had already incremented an earlier one. Every release since
+  `SublimeCountMinSketch` shipped in 6.2.0 is affected. At the default growth a row reaches
+  that width after 8e16 keys, but a growth exponent of 0.9 gets there at about 2.5e9. The
+  positions are now 64-bit, and a row works up to 2^30 counters, the widest an `int` holds.
+  <br><br>
+  Past that, growth is refused. The doubling was an `int` product that went negative from
+  2^30, after the expansion had already put the old rows on its list of records and after
+  the add had counted its key. An `Add` that would widen a row past 2^30 now throws an
+  `InvalidOperationException` first, naming the width and the ways round it, and changes
+  nothing; the sketch can still be queried and written. A size factor that asked for a row
+  of 2^31 counters or more was quietly clamped to 2^30; the constructor now refuses it,
+  naming `sizeFactor`. No width that worked is refused. The stored format does not change
+  and a payload claiming a width past 2^30 is refused with that limit named.
+
+- **An `InfiniFilter` or `MementoFilter` that grew to 2^31 slots failed obscurely on its
+  next expansion, and their readers accepted tables that cannot exist.** A table's slot
+  count was `1u << quotientBits`, and C# takes a shift count mod 32, so a table of 2^32
+  slots was built with one. The tables double to 2^28 slots at about a hundred million
+  items, so the doubling into 2^32 comes at about 1.6 billion: the add that triggered it
+  threw `IndexOutOfRangeException` part way through moving the entries (the old table was
+  kept, so the filter survived, with an error that said nothing of why). Separately, the
+  readers accepted 32 to 40 bits of address, building a segment of 1 to 256 slots that
+  disagreed with its own claim; no writer produced such a payload. Every release since
+  `InfiniFilter` and `MementoFilter` shipped in 6.2.0 is affected.
+  <br><br>
+  A table now has at most 31 bits of address, the same limit and the same reason as
+  `QuotientFilter`'s: the slot count is a 32-bit number holding 2^q. The add that would
+  expand past it throws an `InvalidOperationException` first, naming the table's size and
+  the limit, and changes nothing; the filter can still be queried and written, and removing
+  keys makes room. The readers refuse more than 31 bits of address and say what the limit
+  is. A bigger table is not a matter of wider arithmetic: it could not be written (at the
+  narrowest fingerprint it is three gibibytes of payload, in an envelope that holds two) and
+  the expansion into it lists every entry it moves, 1.6 billion at sixteen bytes. An initial
+  capacity past three quarters of 2^31 starts the first table at the widest, as it did,
+  now by a rule and not by a saturating conversion. No size that worked is refused.
+
+- **A `MementoFilter` whose slots came to 64 bits stored no key at all, and one past 64 lost
+  almost every key.** A slot is three bits of metadata and a field of the fingerprint, a bit
+  for its age counter and the memento, so `fingerprintBits` + the range's bits + 4. Its mask
+  was `(1UL << bits) - 1`, and a `ulong` shifts by its count mod 64, so at exactly 64 bits
+  the mask was zero and every write was masked away: `Add` counted the key and stored
+  nothing, and `Test` answered no. `new MementoFilter(1UL << 32, 28)` and `new
+  MementoFilter(1UL << 28, 32)` each found 0 of 200 keys added. At 65 bits it found 1 of 200;
+  at 66 an add threw `InvalidOperationException` from an insert that found no slot to write.
+  Every release since `MementoFilter` shipped in 6.2.0 is affected. `InfiniFilter` has the
+  same shape and cannot reach it: its slot is the fingerprint and four bits, 36 at most.
+  <br><br>
+  The mask is right for 64 bits, and a filter with a slot of 64 bits holds its keys, finds
+  them, removes them and reads back. The constructor refuses a slot past 64, since it would
+  straddle three words, with an `ArgumentOutOfRangeException` naming `fingerprintBits` and
+  giving the widest fingerprint for the range and the widest range for the fingerprint. No
+  size that worked is refused: every slot that held a key is 63 bits or fewer.
+  <br><br>
+  **A payload an earlier version wrote for a slot of 64 bits is now refused.** It says the
+  table holds entries and every word of it is zero, which is what the dropped writes left;
+  nothing in it can be recovered, and reading it would give a filter that says it holds keys
+  and denies each of them. The reader says where it came from, and the filter has to be
+  built again from its keys. A table of slots wider than 64 bits, empty or not, is refused
+  for its width. Payloads of narrower slots read as they always did.
+
+- **`QuotientFilter.WriteTo` threw an `OverflowException` on filters its own constructor
+  builds.** It sized the byte array for the table as `data.Length * 8` in an `int`, which is
+  negative from 2^28 words, two gibibytes of table. A filter of 2^31 slots with five or more
+  bits of remainder, or 2^30 with thirteen or more, is that large: about 805 million items or
+  more at 1%, 700 million at 0.02%. The reader compared the bytes it was given with the same
+  product. Every release since persistence arrived is affected, for each size it could build.
+  <br><br>
+  The length is computed in 64 bits in both, and a filter whose payload would pass the
+  longest an envelope holds, 2,147,483,573 bytes, now fails to write with the
+  `InvalidOperationException` the payload writer gives for any structure too large to write,
+  naming the size it would be and the size one can be, before anything is allocated. The
+  filter is untouched. The format does not grow to carry a larger table: such a filter can be
+  built and used and cannot be saved. Filters whose payload fits write as they did.
+
+- **`HyperLogLog` overestimated large counts, and from about 5.7 billion distinct items
+  returned 0.** It applied the original paper's large-range correction, -2^32 ln(1 -
+  E/2^32), once its raw estimate E passed 2^32/30, about 143 million. The correction
+  assumes the raw estimate counts distinct 32-bit hash values and adds back the items
+  that collisions hid. The registers hide none: an item whose 32 bits match another's
+  moves them exactly as it would have under a wider hash, unless its run of zeros reaches
+  the end of the 32 bits. So the correction inflated every estimate it touched — by 3.2%
+  at 2^28 distinct items, 13% at 2^30, 29% at 2^31, 84% at 2^32 and 2.6 times at 5.5
+  billion, the same at every register count up to 2^24 (above that, linear counting
+  covered the start of the band). Once the raw estimate passed 2^32 the logarithm's
+  argument was negative, and the NaN converted to a count of 0 (on .NET 9 and later,
+  which recent releases target): for every sketch from about 5.7 billion items, 2^32.4,
+  and for any sketch whose registers were all full. The correction arrived with
+  `HyperLogLog` itself, in 2015, so every release is affected.
+  <br><br>
+  The correction is gone. What 32 bits do limit is how long a run of zeros a register can
+  record, and a register at that cap is now counted with Ertl's tau term, as
+  `HyperLogLogPlus` counts its own. The estimate is now close to its nominal error up to
+  about 2^33 distinct items with 16 registers or more; at 2^14 registers its mean is within
+  0.25% of the truth from 2^20 to 2^34. Past 2^33 the registers fill and the error grows,
+  and a sketch whose every register is full reports the largest estimate it can make,
+  about 2^32 × ln m — 11 billion with 16 registers, 42 billion with 2^14 — rather than 0.
+  A non-empty sketch never counts 0 now: the count is at least the number of registers
+  set. That also corrects the smallest sketches, where one register counted 0 after an
+  item and two registers could count 1 after two.
+  <br><br>
+  A sketch of one register could not be added to at all, in any release. Its register
+  index was taken with a 32-bit shift by 32, which C# performs as a shift by 0, so the
+  index was the whole hash and `Add` threw `IndexOutOfRangeException` for nearly every
+  item.
+  <br><br>
+  The stored format does not change, and neither does anything stored: a payload any
+  version wrote reads back holding the same registers, writes back the same bytes, and
+  estimates by the corrected rule. Below about 143 million distinct items, where the old
+  correction did not engage, estimates move only where a register has already reached the
+  cap, which is rare there, and by at most 0.03%.
 
 - **Large 32-bit Bloom filters had a higher false positive rate than they were sized
   for.** `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`,

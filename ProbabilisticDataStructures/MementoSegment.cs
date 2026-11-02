@@ -57,6 +57,19 @@ namespace ProbabilisticDataStructures
         internal uint Count { get; set; }
         internal ulong[] Data { get; set; } = null!;
 
+        /// <summary>
+        /// The widest a slot can be, in bits: it is held in a 64-bit word, and the
+        /// arithmetic that reads and writes one spans two words and no more.
+        /// </summary>
+        internal static int MaxSlotBits => 64;
+
+        /// <summary>
+        /// The bits of a slot: its metadata, and a field of the fluid fingerprint (one bit
+        /// longer than the fingerprint, for the age counter's terminator) and the memento.
+        /// </summary>
+        internal static int SlotBits(int fingerprintBits, int mementoBits) =>
+            fingerprintBits + 1 + mementoBits + MetadataBits;
+
         private uint slotMaskIndex;
         private int bitsPerSlot;
         private ulong slotMask;
@@ -83,8 +96,11 @@ namespace ProbabilisticDataStructures
             // the fingerprint's low bit without ever touching the key's own bits.
             this.fieldBits = fingerprintBits + 1 + mementoBits;
             this.mementoMask = (1UL << mementoBits) - 1;
-            this.bitsPerSlot = this.fieldBits + MetadataBits;
-            this.slotMask = (1UL << this.bitsPerSlot) - 1;
+            this.bitsPerSlot = SlotBits(fingerprintBits, mementoBits);
+
+            // Not (1UL << bits) - 1: a ulong shifts by its count mod 64, so for a slot of
+            // exactly 64 bits that was (1 << 0) - 1, zero, and every write was masked away.
+            this.slotMask = ulong.MaxValue >> (64 - this.bitsPerSlot);
             this.Data = new ulong[(((long)this.Slots * this.bitsPerSlot) >> 6) + 2];
             this.Codec = new KeepsakeCodec(fingerprintBits, mementoBits);
         }

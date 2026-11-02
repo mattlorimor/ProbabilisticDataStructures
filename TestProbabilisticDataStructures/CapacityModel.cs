@@ -115,12 +115,13 @@ namespace TestProbabilisticDataStructures
         internal static ulong TrueBytes(ulong count, int bits) => (count * (ulong)bits + 7) / 8;
 
         /// <summary>
-        /// Whether <c>Buckets</c> sizes this many buckets correctly. It does not once
-        /// the count times the width passes what 32 bits hold: the array it builds is
-        /// then truncated and the filter fails on its first <c>Add</c>.
+        /// Whether <c>Buckets</c> builds this many buckets: it sizes them correctly, in 64
+        /// bits, up to the most one array holds at that width, <c>Buckets.MaxCount</c>, and
+        /// refuses more. (Before that was so, the array was sized in 32 bits and was
+        /// truncated once the count times the width passed what 32 bits hold.)
         /// </summary>
         internal static bool BucketsAreSound(ulong count, int bits) =>
-            count <= uint.MaxValue
+            count <= Buckets.MaxCount((byte)bits)
             && LibraryBytes((uint)count, (byte)bits) == (long)TrueBytes(count, bits);
 
         // ---- Reading ----------------------------------------------------------------

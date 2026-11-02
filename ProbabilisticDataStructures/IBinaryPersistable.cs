@@ -21,6 +21,12 @@ namespace ProbabilisticDataStructures
         /// Writes this structure to a stream.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
+        /// <exception cref="InvalidOperationException">
+        /// The structure is too large to write: its payload would be longer than the
+        /// largest one the format holds, 2,147,483,573 bytes. The structure is
+        /// unchanged. This is the one thing a structure can be built but not written
+        /// for.
+        /// </exception>
         void WriteTo(Stream stream);
 
         /// <summary>

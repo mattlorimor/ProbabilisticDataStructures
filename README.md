@@ -194,12 +194,12 @@ building at the scale it describes, which is the measurement as of commit 426348
 
 | Structure | Counts | Builds up to | Loads by default up to | Saves up to |
 | --- | --- | --- | --- | --- |
-| `BloomFilter` | n, fp 1% | 448,089,841 | ≈ 448.09 million | as built |
-| `BloomFilter` | n, fp 0.1% | 298,726,560 | ≈ 298.73 million | as built |
+| `BloomFilter` | n, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
+| `BloomFilter` | n, fp 0.1% | 298,726,561 | ≈ 298.73 million | as built |
 | `BloomFilter64` | n, fp 1% | memory | ≈ 448.09 million | ≈ 1.79 billion |
 | `BloomFilter64` | n, fp 0.1% | memory | ≈ 298.73 million | ≈ 1.19 billion |
-| `CountingBloomFilter` | n, 4-bit counters, fp 1% | 112,022,460 | ≈ 112.02 million | as built |
-| `CountingBloomFilter` | n, 8-bit counters, fp 1% | 56,011,230 | ≈ 56.01 million | as built |
+| `CountingBloomFilter` | n, 4-bit counters, fp 1% | 448,089,830 | ≈ 112.02 million | 448,089,822 |
+| `CountingBloomFilter` | n, 8-bit counters, fp 1% | 224,044,915 | ≈ 56.01 million | 224,044,911 |
 | `DeletableBloomFilter` | n, r 1,000, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
 | `PartitionedBloomFilter` | n, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
 | `CuckooBloomFilter` | n, fp 1%, empty | 2,040,109,465 | 510,027,366 | as built |
@@ -248,9 +248,9 @@ building at the scale it describes, which is the measurement as of commit 426348
 
 | Structure | Counts | Builds up to | Loads by default up to | Saves up to |
 | --- | --- | --- | --- | --- |
-| `StableBloomFilter` | m cells, 1-bit cells, fp 1% | 4,294,967,288 | ≈ 4.29 billion | as built |
-| `StableBloomFilter` | m cells, 3-bit cells, fp 1% | 1,431,655,762 | ≈ 1.43 billion | as built |
-| `StableBloomFilter` | m cells, 8-bit cells, fp 1% | 536,870,911 | ≈ 536.87 million | as built |
+| `StableBloomFilter` | m cells, 1-bit cells, fp 1% | 4,294,967,295 | ≈ 4.29 billion | as built |
+| `StableBloomFilter` | m cells, 3-bit cells, fp 1% | 4,294,967,295 | ≈ 1.43 billion | as built |
+| `StableBloomFilter` | m cells, 8-bit cells, fp 1% | 2,147,483,591 | ≈ 536.87 million | 2,147,483,536 |
 | `HyperLogLog` | registers m (a power of two) | 1,073,741,824 | 268,435,456 | as built |
 | `HyperLogLogPlus` | registers 2^p, p up to 18 | 262,144 | any | as built |
 | `UltraLogLog` | registers 2^p, p up to 26 | 67,108,864 | any | as built |
@@ -591,10 +591,11 @@ placements differ, and what was measured, are in
 `CountingBloomFilter` and `DeletableBloomFilter` size in 32 bits too, and **this structure
 is not a replacement for either**: it cannot delete. For a set that large that has to
 shrink, `CuckooBloomFilter` and `QuotientFilter` hold well over a billion items. A
-`CountingBloomFilter` does not refuse at the limit of 4.29 billion bits. Its array is
-`m` buckets of `b` bits, and a filter whose array passes 2^32 bits is built from a
-truncated one and fails when you add to it; the sizes where that begins are the "Builds
-up to" figures in [the table](#how-much-each-one-holds).
+`CountingBloomFilter` reaches its limit sooner than 4.29 billion bits the wider its
+counters are, since its array is `m` buckets of `b` bits and one .NET array holds at most
+2,147,483,591 bytes: 4,294,967,182 four-bit counters, or 2,147,483,591 eight-bit ones. It
+refuses a size past that, naming `n`; the "Builds up to" figures are in
+[the table](#how-much-each-one-holds).
 
 **Look elsewhere otherwise.** Below 4.29 billion bits it is the same filter with wider
 arithmetic, so `BloomFilter` is the plainer choice. And if you do not know the size
@@ -638,6 +639,13 @@ merging at lower memory, in which case `QuotientFilter`.
 
 A counter that saturates stops being decrementable, so an element added far more often than
 the counter width allows may not be fully removable.
+
+Its counters are one array, which holds at most 2,147,483,591 bytes. The constructor refuses
+a size past that, naming `n`, and says how many counters of that width fit: 4,294,967,182
+at four bits and 2,147,483,591 at eight. Anything smaller works. Before this was fixed, a
+filter whose counters came to 512 MiB or more was built with a table of the wrong length
+and failed on an add; one stored then is refused with an explanation when read, and has to
+be built again.
 
 ```C#
 var filter = new CountingBloomFilter(10000, 4, 0.01);
@@ -800,6 +808,17 @@ bounded.
 hold a ceiling. Or if you do know the size, since a correctly sized `BloomFilter` is
 smaller than a scalable one that grew into the same capacity.
 
+It does have a ceiling, and it is not memory. Each new filter is built at a rate tighter
+than the last by the ratio `r`, and a rate can only be tightened so far: below
+1 / `double.MaxValue`, about 5.6e-309, a Bloom filter cannot be sized for it. At a growth
+factor of 1, where that is what runs out, a rate of 1% and a ratio of 0.8 allow 3,161
+filters, and a ratio of 0.9 allows 6,693; each holds about as many items as the hint, so
+at a hint of a thousand the first is 3.16 million items. A filter that grows stops sooner,
+when its next filter would be built for more items or bits than a contained filter
+addresses. An `Add` past the ceiling throws an `InvalidOperationException` that says
+which, before changing anything, and the filter goes on answering. `BloomFilter64` has no
+ceiling of this kind.
+
 Described by Almeida, Baquero, Preguiça and Hutchison in
 [Scalable Bloom Filters](https://haslab.uminho.pt/cbm/files/dbloom.pdf).
 
@@ -846,7 +865,7 @@ right after it grows, so memory arrives in steps rather than smoothly.
 
 ```C#
 var filter = new InfiniFilter(initialCapacity: 1024, fingerprintBits: 8);
-filter.Add(bytes);              // grows itself; never refuses
+filter.Add(bytes);              // grows itself, to 2^31 slots (about 1.6 billion items)
 
 bool maybe = filter.Test(bytes);
 bool wasThere = filter.TestAndRemove(bytes);
@@ -1032,9 +1051,19 @@ The original, kept because replacing it would change the number an existing esti
 answers with — including one read back from a payload written years ago.
 
 **Reach for it when** you have stored `HyperLogLog` payloads to read, or need answers that
-match what earlier versions gave.
+match what earlier versions gave. They match, to within 0.03%, below about 143 million
+distinct items. Above that, earlier versions overestimated — by 3% at 2^28 and 13% at
+2^30 — and from about 5.7 billion they returned 0; a stored sketch now reads back to the
+corrected estimate.
 
 **Look elsewhere for new work.** Use `HyperLogLogPlus`.
+
+**Its range is set by its 32-bit hash.** It is close to its nominal error up to about 2^33
+distinct items, 8.6 billion, with 16 registers or more. Past that its registers fill, the
+error grows, and the estimate stops at a ceiling of about 2^32 × ln *m*: 11 billion with 16
+registers, 42 billion with 2^14. A sketch at its ceiling has probably seen at least that
+many and may have seen far more. `HyperLogLogPlus` and `UltraLogLog` hash to 64 bits and
+have no such limit in practice.
 
 Described by Flajolet, Fusy, Gandouet and Meunier in
 [HyperLogLog](http://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf).
@@ -1283,6 +1312,12 @@ sketch.Remove(bytes);                // deletions, which CountMinSketch does not
 
 int counters = sketch.Width;         // grows with the stream, and shrinks again
 ```
+
+A row holds at most 2^30 counters. At the default growth that is 2^60 keys, which nothing
+reaches, and at a growth exponent of 0.9 it is about ten billion; an `Add` that would
+widen a row past it throws an `InvalidOperationException` before it changes anything,
+and the sketch goes on answering queries. A size factor that would start a row wider than
+that is refused by the constructor.
 
 Described by Eslami, Bercea, Pagh and Dayan in
 [Sublime: Sublinear Error & Space for Unbounded Skewed Streams](https://doi.org/10.1145/3802116),
@@ -1884,6 +1919,13 @@ Keys sharing a block share one stored fingerprint between them, so dense data co
 less than sparse: the same 256,000 keys take 41.0 bits each spread one to a block and
 20.5 packed sixty-four to a block. Sparse data gets no such saving — every block holding
 one key costs a slot, as it would anywhere.
+
+A slot is held in a 64-bit word, so the fingerprint and the range, in bits, have to fit
+beside four bits of bookkeeping: `fingerprintBits` plus the bits of `maxRangeSize` is at
+most 60. A pair past that — a range of 2^32 with a 29-bit fingerprint, say — is refused by
+the constructor, which names the widest fingerprint for the range. The table doubles as it
+fills, up to 2^31 slots; an `Add` that would pass that throws before changing anything, and
+the filter goes on answering.
 
 Described by Eslami and Dayan in
 [Memento Filter: A Fast, Dynamic, and Robust Range Filter](https://doi.org/10.1145/3698820).

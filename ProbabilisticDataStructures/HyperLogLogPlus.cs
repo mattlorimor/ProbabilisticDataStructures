@@ -20,11 +20,11 @@ namespace ProbabilisticDataStructures
     /// Three things differ from the older estimator:
     /// </para>
     /// <para>
-    /// <b>The whole 64-bit hash is used.</b> The older one indexes into a 32-bit space,
-    /// so distinct items start colliding around four billion and it carries a
-    /// large-range correction to paper over it. At 64 bits that correction is
-    /// unnecessary -- collisions arrive around 2^64 -- and the estimate stays good far
-    /// past where the older one gives up.
+    /// <b>The whole 64-bit hash is used.</b> The older one takes its register index and
+    /// its run of zeros from 32 bits, so its registers reach the longest run they can
+    /// record as the count nears a few times 2^32, and past about 2^33 its estimate
+    /// degrades until every register is full. At 64 bits that happens around 2^64, and
+    /// the estimate stays good far past where the older one gives up.
     /// </para>
     /// <para>
     /// <b>Small cardinalities are stored sparsely and counted exactly.</b> An estimator
@@ -434,9 +434,11 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// The correction for saturated registers, which is what replaces the
-        /// large-range correction.
+        /// large-range correction. <see cref="HyperLogLog"/> uses it too, for the
+        /// registers its 32-bit hash saturates.
         /// </summary>
-        private static double Tau(double x)
+        /// <param name="x">The fraction of registers that are not saturated.</param>
+        internal static double Tau(double x)
         {
             if (x == 0.0 || x == 1.0)
             {

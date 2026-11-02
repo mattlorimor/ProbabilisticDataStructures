@@ -199,7 +199,10 @@ u8      bits per bucket
 bytes   packed data
 ```
 
-The data length is checked against what the count and bucket width imply.
+The data length is checked against what the count and bucket width imply: the count
+times the width, in bits, rounded up to whole bytes. A reader works that out in 64 bits.
+Releases up to and including 6.2.0 worked it out in 32, so a table of 2^32 bits or more
+was written with a length that had wrapped; [Sizes](#sizes) says what is done with those.
 
 `Buckets64`, its 64-bit counterpart, holds several arrays because one filter can need
 more bytes than a single array holds:
@@ -253,10 +256,38 @@ address.
 | `Grafite` | words of high bits | 33,554,432 | enough for 2,147,483,647 bits, the most an `int` position addresses |
 | `SetSketch` | `m` | 2,147,483,591 | the registers are one array |
 | `SublimeCountMinSketch` | rows | 710 | `ceil(ln(1 / delta))` at the smallest delta whose reciprocal is a finite double |
-| `ScalableBloomFilter` | filter count | 2,147,483,591 | the filters are a list |
+| `SublimeCountMinSketch` | counters in a row | 1,073,741,824 | a width is a power of two held in an `int`, and 2^30 is the largest of those; the sketch stops widening there |
+| `ScalableBloomFilter` | filter count | 2,147,483,591 | the filters are a list; a filter stops growing sooner, when its next filter would have no finite rate to be sized from, or would be built for more items or bits than a contained filter addresses, which is a limit on growing and not on reading |
+| `CountingBloomFilter` | bytes of counters, `m` × `b` bits, rounded up | 2,147,483,591 | the counters are one array; from four-bit counters up that is fewer counters than a `u32` counts |
+| `StableBloomFilter` | bytes of cells, `m` × `d` bits, rounded up | 2,147,483,591 | the cells are one array, as the counters are |
+| `InfiniFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; a filter stops expanding there |
+| `MementoFilter` | quotient bits | 31 | as `InfiniFilter` |
+| `MementoFilter` | bits of a slot | 64 | a slot is held in a 64-bit word: three bits of metadata, and a field of the fingerprint, one bit for its age counter and the memento |
 | `QuotientFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; the reader also reads 32, which earlier constructors wrote as a wrapped one-slot table |
 | `QuotientFilter` | quotient + remainder bits | 64 | a fingerprint is cut from a 64-bit hash |
 | `QuotientFilter` | remainder bits | 61 | a slot is its remainder and three bits of bookkeeping in one 64-bit word; the reader also reads the wider remainders earlier constructors wrote |
+
+The other filters built on `Buckets` hold one-bit buckets, so the most they hold is what
+a `u32` counts, 4,294,967,295, which is 536,870,912 bytes, and their sizing refuses
+anything beyond it. The same arithmetic limits the counting and stable filters from four
+bits up: at 4 bits it is 4,294,967,182 buckets, and at 8 bits 2,147,483,591.
+
+A bucket array of 2^32 bits or more, 512 MiB, was written by 6.2.0 and every release before
+it with a byte count that had wrapped in 32 bits: a Bloom filter of 4,294,967,294 buckets
+was stored with no bytes, and a counting filter of 1,127,428,565 four-bit counters with
+26,843,371 of the 563,714,283 they need. Nothing of the bucket array can be recovered from
+such a payload, and the filter that wrote it could not use it either, since an add that
+landed past the end of the table threw after setting the buckets before it. A reader
+therefore refuses a bucket array whose stored length is exactly the wrapped one, and says
+so; it does not read the short table as the filter it was meant to be. Any other length that
+disagrees with the count is refused as corrupt. Sizes that did not wrap are unchanged, and
+read as they always did.
+
+A quotient filter's table can be larger than a payload holds: 2^31 slots at five bits of
+remainder, or 2^30 at thirteen, is 268,435,458 words, and a payload carries at most
+268,435,444. Such a filter can be built and used and not written, and `WriteTo` says so
+with the `InvalidOperationException` of the envelope's ceiling; releases up to 6.2.0 failed
+with an `OverflowException` from computing the table's length in 32 bits.
 
 A size below its limit can still be refused for not being in the payload. Where a reader
 allocates for a count, it first checks that the bytes left could hold that many, so what
@@ -269,8 +300,12 @@ regions whole because its arithmetic assumes their size, and a quotient filter's
 names its table outright. A payload can ask those for as large a structure as the
 constructor would build. What stops a small one asking is the read budget, below.
 
-The envelope bounds everything else: a payload is at most 2,147,483,647 bytes, so a
-structure whose payload would be larger can be built but not written.
+The envelope bounds everything else. A payload is written as one array together with the
+envelope's eighteen bytes, so it is at most 2,147,483,573 bytes: the largest array,
+2,147,483,591, less those. A structure whose payload would be larger can be built but not
+written, and `WriteTo` throws an `InvalidOperationException` saying how large the payload
+would have been; the structure is untouched. A reader refuses a length field above
+2,147,483,591, what one array holds, before allocating for it.
 
 ### Read budget
 
@@ -922,7 +957,9 @@ takes the next bit up, so an entry's address is a growing prefix of its hash and
 table can double without the original keys.
 
 A reader rejects a chain of no tables, a chain longer than a 64-bit hash could justify,
-a table holding more entries than it has slots, a table whose address and fingerprint
+a table with more than 31 bits of address (releases up to 6.2.0 read up to 40, with a slot
+count that wrapped and gave a table of 1 to 256 slots; no writer ever produced one), a
+table holding more entries than it has slots, a table whose address and fingerprint
 together exceed the hash, and a word count that disagrees with the shape claimed. The
 tables are stored newest first, and the count of entries per table is stored rather than
 recomputed, because a table's occupancy cannot be derived from its bits alone.
@@ -959,7 +996,16 @@ The count is written in memento-sized pieces, an all-ones piece meaning "add thi
 read another", so a small count costs as much as one memento and a large one still fits.
 
 A reader rejects an impossible memento width, a chain of no tables or absurdly many, a
-table with more entries than slots, and a word count disagreeing with the shape claimed.
+table with more than 31 bits of address (as `InfiniFilter`'s), a table whose slots are wider
+than 64 bits, a table with more entries than slots, and a word count disagreeing with the
+shape claimed.
+
+A slot of exactly 64 bits — the fingerprint plus the memento width come to 60 — was written
+by releases up to and including 6.2.0 with a mask of zero, which dropped every write: the
+table counted each key and held none. Such a payload has a positive entry count and no
+word with a bit set, which no table holding an entry can have, and a reader refuses it with
+that said instead of reading a filter that denies every key it claims to hold. A table of
+wider slots was never usable either, and is refused for its width, empty or not.
 
 ### `SublimeCountMinSketch` (id 29)
 

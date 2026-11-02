@@ -38,6 +38,14 @@ namespace ProbabilisticDataStructures
 
         // The largest C# array to create; the largest power of 2 that C# can support.
         internal const uint maxArraySize = 1U << 30;
+
+        /// <summary>
+        /// The most buckets this type holds. The arrays are held in one array, so there
+        /// are at most <see cref="Array.MaxLength"/> of them, and a bucket count has as
+        /// many arrays as it has multiples of <see cref="maxArraySize"/>, plus one. Past
+        /// this the count of arrays does not fit, and was cast to an int that wrapped.
+        /// </summary>
+        internal static ulong MaxCount => (ulong)Array.MaxLength * maxArraySize - 1;
         private byte[][] Data { get; set; }
         private int arrayCount { get; set; }
         private byte bucketSize { get; set; }
@@ -88,6 +96,13 @@ namespace ProbabilisticDataStructures
         internal static Buckets64 Restore(ulong count, byte bucketSize, byte[][] data)
         {
             ValidBucketSize(bucketSize);
+
+            if (count > MaxCount)
+            {
+                throw new InvalidDataException(
+                    $"{count:N0} buckets are more than the {MaxCount:N0} this type holds, " +
+                    "which is beyond anything this library builds.");
+            }
 
             var arrays = count / maxArraySize + 1;
             if ((ulong)data.Length != arrays)
@@ -142,6 +157,37 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Refuses a size this type cannot build, naming the parameter the caller knows
+        /// it by.
+        /// </summary>
+        /// <param name="count">Number of buckets.</param>
+        /// <param name="bucketSize">Number of bits per bucket.</param>
+        /// <param name="paramName">The parameter the refusal is reported against.</param>
+        /// <param name="request">
+        /// What was asked for, as the caller knows it, in place of the bare count of
+        /// buckets: a sentence's worth, without its full stop.
+        /// </param>
+        /// <param name="remedy">What the caller can change, as a sentence.</param>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The buckets would need more arrays than the outer array holds, or the width is
+        /// not one this type holds.
+        /// </exception>
+        internal static void CheckSize(
+            ulong count, byte bucketSize, string paramName,
+            string? request = null, string? remedy = null)
+        {
+            ValidBucketSize(bucketSize);
+
+            if (count > MaxCount)
+            {
+                throw new ArgumentOutOfRangeException(paramName, count,
+                    $"{request ?? $"{count:N0} buckets"}. That is {count / maxArraySize + 1:N0} " +
+                    $"arrays of up to {maxArraySize:N0} bytes, and the arrays are held in one, " +
+                    $"which holds at most {Array.MaxLength:N0}: {MaxCount:N0} buckets.{(remedy is null ? "" : " " + remedy)}");
+            }
+        }
+
+        /// <summary>
         /// Creates a new Buckets64 with the provided number of buckets where each bucket
         /// is the specified number of bits.
         /// </summary>
@@ -149,7 +195,7 @@ namespace ProbabilisticDataStructures
         /// <param name="bucketSize">Number of bits per bucket.</param>
         internal Buckets64(ulong count, byte bucketSize)
         {
-            ValidBucketSize(bucketSize);
+            CheckSize(count, bucketSize, nameof(count));
 
             this.count = count;
             this.bucketSize = bucketSize;
@@ -191,16 +237,16 @@ namespace ProbabilisticDataStructures
         /// <param name="bucket">The bucket to increment.</param>
         /// <param name="delta">The amount to increment the bucket by.</param>
         /// <returns>The modified bucket.</returns>
-        internal Buckets64 Increment(uint bucket, int delta)
+        internal Buckets64 Increment(ulong bucket, int delta)
         {
-            int val = (int)(GetBits(bucket * this.bucketSize, this.bucketSize) + delta);
+            int val = (int)(Get(bucket) + delta);
 
             if (val > this.Max)
                 val = this.Max;
             else if (val < 0)
                 val = 0;
 
-            SetBits((uint)bucket * (uint)this.bucketSize, this.bucketSize, (uint)val);
+            Set(bucket, (byte)val);
             return this;
         }
 

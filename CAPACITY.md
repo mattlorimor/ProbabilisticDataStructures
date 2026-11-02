@@ -39,7 +39,9 @@ the same as what they build, which the table says as `as built`. A structure is 
 into one `byte[]`, wrapped in a frame that is another, and read back from a third, so the
 payload is at most 2,147,483,573 bytes: `Array.MaxLength` less the 18 bytes of envelope.
 The 32-bit length in the envelope is not what limits it. A structure built larger than
-that works and cannot be saved, which is what the figure in this column is for; it is
+that works and cannot be saved, and `WriteTo` of one throws an `InvalidOperationException`
+naming the size it would be and the size one can be, with the structure unchanged; the
+figure in this column is for that; it is
 worked out from the payload each structure writes, so it follows the layouts in
 [FORMAT.md](FORMAT.md). A read is charged at least twice the payload, which is why the
 default budget reads payloads of up to about half a gigabyte.
@@ -52,23 +54,27 @@ with that slack in hand, so it is documented to the digits the slack cannot move
 measured one, with the settings given, at commit 426348d, and the suite holds it to an
 estimate worked out from reads it can afford.
 
-## Where master stops working before it should
+## Where a limit refuses
 
-Three ceilings below are defects, not capacities, and the "Builds up to" figures stop
-short of them. Each is checked by the suite, so the numbers change when the defect is
-fixed.
+Four ceilings were silent defects when this document was first written. Each now stops
+the structure with an exception that names the limit, before anything changes, and the
+"Builds up to" figures are the sizes that refuse nothing.
 
-- **A bucket array longer than 32 bits of bucket data is truncated.** `Buckets` sizes its
-  array with 32-bit arithmetic. A `BloomFilter` sized for 448,089,842 items at 1%, a
-  4-bit `CountingBloomFilter` sized for more than 112,022,460, and a 3-bit
-  `StableBloomFilter` of more than 1,431,655,762 cells are all built with an array too
-  short for their bits, without an error, and fail on `Add`. The tables stop at the last
-  size that works.
-- **A table of 2^32 slots is a table of one.** `InfiniFilter` and `MementoFilter` double
-  their table when three quarters full, and a table of 32 address bits has one slot. The
-  tables stop at the last table that does not double past 2^31 slots.
-- **`SublimeCountMinSketch` doubles its width in a signed 32-bit integer**, so its
-  width cannot pass 2^30.
+- **A bucket array is one .NET array.** `Buckets` sizes it in 64 bits, up to the
+  2,147,483,591 bytes an array holds, and the filters refuse more against the parameter
+  that chose it. For buckets of one to three bits that is more than a 32-bit count
+  addresses, so the count is the limit; from four bits up it is the array:
+  4,294,967,182 four-bit counters, or 2,147,483,591 eight-bit ones. Versions that sized the
+  array in 32 bits built a filter whose bits passed 2^32 with an array too short for them,
+  without an error, and it failed on `Add`; a payload written then is refused when read,
+  with that said.
+- **A table of 2^32 slots is not a table.** `InfiniFilter` and `MementoFilter` double their
+  table when three quarters full, up to 2^31 slots, and the `Add` that would double it
+  past that throws, with the filter as it was.
+- **A Sublime row is at most 2^30 counters.** The `Add` that would double it past that
+  throws, with the sketch as it was.
+- **A Memento slot is at most 64 bits.** The constructor refuses a fingerprint and a range
+  that make it wider, and a slot of exactly 64 bits holds its keys.
 
 ## How the 32-bit filters place their bits
 
@@ -106,8 +112,8 @@ so. The size is `m ≈ 1.44 · n · log2(1/fp)` bits: 9.6 bits per item at 1%, 1
 using 7 hash functions at 1% and 10 at 0.1%.
 
 `m` is a `uint`. `Utils.OptimalM` refuses a filter of more than 4,294,967,295 bits, which
-is 448,089,842 items at 1%, and the figure in the table is the last of those that builds a
-working array. For more items use `BloomFilter64`, which sizes in 64 bits.
+is 448,089,842 items at 1%, and that is the figure in the table. For more items use
+`BloomFilter64`, which sizes in 64 bits.
 `ScalableBloomFilter` does not reach much further: each filter it adds is a 32-bit filter.
 
 A read is charged twice the filter's bytes, so the default budget reads a filter of
@@ -126,9 +132,12 @@ at most 2,147,483,573 bytes, which is about 1.79 billion items at 1%.
 ### `CountingBloomFilter`
 
 The same sizing, with `b` bits in each bucket instead of one, so `b` times the memory and
-the same false positive rate. Because the bucket array is `m · b` bits, the largest `n`
-falls in proportion to `b`: the table gives 4-bit and 8-bit counters at 1%. A counter that
-reaches its maximum stays there rather than wrapping.
+the same false positive rate. Because the bucket array is `m · b` bits and is one array,
+the largest `n` falls in proportion to `b` from four bits up: the table gives 4-bit and
+8-bit counters at 1%, and a constructor asked for more refuses, naming `n`. The array is
+as large as the table, so the largest build is more than a payload holds and the
+"Saves up to" figure is lower than the "Builds up to" one. A counter that reaches its
+maximum stays there rather than wrapping.
 
 ### `DeletableBloomFilter`
 
@@ -244,7 +253,7 @@ Fingerprints that have aged out of the table move to smaller tables beneath it, 
 a sliver of the main one.
 
 A table of 2^31 slots is the largest that works, which is the figure in the table; the
-next doubling makes a table of one slot, which is a defect. A read is charged three times
+`Add` that would double it throws, with the filter as it was. A read is charged three times
 the table, which at 8 or 16 bits is the table of 2^27 slots. The fingerprint width does
 not move that number, because the table doubles at the same load whatever the width, and
 2^28 slots do not fit either way.
@@ -255,7 +264,8 @@ The same table, with each slot also holding the memento that lets it answer a ra
 query: `F + 1 + m + 3` bits for a range up to 2^m wide, so a wider range costs more per
 slot. The items counted are entries, one for each block of `range` consecutive keys, so
 keys that fall in blocks already present add nothing. A range of 256 reads back a table of
-2^27 slots, and a range of 65,536 only 2^26.
+2^27 slots, and a range of 65,536 only 2^26. A slot is held in a 64-bit word, so the
+constructor refuses a fingerprint and a range that make it wider.
 
 ## Retains k
 
@@ -310,18 +320,27 @@ keeps, the second row.
 
 `m` cells of `d` bits each, holding the most recent items and forgetting the rest, so the
 items it takes are unlimited and what you choose is the cells. The packed array is `m · d`
-bits, so the most cells falls in proportion to `d`, as the three rows of the table show.
-Past that the array is truncated.
+bits and is one array, so from four bits up the most cells falls in proportion to `d`, as
+the rows of the table show. Past that the constructor refuses, naming `m`.
 
 ### `HyperLogLog`
 
-`m` registers, a power of two, one byte each; the error is `1.04 / √m`. It uses 32 bits of
-the hash, so it cannot tell apart more than 2^32 distinct items, 4,294,967,296, and its
-estimate corrects for collisions in a 32-bit space from about 143 million. A raw estimate
-past 2^32 makes `Count()` return 0. Measured at master 596071f by the investigation of
-issue 172, not rebuilt by the suite: it overestimates past about 143 million distinct
-items, by +3.2% at 2^28 and +13% at 2^30, and returns 0 from 2^33. It suits cardinalities
-well below 100 million; for more use `HyperLogLogPlus` or `UltraLogLog`, which use 64 bits.
+`m` registers, a power of two, one byte each; the error is `1.04 / √m`. It takes the
+register index and the run of zeros from 32 bits of the hash, so a register records a run
+of at most 32 − log2 m zeros. One hash value in 2^32 caps any given register, so after n
+distinct items each register has reached that cap with probability 1 − e^(−n/2^32),
+whatever m is. A register holds what a wider hash would have given it, cut off at the cap,
+so collisions in those 32 bits do not bias the estimate, and `Count()` accounts for the
+capped registers. With 16 registers or more the estimate stays close to its nominal error
+up to about 2^33 distinct items, 8,589,934,592. Past that the error grows, to about 1.5–2
+times nominal at 2^34 with 1,024 registers or more, and a sketch whose every register is
+capped reports its ceiling, about 2^32 × ln m: 11,280,826,639 with 16 registers,
+29,737,154,114 with 1,024 and 41,673,492,339 with 16,384. Below 16 registers the ceiling is
+under 2^33; with one register it is 1,490,120,207. It never reports 0 once anything has
+been added. Earlier releases, measured on the estimator of master 596071f and not rebuilt
+by the suite, overestimated past about 143 million distinct items, by +3.2% at 2^28 and
++13% at 2^30, and returned 0 from about 5.7 billion (2^32.4). For more than a few billion
+distinct items use `HyperLogLogPlus` or `UltraLogLog`, which use 64 bits.
 
 ### `HyperLogLogPlus`
 
@@ -363,7 +382,7 @@ for the growth exponent `g` and size factor `s`, so a larger `g` grows faster. A
 `g` of one half and `s` of one the width is about the square root of the items: a width of
 2^14 from 67,108,864 items and 2^15 from 268,435,456. At `g` of 0.9 a sketch reaches a
 width of 2^22 at 10,568,984 items. The width is a signed 32-bit integer, so it cannot pass
-2^30.
+2^30, and an `Add` that would double it past that throws, with the sketch as it was.
 
 What a counter costs to read depends on how the counters pack, which depends on the counts
 they hold; that makes the width the read reaches a measurement, which was made at `g` of

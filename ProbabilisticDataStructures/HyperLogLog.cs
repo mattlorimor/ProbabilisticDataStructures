@@ -44,10 +44,24 @@ namespace ProbabilisticDataStructures
     /// accurate approximation. For counting element frequency, refer to the
     /// Count-Min Sketch.
     /// </summary>
+    /// <remarks>
+    /// <b>Its range is set by its 32-bit hash.</b> The register index and the run of
+    /// zeros both come from the low 32 bits of the hash, so with m = 2^b registers a
+    /// register can record a run of at most 32 - b zeros, and holds at most 33 - b.
+    /// Items whose 32 bits collide do not bias the estimate: such an item moves the
+    /// registers exactly as it would have under a wider hash, unless its run of zeros
+    /// reaches the end of the 32 bits. The cap is what limits it. Each register reaches
+    /// it with probability 1 - exp(-n/2^32) after n distinct items, whatever m is, and
+    /// <see cref="Count"/> accounts for the registers that have. The estimate is close
+    /// to its nominal error of 1.04/sqrt(m) up to about 2^33 distinct items, about 8.6
+    /// billion, with 16 registers or more; past that it degrades as the registers fill,
+    /// and it cannot exceed about 2^32 * ln(m), which below 16 registers is short of
+    /// 2^33 itself. <see cref="HyperLogLogPlus"/> and
+    /// <see cref="UltraLogLog"/> use the whole 64-bit hash and have no such limit in
+    /// practice.
+    /// </remarks>
     public class HyperLogLog : IBinaryPersistable<HyperLogLog>
     {
-        private static double Exp32 = Math.Pow(2, 32);
-
         /// <summary>
         /// Counter registers
         /// </summary>
@@ -159,54 +173,123 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Add(byte[])"/>
         public HyperLogLog Add(ReadOnlySpan<byte> data)
         {
-            var hash = CalculateHash(data);
+            this.AddHash(CalculateHash(data));
+            return this;
+        }
+
+        /// <summary>
+        /// Records one 32-bit hash: its top b bits pick the register, and the
+        /// position of the first set bit in the rest is what the register keeps the
+        /// largest of.
+        /// </summary>
+        /// <remarks>
+        /// Internal so that tests can drive the register update with chosen hash
+        /// values, which is how a sketch of billions of distinct items is reached
+        /// without billions of calls to the hash. <see cref="Add(ReadOnlySpan{byte})"/>
+        /// goes through it, so the update a test drives is the one that ships.
+        /// </remarks>
+        internal void AddHash(uint hash)
+        {
             var k = 32 - this.B;
             var r = CalculateRho(hash << (int)this.B, k);
-            var j = hash >> (int)k;
+
+            // Shifted as 64 bits: with a single register k is 32, and C# masks a 32-bit
+            // shift by 32 to a shift by nothing, which would index by the whole hash.
+            var j = (uint)((ulong)hash >> (int)k);
 
             if (r > this.Registers[j])
             {
                 this.Registers[j] = r;
             }
-
-            return this;
         }
 
         /// <summary>
         /// Returns the approximated cardinality of the set.
         /// </summary>
-        /// <returns>The approximated cardinality of the set</returns>
+        /// <returns>
+        /// The approximated cardinality of the set. It is never less than the number of
+        /// registers that have been set, so it is never 0 once anything has been added,
+        /// and never more than the ceiling described in the remarks.
+        /// </returns>
+        /// <remarks>
+        /// This is Flajolet et al.'s raw harmonic-mean estimate with linear counting at
+        /// or below 5m/2, as in their paper, except at the large end. There the paper
+        /// corrects the raw estimate for collisions in the 32-bit hash space, with
+        /// -2^32 ln(1 - E/2^32) once E passes 2^32/30, and this does not. The registers
+        /// already absorb collisions, so that correction inflated every estimate it
+        /// touched: by 3% at 2^28 distinct items and 13% at 2^30, and once the raw
+        /// estimate passed 2^32 it took the logarithm of a negative number and returned
+        /// 0. What 32 bits do limit is the run of zeros a register can record (see the
+        /// class remarks). A register at that cap is counted by Ertl's tau term, the one
+        /// <see cref="HyperLogLogPlus"/> uses for its own saturated registers: what such
+        /// registers are expected to contribute, given the fraction of registers that
+        /// have reached the cap. A sketch with no register at the cap estimates exactly
+        /// as the paper's raw estimator does.
+        /// <para>
+        /// A sketch whose every register is at the cap can say only that it has seen a
+        /// great many items, and the estimate would be infinite. It saturates instead:
+        /// a full sketch reports what a sketch one register short of full reports, which
+        /// is the largest estimate it can give, about 2^32 * ln(m) -- 1.1e10 at 16
+        /// registers, 4.2e10 at 2^14 and 8.9e10 at 2^30. A sketch reporting its ceiling
+        /// has probably seen at least that many items, and may have seen far more.
+        /// </para>
+        /// </remarks>
         public UInt64 Count()
         {
-            var sum = 0.0;
             var m = (double)this.M;
+
+            // rho is counted over the q bits of the hash below the register index, so
+            // a register holds at most q + 1. One there is saturated: it saw a run of
+            // zeros as long as the hash has room for, and says only that the run was
+            // at least that long.
+            var q = 32 - (int)this.B;
+
+            var sum = 0.0;
+            var zeros = 0;
+            var saturated = 0;
             foreach (var val in this.Registers)
             {
+                if (val > q)
+                {
+                    saturated++;
+                    continue;
+                }
+
                 sum += 1.0 / Math.Pow(2.0, val);
+                if (val == 0)
+                {
+                    zeros++;
+                }
             }
+
+            if (saturated == this.M)
+            {
+                // Every register is saturated, so the sum below would be zero and the
+                // estimate infinite. A full sketch answers as one a register short of
+                // full does, which is the most this sketch can answer.
+                saturated--;
+                sum = 1.0 / Math.Pow(2.0, q);
+            }
+
+            // Large range: a saturated register stands for every run of q + 1 zeros
+            // or more, not for a run of exactly q + 1, so its plain contribution of
+            // 2^-(q+1) is too large. Ertl's tau gives the contribution such registers
+            // are expected to make, from the fraction of them that are not saturated.
+            // With none saturated it is zero, and the sum is the paper's.
+            sum += m * HyperLogLogPlus.Tau((m - saturated) / m) / Math.Pow(2.0, q);
+
             var estimate = this.Alpha * m * m / sum;
-            if (estimate <= 5.0 / 2.0 * m)
+            if (estimate <= 5.0 / 2.0 * m && zeros > 0)
             {
                 // Small range correction
-                var v = 0;
-                foreach (var r in this.Registers)
-                {
-                    if (r == 0)
-                    {
-                        v++;
-                    }
-                }
-                if (v > 0)
-                {
-                    estimate = m * Math.Log(m / v);
-                }
+                estimate = m * Math.Log(m / zeros);
             }
-            else if (estimate > 1.0 / 30.0 * Exp32)
-            {
-                // Large range correction
-                estimate = -Exp32 * Math.Log(1 - estimate / Exp32);
-            }
-            return (UInt64)estimate;
+
+            // Every register that has been set was set by a distinct hash, so this
+            // many distinct items were certainly added. Only one or two registers can
+            // estimate below it, and one of them estimates below one.
+            var occupied = this.M - (uint)zeros;
+            return Math.Max((UInt64)estimate, occupied);
         }
 
         /// <summary>

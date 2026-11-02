@@ -744,9 +744,11 @@ rest of a message survives, as it should, and one that deletes the guard does no
   cannot be reached that way is marked and held to an estimate, with the reason it is
   exempt checked in turn. Each sentence of the prose that states a figure is a claim with
   a check, and a figure of four digits in neither the table nor a claim fails. Whatever
-  the table says about a defect that is open, such as a bucket array truncated by 32-bit
-  arithmetic, is a check on the defect: it fails when the defect is fixed, which is when
-  the number should change.
+  the table says about a defect that is open is a check on the defect: it fails when the
+  defect is fixed, which is when the number should change. A bucket array truncated by
+  32-bit arithmetic, a table of 2^32 slots that was one, and a width held in a signed
+  integer were three such, and the fix that closed them failed those checks on the merge
+  until the table, the notes and the checks said what the library now does.
 
 ## Deliberately not done
 

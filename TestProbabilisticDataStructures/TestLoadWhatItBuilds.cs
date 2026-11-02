@@ -628,6 +628,21 @@ namespace TestProbabilisticDataStructures
             AssertRefused<SublimeCountMinSketch>(
                 PokeUInt32(deepest.ToByteArray(), 24, (uint)SublimeCountMinSketch.MaxDepth + 1),
                 "rows");
+
+            // The width of a row is the largest power of two an int holds. The
+            // constructor starts a row there and no wider, and the reader takes it and no
+            // wider: past it, the payload is refused as past the limit, and at it only for
+            // what a row of a billion counters costs to read. TestSublimeWidth holds the
+            // sketch's own refusal to widen past it.
+            var widthOffset = 24 + sizeof(uint);
+            AssertRefused<SublimeCountMinSketch>(
+                PokeUInt32(deepest.ToByteArray(), widthOffset, (uint)SublimeCountMinSketch.MaxWidth * 2),
+                "no larger than");
+            var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() =>
+                Persistence.FromByteArray<SublimeCountMinSketch>(
+                    PokeUInt32(deepest.ToByteArray(), widthOffset, (uint)SublimeCountMinSketch.MaxWidth)));
+            Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
+                "a payload at the widest row should be refused for what it costs, not its size");
         }
 
         /// <summary>
@@ -655,6 +670,68 @@ namespace TestProbabilisticDataStructures
                 AssertRefusedOnlyForMissingBytes<ScalableBloomFilter>(
                     PokeUInt32(bytes, offset, (uint)ScalableBloomFilter.MaxFilters));
             }
+        }
+
+        /// <summary>
+        /// The counters are one array, so the largest counting filter is the most counters
+        /// one holds at the width asked for, 2,147,483,591 at eight bits. Structural at the
+        /// limit, where the table is two gigabytes: the constructor's side is its sizing,
+        /// reached with the first item count to size past the limit, and the reader's is
+        /// a small payload with its count raised, which is refused one counter past the
+        /// limit as beyond anything built and at the limit only for the table it lacks.
+        /// </summary>
+        [TestMethod]
+        public void TestCountingFilterLimitIsShared()
+        {
+            // The counters are an array.
+            Assert.AreEqual((long)Array.MaxLength, Buckets.MaxDataBytes);
+
+            // The first item count to size past the limit is refused, against n.
+            var n = TestBucketSizes.FirstItemCountSizedAbove((ulong)Array.MaxLength, 0.01);
+            Assert.AreEqual("n", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new CountingBloomFilter(n, 8, 0.01)).ParamName);
+
+            // u32 m, u32 k, u32 count, then the buckets: u32 count, u8 width, bytes.
+            var bytes = new CountingBloomFilter(1000, 8, 0.01).ToByteArray();
+            AssertBucketLimitIsShared<CountingBloomFilter>(bytes, 0, 12);
+        }
+
+        /// <summary>
+        /// The same for the stable filter's cells, which are its own parameter.
+        /// </summary>
+        [TestMethod]
+        public void TestStableFilterLimitIsShared()
+        {
+            Assert.AreEqual((long)Array.MaxLength, Buckets.MaxDataBytes);
+
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new StableBloomFilter((uint)Array.MaxLength + 1, 8, 0.01, seed: 1));
+
+            // u32 m, u32 k, u32 p, then the buckets.
+            var bytes = new StableBloomFilter(1000, 8, 0.01, seed: 1).ToByteArray();
+            AssertBucketLimitIsShared<StableBloomFilter>(bytes, 0, 12);
+        }
+
+        /// <summary>
+        /// A reader past the limit says so, and at it asks only for the table. The
+        /// payload's two counts are raised together because a filter checks them against
+        /// each other.
+        /// </summary>
+        private static void AssertBucketLimitIsShared<T>(byte[] eightBit, int mOffset, int bucketCountOffset)
+            where T : IBinaryPersistable<T>
+        {
+            var limit = (uint)Buckets.MaxCount(8);
+            Assert.AreEqual((uint)Array.MaxLength, limit);
+
+            AssertRefused<T>(
+                PokeUInt32(PokeUInt32(eightBit, mOffset, limit + 1), bucketCountOffset, limit + 1),
+                PastTheLimit);
+
+            var ex = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<T>(
+                PokeUInt32(PokeUInt32(eightBit, mOffset, limit), bucketCountOffset, limit)));
+            StringAssert.Contains(ex.Message, "were stored",
+                "a payload at the limit should be refused for its table, not its size");
+            Assert.DoesNotContain(PastTheLimit, ex.Message);
         }
 
         /// <summary>
@@ -792,21 +869,62 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Exempt: InfiniFilter's reader caps its chain, its address bits and its
-        /// fingerprints, and its constructor cannot reach any of the three. The
-        /// fingerprint range is the same on both sides. A table's slots are counted in
-        /// a uint, so no working table has more address bits than a uint has. And the
-        /// chain gains a table about once per factor of four in the items, measured
-        /// here at the fastest it grows -- the narrowest fingerprint and the smallest
-        /// start -- so the cap would take more items than <c>Added</c> can count.
+        /// A table of 2^21 slots, about 3 MiB, well past the million the readers once
+        /// stopped at, and read back whole.
         /// </summary>
         [TestMethod]
-        public void TestInfiniFilterCannotReachItsReaderCaps()
+        public void TestInfiniFilterAtAWideTableRoundTrips()
         {
-            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new InfiniFilter(1, 1));
-            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new InfiniFilter(1, 33));
+            var filter = new InfiniFilter(1u << 20, fingerprintBits: 8);
+            for (var i = 0; i < 100; i++) filter.Add(Key(i));
+            Assert.IsGreaterThan((ulong)OldCap, filter.Capacity());
+
+            var restored = AssertRoundTrips(filter);
+            Assert.IsTrue(restored.Test(Key(7)));
+        }
+
+        /// <summary>The range filter's table, as above.</summary>
+        [TestMethod]
+        public void TestMementoFilterAtAWideTableRoundTrips()
+        {
+            var filter = new MementoFilter(256, fingerprintBits: 8, initialCapacity: 1u << 20);
+            for (ulong i = 0; i < 100; i++) filter.Add(i * 7919);
+            Assert.IsGreaterThan((ulong)OldCap, filter.Capacity());
+
+            var restored = AssertRoundTrips(filter);
+            Assert.IsTrue(restored.Test(7919));
+        }
+
+        /// <summary>
+        /// A table's slot count is a uint holding 2^q, so q is at most 31; the constructor
+        /// starts no wider, an expansion stops there, and the reader takes no more. The
+        /// largest table is gigabytes, so each side is checked where it can be: the
+        /// constructor through its sizing, the expansion in <see cref="TestExpandingTableLimits"/>
+        /// with a lower limit, and the reader on payloads that name the widths. The other
+        /// two things the reader caps are still beyond the constructor: the fingerprint's
+        /// range is the same on both sides, and the chain would need more items than
+        /// <c>Added</c> can count to reach its cap.
+        /// </summary>
+        [TestMethod]
+        public void TestInfiniFilterLimitIsShared()
+        {
             Assert.AreEqual(typeof(uint),
                 typeof(InfiniSegment).GetProperty(nameof(InfiniSegment.Slots), BindingFlags.Instance | BindingFlags.NonPublic)!.PropertyType);
+            Assert.IsLessThanOrEqualTo((ulong)uint.MaxValue, 1UL << InfiniFilter.MaxQuotientBits);
+            Assert.IsGreaterThan((ulong)uint.MaxValue, 1UL << (InfiniFilter.MaxQuotientBits + 1));
+
+            Assert.AreEqual(InfiniFilter.MaxQuotientBits, InfiniFilter.InitialQuotientBits(uint.MaxValue));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new InfiniFilter(1, 1));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new InfiniFilter(1, 33));
+
+            AssertRefused<InfiniFilter>(
+                TestExpandingTableLimits.OnePayload(
+                    StructureId.InfiniFilter, InfiniFilter.MaxQuotientBits + 1, 4, includeWords: true),
+                "between 2 and 31");
+            var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<InfiniFilter>(
+                TestExpandingTableLimits.OnePayload(
+                    StructureId.InfiniFilter, InfiniFilter.MaxQuotientBits, 4, includeWords: false)));
+            Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException);
 
             var filter = new InfiniFilter(1, fingerprintBits: 2);
             for (var i = 0; i < 1 << 16; i++) filter.Add(Key(i));
@@ -814,19 +932,28 @@ namespace TestProbabilisticDataStructures
             AssertRoundTrips(filter);
         }
 
-        /// <summary>
-        /// Exempt: MementoFilter's reader caps the same three things as InfiniFilter's,
-        /// for the same reasons, and its memento width besides, which the constructor
-        /// derives from a range it refuses past 2^32.
-        /// </summary>
+        /// <summary>The range filter, which shares the substrate and the limit.</summary>
         [TestMethod]
-        public void TestMementoFilterCannotReachItsReaderCaps()
+        public void TestMementoFilterLimitIsShared()
         {
+            Assert.AreEqual(typeof(uint),
+                typeof(MementoSegment).GetProperty(nameof(MementoSegment.Slots), BindingFlags.Instance | BindingFlags.NonPublic)!.PropertyType);
+            Assert.IsLessThanOrEqualTo((ulong)uint.MaxValue, 1UL << MementoFilter.MaxQuotientBits);
+            Assert.IsGreaterThan((ulong)uint.MaxValue, 1UL << (MementoFilter.MaxQuotientBits + 1));
+
+            Assert.AreEqual(MementoFilter.MaxQuotientBits, MementoFilter.InitialQuotientBits(uint.MaxValue));
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new MementoFilter(256, 1));
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new MementoFilter(256, 33));
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new MementoFilter((1UL << 32) + 1));
-            Assert.AreEqual(typeof(uint),
-                typeof(MementoSegment).GetProperty(nameof(MementoSegment.Slots), BindingFlags.Instance | BindingFlags.NonPublic)!.PropertyType);
+
+            AssertRefused<MementoFilter>(
+                TestExpandingTableLimits.OnePayload(
+                    StructureId.MementoFilter, MementoFilter.MaxQuotientBits + 1, 4, includeWords: true),
+                "between 2 and 31");
+            var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<MementoFilter>(
+                TestExpandingTableLimits.OnePayload(
+                    StructureId.MementoFilter, MementoFilter.MaxQuotientBits, 4, includeWords: false)));
+            Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException);
 
             var filter = new MementoFilter(2, fingerprintBits: 2, initialCapacity: 1);
             for (var i = 0; i < 1 << 16; i++) filter.Add((ulong)i * 7919);
@@ -1062,14 +1189,6 @@ namespace TestProbabilisticDataStructures
                     "its arrays hold 2^30 buckets each, so the reader's cap on their number " +
                     "is reached only by a filter no payload can hold",
                     nameof(TestBloomFilter64CannotReachItsArrayCap)),
-                (StructureId.InfiniFilter,
-                    "its fingerprint range is the constructor's, its slots are a uint's, " +
-                    "and its chain would need more items than it can count to reach the cap",
-                    nameof(TestInfiniFilterCannotReachItsReaderCaps)),
-                (StructureId.MementoFilter,
-                    "as InfiniFilter, and its memento width comes from a range the " +
-                    "constructor bounds",
-                    nameof(TestMementoFilterCannotReachItsReaderCaps)),
                 (StructureId.BloomierFilter,
                     "its value width is bounded to the same range by the builder and the " +
                     "reader, and nothing else is capped",
@@ -1081,12 +1200,8 @@ namespace TestProbabilisticDataStructures
                     "it is one 64-bit value and has no size",
                     nameof(TestSimHashSignatureHasNoSize)),
                 (StructureId.BloomFilter, NoCap, nameof(TestBloomFilterReadsPastTheOldCeiling)),
-                (StructureId.CountingBloomFilter, NoCap,
-                    nameof(TestCountingBloomFilterReadsPastTheOldCeiling)),
                 (StructureId.DeletableBloomFilter, NoCap,
                     nameof(TestDeletableBloomFilterReadsPastTheOldCeiling)),
-                (StructureId.StableBloomFilter, NoCap,
-                    nameof(TestStableBloomFilterReadsPastTheOldCeiling)),
                 (StructureId.InverseBloomFilter, NoCap,
                     nameof(TestInverseBloomFilterReadsPastTheOldCeiling)),
                 (StructureId.CountMinSketch, NoCap,
@@ -1178,6 +1293,18 @@ namespace TestProbabilisticDataStructures
                 (StructureId.ScalableBloomFilter,
                     new[] { nameof(TestScalableFilterReaderTakesAFilterCountPastTheOldCeiling) },
                     nameof(TestScalableFilterLimitIsShared)),
+                (StructureId.InfiniFilter,
+                    new[] { nameof(TestInfiniFilterAtAWideTableRoundTrips) },
+                    nameof(TestInfiniFilterLimitIsShared)),
+                (StructureId.MementoFilter,
+                    new[] { nameof(TestMementoFilterAtAWideTableRoundTrips) },
+                    nameof(TestMementoFilterLimitIsShared)),
+                (StructureId.CountingBloomFilter,
+                    new[] { nameof(TestCountingBloomFilterReadsPastTheOldCeiling) },
+                    nameof(TestCountingFilterLimitIsShared)),
+                (StructureId.StableBloomFilter,
+                    new[] { nameof(TestStableBloomFilterReadsPastTheOldCeiling) },
+                    nameof(TestStableFilterLimitIsShared)),
                 (StructureId.QuotientFilter,
                     new[] { nameof(TestQuotientFilterAtItsWidestSplitRoundTrips) },
                     nameof(TestQuotientFilterLimitIsShared)),
@@ -1196,6 +1323,10 @@ namespace TestProbabilisticDataStructures
             var expected = new Dictionary<(string Structure, string Size), ulong>
             {
                 [("CuckooBloomFilter", "entries, `m` × `b`")] = CuckooBloomFilter.MaxEntries,
+                [("CountingBloomFilter", "bytes of counters, `m` × `b` bits, rounded up")] =
+                    (ulong)Buckets.MaxDataBytes,
+                [("StableBloomFilter", "bytes of cells, `m` × `d` bits, rounded up")] =
+                    (ulong)Buckets.MaxDataBytes,
                 [("ThetaSketch", "`k`")] = ThetaSketch.MaxNominalEntries,
                 [("TupleSketch", "`k`")] = TupleSketch.MaxNominalEntries,
                 [("MinHashSignature", "`k`")] = (ulong)MinHashSignature.MaxValues,
@@ -1208,7 +1339,11 @@ namespace TestProbabilisticDataStructures
                 [("Grafite", "words of high bits")] = Grafite.MaxHighWords,
                 [("SetSketch", "`m`")] = (ulong)SetSketch.MaxRegisters,
                 [("SublimeCountMinSketch", "rows")] = (ulong)SublimeCountMinSketch.MaxDepth,
+                [("SublimeCountMinSketch", "counters in a row")] = (ulong)SublimeCountMinSketch.MaxWidth,
                 [("ScalableBloomFilter", "filter count")] = (ulong)ScalableBloomFilter.MaxFilters,
+                [("InfiniFilter", "quotient bits")] = (ulong)InfiniFilter.MaxQuotientBits,
+                [("MementoFilter", "quotient bits")] = (ulong)MementoFilter.MaxQuotientBits,
+                [("MementoFilter", "bits of a slot")] = (ulong)MementoSegment.MaxSlotBits,
                 [("QuotientFilter", "quotient bits")] = QuotientFilter.MaxQuotientBits,
                 [("QuotientFilter", "quotient + remainder bits")] = QuotientFilter.HashBits,
                 [("QuotientFilter", "remainder bits")] = QuotientFilter.MaxRemainderBits,
