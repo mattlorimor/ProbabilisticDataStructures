@@ -117,6 +117,17 @@ namespace ProbabilisticDataStructures
         private const int MaxPoolFragments = 64;
 
         /// <summary>
+        /// The bits in a counter, and so the longest bit length one can have.
+        /// </summary>
+        /// <remarks>
+        /// A counter is a <c>ulong</c> and every <c>ulong</c> is a valid one, so a length
+        /// runs from nought, for a counter holding nothing, to this. The tally is one slot
+        /// longer than this for that reason; it was sixty-four slots, which left no room
+        /// for the counters of 2^63 and more.
+        /// </remarks>
+        private const int CounterBits = 64;
+
+        /// <summary>
         /// The most rows a sketch can have: ceil(ln(1 / delta)) for the smallest delta
         /// whose reciprocal is still a finite double.
         /// </summary>
@@ -985,7 +996,7 @@ namespace ProbabilisticDataStructures
 
                     var expected = 0.0;
                     var variance = 0.0;
-                    for (var bits = s + 1; bits < 64; bits++)
+                    for (var bits = s + 1; bits <= CounterBits; bits++)
                     {
                         if (lengths[bits] == 0)
                         {
@@ -1026,15 +1037,18 @@ namespace ProbabilisticDataStructures
         /// How many counters hold a value of each bit length, counted over the sketch
         /// as it will be once it has been laid out at the given width.
         /// </summary>
+        /// <remarks>
+        /// Indexed by length, from nought to <see cref="CounterBits"/> inclusive.
+        /// </remarks>
         private static long[] CounterLengths(ulong[][] values)
         {
-            var lengths = new long[64];
+            var lengths = new long[CounterBits + 1];
 
             foreach (var row in values)
             {
                 foreach (var value in row)
                 {
-                    lengths[64 - BitOperations.LeadingZeroCount(value)]++;
+                    lengths[CounterBits - BitOperations.LeadingZeroCount(value)]++;
                 }
             }
 
