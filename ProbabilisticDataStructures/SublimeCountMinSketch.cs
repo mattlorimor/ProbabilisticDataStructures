@@ -1052,9 +1052,10 @@ namespace ProbabilisticDataStructures
         /// as it will be once it has been laid out at the given width.
         /// </summary>
         /// <remarks>
-        /// Indexed by length, from nought to <see cref="CounterBits"/> inclusive.
+        /// Indexed by length, from nought to <see cref="CounterBits"/> inclusive. Internal
+        /// so that a test can ask it what it tallied, which the tuning built on it hides.
         /// </remarks>
-        private static long[] CounterLengths(ulong[][] values)
+        internal static long[] CounterLengths(ulong[][] values)
         {
             var lengths = new long[CounterBits + 1];
 

@@ -252,6 +252,98 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The tally puts each counter at its own bit length, from nought for a counter
+        /// holding nothing to sixty-four for one with its top bit set.
+        /// </summary>
+        /// <remarks>
+        /// The tuning built on the tally prices a length by what its extension costs, and
+        /// the cost of 63 bits and of 64 differ by a fragment only some of the time, so a
+        /// tally that put a counter one slot short could not be told from the outside: with
+        /// 64-bit counters counted as 63-bit ones, every test above still passed, and only
+        /// the tuning chosen for some rows (a stub a bit narrower, a chunk a counter
+        /// fewer) was different. So this asks the tally itself. Each length has the
+        /// smallest counter that has it and the largest, and a counter of nought, whose
+        /// length is nought, is counted too.
+        /// </remarks>
+        [TestMethod]
+        public void TestTheTallyPutsEveryCounterAtItsOwnLength()
+        {
+            var smallest = new ulong[65];
+            var largest = new ulong[65];
+            for (var length = 1; length <= 64; length++)
+            {
+                smallest[length] = 1UL << (length - 1);
+                largest[length] = ulong.MaxValue >> (64 - length);
+            }
+
+            // Two rows, so that the tally is shown to run across rows and not only along one.
+            var tally = SublimeCountMinSketch.CounterLengths(new[] { smallest, largest });
+
+            Assert.AreEqual(65, tally.Length, "a length runs from nought to sixty-four");
+            Assert.AreEqual(2L, tally[0], "the two counters of nought");
+            for (var length = 1; length <= 64; length++)
+            {
+                Assert.AreEqual(2L, tally[length],
+                    $"the smallest and the largest counter of {length} bits");
+            }
+        }
+
+        /// <summary>
+        /// A counter the fold would take below nought is nought.
+        /// </summary>
+        /// <remarks>
+        /// The two halves started from the record and have each lost counts since, so their
+        /// sum can be below it. Deletions are what bring a sketch to a fold, and an
+        /// unmatched one is how the sum comes out under the record. No test reached this:
+        /// with the floor taken out of the fold, the whole Sublime, Vale and persistence
+        /// suites still passed. The state is built by hand, as the one below is.
+        /// </remarks>
+        [TestMethod]
+        public void TestFoldingBackNeverGoesBelowNought()
+        {
+            var sketch = Wide();
+            SetField(sketch, "expansionLimit", 1UL);
+            sketch.Add(Key(1));
+            Assert.AreEqual(2048, sketch.Width, "the add should have doubled the row");
+
+            var records = (System.Collections.IList)typeof(SublimeCountMinSketch)
+                .GetField("records", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(sketch)!;
+            var record = ((ValeCounterArray[])records[records.Count - 1]!)[0];
+            var row = RowsOf(sketch)[0];
+
+            // The counters to set are two that the removal will not touch: the add raised
+            // exactly one counter from nought, in each half, and the removal lowers that one.
+            var raised = -1;
+            for (var j = 0; j < 1024; j++)
+            {
+                if (row.Get(j) == 1)
+                {
+                    raised = j;
+                }
+            }
+            Assert.AreNotEqual(-1, raised, "the add should have raised a counter");
+            var below = (raised + 100) % 1024;
+            var above = (raised + 200) % 1024;
+
+            // 3 + 4 gathered against 10 to start from: seven less than it started, so nought.
+            record.Set(below, 10);
+            row.Set(below, 3);
+            row.Set(below + 1024, 4);
+            // 17 against 10: seven more than it started, which is what the fold keeps.
+            record.Set(above, 10);
+            row.Set(above, 8);
+            row.Set(above + 1024, 9);
+
+            sketch.Remove(Key(1));
+
+            Assert.AreEqual(1024, sketch.Width, "the removal should have folded the row back");
+            var folded = RowsOf(sketch)[0];
+            Assert.AreEqual(0UL, folded.Get(below));
+            Assert.AreEqual(7UL, folded.Get(above));
+        }
+
+        /// <summary>
         /// A sketch that widened and then has the same key removed folds back to the row it
         /// started as, counters of any size included.
         /// </summary>
