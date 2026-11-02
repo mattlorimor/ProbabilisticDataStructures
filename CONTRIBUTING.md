@@ -55,7 +55,9 @@ through several green checks in a row.
 
 New structures follow the pattern of the existing ones: a class with the same shape of
 API, span overloads beside the array ones, persistence with a golden fixture, an entry
-in the README's decision table, and a `CHANGELOG.md` line.
+in the README's decision table, a row in its table of how much each one holds and a note
+in [`CAPACITY.md`](CAPACITY.md) (`TestCapacityDocumentation` fails until both exist), and
+a `CHANGELOG.md` line.
 
 ## Asking is fine
 

@@ -25,7 +25,8 @@ twenty-four structures the Go library does not have.
 - [Choosing a structure](#choosing-a-structure) —
   [what are you trying to do?](#what-are-you-trying-to-do) ·
   [if you only read one thing](#if-you-only-read-one-thing) ·
-  [what each one costs](#what-each-one-costs)
+  [what each one costs](#what-each-one-costs) ·
+  [how much each one holds](#how-much-each-one-holds)
 - [Installation](#installation)
 - [Things that apply to everything](#things-that-apply-to-everything) —
   [hashing](#hashing) · [persistence](#persistence) · [merging](#merging) ·
@@ -113,7 +114,7 @@ BloomFilter
   ├── set is fixed forever? ────── BinaryFuseFilter   (smaller and faster)
   ├── don't know the size? ─────── ScalableBloomFilter
   ├── stream never ends? ───────── StableBloomFilter  (forgets, allows false negatives)
-  └── more than ~500M items? ───── BloomFilter64
+  └── more than ~120M items? ───── BloomFilter64
 ```
 
 ### What each one costs
@@ -149,6 +150,120 @@ same machine, so the numbers would be worse than useless for choosing; see
 [Benchmarks](Benchmarks/README.md) for measured timings and why they are not gated on in
 CI. Broadly: `BinaryFuseFilter` is the fastest by a wide margin, and the rest are close
 enough that memory and capability should decide.
+
+### How much each one holds
+
+<sup>[↑ Contents](#contents)</sup>
+
+"How many items?" has four answers, and which one applies depends on the structure:
+
+- **Sized for n items.** You say how many to expect, and the structure is built for that
+  many at the false positive rate you asked for. It holds more only by getting worse: past
+  `n` the rate climbs, and nothing throws. The number is the most `n` it will take.
+- **Grows as items are added.** There is no `n`; the structure adds a filter or doubles its
+  table as it fills. The number is the items added before it stops.
+- **Retains k.** It keeps at most `k` entries however many items it sees: the `k`
+  smallest hashes, the `k` heaviest elements, a sample of `k`. The number is `k`.
+- **Takes unlimited items.** Its memory is fixed by accuracy settings you choose, a width
+  or a number of registers, and any number of items can be added to it. The number is that
+  setting. The error of most of them depends on how many items there are, and
+  [CAPACITY.md](CAPACITY.md) says how.
+
+Each row has three numbers. **Builds up to** is the largest the constructor builds and that
+works, and what stops it is in [CAPACITY.md](CAPACITY.md): a 32-bit parameter, the longest
+array .NET allows, a field of the [persisted format](FORMAT.md#sizes), or the arithmetic
+that turns your settings into a size. Almost all of these are gigabytes of memory, and
+`memory` means the constructor checks nothing before an allocation fails. **Loads by
+default up to** is the largest that reads back under the default budget of 1,073,741,824
+bytes (see [loading files you didn't write](#loading-files-you-didnt-write)); a larger one
+reads back with `ReadFrom(stream, new ReadOptions(bytes))` or `ReadOptions.Unlimited`, and
+`any` means every size that can be built reads back by default. **Saves up to** is the
+largest that can be written at all. A structure is written into one array, wrapped in
+a frame in another and read back from a third, so a payload is at most 2,147,483,573
+bytes, whatever the structure was built at, and one built larger works but cannot be
+saved. `as built` means the largest build is under that. Reading a payload takes at least
+twice its size in budget, so the default reads payloads of up to about half a gigabyte.
+
+The numbers are for the settings in the second column, and settings move them:
+[CAPACITY.md](CAPACITY.md) gives, for each structure, the rule that does. A `≈` is a
+number rounded to the digits shown, because a read is charged a few bytes more or less
+according to how its arrays round. A `†` is a number that can only be measured by
+building at the scale it describes, which is the measurement as of commit 426348d.
+
+#### Sized for n items
+
+| Structure | Counts | Builds up to | Loads by default up to | Saves up to |
+| --- | --- | --- | --- | --- |
+| `BloomFilter` | n, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
+| `BloomFilter` | n, fp 0.1% | 298,726,561 | ≈ 298.73 million | as built |
+| `BloomFilter64` | n, fp 1% | memory | ≈ 448.09 million | ≈ 1.79 billion |
+| `BloomFilter64` | n, fp 0.1% | memory | ≈ 298.73 million | ≈ 1.19 billion |
+| `CountingBloomFilter` | n, 4-bit counters, fp 1% | 448,089,830 | ≈ 112.02 million | 448,089,822 |
+| `CountingBloomFilter` | n, 8-bit counters, fp 1% | 224,044,915 | ≈ 56.01 million | 224,044,911 |
+| `DeletableBloomFilter` | n, r 1,000, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
+| `PartitionedBloomFilter` | n, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
+| `CuckooBloomFilter` | n, fp 1%, empty | 2,040,109,465 | 510,027,366 | as built |
+| `CuckooBloomFilter` | n, fp 1%, holding n items | 2,040,109,465 | ≈ 88.92 million | ≈ 214.75 million |
+| `CuckooBloomFilter` | n, fp 0.1%, empty | 2,040,109,465 | 510,027,366 | as built |
+| `QuotientFilter` | n, fp 1% | 1,610,612,736 | 201,326,592 | 805,306,368 |
+| `QuotientFilter` | n, fp 0.1% | 1,610,612,736 | 100,663,296 | 805,306,368 |
+| `BinaryFuseFilter` | keys, 8-bit fingerprints | memory | ≈ 476.99 million | ≈ 1.91 billion |
+| `BinaryFuseFilter` | keys, 16-bit fingerprints | memory | ≈ 238.38 million | ≈ 954.20 million |
+| `BloomierFilter` | keys, 8-bit values | memory | ≈ 238.38 million | ≈ 954.20 million |
+| `BloomierFilter` | keys, 16-bit values | memory | ≈ 159.03 million | ≈ 636.14 million |
+| `BloomierFilter` | keys, 40-bit values | memory | ≈ 79.46 million | ≈ 318.07 million |
+| `Grafite` | keys, fp 1%, ranges up to 64, worst case | ≈ 838.04 million | ≈ 282.51 million | as built |
+| `Grafite` | keys, fp 0.1%, ranges up to 64, worst case | ≈ 727.19 million | ≈ 229.78 million | as built |
+| `Grafite` | keys, fp 1%, ranges up to 1,024, worst case | ≈ 838.04 million | ≈ 223.66 million | as built |
+| `InvertibleBloomLookupTable` | expected differences, 8-byte keys | 178,956,965 | ≈ 11.18 million | 59,652,320 |
+| `InvertibleBloomLookupTable` | expected differences, 32-byte keys | 44,739,241 | ≈ 6.39 million | 29,826,160 |
+
+#### Grows as items are added
+
+| Structure | Counts | Builds up to | Loads by default up to | Saves up to |
+| --- | --- | --- | --- | --- |
+| `ScalableBloomFilter` | items added, hint 1,000, growth 2, fp 1%, r 0.8 | ≈ 248.99 million | ≈ 62.41 million | as built |
+| `ScalableBloomFilter` | items added, hint 1,000, growth 2, fp 1%, r 0.9 | ≈ 490.25 million | ≈ 123.41 million | as built |
+| `ScalableBloomFilter` | items added, hint 1,000, growth 1, fp 1%, r 0.8 | ≈ 3.16 million | ≈ 2.83 million | as built |
+| `ScalableBloomFilter` | items added, hint 1,000, growth 1, fp 1%, r 0.9 | ≈ 6.68 million | ≈ 4.10 million | as built |
+| `InfiniFilter` | items added, 8-bit fingerprints | 1,610,612,736 | 100,663,296 | 805,306,368 |
+| `InfiniFilter` | items added, 16-bit fingerprints | 1,610,612,736 | 100,663,296 | 402,653,184 |
+| `MementoFilter` | items added, one per block, range 256, 8-bit fingerprints | 1,610,612,736 | 100,663,296 | 402,653,184 |
+| `MementoFilter` | items added, one per block, range 65,536, 8-bit fingerprints | 1,610,612,736 | 50,331,648 | 402,653,184 |
+
+#### Retains k
+
+| Structure | Counts | Builds up to | Loads by default up to | Saves up to |
+| --- | --- | --- | --- | --- |
+| `InverseBloomFilter` | capacity (slots), empty | 2,147,483,591 | ≈ 134.22 million | as built |
+| `InverseBloomFilter` | capacity (slots), every slot holding an 8-byte item | 2,147,483,591 | ≈ 19.17 million | 134,217,722 |
+| `ThetaSketch` | k, values retained | 1,073,741,795 | ≈ 33.55 million | 134,217,722 |
+| `TupleSketch` | k, keys retained | 1,073,741,795 | ≈ 16.78 million | 67,108,861 |
+| `MinHashSignature` | k, values in the signature | 2,147,483,591 | ≈ 67.11 million | 268,435,446 |
+| `TopK` | k, elements held (8-byte), ε 0.001, δ 1% | 2,147,483,587 | ≈ 6.24 million | 107,368,737 |
+| `VarOpt` | k, sample empty | 2,147,483,590 | ≈ 26.84 million | as built |
+| `VarOpt` | k, sample full of 8-byte items | 2,147,483,590 | ≈ 12.78 million | 178,956,961 |
+
+#### Takes unlimited items
+
+| Structure | Counts | Builds up to | Loads by default up to | Saves up to |
+| --- | --- | --- | --- | --- |
+| `StableBloomFilter` | m cells, 1-bit cells, fp 1% | 4,294,967,295 | ≈ 4.29 billion | as built |
+| `StableBloomFilter` | m cells, 3-bit cells, fp 1% | 4,294,967,295 | ≈ 1.43 billion | as built |
+| `StableBloomFilter` | m cells, 8-bit cells, fp 1% | 2,147,483,591 | ≈ 536.87 million | 2,147,483,536 |
+| `HyperLogLog` | registers m (a power of two) | 1,073,741,824 | 268,435,456 | as built |
+| `HyperLogLogPlus` | registers 2^p, p up to 18 | 262,144 | any | as built |
+| `UltraLogLog` | registers 2^p, p up to 26 | 67,108,864 | any | as built |
+| `SetSketch` | registers m | 2,147,483,591 | ≈ 89.48 million | 1,073,741,774 |
+| `SimHashSignature` | none: one 64-bit value | any | any | as built |
+| `CountMinSketch` | width w = ⌈e/ε⌉ per row, δ 1% (5 rows) | 2,147,483,591 | ≈ 13.42 million | 53,687,088 |
+| `CountSketch` | width w = ⌈1/ε²⌉ per row, δ 1% (5 rows) | 2,147,483,591 | ≈ 8.95 million | 53,687,089 |
+| `PrivateCountMinSketch` | width w per row, depth 5 | 2,147,483,591 | ≈ 13.42 million | 53,687,088 |
+| `SublimeCountMinSketch` | width w per row (a power of two), δ 1% (5 rows) | 1,073,741,824 | 2,097,152 † | 16,777,216 |
+| `TopK` | width w of the count-min sketch inside, δ 1% (5 rows) | 2,147,483,591 | ≈ 6.71 million | 53,687,082 |
+| `HeavyKeeper` | width w per row, depth 2 | 2,147,483,591 | ≈ 26.84 million | 107,374,175 |
+| `DDSketch` | bucket span, values of one sign | memory | ≈ 44.74 million | ≈ 268.44 million |
+| `DpswSketch` | window (items), width 512, depth 5 | memory | 1,500,000,000 † | 100,000,000,000 † |
 
 ---
 
@@ -463,19 +578,30 @@ bool wasAlreadyThere = filter.TestAndAdd(bytes);
 
 The same structure with 64-bit sizing throughout.
 
-**Reach for it when** the filter needs more than 4.29 billion bits — about **448 million
-items at 1%**, and fewer at a tighter rate. `BloomFilter`, `CountingBloomFilter`,
-`PartitionedBloomFilter` and `DeletableBloomFilter` all size in 32 bits and refuse past
-that, naming this structure when they do. `CountingBloomFilter` reaches its limit sooner
-the wider its counters are, since its counters have to fit one .NET array of 2,147,483,591
-bytes: 4,294,967,182 four-bit counters, or 2,147,483,591 eight-bit ones.
+**Reach for it when** the filter needs more than about **121 million items at 1%**.
+`BloomFilter` places its bits with a 32-bit hash, and from there to its limit of 4.29
+billion bits — about 448 million items at 1% — it delivers a worse false positive rate than
+the one it was asked for: a filter sized for 1% measured 1.42% at three quarters of that
+size, where this one measured 1.00%. The band, and what was measured, are in
+[CAPACITY.md](CAPACITY.md#the-bloomfilter-32-bit-band). `BloomFilter` and
+`PartitionedBloomFilter` also refuse past 4.29 billion bits, naming this structure when
+they do.
 
-**Look elsewhere otherwise.** Below that ceiling it is the same filter with wider
-arithmetic, so `BloomFilter` is the plainer choice. And above it, consider
-`ScalableBloomFilter` instead: it grows by adding filters rather than by making one
-larger, so it has no single-filter ceiling at all, and it does not need you to know the
-size in advance. (It has a ceiling of its own, on how many filters it can stack; see its
-entry.)
+`CountingBloomFilter` and `DeletableBloomFilter` size in 32 bits too, and **this structure
+is not a replacement for either**: it cannot delete. For a set that large that has to
+shrink, `CuckooBloomFilter` and `QuotientFilter` hold well over a billion items. A
+`CountingBloomFilter` reaches its limit sooner than 4.29 billion bits the wider its
+counters are, since its array is `m` buckets of `b` bits and one .NET array holds at most
+2,147,483,591 bytes: 4,294,967,182 four-bit counters, or 2,147,483,591 eight-bit ones. It
+refuses a size past that, naming `n`; the "Builds up to" figures are in
+[the table](#how-much-each-one-holds).
+
+**Look elsewhere otherwise.** Below about 121 million items it is the same filter with
+wider arithmetic, so `BloomFilter` is the plainer choice. And if you do not know the size
+in advance, `ScalableBloomFilter` takes it from you, but it does not reach much further:
+every filter it adds is itself a 32-bit filter, so at its default growth it stops at the
+items in [the table](#how-much-each-one-holds), a few hundred million. Past that, size a
+`BloomFilter64` for the most you expect.
 
 Only the Bloom family has this ceiling. `CuckooBloomFilter` and `BinaryFuseFilter` hold
 around 2.1 billion entries before they run into .NET's 2 GB array limit, and the sketches —
@@ -669,7 +795,10 @@ Adds new filters with geometrically tightening rates as it fills, so it grows to
 whatever arrives. Each new filter also holds more than the last, by a growth factor, so
 the stack a query has to ask stays a few dozen filters deep at most; a growth factor of 1
 builds every filter the same size, as the filter did before the factor existed, and
-stops after a few thousand.
+stops after a few thousand. Either way it has a ceiling, and an `Add` that needs one more
+filter than it can build throws `InvalidOperationException` and leaves the filter as it
+was; how many items that is, and how many read back under the default budget, are in
+[the table](#how-much-each-one-holds) for growth factors of 2 and 1.
 
 **Reach for it when** you genuinely don't know how large the set will be and memory is not
 bounded.
