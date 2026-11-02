@@ -1800,6 +1800,11 @@ memory grows with the *logarithm* of the dynamic range â€” a stream spanning 10â
 fits in well under a megabyte. It is the only structure here that takes numbers rather than
 bytes, and so the only one that never hashes.
 
+A bucket is numbered by a 32-bit integer, so an accuracy finer than about 1.74e-7 cannot
+bucket every double: `Add` refuses a value outside the range the accuracy reaches (0.65 to
+1.54 at 1e-10) rather than answering for it from the wrong bucket. [CAPACITY.md](CAPACITY.md)
+has the range at each accuracy.
+
 From Masson, Rim and Lee,
 [DDSketch](https://arxiv.org/abs/1908.10693).
 

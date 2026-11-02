@@ -719,6 +719,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   correction did not engage, estimates move only where a register has already reached the
   cap, which is rare there, and by at most 0.03%.
 
+- **`DDSketch` filed a value its 32-bit bucket index could not hold in the last bucket
+  there is, and answered with that bucket for all of them.** A bucket is numbered by an
+  `int`, and the cast saturated. At a relative accuracy of 1e-10 an `int` reaches 2^31
+  buckets of 2e-10, so only values from about 0.65 to 1.54 have a bucket: a sketch of
+  {1000, 2000, 1e6} answered 1.536 at every quantile. On a sketch that already held a
+  value, the same index failed with an `OverflowException` inside the store's allocation,
+  as did any two values further apart than one array of buckets holds.
+  <br><br>
+  `Add` now refuses a value whose bucket is not a 32-bit index, or is further from the
+  buckets in use than one array holds, 2,147,483,591, with an `ArgumentOutOfRangeException`
+  that names the range the accuracy reaches. The sketch is unchanged. `Merge` refuses a
+  merge that would span more, before it changes either store. Every double has a bucket
+  from an accuracy of about 1.74e-7; below that the range narrows, to 0.014 – 73 at 1e-9.
+  The constructor and the reader refuse an accuracy below about 5.6e-17, where
+  `(1+a)/(1-a)` is exactly 1 and no value has a bucket of its own. No accuracy and value
+  that was bucketed correctly stops being.
+  <br><br>
+  With the ends of the range now reachable on purpose, the store's own arithmetic at them
+  is 64-bit: its window, which sits partly below `int.MinValue` around an index there, and
+  the quantile walk and merge, whose loops would otherwise wrap past `int.MaxValue`. The
+  stored format does not change.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

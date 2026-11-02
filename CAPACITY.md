@@ -389,6 +389,15 @@ A value of one sign spans at most every positive double, which at 1% is a few te
 and finer accuracies cost proportionally more. A read charges 24 bytes a bucket of span,
 for each sign.
 
+Two limits sit beneath that, and `Add` refuses a value that passes either, with an
+`ArgumentOutOfRangeException` and the sketch unchanged. A bucket is numbered by a 32-bit
+integer, so a value has a bucket only if `|ln v| < 2^31 · ln((1+α)/(1−α))`: every double
+does from an accuracy of about 1.74e-7, and below that the range narrows, to 0.014 – 73 at
+1e-9 and 0.65 – 1.54 at 1e-10. And the buckets of one sign are one array, so the span from
+the lowest bucket in use to the highest is at most 2,147,483,591, which is 16 GiB of
+counts. The constructor refuses an accuracy below about 5.6e-17, where
+`(1+α)/(1−α)` rounds to exactly 1 and no value has a bucket of its own.
+
 ### `DpswSketch`
 
 Takes any number of items, and what it holds is a window of the most recent `window`

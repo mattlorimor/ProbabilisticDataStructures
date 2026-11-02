@@ -720,6 +720,32 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The store's limit is the largest array, to the bucket. A run of exactly that
+        /// many buckets is a 16 GiB allocation, so the accepting side is held to the
+        /// predicate the store asks, and the refusing side is run for real: two values
+        /// whose buckets are one more than that apart are refused with the first already
+        /// in, at a cost of a 64-slot array.
+        /// </summary>
+        [TestMethod]
+        public void TestARunOfBucketsFitsUpToTheLargestArray()
+        {
+            Assert.IsTrue(DDSketch.SpanFits(Array.MaxLength));
+            Assert.IsFalse(DDSketch.SpanFits(Array.MaxLength + 1L));
+            Assert.IsTrue(DDSketch.SpanFits(1));
+
+            const double accuracy = 1e-9;
+            var logGamma = LogGammaOf(accuracy);
+            const long lowIndex = -1_073_741_800;
+
+            // Indices lowIndex and lowIndex + MaxLength: a run of MaxLength + 1 buckets.
+            var sketch = new DDSketch(accuracy);
+            sketch.Add(Math.Exp((lowIndex - 0.5) * logGamma));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => sketch.Add(Math.Exp((lowIndex + Array.MaxLength - 0.5) * logGamma)));
+            Assert.AreEqual(1UL, sketch.Count());
+        }
+
+        /// <summary>
         /// Merging two sketches whose buckets are too far apart for one array is refused
         /// before either is changed, rather than after one store has taken the merge and
         /// the other has overflowed.
@@ -730,18 +756,61 @@ namespace TestProbabilisticDataStructures
             const double accuracy = 1e-9;
             var top = Math.Exp((int.MaxValue - 0.5) * LogGammaOf(accuracy));
 
-            var high = new DDSketch(accuracy);
-            high.Add(top);
-            high.Add(-1.0);
+            // One store at a time is too far apart, with the other store compatible, so
+            // each store's check is the only thing standing between the merge and the
+            // overflow. Then both at once.
+            var cases = new (double[] Into, double[] From)[]
+            {
+                (new[] { top }, new[] { 1.0 }),
+                (new[] { -top }, new[] { -1.0 }),
+                (new[] { top, -1.0 }, new[] { 1.0, -top }),
 
-            var low = new DDSketch(accuracy);
-            low.Add(1.0);
-            low.Add(-top);
+                // The positive stores merge without trouble and the negative ones do not:
+                // the case where checking one store at a time leaves the first changed.
+                (new[] { 5.0, -top }, new[] { 6.0, -1.0 }),
+            };
 
-            var before = high.ToByteArray();
-            Assert.ThrowsExactly<ArgumentException>(() => high.Merge(low));
-            CollectionAssert.AreEqual(before, high.ToByteArray(),
-                "a merge that was refused changed the sketch it was merging into");
+            foreach (var (into, from) in cases)
+            {
+                var high = new DDSketch(accuracy);
+                foreach (var value in into) high.Add(value);
+                var low = new DDSketch(accuracy);
+                foreach (var value in from) low.Add(value);
+
+                var before = high.ToByteArray();
+                Assert.ThrowsExactly<ArgumentException>(() => high.Merge(low),
+                    $"{string.Join(", ", into)} merged with {string.Join(", ", from)}");
+                CollectionAssert.AreEqual(before, high.ToByteArray(),
+                    "a merge that was refused changed the sketch it was merging into");
+            }
+        }
+
+        /// <summary>
+        /// A sketch whose last bucket is the last index an int has can be merged. The
+        /// merge walks the other store's indices, and a walk in ints that ends at
+        /// int.MaxValue wraps to int.MinValue and never ends; the timeout is what turns
+        /// that into a failure.
+        /// </summary>
+        [TestMethod]
+        [Timeout(15000)]
+        public void TestMergingTheLastBucketAnIntHasEnds()
+        {
+            const double accuracy = 1e-9;
+            var top = Math.Exp((int.MaxValue - 0.5) * LogGammaOf(accuracy));
+            var bottom = Math.Exp((int.MinValue - 0.5) * LogGammaOf(accuracy));
+
+            foreach (var value in new[] { top, -top, bottom, -bottom })
+            {
+                var source = new DDSketch(accuracy);
+                source.Add(value);
+                source.Add(value);
+
+                var merged = new DDSketch(accuracy).Merge(source);
+
+                CollectionAssert.AreEqual(source.ToByteArray(), merged.ToByteArray(),
+                    $"merging {value} into an empty sketch did not give the sketch it came from");
+                Assert.AreEqual(2UL, merged.Count());
+            }
         }
 
         /// <summary>
