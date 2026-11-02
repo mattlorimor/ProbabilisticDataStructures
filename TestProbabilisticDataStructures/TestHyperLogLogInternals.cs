@@ -118,18 +118,32 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// Computes the estimate the paper promises for a register state: the raw
         /// estimator alpha_m * m^2 / sum(2^-M_j) with the printed constants (0.673,
-        /// 0.697, 0.709, then 0.7213/(1 + 1.079/m)), linear counting m*ln(m/V) when
-        /// the raw estimate is at most 5m/2 and V registers are zero, and
-        /// -2^32*ln(1 - E/2^32) past 2^32/30. Restated from Figure 3 of Flajolet,
-        /// Fusy, Gandouet and Meunier (2007), not read back from the implementation
-        /// -- that is the entire point. The constants come out of the paper's
-        /// integral for the bias of the raw estimator; no behavioral test can tell
-        /// 0.673 from 0.697, because both sit inside the estimator's own spread for
-        /// any one stream. The alpha substitution is exactly the mutation the spread
-        /// tests in TestSetHash caught only in the mean, only at one m.
+        /// 0.697, 0.709, then 0.7213/(1 + 1.079/m)), and linear counting m*ln(m/V)
+        /// when the raw estimate is at most 5m/2 and V registers are zero. Restated
+        /// from Figure 3 of Flajolet, Fusy, Gandouet and Meunier (2007), not read back
+        /// from the implementation -- that is the entire point. The constants come out
+        /// of the paper's integral for the bias of the raw estimator; no behavioral
+        /// test can tell 0.673 from 0.697, because both sit inside the estimator's own
+        /// spread for any one stream. The alpha substitution is exactly the mutation
+        /// the spread tests in TestSetHash caught only in the mean, only at one m.
+        /// <para>
+        /// Figure 3's third step, -2^32*ln(1 - E/2^32) past 2^32/30, is deliberately
+        /// not restated. It corrects for collisions the registers already absorb, and
+        /// it inflated every estimate it touched; the estimator no longer applies it,
+        /// and TestHyperLogLogRange holds that band and the saturated registers that
+        /// replaced it. The states here have no saturated register, where what replaced
+        /// it contributes nothing.
+        /// </para>
         /// </summary>
         private static double PaperEstimate(byte[] registers)
         {
+            var q = 32 - System.Numerics.BitOperations.Log2((uint)registers.Length);
+            foreach (var r in registers)
+            {
+                Assert.IsLessThanOrEqualTo(q, (int)r,
+                    "PaperEstimate is the paper's pipeline for states with nothing saturated");
+            }
+
             var m = (double)registers.Length;
             var alpha = registers.Length switch
             {
@@ -158,10 +172,6 @@ namespace TestProbabilisticDataStructures
                     estimate = m * Math.Log(m / zeros);
                 }
             }
-            else if (estimate > Math.Pow(2, 32) / 30.0)
-            {
-                estimate = -Math.Pow(2, 32) * Math.Log(1 - (estimate / Math.Pow(2, 32)));
-            }
 
             return estimate;
         }
@@ -171,7 +181,7 @@ namespace TestProbabilisticDataStructures
         /// alpha. All registers are set to the same value, which keeps the harmonic
         /// sum exact in floating point (m identical powers of two), so the expected
         /// count is the formula's value to the digit and the assertion is equality,
-        /// not tolerance. Every row sits above 5m/2 and below 2^32/30, so no
+        /// not tolerance. Every row sits above 5m/2 with no register saturated, so no
         /// correction engages and alpha is the only thing that can move the answer:
         /// swapping 0.673 for 0.697 moves the m = 16 row by 6, and dropping the
         /// 1.079 from the general formula moves the m = 128 row.
@@ -234,38 +244,6 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(0UL, new HyperLogLog(16).Count(),
                 "an estimator that has seen nothing must say zero, which only the " +
                 "small-range correction can make it say.");
-        }
-
-        /// <summary>
-        /// The large-range path: all sixteen registers at 27 put the raw estimate at
-        /// 1.445e9, a third of the 32-bit hash space, where the paper corrects for
-        /// hash collisions with -2^32*ln(1 - E/2^32) and the answer grows to
-        /// 1.76e9. Nothing in a realistic stream reaches this state cheaply -- which
-        /// is why the branch was previously covered by no exact assertion and a
-        /// deleted correction would have shown up only past a billion distinct
-        /// items, in production, as a 20% undercount.
-        /// <para>
-        /// The fill = 24 row sits at 1.8e8, just past the 1.43e8 threshold; a
-        /// threshold moved from 2^32/30 toward 2^32/3 leaves the fill = 27 row
-        /// corrected but strands this one on the raw path.
-        /// </para>
-        /// </summary>
-        [TestMethod]
-        [DataRow((byte)27)]
-        [DataRow((byte)24)]
-        public void TestLargeRangeCorrectionIsThePapersFormula(byte fill)
-        {
-            var hll = new HyperLogLog(16);
-            Array.Fill(hll.RegisterState, fill);
-
-            var expected = PaperEstimate(hll.RegisterState);
-            Assert.IsGreaterThan(Math.Pow(2, 32) / 30.0, expected,
-                $"fill={fill}: the crafted state must land past the 2^32/30 " +
-                "threshold, or this pins the raw path twice.");
-
-            Assert.AreEqual((ulong)expected, hll.Count(),
-                $"fill={fill}: this deep into the hash space, the estimate must be " +
-                "the paper's collision correction, not the raw formula.");
         }
     }
 }
