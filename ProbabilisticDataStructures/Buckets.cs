@@ -88,6 +88,19 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         internal static Buckets Restore(uint count, byte bucketSize, byte[] data)
         {
+            CheckRestorable(count, bucketSize, data.Length);
+            return new Buckets(count, bucketSize, data);
+        }
+
+        /// <summary>
+        /// The checks <see cref="Restore"/> makes of a stored run's length, for a read's
+        /// price to make where the run lies, before anything after it is charged.
+        /// </summary>
+        /// <exception cref="InvalidDataException">
+        /// The run is not the length the count and bucket size imply.
+        /// </exception>
+        internal static void CheckRestorable(uint count, byte bucketSize, int length)
+        {
             var most = MaxCount(bucketSize);
             if (count > most)
             {
@@ -100,7 +113,7 @@ namespace ProbabilisticDataStructures
 
             var needed = DataLength(count, bucketSize);
 
-            if (data.Length != needed)
+            if (length != needed)
             {
                 // The one wrong length with a history. Every version before this
                 // worked the byte count out in 32 bits, so a table of 2^32 bits or more
@@ -108,11 +121,11 @@ namespace ProbabilisticDataStructures
                 // hundreds the buckets need, or none. That is the length stored here
                 // when the count is right and the array is short by exactly that.
                 var wrapped = unchecked((count * bucketSize + 7) / 8);
-                if ((uint)data.Length == wrapped)
+                if ((uint)length == wrapped)
                 {
                     throw new InvalidDataException(
                         $"{count:N0} buckets of {bucketSize} bits need {needed:N0} bytes " +
-                        $"and {data.Length:N0} were stored. That is what the byte count " +
+                        $"and {length:N0} were stored. That is what the byte count " +
                         "comes to when it is worked out in 32 bits and wraps, which is how " +
                         "an earlier version of this library sized the table of a filter " +
                         "this large: too short to hold its buckets, so that an add landing " +
@@ -123,10 +136,8 @@ namespace ProbabilisticDataStructures
 
                 throw new InvalidDataException(
                     $"{count} buckets of {bucketSize} bits need {needed} " +
-                    $"bytes and {data.Length} were stored.");
+                    $"bytes and {length} were stored.");
             }
-
-            return new Buckets(count, bucketSize, data);
         }
 
         /// <summary>

@@ -808,51 +808,8 @@ namespace ProbabilisticDataStructures
             var a = reader.ReadDouble();
             var m = reader.ReadUInt32();
             var q = reader.ReadUInt32();
-
-            // Payloads written before the second variant existed carry no variant byte
-            // and are the first variant by definition, which is what keeps them
-            // readable rather than merely tolerated.
-            var variant = SetSketchVariant.SetSketch1;
-            if (version >= PersistenceFormat.SetSketchVariantVersion)
-            {
-                var stored = reader.ReadByte();
-                if (stored != (byte)SetSketchVariant.SetSketch2)
-                {
-                    throw new InvalidDataException(
-                        $"Sketch names construction {stored}. A payload at version " +
-                        $"{version} carries a variant byte, and the only one it is " +
-                        "written with is the second construction -- the first writes " +
-                        "no byte at all.");
-                }
-                variant = SetSketchVariant.SetSketch2;
-            }
-
-            if (double.IsNaN(b) || b <= 1 || b > 2)
-            {
-                throw new InvalidDataException(
-                    $"Sketch claims a base of {b}. At one the register values would " +
-                    "not move with the cardinality at all, and this library only " +
-                    "writes bases up to two.");
-            }
-            if (double.IsNaN(a) || a <= 0 || double.IsInfinity(a))
-            {
-                throw new InvalidDataException(
-                    $"Sketch claims a hash rate of {a}, and a rate is a positive " +
-                    "number.");
-            }
-            // The constructor's own limit, so that every sketch it builds reads back.
-            if (m == 0 || m > MaxRegisters)
-            {
-                throw new InvalidDataException(
-                    $"Sketch claims {m} registers. A sketch has at least one, and at " +
-                    $"most the {MaxRegisters} an array holds.");
-            }
-            if (q == 0 || q > ushort.MaxValue - 1)
-            {
-                throw new InvalidDataException(
-                    $"Sketch claims a ceiling of {q}, and a register holds two bytes " +
-                    "and has to hold one more than the ceiling.");
-            }
+            var variant = ReadVariant(ref reader, version);
+            CheckShape(b, a, m, q);
 
             // Every register is written, so they are checked against the bytes behind
             // them before the arrays are allocated.
@@ -885,19 +842,78 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Reads the variant byte a payload carries from the version that has one.
+        /// </summary>
+        /// <remarks>
+        /// Payloads written before the second variant existed carry no variant byte and
+        /// are the first variant by definition, which is what keeps them readable rather
+        /// than merely tolerated.
+        /// </remarks>
+        private static SetSketchVariant ReadVariant(ref PayloadReader reader, ushort version)
+        {
+            if (version < PersistenceFormat.SetSketchVariantVersion)
+            {
+                return SetSketchVariant.SetSketch1;
+            }
+
+            var stored = reader.ReadByte();
+            if (stored != (byte)SetSketchVariant.SetSketch2)
+            {
+                throw new InvalidDataException(
+                    $"Sketch names construction {stored}. A payload at version " +
+                    $"{version} carries a variant byte, and the only one it is " +
+                    "written with is the second construction -- the first writes " +
+                    "no byte at all.");
+            }
+            return SetSketchVariant.SetSketch2;
+        }
+
+        /// <summary>
+        /// Checks the shape a payload claims, as both the read and its price do before
+        /// the registers are allocated.
+        /// </summary>
+        private static void CheckShape(double b, double a, uint m, uint q)
+        {
+            if (double.IsNaN(b) || b <= 1 || b > 2)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims a base of {b}. At one the register values would " +
+                    "not move with the cardinality at all, and this library only " +
+                    "writes bases up to two.");
+            }
+            if (double.IsNaN(a) || a <= 0 || double.IsInfinity(a))
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims a hash rate of {a}, and a rate is a positive " +
+                    "number.");
+            }
+            // The constructor's own limit, so that every sketch it builds reads back.
+            if (m == 0 || m > MaxRegisters)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims {m} registers. A sketch has at least one, and at " +
+                    $"most the {MaxRegisters} an array holds.");
+            }
+            if (q == 0 || q > ushort.MaxValue - 1)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims a ceiling of {q}, and a register holds two bytes " +
+                    "and has to hold one more than the ceiling.");
+            }
+        }
+
+        /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the registers and
         /// the two arrays that order their updates. See <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
-            reader.ReadDouble();
-            reader.ReadDouble();
+            var b = reader.ReadDouble();
+            var a = reader.ReadDouble();
             var m = reader.ReadUInt32();
-            reader.ReadUInt32();
-            if (version >= PersistenceFormat.SetSketchVariantVersion)
-            {
-                reader.ReadByte();
-            }
+            var q = reader.ReadUInt32();
+            ReadVariant(ref reader, version);
+            CheckShape(b, a, m, q);
 
             reader.RequireHolds(m, sizeof(ushort), "registers");
             reader.Budget.Price(RegistersCost(m));

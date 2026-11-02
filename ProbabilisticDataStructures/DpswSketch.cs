@@ -126,13 +126,28 @@ namespace ProbabilisticDataStructures
         /// 0.5, 0.6, 0.7, 0.8 and 0.9, while the memory fell from 80 MB to 3 MB. The
         /// default is where those two stop pulling in the same direction.
         /// </param>
-        /// <param name="width">How many counters each sketch row holds.</param>
-        /// <param name="depth">How many rows each sketch has.</param>
+        /// <param name="width">
+        /// How many counters each sketch row holds: at most
+        /// <see cref="PrivateCountMinSketch"/>'s limit, 2,147,483,591.
+        /// </param>
+        /// <param name="depth">
+        /// How many rows each sketch has: at most <see cref="PrivateCountMinSketch"/>'s
+        /// limit, 2,147,483,591.
+        /// </param>
         /// <param name="seed">
         /// The seed for the noise. For tests only: a deployment must not supply one,
         /// since anyone who knows it can subtract the noise back off.
         /// </param>
         /// <param name="hash">The hash function to use, or null for the default.</param>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// A parameter is out of range, or the window raised to the substream factor is
+        /// more than 2,147,483,591 items: the checkpoints of a substream are a list with a
+        /// slot for each, and a list holds no more than an array does. This was a cast to
+        /// an <c>int</c> that saturated, so a larger substream was built as that long.
+        /// Or the width or the depth is more than a <see cref="PrivateCountMinSketch"/>
+        /// holds, 2,147,483,591 each, which the first <c>Add</c> would have refused when
+        /// it built the first of the window's sketches.
+        /// </exception>
         public DpswSketch(
             long window,
             double rho,
@@ -164,6 +179,25 @@ namespace ProbabilisticDataStructures
                     "The substream factor lies strictly between nought and one.");
             }
 
+            // Every sketch the window holds is a PrivateCountMinSketch, so its limits are
+            // that sketch's, by the same symbols; a shape it refuses would build here and
+            // fail on the first Add, when the first substream begins. Checked before the
+            // checkpoints are built, which a shape that cannot be used should not cost, and
+            // before the guard on the leanest checkpoint, which divides the depth by a
+            // budget and would otherwise answer a depth past the limit and blame alpha.
+            if (width > PrivateCountMinSketch.MaxWidth)
+            {
+                throw new ArgumentOutOfRangeException(nameof(width), width,
+                    $"A row of {width} counters is more than the " +
+                    $"{PrivateCountMinSketch.MaxWidth:N0} one sketch of the window holds.");
+            }
+            if (depth > PrivateCountMinSketch.MaxDepth)
+            {
+                throw new ArgumentOutOfRangeException(nameof(depth), depth,
+                    $"{depth} rows is more than the " +
+                    $"{PrivateCountMinSketch.MaxDepth:N0} one sketch of the window holds.");
+            }
+
             this.window = window;
             this.rho = rho;
             this.alpha = alpha;
@@ -174,7 +208,7 @@ namespace ProbabilisticDataStructures
                 ? new SeededRandom(seed.Value)
                 : SeededRandom.Unpredictable();
 
-            this.substreamSize = (int)Math.Max(1, Math.Ceiling(Math.Pow(window, beta)));
+            this.substreamSize = SubstreamSizeFor(window, beta);
             this.checkpoints = Checkpoints(this.substreamSize, alpha);
 
             // The budget for the j-th checkpoint falls as alpha to the power of j, and
@@ -205,6 +239,42 @@ namespace ProbabilisticDataStructures
                 throw new ArgumentOutOfRangeException(nameof(width),
                     "A sketch needs at least one counter and one row.");
             }
+        }
+
+        /// <summary>
+        /// The most items a substream holds: the checkpoints of one are a list with a slot
+        /// for each item, and a list holds at most what an array does. The constructor
+        /// refuses a window and substream factor that make more, and the reader refuses a
+        /// payload that claims more.
+        /// </summary>
+        internal static int MaxSubstreamSize => Array.MaxLength;
+
+        /// <summary>
+        /// How many items a substream holds for a window and a substream factor: the
+        /// window raised to the factor, rounded up, and at least one. A function of its
+        /// own so that a test can reach the sizes where it matters, which would otherwise
+        /// build the checkpoints of a substream of billions.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The substream would hold more than <see cref="MaxSubstreamSize"/>.
+        /// </exception>
+        internal static int SubstreamSizeFor(long window, double beta)
+        {
+            // Compared as a double and cast afterwards: the cast of anything past an int
+            // is not an error but a saturated number, which made every substream of more
+            // than 2^31 - 1 items exactly that long and built its checkpoints.
+            var size = Math.Max(1, Math.Ceiling(Math.Pow(window, beta)));
+
+            if (!(size <= MaxSubstreamSize))
+            {
+                throw new ArgumentOutOfRangeException(nameof(window), window,
+                    $"A window of {window} at a substream factor of {beta} makes " +
+                    $"substreams of {size:E2} items, and the checkpoints of one are a " +
+                    $"list that holds at most {MaxSubstreamSize:N0}. Use a smaller window, " +
+                    "or a smaller substream factor to shorten the substreams.");
+            }
+
+            return (int)size;
         }
 
         /// <summary>How many of the most recent items a query covers.</summary>
@@ -640,11 +710,11 @@ namespace ProbabilisticDataStructures
             var window = (long)reader.ReadUInt64();
             var rho = reader.ReadDouble();
             var alpha = reader.ReadDouble();
-            var substreamSize = (int)reader.ReadUInt32();
+            var claimedSubstream = reader.ReadUInt32();
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
             var position = (long)reader.ReadUInt64();
-            CheckShape(window, rho, alpha, substreamSize, width, depth, position);
+            var substreamSize = CheckShape(window, rho, alpha, claimedSubstream, width, depth, position);
 
             var resolved = PersistenceFormat.ResolveOrThrow(hashId, hash);
 
@@ -674,28 +744,7 @@ namespace ProbabilisticDataStructures
             {
                 var start = (long)reader.ReadUInt64();
                 var held = (int)reader.ReadUInt32();
-
-                if (start <= previousStart)
-                {
-                    throw new InvalidDataException(
-                        $"Substream {s} starts at {start}, which does not follow the " +
-                        $"one before it at {previousStart}. Substreams divide the " +
-                        "stream in order and cannot overlap or repeat.");
-                }
-                if (held < 1 || held > substreamSize)
-                {
-                    throw new InvalidDataException(
-                        $"Substream {s} holds {held} of a possible {substreamSize} " +
-                        "items. A substream exists because something was added to it, " +
-                        "and never holds more than its size.");
-                }
-                if (start + held - 1 > position)
-                {
-                    throw new InvalidDataException(
-                        $"Substream {s} ends at item {start + held - 1}, past the " +
-                        $"{position} items the window says it has seen.");
-                }
-
+                CheckSubstream(s, start, held, previousStart, substreamSize, position);
                 previousStart = start;
 
                 // The substream, and a segment list as long as the plan; each segment's
@@ -705,14 +754,7 @@ namespace ProbabilisticDataStructures
                 foreach (var planned in plan)
                 {
                     var heldSketch = PrivateCountMinSketch.ReadBody(ref reader, resolved);
-
-                    if (heldSketch.Width != width || heldSketch.Depth != depth)
-                    {
-                        throw new InvalidDataException(
-                            $"Substream {s} holds a {heldSketch.Depth} by " +
-                            $"{heldSketch.Width} sketch where the window says every " +
-                            $"sketch is {depth} by {width}.");
-                    }
+                    CheckSegment(s, heldSketch.Width, heldSketch.Depth, width, depth);
 
                     substream.Segments.Add(new Segment(
                         planned.From, planned.To, heldSketch, planned.Budget));
@@ -736,11 +778,11 @@ namespace ProbabilisticDataStructures
             var window = (long)reader.ReadUInt64();
             var rho = reader.ReadDouble();
             var alpha = reader.ReadDouble();
-            var substreamSize = (int)reader.ReadUInt32();
+            var claimedSubstream = reader.ReadUInt32();
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
             var position = (long)reader.ReadUInt64();
-            CheckShape(window, rho, alpha, substreamSize, width, depth, position);
+            var substreamSize = CheckShape(window, rho, alpha, claimedSubstream, width, depth, position);
 
             reader.Budget.Price(CheckpointsCost(substreamSize));
             var checkpoints = CheckpointCount(substreamSize, alpha);
@@ -753,15 +795,64 @@ namespace ProbabilisticDataStructures
             reader.RequireHolds(substreamCount, sizeof(ulong) + sizeof(uint), "substreams");
             reader.Budget.Price(ReadBudget.ListOf(substreamCount, sizeof(long)));
 
+            var previousStart = 0L;
             for (var s = 0u; s < substreamCount; s++)
             {
-                reader.ReadUInt64();
-                reader.ReadUInt32();
+                var start = (long)reader.ReadUInt64();
+                var held = (int)reader.ReadUInt32();
+                CheckSubstream(s, start, held, previousStart, substreamSize, position);
+                previousStart = start;
+
                 reader.Budget.Price(SubstreamCost(segments));
                 for (var i = 0UL; i < segments; i++)
                 {
-                    PrivateCountMinSketch.PriceBody(ref reader);
+                    var (heldWidth, heldDepth) = PrivateCountMinSketch.PriceBody(ref reader);
+                    CheckSegment(s, heldWidth, heldDepth, width, depth);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Checks where a substream claims to start and how much it holds, as both the
+        /// read and its price do before anything is allocated for it.
+        /// </summary>
+        private static void CheckSubstream(
+            uint s, long start, int held, long previousStart, int substreamSize, long position)
+        {
+            if (start <= previousStart)
+            {
+                throw new InvalidDataException(
+                    $"Substream {s} starts at {start}, which does not follow the " +
+                    $"one before it at {previousStart}. Substreams divide the " +
+                    "stream in order and cannot overlap or repeat.");
+            }
+            if (held < 1 || held > substreamSize)
+            {
+                throw new InvalidDataException(
+                    $"Substream {s} holds {held} of a possible {substreamSize} " +
+                    "items. A substream exists because something was added to it, " +
+                    "and never holds more than its size.");
+            }
+            if (start + held - 1 > position)
+            {
+                throw new InvalidDataException(
+                    $"Substream {s} ends at item {start + held - 1}, past the " +
+                    $"{position} items the window says it has seen.");
+            }
+        }
+
+        /// <summary>
+        /// Checks a segment's sketch is the shape the window says every sketch is, as both
+        /// the read and its price do before the next sketch is allocated.
+        /// </summary>
+        private static void CheckSegment(uint s, uint heldWidth, uint heldDepth, uint width, uint depth)
+        {
+            if (heldWidth != width || heldDepth != depth)
+            {
+                throw new InvalidDataException(
+                    $"Substream {s} holds a {heldDepth} by " +
+                    $"{heldWidth} sketch where the window says every " +
+                    $"sketch is {depth} by {width}.");
             }
         }
 
@@ -780,10 +871,25 @@ namespace ProbabilisticDataStructures
         /// Checks the shape a payload claims, as both the read and its price do before the
         /// checkpoints are rebuilt.
         /// </summary>
-        private static void CheckShape(
-            long window, double rho, double alpha, int substreamSize, uint width, uint depth,
+        /// <returns>The substream size, as the int it is held in.</returns>
+        private static int CheckShape(
+            long window, double rho, double alpha, uint claimedSubstream, uint width, uint depth,
             long position)
         {
+            // The constructor's own limit. The size is a u32 in the payload and an int
+            // here, so one past the int would otherwise read as negative and be refused
+            // for being less than one; and one in between would build a list no array
+            // could hold.
+            if (claimedSubstream > MaxSubstreamSize)
+            {
+                throw new InvalidDataException(
+                    $"Window claims substreams of {claimedSubstream} items, beyond anything " +
+                    $"this library builds: their checkpoints are a list, of at most " +
+                    $"{MaxSubstreamSize}.");
+            }
+
+            var substreamSize = (int)claimedSubstream;
+
             if (window < 1)
             {
                 throw new InvalidDataException(
@@ -814,11 +920,32 @@ namespace ProbabilisticDataStructures
                     $"Window claims sketches of {depth} by {width}. A sketch needs at " +
                     "least one counter and one row.");
             }
+            // The constructor's own limits, which are the private sketch's. Without them a
+            // window of no substreams claims a shape that no sketch of it could be built
+            // in, and loads; with substreams it would be refused by the first inner sketch,
+            // naming that sketch and not the window. Before the guard on the leanest
+            // checkpoint below, which a depth this large would trip for the wrong reason.
+            if (width > PrivateCountMinSketch.MaxWidth)
+            {
+                throw new InvalidDataException(
+                    $"Window claims sketches {width} counters wide, beyond anything this " +
+                    $"library builds: a row is one array, of at most " +
+                    $"{PrivateCountMinSketch.MaxWidth}.");
+            }
+            if (depth > PrivateCountMinSketch.MaxDepth)
+            {
+                throw new InvalidDataException(
+                    $"Window claims sketches {depth} rows deep, beyond anything this " +
+                    $"library builds: they are one array, of at most " +
+                    $"{PrivateCountMinSketch.MaxDepth}.");
+            }
             if (position < 0)
             {
                 throw new InvalidDataException(
                     $"Window claims {position} items seen, which cannot be negative.");
             }
+
+            return substreamSize;
         }
 
         /// <summary>

@@ -12,7 +12,20 @@ namespace ProbabilisticDataStructures
     {
         private CountMinSketch Cms { get; set; }
         private uint K { get; set; }
-        internal uint N { get; set; }
+
+        /// <summary>
+        /// How many items have been added, which is the count of the sketch inside.
+        /// </summary>
+        /// <remarks>
+        /// Read from the sketch rather than kept beside it. This was a <c>uint</c> of
+        /// its own, incremented with the sketch's and merged with it, and it wrapped to
+        /// zero at 2^32 adds and was written that way while the sketch beside it had
+        /// counted in 64 bits all along. There is one count now, so there is nothing for
+        /// it to disagree with. The payload still has a 32-bit field for it, which holds
+        /// this, saturated at 4,294,967,295 (see <see cref="WriteTo"/>).
+        /// </remarks>
+        internal ulong N => this.Cms.TotalCount();
+
         private ElementHeap elements { get; set; }
 
         /// <summary>
@@ -68,7 +81,6 @@ namespace ProbabilisticDataStructures
         public TopK Add(ReadOnlySpan<byte> data)
         {
             this.Cms.Add(data);
-            this.N++;
 
             var freq = this.Cms.Count(data);
             if (this.elements.isTop(freq, this.K))
@@ -125,7 +137,6 @@ namespace ProbabilisticDataStructures
             // Throws if the sketches disagree about dimensions or hashing, before
             // anything here has been changed.
             this.Cms.Merge(other.Cms);
-            this.N += other.N;
 
             // Every element either was holding is a candidate, and no others can be:
             // an element neither heap held is one neither considered frequent.
@@ -180,13 +191,18 @@ namespace ProbabilisticDataStructures
         /// Writes this structure to a stream, in the format documented in FORMAT.md.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
+        /// <remarks>
+        /// The payload's count of items added is 32 bits, so past 4,294,967,295 it holds
+        /// that and no more. Nothing reads it back: the count is the sketch's, which is
+        /// 64 bits and written whole.
+        /// </remarks>
         public void WriteTo(Stream stream)
         {
             ArgumentNullException.ThrowIfNull(stream);
 
             var payload = new PayloadWriter();
             payload.WriteUInt32(this.K);
-            payload.WriteUInt32(this.N);
+            payload.WriteUInt32((uint)Math.Min(this.N, uint.MaxValue));
 
             // The sketch keeps its own envelope: it is a structure in its own right,
             // names its own hash, and can be pulled out and read on its own. The heap
@@ -282,22 +298,18 @@ namespace ProbabilisticDataStructures
             var reader = new PayloadReader(payload, budget);
 
             var k = reader.ReadUInt32();
-            var n = reader.ReadUInt32();
+
+            // The count of items added. Read past and not kept: the sketch inside has the
+            // real one, in 64 bits, and this field only ever held it saturated.
+            _ = reader.ReadUInt32();
             CheckRoom(k);
 
             var sketch = PersistenceFormat.ReadNested<CountMinSketch>(ref reader, hash);
 
-            var elementCount = reader.ReadUInt32();
-            if (elementCount > k)
-            {
-                throw new InvalidDataException(
-                    $"Structure holds {elementCount} elements with room for {k}.");
-            }
-
             // Sized by what is held, not by k: the heap grows as elements arrive, so a
             // structure read back behaves as it did, and a large k costs nothing until
-            // it is used. Each element is its length, at least, and its frequency.
-            reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
+            // it is used.
+            var elementCount = ReadElementCount(ref reader, k);
             budget.Charge(ElementHeap.RestoreCost(elementCount));
             var heap = new ElementHeap((int)elementCount);
             for (uint i = 0; i < elementCount; i++)
@@ -318,7 +330,6 @@ namespace ProbabilisticDataStructures
             {
                 Cms = sketch,
                 K = k,
-                N = n,
                 elements = heap,
             };
         }
@@ -331,19 +342,37 @@ namespace ProbabilisticDataStructures
         internal static void Price(ref PayloadReader reader, ushort version)
         {
             var k = reader.ReadUInt32();
-            reader.ReadUInt32();
+            // The count of items added, which the reader reads past too.
+            _ = reader.ReadUInt32();
             CheckRoom(k);
 
             PersistenceFormat.PriceNested(ref reader, StructureId.CountMinSketch, CountMinSketch.Price);
 
-            var elementCount = reader.ReadUInt32();
-            reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
+            var elementCount = ReadElementCount(ref reader, k);
             reader.Budget.Price(ElementHeap.RestoreCost(elementCount));
             for (uint i = 0; i < elementCount; i++)
             {
                 reader.SkipBytes();
                 reader.ReadUInt64();
             }
+        }
+
+        /// <summary>
+        /// Reads how many elements are held, checked against the room for them and the
+        /// bytes behind them, as both the read and its price do before the heap is sized.
+        /// Each element is its length, at least, and its frequency.
+        /// </summary>
+        private static uint ReadElementCount(ref PayloadReader reader, uint k)
+        {
+            var elementCount = reader.ReadUInt32();
+            if (elementCount > k)
+            {
+                throw new InvalidDataException(
+                    $"Structure holds {elementCount} elements with room for {k}.");
+            }
+
+            reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
+            return elementCount;
         }
 
         private static void CheckRoom(uint k)
@@ -382,7 +411,6 @@ namespace ProbabilisticDataStructures
         {
             this.Cms.Reset();
             this.elements = new ElementHeap((int)K);
-            this.N = 0;
             return this;
         }
     }

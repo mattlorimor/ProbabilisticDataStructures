@@ -455,23 +455,7 @@ namespace ProbabilisticDataStructures
             var nominalEntries = reader.ReadUInt32();
             var theta = reader.ReadUInt64();
             var held = reader.ReadUInt32();
-
-            // The constructor's own limit, so that every sketch it builds reads back.
-            if (nominalEntries == 0 || nominalEntries > MaxNominalEntries)
-            {
-                throw new InvalidDataException(
-                    $"Sketch retains {nominalEntries} values, which is not a size this " +
-                    $"library builds: it builds them retaining 1 to {MaxNominalEntries}.");
-            }
-
-            // A sketch trims once it reaches twice its retained size, so it never holds
-            // more than that.
-            if (held > 2 * nominalEntries)
-            {
-                throw new InvalidDataException(
-                    $"Sketch holds {held} values and retains {nominalEntries}, and one " +
-                    "never holds more than twice what it retains.");
-            }
+            CheckHeld(nominalEntries, held);
 
             // The buffer is sized by what is held, so a large k costs nothing here; what
             // is held is checked against the bytes behind it first, so a claim cannot
@@ -533,11 +517,32 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
-            reader.ReadUInt32();
+            var nominalEntries = reader.ReadUInt32();
             reader.ReadUInt64();
             var held = reader.ReadUInt32();
+            CheckHeld(nominalEntries, held);
             reader.RequireHolds(held, sizeof(ulong), "values");
             reader.Budget.Price(ValuesCost(held));
+        }
+
+        private static void CheckHeld(uint nominalEntries, uint held)
+        {
+            // The constructor's own limit, so that every sketch it builds reads back.
+            if (nominalEntries == 0 || nominalEntries > MaxNominalEntries)
+            {
+                throw new InvalidDataException(
+                    $"Sketch retains {nominalEntries} values, which is not a size this " +
+                    $"library builds: it builds them retaining 1 to {MaxNominalEntries}.");
+            }
+
+            // A sketch trims once it reaches twice its retained size, so it never holds
+            // more than that.
+            if (held > 2 * nominalEntries)
+            {
+                throw new InvalidDataException(
+                    $"Sketch holds {held} values and retains {nominalEntries}, and one " +
+                    "never holds more than twice what it retains.");
+            }
         }
 
         /// <summary>The buffer a sketch read back holding <paramref name="held"/> values starts with.</summary>

@@ -545,16 +545,8 @@ namespace ProbabilisticDataStructures
                 }
             }
 
-            var elementCount = reader.ReadUInt32();
-            if (elementCount > k)
-            {
-                throw new InvalidDataException(
-                    $"Structure holds {elementCount} elements with room for {k}.");
-            }
-
-            // Sized by what is held, not by k: the heap grows as elements arrive. Each
-            // element is its length, at least, and its frequency.
-            reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
+            // Sized by what is held, not by k: the heap grows as elements arrive.
+            var elementCount = ReadElementCount(ref reader, k);
             budget.Charge(ElementHeap.RestoreCost(elementCount));
             restored.elements = new ElementHeap((int)elementCount);
             for (uint i = 0; i < elementCount; i++)
@@ -590,14 +582,31 @@ namespace ProbabilisticDataStructures
             reader.Budget.Price(ArraysCost(width, depth));
             reader.Skip((long)width * depth * (sizeof(ushort) + sizeof(ulong)));
 
-            var elementCount = reader.ReadUInt32();
-            reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
+            var elementCount = ReadElementCount(ref reader, k);
             reader.Budget.Price(ElementHeap.RestoreCost(elementCount));
             for (uint i = 0; i < elementCount; i++)
             {
                 reader.SkipBytes();
                 reader.ReadUInt64();
             }
+        }
+
+        /// <summary>
+        /// Reads how many elements are held, checked against the room for them and the
+        /// bytes behind them, as both the read and its price do before the heap is sized.
+        /// Each element is its length, at least, and its frequency.
+        /// </summary>
+        private static uint ReadElementCount(ref PayloadReader reader, uint k)
+        {
+            var elementCount = reader.ReadUInt32();
+            if (elementCount > k)
+            {
+                throw new InvalidDataException(
+                    $"Structure holds {elementCount} elements with room for {k}.");
+            }
+
+            reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
+            return elementCount;
         }
 
         /// <summary>

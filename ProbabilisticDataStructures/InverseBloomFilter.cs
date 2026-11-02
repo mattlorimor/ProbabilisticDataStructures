@@ -86,6 +86,13 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The most slots a filter has, which is the most references an array holds. The
+        /// constructor refuses a capacity past it and the reader refuses a payload that
+        /// claims one.
+        /// </summary>
+        internal static uint MaxCapacity => (uint)System.Array.MaxLength;
+
+        /// <summary>
         /// Instantiates an InverseBloomFilter with the specified capacity.
         /// </summary>
         /// <param name="capacity">The capacity of the filter</param>
@@ -94,9 +101,22 @@ namespace ProbabilisticDataStructures
         /// only way to have one hash cover everything the structure will ever hold:
         /// once anything has been added, the hash can no longer be replaced.
         /// </param>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The capacity is zero, or more than one array of references holds,
+        /// 2,147,483,591 (sixteen gigabytes of slots, before anything is stored in them).
+        /// </exception>
         public InverseBloomFilter(uint capacity, Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
             Guard.ValidItemCount(capacity, nameof(capacity));
+
+            // Refused before the array is asked for, which failed with an
+            // OutOfMemoryException just past the limit and an OverflowException from 2^31.
+            if (capacity > MaxCapacity)
+            {
+                throw new ArgumentOutOfRangeException(nameof(capacity), capacity,
+                    $"A capacity of {capacity} is more than the {MaxCapacity:N0} slots one " +
+                    "array holds.");
+            }
 
             this.Array = new byte[capacity][];
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
@@ -372,13 +392,7 @@ namespace ProbabilisticDataStructures
             for (uint n = 0; n < occupied; n++)
             {
                 var index = reader.ReadUInt32();
-                if (index >= capacity)
-                {
-                    throw new InvalidDataException(
-                        $"Filter holds an entry at slot {index}, beyond its capacity of " +
-                        $"{capacity}.");
-                }
-
+                CheckSlot(index, capacity);
                 slots[index] = reader.ReadBytes();
             }
 
@@ -404,8 +418,18 @@ namespace ProbabilisticDataStructures
             reader.Budget.Price(SlotsCost(capacity));
             for (uint n = 0; n < occupied; n++)
             {
-                reader.ReadUInt32();
+                CheckSlot(reader.ReadUInt32(), capacity);
                 reader.SkipBytes();
+            }
+        }
+
+        private static void CheckSlot(uint index, uint capacity)
+        {
+            if (index >= capacity)
+            {
+                throw new InvalidDataException(
+                    $"Filter holds an entry at slot {index}, beyond its capacity of " +
+                    $"{capacity}.");
             }
         }
 
@@ -420,6 +444,15 @@ namespace ProbabilisticDataStructures
                 throw new InvalidDataException(
                     "Filter has a capacity of zero, leaving nowhere to put anything; it " +
                     "divides by that on first use.");
+            }
+
+            // The constructor's own limit. Every slot is allocated whether it is occupied
+            // or not, so this is the one count a few bytes can ask a large array for.
+            if (capacity > MaxCapacity)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims a capacity of {capacity}, beyond anything this library " +
+                    $"builds: the slots are one array, of at most {MaxCapacity}.");
             }
 
             var occupied = reader.ReadUInt32();

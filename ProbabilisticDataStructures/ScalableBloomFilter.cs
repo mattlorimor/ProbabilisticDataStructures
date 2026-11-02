@@ -494,44 +494,8 @@ namespace ProbabilisticDataStructures
             var fp = reader.ReadDouble();
             var p = reader.ReadDouble();
             var hint = reader.ReadUInt32();
-
-            // A payload from before version 7 carries no growth factor because the filter
-            // that wrote it had none: every filter then built each of its filters for the
-            // hint, so that is how this one goes on. One, and not the default a new
-            // filter is given, which would size its next filter as that filter never did.
-            var growth = 1u;
-            if (version >= PersistenceFormat.ScalableGrowthVersion)
-            {
-                growth = reader.ReadUInt32();
-                if (growth < 2)
-                {
-                    throw new InvalidDataException(
-                        $"Filter claims a growth factor of {growth}. A payload at version " +
-                        $"{version} carries one only because its filter grows: zero would " +
-                        "size every filter after the first for no items, and a filter " +
-                        "growing by one writes version 1.");
-                }
-            }
-
-            var filterCount = reader.ReadUInt32();
-            if (filterCount == 0)
-            {
-                throw new InvalidDataException(
-                    "Filter holds no contained filters. A scalable filter always has at " +
-                    "least the one it started with, and indexes it on every add.");
-            }
-
-            // As many as the filter can grow to, so that every filter it grows reads
-            // back; then checked against the bytes behind them, each a nested payload,
-            // before the list is sized by the count.
-            if (filterCount > MaxFilters)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims {filterCount} contained filters, beyond anything " +
-                    $"this library builds: it holds them in a list of at most {MaxFilters}.");
-            }
-            reader.RequireHolds(
-                filterCount, PersistenceFormat.MinNestedLength, "contained filters");
+            var growth = ReadGrowth(ref reader, version);
+            var filterCount = ReadFilterCount(ref reader);
 
             budget.Charge(FiltersCost(filterCount));
             var filters = new List<PartitionedBloomFilter>((int)filterCount);
@@ -564,14 +528,8 @@ namespace ProbabilisticDataStructures
             reader.ReadDouble();
             reader.ReadDouble();
             reader.ReadUInt32();
-            if (version >= PersistenceFormat.ScalableGrowthVersion)
-            {
-                reader.ReadUInt32();
-            }
-
-            var filterCount = reader.ReadUInt32();
-            reader.RequireHolds(
-                filterCount, PersistenceFormat.MinNestedLength, "contained filters");
+            ReadGrowth(ref reader, version);
+            var filterCount = ReadFilterCount(ref reader);
 
             reader.Budget.Price(FiltersCost(filterCount));
             for (uint i = 0; i < filterCount; i++)
@@ -579,6 +537,63 @@ namespace ProbabilisticDataStructures
                 PersistenceFormat.PriceNested(
                     ref reader, StructureId.PartitionedBloomFilter, PartitionedBloomFilter.Price);
             }
+        }
+
+        /// <summary>
+        /// Reads the growth factor, from the version that carries one, as both the read
+        /// and its price do.
+        /// </summary>
+        /// <remarks>
+        /// A payload from before version 7 carries no growth factor because the filter
+        /// that wrote it had none: every filter then built each of its filters for the
+        /// hint, so that is how this one goes on. One, and not the default a new filter
+        /// is given, which would size its next filter as that filter never did.
+        /// </remarks>
+        private static uint ReadGrowth(ref PayloadReader reader, ushort version)
+        {
+            if (version < PersistenceFormat.ScalableGrowthVersion)
+            {
+                return 1u;
+            }
+
+            var growth = reader.ReadUInt32();
+            if (growth < 2)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims a growth factor of {growth}. A payload at version " +
+                    $"{version} carries one only because its filter grows: zero would " +
+                    "size every filter after the first for no items, and a filter " +
+                    "growing by one writes version 1.");
+            }
+            return growth;
+        }
+
+        /// <summary>
+        /// Reads the count of contained filters, checked as both the read and its price
+        /// check it before the list is sized by it.
+        /// </summary>
+        private static uint ReadFilterCount(ref PayloadReader reader)
+        {
+            var filterCount = reader.ReadUInt32();
+            if (filterCount == 0)
+            {
+                throw new InvalidDataException(
+                    "Filter holds no contained filters. A scalable filter always has at " +
+                    "least the one it started with, and indexes it on every add.");
+            }
+
+            // As many as the filter can grow to, so that every filter it grows reads
+            // back; then checked against the bytes behind them, each a nested payload,
+            // before the list is sized by the count.
+            if (filterCount > MaxFilters)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {filterCount} contained filters, beyond anything " +
+                    $"this library builds: it holds them in a list of at most {MaxFilters}.");
+            }
+            reader.RequireHolds(
+                filterCount, PersistenceFormat.MinNestedLength, "contained filters");
+            return filterCount;
         }
 
         /// <summary>The list holding <paramref name="filterCount"/> contained filters.</summary>

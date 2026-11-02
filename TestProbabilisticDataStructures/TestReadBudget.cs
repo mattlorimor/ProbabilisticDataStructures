@@ -797,16 +797,19 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A size so large its cost does not fit a long -- every row of a matrix four
-        /// billion by four billion -- is refused rather than wrapping to a small one.
+        /// A size so large its cost does not fit a long -- every row of a matrix two
+        /// billion by two billion, the most a private sketch allows of each -- is refused
+        /// rather than wrapping to a small one. (A Count-Min Sketch cannot reach this
+        /// any more: its depth is at most 710, which its reader checks first.)
         /// </summary>
         [TestMethod]
         public void TestACostTooLargeToCountIsRefusedRatherThanWrapped()
         {
-            // u32 width at 16 and u32 depth at 20, both the most a u32 holds.
-            var bytes = new CountMinSketch(0.1, 0.1).ToByteArray();
-            AssertRefusedBeforeAllocating<CountMinSketch>(
-                Poke(Poke(bytes, 16, uint.MaxValue), 20, uint.MaxValue), long.MaxValue);
+            // u32 width at 0 and u32 depth at 4, both the most an array holds.
+            var bytes = new PrivateCountMinSketch(64, 2, 1.0, seed: 1).ToByteArray();
+            AssertRefusedBeforeAllocating<PrivateCountMinSketch>(
+                Poke(Poke(bytes, 0, (uint)Array.MaxLength), 4, (uint)Array.MaxLength),
+                long.MaxValue);
         }
 
         /// <summary>A private sketch's rows, likewise.</summary>

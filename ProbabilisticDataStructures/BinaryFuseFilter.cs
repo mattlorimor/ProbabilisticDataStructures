@@ -206,6 +206,13 @@ namespace ProbabilisticDataStructures
         /// afterwards could not apply to anything already held.
         /// </param>
         /// <returns>A filter that answers yes to every one of those items.</returns>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The width is not one of the two, or the set has more distinct keys than one
+        /// array of fingerprints holds: 2,147,483,591 bytes, which is about 1.9 billion
+        /// keys at eight bits and 954 million at sixteen. The refusal comes before the
+        /// fingerprints or anything of the build is allocated, though not before the items
+        /// are hashed.
+        /// </exception>
         public static BinaryFuseFilter Build(
             IEnumerable<byte[]> items,
             BinaryFuseWidth width,
@@ -275,15 +282,43 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private void Shape(uint keyCount)
         {
-            this.size = keyCount;
-            this.segmentLength = keyCount == 0 ? 4 : SegmentLengthFor(keyCount);
+            var geometry = Geometry(keyCount);
 
-            if (this.segmentLength > MaxSegmentLength)
+            // Refused before the array is asked for, which failed with an OverflowException
+            // from 2^31 bytes and an OutOfMemoryException just under.
+            var bytes = (long)geometry.ArrayLength * this.Stride;
+            if (bytes > Array.MaxLength)
             {
-                this.segmentLength = MaxSegmentLength;
+                throw new ArgumentOutOfRangeException("items", keyCount,
+                    $"{keyCount:N0} distinct keys at {(int)this.width} bits a fingerprint need " +
+                    $"{bytes:N0} bytes of fingerprints, and one array holds " +
+                    $"{Array.MaxLength:N0}. The most is {MaxKeys(this.width):N0} keys. Build " +
+                    "several filters over parts of the set instead.");
             }
 
+            this.size = keyCount;
+            this.segmentLength = geometry.SegmentLength;
             this.segmentLengthMask = this.segmentLength - 1;
+            this.segmentCount = geometry.SegmentCount;
+            this.arrayLength = geometry.ArrayLength;
+            this.segmentCountLength = this.segmentCount * this.segmentLength;
+            this.fingerprints = new byte[bytes];
+        }
+
+        /// <summary>
+        /// The segment length, segment count and array length for a set of the given size,
+        /// following the paper's parameters. Pure, so that the limit on the array can be
+        /// asked of it without allocating.
+        /// </summary>
+        private static (uint SegmentLength, uint SegmentCount, uint ArrayLength) Geometry(
+            uint keyCount)
+        {
+            var segmentLength = keyCount == 0 ? 4 : SegmentLengthFor(keyCount);
+
+            if (segmentLength > MaxSegmentLength)
+            {
+                segmentLength = MaxSegmentLength;
+            }
 
             var sizeFactor = keyCount <= 1 ? 0 : SizeFactorFor(keyCount);
             var capacity = keyCount <= 1 ? 0 : (uint)Math.Round(keyCount * sizeFactor);
@@ -293,22 +328,54 @@ namespace ProbabilisticDataStructures
             // then turns into a single segment. That is the reference implementation's
             // behavior and the small-set sizing depends on it, so it is spelled out as
             // deliberate rather than left to look like an oversight.
+            uint arrayLength;
             unchecked
             {
                 var initialSegments =
-                    (capacity + this.segmentLength - 1) / this.segmentLength - (Arity - 1);
-                this.arrayLength = (initialSegments + Arity - 1) * this.segmentLength;
+                    (capacity + segmentLength - 1) / segmentLength - (Arity - 1);
+                arrayLength = (initialSegments + Arity - 1) * segmentLength;
             }
 
-            this.segmentCount =
-                (this.arrayLength + this.segmentLength - 1) / this.segmentLength;
-            this.segmentCount = this.segmentCount <= Arity - 1
+            var segmentCount = (arrayLength + segmentLength - 1) / segmentLength;
+            segmentCount = segmentCount <= Arity - 1
                 ? 1
-                : this.segmentCount - (Arity - 1);
+                : segmentCount - (Arity - 1);
 
-            this.arrayLength = (this.segmentCount + Arity - 1) * this.segmentLength;
-            this.segmentCountLength = this.segmentCount * this.segmentLength;
-            this.fingerprints = new byte[(long)this.arrayLength * this.Stride];
+            arrayLength = (segmentCount + Arity - 1) * segmentLength;
+            return (segmentLength, segmentCount, arrayLength);
+        }
+
+        /// <summary>
+        /// The bytes of fingerprints a filter of this many keys and this width has.
+        /// </summary>
+        internal static long FingerprintBytes(uint keyCount, BinaryFuseWidth width)
+        {
+            return (long)Geometry(keyCount).ArrayLength * ((int)width / 8);
+        }
+
+        /// <summary>
+        /// The most distinct keys a filter of this width is built for: the most whose
+        /// fingerprints are one array. About 1.9 billion at eight bits, 954 million at
+        /// sixteen. The count of keys is an int, so the search stops there.
+        /// </summary>
+        internal static uint MaxKeys(BinaryFuseWidth width)
+        {
+            uint low = 0;
+            uint high = int.MaxValue;
+            while (low < high)
+            {
+                var middle = low + ((high - low + 1) / 2);
+                if (FingerprintBytes(middle, width) <= Array.MaxLength)
+                {
+                    low = middle;
+                }
+                else
+                {
+                    high = middle - 1;
+                }
+            }
+
+            return low;
         }
 
         private static uint SegmentLengthFor(uint keyCount)

@@ -161,12 +161,7 @@ namespace ProbabilisticDataStructures
             var reader = new PayloadReader(payload, budget);
 
             var length = reader.ReadUInt32();
-            if (length == 0 || length > MaxValues)
-            {
-                throw new InvalidDataException(
-                    $"Signature claims {length} values, which is not a signature this " +
-                    $"library builds: it builds them 1 to {MaxValues} long.");
-            }
+            CheckLength(length);
 
             // Checked before the array is sized by it, so a claim cannot cost more than
             // the payload it came in.
@@ -190,8 +185,19 @@ namespace ProbabilisticDataStructures
         internal static void Price(ref PayloadReader reader, ushort version)
         {
             var length = reader.ReadUInt32();
+            CheckLength(length);
             reader.RequireHolds(length, sizeof(ulong), "values");
             reader.Budget.Price(ReadBudget.ArrayOf(length, sizeof(ulong)));
+        }
+
+        private static void CheckLength(uint length)
+        {
+            if (length == 0 || length > MaxValues)
+            {
+                throw new InvalidDataException(
+                    $"Signature claims {length} values, which is not a signature this " +
+                    $"library builds: it builds them 1 to {MaxValues} long.");
+            }
         }
     }
 }

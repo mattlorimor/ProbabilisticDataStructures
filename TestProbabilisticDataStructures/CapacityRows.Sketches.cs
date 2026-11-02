@@ -47,7 +47,8 @@ namespace TestProbabilisticDataStructures
                 // an array holds is 2^30; the next is refused before anything is allocated.
                 Assert.IsLessThan((ulong)Array.MaxLength, 1UL << 30);
                 Assert.IsGreaterThan((ulong)Array.MaxLength, 1UL << 31);
-                Assert.Throws<OverflowException>(() => new HyperLogLog(1u << 31));
+                Assert.AreEqual(1u << 30, HyperLogLog.MaxRegisters);
+                Assert.Throws<ArgumentOutOfRangeException>(() => new HyperLogLog(1u << 31));
                 return Exact(1UL << 30);
             },
             () =>
@@ -195,11 +196,12 @@ namespace TestProbabilisticDataStructures
             StructureId.CountMinSketch, "width w = ⌈e/ε⌉ per row, δ 1% (5 rows)",
             () =>
             {
-                // One past the longest array a row can be: refused when the first row is
-                // allocated, which is before anything of that size exists.
+                // One past the longest array a row can be: refused before anything of that
+                // size is allocated.
                 var epsilon = Math.E / (Array.MaxLength + 0.5);
                 Assert.AreEqual(Array.MaxLength + 1.0, Math.Ceiling(Math.E / epsilon));
-                Assert.Throws<OutOfMemoryException>(() => new CountMinSketch(epsilon, 0.01));
+                Assert.AreEqual((uint)Array.MaxLength, CountMinSketch.MaxWidth);
+                Assert.Throws<ArgumentOutOfRangeException>(() => new CountMinSketch(epsilon, 0.01));
                 return Exact((ulong)Array.MaxLength);
             },
             () =>
@@ -220,7 +222,7 @@ namespace TestProbabilisticDataStructures
             {
                 var epsilon = 1 / Math.Sqrt(Array.MaxLength + 0.5);
                 Assert.AreEqual(Array.MaxLength + 1.0, Math.Ceiling(1.0 / (epsilon * epsilon)));
-                Assert.Throws<OutOfMemoryException>(() => new CountSketch(epsilon, 0.01));
+                Assert.Throws<ArgumentOutOfRangeException>(() => new CountSketch(epsilon, 0.01));
                 return Exact((ulong)Array.MaxLength);
             },
             () =>
@@ -239,7 +241,8 @@ namespace TestProbabilisticDataStructures
             StructureId.PrivateCountMinSketch, "width w per row, depth 5",
             () =>
             {
-                Assert.Throws<OutOfMemoryException>(
+                Assert.AreEqual((uint)Array.MaxLength, PrivateCountMinSketch.MaxWidth);
+                Assert.Throws<ArgumentOutOfRangeException>(
                     () => new PrivateCountMinSketch((uint)Array.MaxLength + 1, 5, 1.0, seed: 1));
                 return Exact((ulong)Array.MaxLength);
             },
@@ -359,7 +362,21 @@ namespace TestProbabilisticDataStructures
 
         private static CapacityRow DDSketchRow() => Row(
             StructureId.DDSketch, "bucket span, values of one sign",
-            () => Memory,
+            () =>
+            {
+                // The buckets of one sign are one array, from the lowest in use to the
+                // highest. A run of exactly the longest array is a 16 GiB allocation, so
+                // it is held to the predicate the store asks; one bucket more than that
+                // between two values is refused with the first already in.
+                Assert.IsTrue(DDSketch.SpanFits(Array.MaxLength));
+                Assert.IsFalse(DDSketch.SpanFits(Array.MaxLength + 1L));
+                var logGamma = Math.Log((1 + 1e-9) / (1 - 1e-9));
+                var sketch = new DDSketch(1e-9);
+                sketch.Add(Math.Exp((-1_073_741_800 - 0.5) * logGamma));
+                Assert.Throws<ArgumentOutOfRangeException>(
+                    () => sketch.Add(Math.Exp((-1_073_741_800 + (long)Array.MaxLength - 0.5) * logGamma)));
+                return Exact((ulong)Array.MaxLength);
+            },
             () =>
             {
                 var line = ChargeLine.Fit("DDSketch", 128,
@@ -428,7 +445,26 @@ namespace TestProbabilisticDataStructures
 
         private static CapacityRow DpswRow() => Row(
             StructureId.DpswSketch, "window (items), width 512, depth 5",
-            () => Memory,
+            () =>
+            {
+                // A substream is the window to the 0.7, and its checkpoints are a list of
+                // that many slots, so the window is held to the longest substream a list
+                // holds: found by search, against the same rule the constructor applies.
+                var largest = Largest(1, long.MaxValue, w =>
+                {
+                    try
+                    {
+                        DpswSketch.SubstreamSizeFor((long)w, 0.7);
+                        return true;
+                    }
+                    catch (ArgumentOutOfRangeException)
+                    {
+                        return false;
+                    }
+                });
+                Assert.Throws<ArgumentOutOfRangeException>(() => new DpswSketch((long)largest + 1, 1.0));
+                return Exact(largest);
+            },
             () => Measured(1_500_000_000, DpswWindowEstimate, 0.35,
                 "only a stream that has filled a window of that many items reaches the state that is read, and the suite fills windows of at most 32,000 items",
                 () => DpswLargestWindow * 10_000.0 < 1_500_000_000));

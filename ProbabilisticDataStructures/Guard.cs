@@ -111,8 +111,9 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A count-min sketch's epsilon fixes the width of its matrix, as e / epsilon,
-        /// so it has to be positive and not so small that the width is unbuildable.
+        /// A sketch's epsilon fixes the width of its matrix, so it has to be positive.
+        /// How wide that makes it is a different question, which depends on the sketch:
+        /// see <see cref="SketchWidth"/>.
         /// </summary>
         internal static void ValidSketchEpsilon(double epsilon, string paramName)
         {
@@ -123,14 +124,75 @@ namespace ProbabilisticDataStructures
                     "overestimate as a fraction of the total count, and a bound of " +
                     "zero or less asks for a matrix of infinite width.");
             }
+        }
 
-            var width = Math.Ceiling(Math.E / epsilon);
-            if (width > uint.MaxValue)
+        /// <summary>
+        /// The most counters a row of a sketch can hold: a row is one array.
+        /// </summary>
+        internal static uint MaxSketchWidth => (uint)Array.MaxLength;
+
+        /// <summary>
+        /// The most rows a sketch sized by delta can have: ceil(ln(1 / delta)) for the
+        /// smallest delta whose reciprocal is a finite double, which is 710.
+        /// </summary>
+        internal static uint MaxSketchRows => (uint)Math.Ceiling(Math.Log(double.MaxValue));
+
+        /// <summary>
+        /// The width a sketch's epsilon asks for, refused when no array holds it.
+        /// </summary>
+        /// <param name="width">
+        /// What epsilon makes the width, as a double and before it is converted: e / epsilon
+        /// for a count-min sketch, 1 / epsilon squared for a count sketch.
+        /// </param>
+        /// <param name="epsilon">The epsilon it came from.</param>
+        /// <param name="paramName">The parameter it came from.</param>
+        /// <returns>The width.</returns>
+        /// <remarks>
+        /// The width is worked out in a double and cast afterwards, and a cast of anything
+        /// past what the target holds is not an error but a saturated number, which the
+        /// allocation then failed on. An epsilon of infinity has the opposite fault: a
+        /// width of none, which divides by zero on the first add.
+        /// </remarks>
+        internal static uint SketchWidth(double width, double epsilon, string paramName)
+        {
+            if (!(width >= 1))
             {
                 throw new ArgumentOutOfRangeException(paramName, epsilon,
-                    $"Epsilon of {epsilon} needs a matrix {width} columns wide, which " +
-                    $"exceeds the {uint.MaxValue} addressable. Use a larger epsilon.");
+                    $"Epsilon of {epsilon} is so large that the matrix has no columns, and " +
+                    "an item has nowhere to be counted.");
             }
+
+            if (!(width <= MaxSketchWidth))
+            {
+                throw new ArgumentOutOfRangeException(paramName, epsilon,
+                    $"Epsilon of {epsilon} needs rows {width:N0} counters wide, past the " +
+                    $"{MaxSketchWidth:N0} that one array holds. Use a larger epsilon.");
+            }
+
+            return (uint)width;
+        }
+
+        /// <summary>
+        /// The rows a sketch's delta asks for, refused when delta has no reciprocal.
+        /// </summary>
+        /// <returns>ceil(ln(1 / delta)).</returns>
+        /// <remarks>
+        /// Below about 5.56e-309 the reciprocal of a double is infinite, and so is the row
+        /// count, which used to be converted to an integer anyway and failed in the
+        /// allocation. Delta must already be valid (see <see cref="ValidSketchDelta"/>).
+        /// </remarks>
+        internal static uint SketchRows(double delta, string paramName)
+        {
+            var rows = Math.Ceiling(Math.Log(1 / delta));
+            if (!(rows <= MaxSketchRows))
+            {
+                throw new ArgumentOutOfRangeException(paramName, delta,
+                    $"A delta of {delta} needs ln(1 / delta) rows, and its reciprocal is " +
+                    $"past the largest double. The deepest sketch is {MaxSketchRows} rows, " +
+                    $"at a delta of about {1 / double.MaxValue:E2}.");
+            }
+
+            return (uint)rows;
         }
 
         /// <summary>

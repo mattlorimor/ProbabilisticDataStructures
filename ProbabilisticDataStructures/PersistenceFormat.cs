@@ -693,9 +693,10 @@ namespace ProbabilisticDataStructures
         internal static uint PriceBuckets(ref PayloadReader reader)
         {
             var count = reader.ReadUInt32();
-            reader.ReadByte();
-            reader.SkipBytes();
+            var bucketSize = reader.ReadByte();
+            var length = reader.SkipBytes();
             reader.Budget.Price(Buckets.ObjectSize);
+            Buckets.CheckRestorable(count, bucketSize, length);
             return count;
         }
 

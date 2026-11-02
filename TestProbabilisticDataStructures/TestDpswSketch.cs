@@ -20,6 +20,157 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestDpswSketch
     {
+        /// <summary>
+        /// A substream is the window raised to the substream factor, and the checkpoints
+        /// of one are a list with a slot for every item in it, so it holds at most what an
+        /// array does. A window and factor that make it more are refused, naming the
+        /// window: the size was cast to an int, which saturates, so the substream became
+        /// 2^31 - 1 items whatever it was meant to be. The hook is called directly, since
+        /// building the checkpoints of a substream this long is the failure.
+        /// </summary>
+        [TestMethod]
+        public void TestASubstreamNoListCouldHoldIsRefusedNotSaturated()
+        {
+            // 2^40 to the 0.9 is 2^36 items.
+            var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => DpswSketch.SubstreamSizeFor(1L << 40, 0.9));
+            Assert.AreEqual("window", ex.ParamName);
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => DpswSketch.SubstreamSizeFor(long.MaxValue, 0.99));
+
+            // The line itself, straddled: a factor a hair under one takes a window of
+            // Array.MaxLength to a substream of Array.MaxLength (the power is a twentieth
+            // of an item short), and a window one longer to one item past it.
+            const double beta = 1 - 1e-12;
+            Assert.AreEqual(Array.MaxLength, DpswSketch.SubstreamSizeFor(Array.MaxLength, beta));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => DpswSketch.SubstreamSizeFor(Array.MaxLength + 1L, beta));
+
+            // And sizes that built before are unchanged.
+            Assert.AreEqual(389, DpswSketch.SubstreamSizeFor(5000, 0.7));
+            Assert.AreEqual(1, DpswSketch.SubstreamSizeFor(1, 0.5));
+            Assert.AreEqual(50, DpswSketch.SubstreamSizeFor(2500, 0.5));
+        }
+
+        /// <summary>
+        /// Every sketch a window holds is a <see cref="PrivateCountMinSketch"/>, so a
+        /// width that one refuses is a window that builds and cannot be used: the
+        /// constructor took it, and the first <c>Add</c> failed from inside the private
+        /// sketch, naming that type, when the first substream began. The window now
+        /// refuses the width itself, naming its own parameter and the limit it shares
+        /// with the sketch.
+        /// </summary>
+        [TestMethod]
+        public void TestAWidthNoPrivateSketchCouldHoldIsRefusedWhenTheWindowIsBuilt()
+        {
+            foreach (var rho in new[] { 1.0, GenerousBudget })
+            {
+                foreach (var past in new[] { PrivateCountMinSketch.MaxWidth + 1, uint.MaxValue })
+                {
+                    var wide = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                        () => new DpswSketch(100, rho, width: past, depth: 5));
+                    Assert.AreEqual("width", wide.ParamName);
+                    StringAssert.Contains(wide.Message,
+                        PrivateCountMinSketch.MaxWidth.ToString("N0"),
+                        "the refusal should say what the limit is");
+                }
+            }
+        }
+
+        /// <summary>
+        /// The same for a depth, with a hazard of its own. The guard on the noise of the
+        /// leanest checkpoint divides the depth by the budget it is left, so the deepest
+        /// shapes are also refused by it, naming <c>alpha</c>. At a budget of 1 that guard
+        /// answers a depth past the limit, and blames the checkpoint factor for a sketch
+        /// that is simply too deep; at a generous one it passes, so only the depth can
+        /// refuse. Both are held to naming <c>depth</c>.
+        /// </summary>
+        [TestMethod]
+        public void TestADepthNoPrivateSketchCouldHoldIsRefusedWhenTheWindowIsBuilt()
+        {
+            foreach (var rho in new[] { 1.0, GenerousBudget })
+            {
+                foreach (var past in new[] { PrivateCountMinSketch.MaxDepth + 1, uint.MaxValue })
+                {
+                    var deep = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                        () => new DpswSketch(100, rho, width: 512, depth: past));
+                    Assert.AreEqual("depth", deep.ParamName,
+                        $"at a budget of {rho} a depth of {past} is refused for something " +
+                        "other than the depth");
+                    StringAssert.Contains(deep.Message,
+                        PrivateCountMinSketch.MaxDepth.ToString("N0"),
+                        "the refusal should say what the limit is");
+                }
+            }
+        }
+
+        /// <summary>
+        /// And every shape a private sketch takes is still taken: the limit is the
+        /// sketch's own, one either side. Nothing is allocated for a sketch until the
+        /// first substream begins, so the shapes at the limit are built here and no sketch
+        /// of them is.
+        /// </summary>
+        [TestMethod]
+        public void TestTheShapesAtThePrivateSketchesLimitStillBuild()
+        {
+            var widest = new DpswSketch(
+                100, GenerousBudget, width: PrivateCountMinSketch.MaxWidth, depth: 5);
+            var deepest = new DpswSketch(
+                100, GenerousBudget, width: 512, depth: PrivateCountMinSketch.MaxDepth);
+            var both = new DpswSketch(
+                100, GenerousBudget,
+                width: PrivateCountMinSketch.MaxWidth, depth: PrivateCountMinSketch.MaxDepth);
+
+            foreach (var window in new[] { widest, deepest, both })
+            {
+                Assert.AreEqual(0, window.SketchesHeld);
+                Assert.AreEqual(0L, window.SizeInBytes);
+            }
+
+            // The ordinary shapes, the smallest and the default.
+            _ = new DpswSketch(100, 1.0, width: 1, depth: 1);
+            _ = new DpswSketch(100, 1.0);
+        }
+
+        /// <summary>
+        /// The refusal comes before anything is built. A window of a billion at the
+        /// default factor has substreams of about two million items, and the checkpoints
+        /// of one are a list of that many offsets, so a constructor that checked the shape
+        /// after sizing them would allocate megabytes to say no. The allocation is the
+        /// least of three runs, as <see cref="TestReadBudget"/> measures a read: the
+        /// first throw of an exception costs more than the ones after it.
+        /// </summary>
+        [TestMethod]
+        public void TestARefusedShapeBuildsNothing()
+        {
+            foreach (var (width, depth) in new[]
+            {
+                (PrivateCountMinSketch.MaxWidth + 1, 5u),
+                (512u, PrivateCountMinSketch.MaxDepth + 1),
+            })
+            {
+                var least = long.MaxValue;
+                for (var run = 0; run < 3; run++)
+                {
+                    var before = GC.GetAllocatedBytesForCurrentThread();
+                    Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                        () => new DpswSketch(1_000_000_000, GenerousBudget, width: width, depth: depth));
+                    least = Math.Min(least, GC.GetAllocatedBytesForCurrentThread() - before);
+                }
+
+                // Checkpoints alone for this window is about eight megabytes.
+                Assert.IsLessThan(64 * 1024, least,
+                    $"a refused {depth} by {width} shape allocated {least:N0} bytes, " +
+                    "which is the checkpoints of a substream: it was built before it was refused");
+            }
+        }
+
+        /// <summary>
+        /// A budget large enough that the noise of the leanest checkpoint stays inside the
+        /// window at the deepest sketch there can be, so only the shape can refuse.
+        /// </summary>
+        private const double GenerousBudget = 1e9;
+
         private static byte[] Key(int i) => Encoding.UTF8.GetBytes("k" + i);
 
         /// <summary>

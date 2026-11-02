@@ -676,30 +676,7 @@ namespace ProbabilisticDataStructures
             var policy = (SummaryPolicy)reader.ReadByte();
             var theta = reader.ReadUInt64();
             var held = reader.ReadUInt32();
-
-            // The constructor's own limit, so that every sketch it builds reads back.
-            if (nominalEntries == 0 || nominalEntries > MaxNominalEntries)
-            {
-                throw new InvalidDataException(
-                    $"Sketch retains {nominalEntries} keys, which is not a size this " +
-                    $"library builds: it builds them retaining 1 to {MaxNominalEntries}.");
-            }
-
-            if (!Enum.IsDefined(policy))
-            {
-                throw new InvalidDataException(
-                    $"Sketch folds values by {(byte)policy}, which is not a way of " +
-                    "folding this library knows.");
-            }
-
-            // A sketch trims once it reaches twice what it retains, so it never holds
-            // more than that.
-            if (held > 2 * nominalEntries)
-            {
-                throw new InvalidDataException(
-                    $"Sketch holds {held} keys and retains {nominalEntries}, and one " +
-                    "never holds more than twice what it retains.");
-            }
+            CheckShape(nominalEntries, policy, held);
 
             // Each key is written with its summary. Checked before the buffers are
             // sized by it, so a claim cannot cost more than the payload it came in.
@@ -766,12 +743,40 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
-            reader.ReadUInt32();
-            reader.ReadByte();
+            var nominalEntries = reader.ReadUInt32();
+            var policy = (SummaryPolicy)reader.ReadByte();
             reader.ReadUInt64();
             var held = reader.ReadUInt32();
+            CheckShape(nominalEntries, policy, held);
             reader.RequireHolds(held, sizeof(ulong) + sizeof(double), "keys");
             reader.Budget.Price(EntriesCost(held));
+        }
+
+        private static void CheckShape(uint nominalEntries, SummaryPolicy policy, uint held)
+        {
+            // The constructor's own limit, so that every sketch it builds reads back.
+            if (nominalEntries == 0 || nominalEntries > MaxNominalEntries)
+            {
+                throw new InvalidDataException(
+                    $"Sketch retains {nominalEntries} keys, which is not a size this " +
+                    $"library builds: it builds them retaining 1 to {MaxNominalEntries}.");
+            }
+
+            if (!Enum.IsDefined(policy))
+            {
+                throw new InvalidDataException(
+                    $"Sketch folds values by {(byte)policy}, which is not a way of " +
+                    "folding this library knows.");
+            }
+
+            // A sketch trims once it reaches twice what it retains, so it never holds
+            // more than that.
+            if (held > 2 * nominalEntries)
+            {
+                throw new InvalidDataException(
+                    $"Sketch holds {held} keys and retains {nominalEntries}, and one " +
+                    "never holds more than twice what it retains.");
+            }
         }
 
         /// <summary>

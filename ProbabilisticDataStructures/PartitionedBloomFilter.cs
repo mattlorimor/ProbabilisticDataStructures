@@ -421,12 +421,7 @@ namespace ProbabilisticDataStructures
             for (uint i = 0; i < partitionCount; i++)
             {
                 partitions[i] = PersistenceFormat.ReadBuckets(ref reader);
-                if (partitions[i].count != s)
-                {
-                    throw new InvalidDataException(
-                        $"Partition {i} holds {partitions[i].count} buckets and the " +
-                        $"filter's partitions are {s} wide.");
-                }
+                CheckPartition(i, partitions[i].count, s);
             }
 
             reader.ExpectEnd();
@@ -457,7 +452,7 @@ namespace ProbabilisticDataStructures
         {
             reader.ReadUInt32();
             var k = reader.ReadUInt32();
-            reader.ReadUInt32();
+            var s = reader.ReadUInt32();
             BitPlacement.Read(ref reader, version);
             BitPlacement.ReadCount(ref reader, version);
             var partitionCount = reader.ReadUInt32();
@@ -466,7 +461,17 @@ namespace ProbabilisticDataStructures
             reader.Budget.Price(PartitionsCost(partitionCount));
             for (uint i = 0; i < partitionCount; i++)
             {
-                PersistenceFormat.PriceBuckets(ref reader);
+                CheckPartition(i, PersistenceFormat.PriceBuckets(ref reader), s);
+            }
+        }
+
+        private static void CheckPartition(uint i, uint buckets, uint s)
+        {
+            if (buckets != s)
+            {
+                throw new InvalidDataException(
+                    $"Partition {i} holds {buckets} buckets and the " +
+                    $"filter's partitions are {s} wide.");
             }
         }
 

@@ -64,6 +64,44 @@ namespace ProbabilisticDataStructures
         /// </param>
         /// <param name="hash">The hash function to use, or null for the default.</param>
         /// <returns>A map answering for exactly those keys.</returns>
+        /// <remarks>
+        /// <b>A key is its 64-bit hash.</b> The filter does not keep keys, only what the
+        /// hash of each says, so two different keys whose hashes are equal are one key to
+        /// it. If they have the same value that costs nothing: the map answers with it for
+        /// either, and counts them once. If they have different values the map cannot hold
+        /// both, and the build is refused with an <see cref="ArgumentException"/> that says
+        /// so, as it does for one key given twice with different values.
+        /// <para>
+        /// The chance of that is chance, and it is not small for a large map. For n keys the
+        /// expected number of colliding pairs is n(n-1) / 2^65, so the chance that some two
+        /// keys collide is, at most (it needs different values too):
+        /// </para>
+        /// <list type="table">
+        /// <listheader><term>Keys</term><description>Chance two share a hash</description></listheader>
+        /// <item><term>1 million</term><description>0.000003%</description></item>
+        /// <item><term>10 million</term><description>0.0003%</description></item>
+        /// <item><term>100 million</term><description>0.03%</description></item>
+        /// <item><term>318 million, the most 40-bit values build</term><description>0.27%</description></item>
+        /// <item><term>636 million, the most 16-bit values build</term><description>1.1%</description></item>
+        /// <item><term>954 million, the most 8-bit values build</term><description>2.4%</description></item>
+        /// <item><term>2^32, which no map builds, for reference</term><description>39%</description></item>
+        /// </list>
+        /// <para>
+        /// Building again with a different <paramref name="hash"/> moves the collision, so a
+        /// refusal at these sizes is a reason to try another hash function and not a sign
+        /// that the data is wrong. Widening the identity would be a change to the format,
+        /// which this does not make.
+        /// </para>
+        /// </remarks>
+        /// <exception cref="ArgumentException">
+        /// A key appears twice with different values, or two different keys have the same
+        /// 64-bit hash and different values.
+        /// </exception>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// A value is wider than <paramref name="valueBits"/>, or the map would have more
+        /// distinct keys than one array of cells holds: 954 million at values of 8 bits or
+        /// fewer, 636 million to 16 bits and 318 million to 40.
+        /// </exception>
         public static BloomierFilter Build(
             IEnumerable<KeyValuePair<byte[], ulong>> pairs,
             int valueBits,
@@ -122,10 +160,21 @@ namespace ProbabilisticDataStructures
 
                 if (seen.TryGetValue(key, out var existing) && existing != pair.Value)
                 {
+                    // Two entries are one key to this filter, which knows a key by its
+                    // 64-bit hash alone and keeps no keys. That is a repeated key, or two
+                    // different keys that happen to hash alike, and the filter cannot tell
+                    // which. It used to say only the first, which for the second sends the
+                    // caller looking for a repeat that is not there.
                     throw new ArgumentException(
-                        $"A key appears twice with different values, {existing} and " +
-                        $"{pair.Value}. A map cannot hold both, and the filter does not " +
-                        "keep the keys, so it could not tell you which one it dropped.",
+                        $"Two entries have the same 64-bit hash and different values, " +
+                        $"{existing} and {pair.Value}. Either a key appears twice with " +
+                        "different values, or two different keys collided. The filter knows " +
+                        "a key by its 64-bit hash alone and does not keep the keys, so a " +
+                        "map cannot hold both values and could not tell you which one it " +
+                        "dropped. If the keys are distinct, this is chance, about n^2 / 2^65 " +
+                        "for n keys: 0.03% at 100 million keys, 2.4% at 954 million, the " +
+                        "most 8-bit values build, and 39% at 2^32. Build again with a " +
+                        "different hash function, which moves the collision elsewhere.",
                         nameof(pairs));
                 }
 
@@ -146,34 +195,105 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private void Shape(uint keyCount)
         {
+            var geometry = Geometry(keyCount);
+            var stride = StrideFor(this.valueBits);
+
+            // Refused before the array is asked for, which failed with an OverflowException
+            // from 2^31 bytes and an OutOfMemoryException just under.
+            var bytes = (long)geometry.ArrayLength * stride;
+            if (bytes > Array.MaxLength)
+            {
+                throw new ArgumentOutOfRangeException("pairs", keyCount,
+                    $"{keyCount:N0} distinct keys at {this.valueBits} bits a value need " +
+                    $"{bytes:N0} bytes of cells, and one array holds {Array.MaxLength:N0}. " +
+                    $"The most is {MaxKeys(this.valueBits):N0} keys. Build several maps over " +
+                    "parts of the set instead.");
+            }
+
             this.size = keyCount;
-            this.segmentLength = keyCount == 0
+            this.segmentLength = geometry.SegmentLength;
+            this.segmentLengthMask = this.segmentLength - 1;
+            this.segmentCount = geometry.SegmentCount;
+            this.arrayLength = geometry.ArrayLength;
+            this.segmentCountLength = this.segmentCount * this.segmentLength;
+
+            var cellBits = FingerprintBits + this.valueBits;
+            this.stride = stride;
+            this.cellMask = (1UL << cellBits) - 1;
+            this.cells = new byte[bytes];
+        }
+
+        /// <summary>
+        /// The bytes a cell takes: the fingerprint and the value, rounded up to whole
+        /// bytes.
+        /// </summary>
+        private static int StrideFor(int valueBits)
+        {
+            return (FingerprintBits + valueBits + 7) / 8;
+        }
+
+        /// <summary>
+        /// The segment length, segment count and array length for a set of the given size,
+        /// which are <see cref="BinaryFuseFilter"/>'s. Pure, so that the limit on the array
+        /// can be asked of it without allocating.
+        /// </summary>
+        private static (uint SegmentLength, uint SegmentCount, uint ArrayLength) Geometry(
+            uint keyCount)
+        {
+            var segmentLength = keyCount == 0
                 ? 4
                 : Math.Min(1u << (int)Math.Floor(Math.Log(keyCount) / Math.Log(3.33) + 2.25), MaxSegmentLength);
-
-            this.segmentLengthMask = this.segmentLength - 1;
 
             var sizeFactor = keyCount <= 1
                 ? 0
                 : Math.Max(1.125, 0.875 + (0.25 * Math.Log(1000000.0) / Math.Log(keyCount)));
             var capacity = keyCount <= 1 ? 0 : (uint)Math.Round(keyCount * sizeFactor);
 
+            uint arrayLength;
             unchecked
             {
                 var initialSegments =
-                    ((capacity + this.segmentLength - 1) / this.segmentLength) - (Arity - 1);
-                this.arrayLength = (initialSegments + Arity - 1) * this.segmentLength;
+                    ((capacity + segmentLength - 1) / segmentLength) - (Arity - 1);
+                arrayLength = (initialSegments + Arity - 1) * segmentLength;
             }
 
-            this.segmentCount = (this.arrayLength + this.segmentLength - 1) / this.segmentLength;
-            this.segmentCount = this.segmentCount <= Arity - 1 ? 1 : this.segmentCount - (Arity - 1);
-            this.arrayLength = (this.segmentCount + Arity - 1) * this.segmentLength;
-            this.segmentCountLength = this.segmentCount * this.segmentLength;
+            var segmentCount = (arrayLength + segmentLength - 1) / segmentLength;
+            segmentCount = segmentCount <= Arity - 1 ? 1 : segmentCount - (Arity - 1);
+            arrayLength = (segmentCount + Arity - 1) * segmentLength;
+            return (segmentLength, segmentCount, arrayLength);
+        }
 
-            var cellBits = FingerprintBits + this.valueBits;
-            this.stride = (cellBits + 7) / 8;
-            this.cellMask = (1UL << cellBits) - 1;
-            this.cells = new byte[(long)this.arrayLength * this.stride];
+        /// <summary>
+        /// The bytes of cells a map of this many keys and this value width has.
+        /// </summary>
+        internal static long CellBytes(uint keyCount, int valueBits)
+        {
+            return (long)Geometry(keyCount).ArrayLength * StrideFor(valueBits);
+        }
+
+        /// <summary>
+        /// The most distinct keys a map of this value width is built for: the most whose
+        /// cells are one array. About 954 million at values of 8 bits, 636 million at 16
+        /// and 318 million at 40. The count of keys is an int, so the search stops there.
+        /// </summary>
+        internal static uint MaxKeys(int valueBits)
+        {
+            uint low = 0;
+            uint high = int.MaxValue;
+            while (low < high)
+            {
+                var middle = low + ((high - low + 1) / 2);
+                if (CellBytes(middle, valueBits) <= Array.MaxLength)
+                {
+                    low = middle;
+                }
+                else
+                {
+                    high = middle - 1;
+                }
+            }
+
+            return low;
         }
 
         /// <summary>

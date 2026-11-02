@@ -19,6 +19,56 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(0L, sketch.Count(Key("anything")));
         }
 
+        /// <summary>
+        /// The width is 1 / epsilon squared, which passes what an array holds long before
+        /// epsilon is small: an epsilon of 1e-5 wants ten billion counters. The guard on
+        /// epsilon checked the width of a Count-Min Sketch, e / epsilon, so this width was
+        /// cast to a uint that saturated and then failed in the allocation. It is refused,
+        /// naming epsilon, as is an epsilon of infinity, whose width is none.
+        /// </summary>
+        [TestMethod]
+        public void TestAWidthNoArrayHoldsIsRefusedBeforeAnythingIsAllocated()
+        {
+            var epsilons = new[]
+            {
+                // The width is Array.MaxLength + 1.
+                1 / Math.Sqrt(Array.MaxLength + 0.5),
+                1e-5,
+                1e-7,
+                double.PositiveInfinity,
+            };
+
+            foreach (var epsilon in epsilons)
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => new CountSketch(epsilon, 0.5), $"an epsilon of {epsilon}");
+                Assert.AreEqual("epsilon", ex.ParamName);
+            }
+        }
+
+        /// <summary>
+        /// A delta whose reciprocal is infinite has no depth, and used to fail converting
+        /// it to a row count. The deepest sketch is 710 rows, and still builds.
+        /// </summary>
+        [TestMethod]
+        public void TestADeltaWithNoReciprocalIsRefused()
+        {
+            foreach (var delta in new[] { double.Epsilon, 1e-310, 5.5e-309 })
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => new CountSketch(0.5, delta), $"a delta of {delta}");
+                Assert.AreEqual("delta", ex.ParamName);
+            }
+
+            foreach (var delta in new[] { 5.6e-309, 1e-308 })
+            {
+                var deepest = new CountSketch(0.5, delta);
+                Assert.AreEqual(710u, deepest.Depth(), $"a delta of {delta}");
+                deepest.Add(Key("a"), 3);
+                Assert.AreEqual(3L, deepest.Count(Key("a")));
+            }
+        }
+
         [TestMethod]
         public void TestSomethingAddedIsCounted()
         {

@@ -540,12 +540,7 @@ namespace ProbabilisticDataStructures
             var fingerprints = new ulong[WordsFor(entries, bits)];
             var occupancy = new Buckets((uint)entries, 1);
 
-            var occupied = reader.ReadUInt32();
-            if (occupied > m * (ulong)b)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims {occupied} occupied entries in {m} buckets of {b}.");
-            }
+            var occupied = ReadOccupied(ref reader, m, b);
 
             // One buffer for the whole loop: widening a stored fingerprint needs eight
             // bytes of scratch, and allocating them per entry grows the stack by the
@@ -556,13 +551,7 @@ namespace ProbabilisticDataStructures
             {
                 var bucket = reader.ReadUInt32();
                 var entry = reader.ReadUInt32();
-
-                if (bucket >= m || entry >= b)
-                {
-                    throw new InvalidDataException(
-                        $"Filter holds an entry at bucket {bucket} slot {entry}, outside " +
-                        $"its {m} buckets of {b}.");
-                }
+                CheckEntry(bucket, entry, m, b);
 
                 ulong fingerprint;
                 if (version >= PersistenceFormat.CuckooPackedVersion)
@@ -583,12 +572,7 @@ namespace ProbabilisticDataStructures
                 else
                 {
                     var stored = reader.ReadBytes();
-                    if (stored.Length != f)
-                    {
-                        throw new InvalidDataException(
-                            $"Filter holds a {stored.Length}-byte fingerprint where its " +
-                            $"own fingerprint size is {f}.");
-                    }
+                    CheckStored(stored.Length, f);
 
                     widened.Clear();
                     stored.CopyTo(widened);
@@ -663,12 +647,46 @@ namespace ProbabilisticDataStructures
                 return;
             }
 
-            var occupied = reader.ReadUInt32();
+            var occupied = ReadOccupied(ref reader, m, b);
             for (uint e = 0; e < occupied; e++)
             {
-                reader.ReadUInt32();
-                reader.ReadUInt32();
-                reader.SkipBytes();
+                CheckEntry(reader.ReadUInt32(), reader.ReadUInt32(), m, b);
+                CheckStored(reader.SkipBytes(), f);
+            }
+        }
+
+        private static uint ReadOccupied(ref PayloadReader reader, uint m, uint b)
+        {
+            var occupied = reader.ReadUInt32();
+            if (occupied > m * (ulong)b)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {occupied} occupied entries in {m} buckets of {b}.");
+            }
+            return occupied;
+        }
+
+        private static void CheckEntry(uint bucket, uint entry, uint m, uint b)
+        {
+            if (bucket >= m || entry >= b)
+            {
+                throw new InvalidDataException(
+                    $"Filter holds an entry at bucket {bucket} slot {entry}, outside " +
+                    $"its {m} buckets of {b}.");
+            }
+        }
+
+        /// <summary>
+        /// Checks a fingerprint stored before packing is the width the filter names, as
+        /// the read does before the next is copied.
+        /// </summary>
+        private static void CheckStored(int length, uint f)
+        {
+            if (length != f)
+            {
+                throw new InvalidDataException(
+                    $"Filter holds a {length}-byte fingerprint where its " +
+                    $"own fingerprint size is {f}.");
             }
         }
 

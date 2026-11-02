@@ -768,6 +768,172 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an old payload read back and a new filter, with an `ArgumentException` saying so,
   since the same item sets different bits in each.
 
+- **`DDSketch` filed a value its 32-bit bucket index could not hold in the last bucket
+  there is, and answered with that bucket for all of them.** A bucket is numbered by an
+  `int`, and the cast saturated. At a relative accuracy of 1e-10 an `int` reaches 2^31
+  buckets of 2e-10, so only values from about 0.65 to 1.54 have a bucket: a sketch of
+  {1000, 2000, 1e6} answered 1.536 at every quantile. On a sketch that already held a
+  value, the same index failed with an `OverflowException` inside the store's allocation,
+  as did any two values further apart than one array of buckets holds.
+  <br><br>
+  `Add` now refuses a value whose bucket is not a 32-bit index, or is further from the
+  buckets in use than one array holds, 2,147,483,591, with an `ArgumentOutOfRangeException`
+  that names the range the accuracy reaches. The sketch is unchanged. `Merge` refuses a
+  merge that would span more, before it changes either store. Every double has a bucket
+  from an accuracy of about 1.74e-7; below that the range narrows, to 0.014 – 73 at 1e-9.
+  The constructor and the reader refuse an accuracy below about 5.6e-17, where
+  `(1+a)/(1-a)` is exactly 1 and no value has a bucket of its own. No accuracy and value
+  that was bucketed correctly stops being.
+  <br><br>
+  With the ends of the range now reachable on purpose, the store's own arithmetic at them
+  is 64-bit: its window, which sits partly below `int.MinValue` around an index there, and
+  the quantile walk and merge, whose loops would otherwise wrap past `int.MaxValue`. The
+  stored format does not change.
+
+- **`TopK` counted the items added in a 32-bit field that wrapped to zero at 2^32 adds, and
+  wrote it that way.** The count is internal and nothing read it, but a structure that had
+  seen four billion items stored a count of none. The sketch inside has counted in 64 bits
+  all along, so the count is now read from it, and the payload's 32-bit field holds that
+  saturated at 4,294,967,295. A reader takes the count from the sketch and does not use the
+  field, so a payload any version wrote reads the same, and one written below 2^32 items
+  is byte for byte what it was.
+
+- **`Grafite.SizeInBytes()` worked out its answer in an `int`, which wrapped.** It returns
+  a `ulong`, but added the words of low and high bits and multiplied by eight before
+  widening, so a filter of 2 GiB reported a size near 2^64 and one of 4 GiB reported none.
+  It is 64-bit throughout now. The signature is unchanged.
+  <br><br>
+  `Grafite.Build` built a filter at a weaker rate than it was asked for, and said nothing.
+  The keys are hashed into a universe of `n × maxRangeSize / falsePositiveRate`, and the
+  hash works modulo 2^61 − 1, so a request that wanted a wider universe was built at
+  2^61 − 2: four keys at 1% for ranges of 2^60 delivered 1, as `FalsePositiveRate` reported
+  and nothing else did. It now refuses, with an `ArgumentOutOfRangeException` naming
+  `maxRangeSize` and the largest range that works for that many keys at that rate (about
+  5.8e15 for four keys at 1%, 2.3e10 for a million), or, when not even a range of one key
+  fits, naming `falsePositiveRate` and the finest rate those keys can have, a little over
+  `n / 2^61`. This is the rule `QuotientFilter` follows for a rate finer than it can
+  deliver. Requests under the limit build as they did, to the same filter for a given seed.
+  <br><br>
+  A payload an earlier release wrote for a request that is now refused carries a universe
+  of exactly 2^61 − 2 and still reads, and answers as it did: measured on 300 keys over all
+  64 bits, no false negative and no point false positive. A payload with a universe past
+  that, which no release wrote, is refused. FORMAT.md's table of sizes has the row.
+
+- **`CountMinSketch`, `CountSketch` and `PrivateCountMinSketch` failed inside the
+  allocation of a row instead of refusing a size they could not build.** A row is one
+  array, which holds 2,147,483,591 counters. `CountMinSketch` allowed a width up to
+  2^32 − 1 and failed with an `OutOfMemoryException` just past the limit and an
+  `OverflowException` from 2^31; `CountSketch`, whose width is 1/ε² and not e/ε, shared
+  the guard written for the other, so an epsilon of 1e-5 (ten billion counters) saturated
+  the cast and failed the same way; `PrivateCountMinSketch` had no upper bound on its
+  width or depth. A delta whose reciprocal is infinite, below about 5.56e-309, has no
+  `ln(1/δ)` and was converted to a row count anyway. An epsilon of infinity had a width of
+  none, and built a sketch that divided by zero on its first add.
+  <br><br>
+  Each is now an `ArgumentOutOfRangeException` naming the parameter, before anything is
+  allocated: a width past 2,147,483,591 for all three, a depth past 710 for the first two
+  (the `SublimeCountMinSketch` limit, for the same reason) and past 2,147,483,591 for the
+  private sketch, and an epsilon with no width. The readers of `CountMinSketch` and
+  `PrivateCountMinSketch` refuse a payload that claims more as beyond anything built,
+  before it can ask for a row; `CountSketch`'s reader already checks its cells against its
+  dimensions. FORMAT.md's table of sizes has the four new rows. No size that built before
+  stops building.
+
+- **`InverseBloomFilter`, `HyperLogLog` and `DpswSketch` failed inside an allocation, or
+  saturated, instead of refusing a size they could not build.** `InverseBloomFilter`'s
+  slots are one array of references, which holds 2,147,483,591: a capacity past that was
+  an `OutOfMemoryException`, and from 2^31 an `OverflowException`. `HyperLogLog(2^31)`
+  was an `OverflowException`, since the registers are an array of bytes and the largest
+  power of two one holds is 2^30; `NewDefaultHyperLogLog` with an error of 1e-5, which
+  wants 2^34, cast the count to a `uint` that saturates and complained that 4,294,967,295
+  is not a power of two. `DpswSketch` sized a substream, the window to the power of the
+  substream factor, with a cast to an `int` that saturates, so a window of 2^40 at a factor
+  of 0.9 (2^36 items) was built as a substream of 2^31 − 1 whose checkpoints are a list of
+  that many.
+  <br><br>
+  Each is now an `ArgumentOutOfRangeException` naming the parameter (`capacity`, `m`, `e`,
+  `window`), before anything is allocated. A substream may hold at most 2,147,483,591
+  items, the longest list; at the default factor of 0.7 that is a window of
+  21,445,114,182,289. The readers of `InverseBloomFilter` and `DpswSketch` refuse a
+  payload that claims more, as beyond anything built, so FORMAT.md's table of sizes has
+  both rows. `HyperLogLog`'s reader needs no check: a payload carries every register it
+  claims, and cannot carry 2^31 of them. No size that built before stops building.
+
+- **`BinaryFuseFilter.Build` and `BloomierFilter.Build` failed inside the allocation of
+  their array when the set was too large for one.** The fingerprints, or the cells, are one
+  array of bytes, which holds 2,147,483,591: from one byte too many the build failed with
+  an `OverflowException` (from 2^31) or an `OutOfMemoryException`, after hashing the whole
+  set. That is 1,908,641,337 distinct keys at 8-bit fingerprints and 954,204,160 at 16;
+  954,204,160, 636,136,107 and 318,068,053 for values of up to 8, 16 and 40 bits. A set with
+  more is now an `ArgumentOutOfRangeException` naming `items` or `pairs`, which says how
+  many keys it would have held, before any array of the build is allocated. The README's
+  and CAPACITY.md's "builds up to" are those numbers, where they said memory. No size that
+  built before stops building.
+
+- **`BloomierFilter.Build` refused a legitimate map when two different keys had the same
+  64-bit hash, and said a key had appeared twice.** The filter knows a key by its 64-bit
+  hash alone and keeps no keys, so two different keys that hash alike are one key to it. If
+  they have the same value that costs nothing, and it never did. If they have different
+  values the map cannot hold both, and the build is refused, which it always was; but the
+  message said "a key appears twice with different values", which for two different keys is
+  false and sends the caller looking for a repeat that is not there. The chance is
+  `n(n−1) / 2^65` for `n` keys: 0.03% at 100 million, 2.4% at 954 million, the most a map
+  of 8-bit values builds, and 39% at 2^32. The `ArgumentException` now says both ways two
+  entries can share a hash, gives the odds, and says what to do: build again with a
+  different `hash`, which moves the collision. The table of odds is in the XML docs of
+  `Build` and in CAPACITY.md. The format is unchanged; widening the identity would change
+  it, and has not been done.
+
+- **`DpswSketch` built with a width or depth no `PrivateCountMinSketch` holds, and failed
+  on its first `Add`.** Every sketch a window holds is a private sketch, whose row is one
+  array and whose rows are one array, so each of the width and the depth is at most
+  2,147,483,591. A window given more constructed, and the failure came when the first item
+  began the first substream, as that sketch's `ArgumentOutOfRangeException` naming that
+  type. A depth past the limit was worse at a small budget: the guard on the noise of the
+  window's leanest checkpoint divides the depth by the budget that checkpoint is left, so
+  it refused the depth first, as an `ArgumentOutOfRangeException` naming `alpha`.
+  <br><br>
+  The constructor now refuses a width or depth past the limit with an
+  `ArgumentOutOfRangeException` naming `width` or `depth` and saying what the limit is,
+  before the checkpoints are built, from the same symbols the private sketch uses so that
+  the two cannot drift. The reader refuses a payload that claims either past it, as beyond
+  anything built; it loaded one that held no substreams, since no inner sketch was there to
+  refuse the size. FORMAT.md's table of sizes has the two new rows. No size that built
+  before stops building: the limit is the sketch's own.
+
+- **`DDSketch.WriteTo` failed with an `OverflowException`, or ran off the end of an array,
+  for a sign of 2^28 buckets or more.** A sign's run of buckets was copied into a byte array
+  sized `buckets * 8` in an `int`, which is negative from 268,435,456 buckets (two gibibytes
+  of counts) and wraps to a small positive length from 2^29, so the loop that filled it
+  failed with an `ArgumentOutOfRangeException` instead. The constructor allows a run of
+  2,147,483,591 buckets, so a sketch could be built and used that could not be written, and
+  said so as an overflow. The length is now counted in 64 bits, and a sketch whose payload
+  would pass 2,147,483,573 bytes, the most an envelope holds, throws the
+  `InvalidOperationException` every structure too large to write throws, naming the size it
+  would be and the size one can be, before anything is allocated and with the sketch
+  unchanged. That is 268,435,439 buckets between both signs, since the two share a payload.
+  Every payload that wrote before is byte-identical, and the reader needed no change: it
+  divides the bytes it is given by eight and multiplies nothing.
+
+- **`DDSketch.Quantile` answered infinity for a value in the top binade of the doubles, and
+  zero for the smallest at the coarsest accuracy.** A bucket reports 2·γⁱ/(γ+1), and written
+  that way the working leaves the range of a double before the answer does: twice γⁱ is
+  infinite from 2^1023 (8.99e307) up, and γⁱ itself just past `double.MaxValue`, though the
+  answer, (1−a)·γⁱ, is never above the largest value its bucket holds. A sketch holding
+  `double.MaxValue` answered `PositiveInfinity` at every accuracy, and `NegativeInfinity` for
+  its negative. At the other end, at an accuracy of 0.99 the smallest 29 multiples of
+  `double.Epsilon` answered zero, which is not within 99% of anything positive.
+  <br><br>
+  An infinite answer is now worked out again from two halves of the power, and if that
+  overflows too the bucket reports `double.MaxValue`, which is within the accuracy of every
+  value it can hold since none is larger; a zero is `double.Epsilon`, likewise. Every other
+  answer is the one it was, bit for bit: the stored indices and counts are untouched, so
+  nothing persisted changes, and of 249,408 answers swept across 12 accuracies and both
+  signs the only ones that moved were the 34,734 infinite and the 58 zero. Among the subnormals the
+  answer is still gamma^i rounded to a multiple of 4.9e-324 and then rounded again, which
+  can leave it up to a unit (0.75 at worst, measured) outside the accuracy; it is not
+  corrected, because a bucket there that answered within the accuracy must keep its answer.
+
 - **A read refused for its budget named a number that did not load it.**
   `ReadBudgetExceededException.RequiredBytes` was the running total at the allocation
   that failed, so a payload was refused at its first allocation the budget did not cover,

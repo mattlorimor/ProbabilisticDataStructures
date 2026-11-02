@@ -41,13 +41,27 @@ namespace ProbabilisticDataStructures
         /// </param>
         /// <param name="delta">The probability that an estimate exceeds that error.</param>
         /// <param name="hash">The hash function to use, or null for the default.</param>
+        /// <remarks>
+        /// Each row is ceil(1 / epsilon^2) counters and is one array, so the widest is
+        /// 2,147,483,591, an epsilon of about 2.16e-5. There are ceil(ln(1 / delta)) rows,
+        /// at most 710, for a delta of about 5.6e-309.
+        /// </remarks>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// Epsilon is not positive, or asks for a row no array holds or for none at all.
+        /// Delta is not strictly between zero and one, or is so small that its reciprocal,
+        /// and so the row count, is infinite.
+        /// </exception>
         public CountSketch(double epsilon, double delta, Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
             Guard.ValidSketchEpsilon(epsilon, nameof(epsilon));
             Guard.ValidSketchDelta(delta, nameof(delta));
 
-            this.width = (uint)Math.Ceiling(1.0 / (epsilon * epsilon));
-            this.depth = (uint)Math.Ceiling(Math.Log(1 / delta));
+            // Refused before anything is allocated. The width is 1 / epsilon squared, which
+            // passes what an array holds long before epsilon is small, and a delta whose
+            // reciprocal is infinite has no row count to convert.
+            this.width = Guard.SketchWidth(
+                Math.Ceiling(1.0 / (epsilon * epsilon)), epsilon, nameof(epsilon));
+            this.depth = Guard.SketchRows(delta, nameof(delta));
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
 
             this.table = new long[this.depth][];

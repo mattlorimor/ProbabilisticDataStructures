@@ -262,7 +262,16 @@ address.
 | `HeavyKeeper` | `k` | 2,147,483,587 | as `TopK` |
 | `HeavyKeeper` | width | 2,147,483,591 | each array of buckets is one array |
 | `HeavyKeeper` | depth | 2,147,483,591 | the arrays are held in one |
+| `CountMinSketch` | width | 2,147,483,591 | each row is one array |
+| `CountMinSketch` | depth | 710 | `ceil(ln(1 / delta))` at the smallest delta whose reciprocal is a finite double |
+| `PrivateCountMinSketch` | width | 2,147,483,591 | each row is one array |
+| `PrivateCountMinSketch` | depth | 2,147,483,591 | the rows are held in one array |
+| `DpswSketch` | items in a substream | 2,147,483,591 | the checkpoints of a substream are a list with a slot for each item, and a list holds no more than an array |
+| `DpswSketch` | width | 2,147,483,591 | the sketches it holds are `PrivateCountMinSketch`es, whose rows are each one array |
+| `DpswSketch` | depth | 2,147,483,591 | as `width`: the rows of one of those sketches are held in one array |
+| `InverseBloomFilter` | capacity | 2,147,483,591 | the slots are one array of references |
 | `VarOpt` | `k` | 2,147,483,590 | each region is an array of `k + 1` slots |
+| `Grafite` | reduced universe `r` | 2,305,843,009,213,693,950 | the hash works modulo 2^61 − 1, and the constructor refuses a request that needs more; every release capped it here, so a payload written for a request that is now refused carries exactly this and reads |
 | `Grafite` | words of low bits | 2,147,483,591 | they are one array |
 | `Grafite` | words of high bits | 33,554,432 | enough for 2,147,483,647 bits, the most an `int` position addresses |
 | `SetSketch` | `m` | 2,147,483,591 | the registers are one array |
@@ -576,13 +585,18 @@ bytes   the registers, one byte each
 
 ```
 u32     k, the number of elements tracked
-u32     n, the number of items added
+u32     n, the number of items added, at most 4,294,967,295
 nested  CountMinSketch
 u32     element count
         per element:
 bytes     the element's data
 u64       its recorded frequency
 ```
+
+The number of items added is the nested sketch's count, which is a `u64`. `n` is that
+number held to what a `u32` holds: a structure that has seen more than 4,294,967,295 items
+writes 4,294,967,295, where releases up to 6.2.0 wrote the number modulo 2^32, which is
+zero at exactly that many. A reader takes the number from the sketch and does not use `n`.
 
 The elements are re-heaped on read rather than being trusted to arrive in heap order.
 They are the same elements either way and `Elements()` sorts them, so nothing about the
@@ -1217,7 +1231,8 @@ round.
 
 A reader rejects a window shorter than one item, a budget or checkpoint factor outside
 its range, a substream size below one or larger than the window, sketches with no rows
-or columns, a negative position, substreams that do not follow one another in order, a
+or columns or with more of either than a `PrivateCountMinSketch` holds (see Sizes), a
+negative position, substreams that do not follow one another in order, a
 substream holding nothing or more than its size, a substream ending past the items the
 window claims to have seen, and a nested sketch whose shape disagrees with the window's.
 It also applies the same refusal the constructor makes for a checkpoint factor whose

@@ -407,6 +407,24 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestBadParametersAreRefused()
         {
+            // A row is one array, and the rows are one array: a size past what an array
+            // holds is refused, naming the parameter, before either is allocated. Width
+            // had no upper guard at all and failed in the allocation, with an overflow
+            // from 2^31 up and an out-of-memory just past the limit.
+            foreach (var width in new[] { (uint)Array.MaxLength + 1, 3_000_000_000u, uint.MaxValue })
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => new PrivateCountMinSketch(width, 5, 1.0), $"a width of {width}");
+                Assert.AreEqual("width", ex.ParamName);
+            }
+
+            // Depth goes only as far as 2^32 - 1 here: one past the array's limit is
+            // seventeen gigabytes of references, and is held to the shared limit once
+            // there is one to name.
+            var deep = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new PrivateCountMinSketch(1, uint.MaxValue, 1.0));
+            Assert.AreEqual("depth", deep.ParamName);
+
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(
                 () => new PrivateCountMinSketch(0, 5, 1.0));
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(

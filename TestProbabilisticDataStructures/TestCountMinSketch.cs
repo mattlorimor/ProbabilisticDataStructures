@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System;
+using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 
@@ -161,6 +162,63 @@ namespace TestProbabilisticDataStructures
             for (int i = 0; i < n; i++)
             {
                 cms.Add(data[i]);
+            }
+        }
+
+        // ---- A constructor refuses what it cannot build ------------------------------
+
+        /// <summary>
+        /// Each row is one array, so a width past what an array holds is refused, naming
+        /// epsilon. Until now a width up to 2^32 - 1 was allowed by the guard on epsilon
+        /// and then failed inside the allocation, with an <see cref="OutOfMemoryException"/>
+        /// just past the limit and an <see cref="OverflowException"/> from 2^31 up.
+        /// An epsilon of infinity had no width at all, and built a sketch that divided by
+        /// zero on its first add.
+        /// </summary>
+        [TestMethod]
+        public void TestAWidthNoArrayHoldsIsRefusedBeforeAnythingIsAllocated()
+        {
+            var epsilons = new[]
+            {
+                // The width is Array.MaxLength + 1.
+                Math.E / (Array.MaxLength + 0.5),
+                // 2.7 billion, between an array's limit and what a uint holds.
+                1e-9,
+                1e-12,
+                double.Epsilon,
+                double.PositiveInfinity,
+            };
+
+            foreach (var epsilon in epsilons)
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => new CountMinSketch(epsilon, 0.5), $"an epsilon of {epsilon}");
+                Assert.AreEqual("epsilon", ex.ParamName);
+            }
+        }
+
+        /// <summary>
+        /// The depth is ln(1 / delta), so a delta whose reciprocal is infinite has none.
+        /// Below about 5.56e-309 it used to be converted to a row count anyway, and failed
+        /// in the allocation. The deepest sketch is 710 rows, and still builds.
+        /// </summary>
+        [TestMethod]
+        public void TestADeltaWithNoReciprocalIsRefused()
+        {
+            foreach (var delta in new[] { double.Epsilon, 1e-310, 5.5e-309 })
+            {
+                Assert.IsTrue(double.IsPositiveInfinity(1 / delta));
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => new CountMinSketch(0.5, delta), $"a delta of {delta}");
+                Assert.AreEqual("delta", ex.ParamName);
+            }
+
+            foreach (var delta in new[] { 5.6e-309, 1e-308 })
+            {
+                var deepest = new CountMinSketch(0.5, delta);
+                Assert.AreEqual(710u, deepest.Depth, $"a delta of {delta}");
+                deepest.Add(A_BYTES).Add(A_BYTES);
+                Assert.AreEqual(2UL, deepest.Count(A_BYTES));
             }
         }
 

@@ -161,27 +161,27 @@ namespace ProbabilisticDataStructures
 
         internal byte ReadByte()
         {
-            return Take(1)[0];
+            return Next(1)[0];
         }
 
         internal ushort ReadUInt16()
         {
-            return BinaryPrimitives.ReadUInt16LittleEndian(Take(2));
+            return BinaryPrimitives.ReadUInt16LittleEndian(Next(2));
         }
 
         internal uint ReadUInt32()
         {
-            return BinaryPrimitives.ReadUInt32LittleEndian(Take(4));
+            return BinaryPrimitives.ReadUInt32LittleEndian(Next(4));
         }
 
         internal ulong ReadUInt64()
         {
-            return BinaryPrimitives.ReadUInt64LittleEndian(Take(8));
+            return BinaryPrimitives.ReadUInt64LittleEndian(Next(8));
         }
 
         internal double ReadDouble()
         {
-            return BinaryPrimitives.ReadDoubleLittleEndian(Take(8));
+            return BinaryPrimitives.ReadDoubleLittleEndian(Next(8));
         }
 
         /// <summary>
@@ -267,7 +267,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal ReadOnlySpan<byte> ReadSpan(int count)
         {
-            return Take(count);
+            return Next(count);
         }
 
         /// <summary>
@@ -365,12 +365,29 @@ namespace ProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// The next <paramref name="count"/> bytes, from the held payload or, when the
+        /// payload is not held, from its stream.
+        /// </summary>
+        private ReadOnlySpan<byte> Next(int count)
+        {
+            if (this.source is null)
+            {
+                return Take(count);
+            }
+
+            RequireAhead(count);
+            return this.source.Take(count);
+        }
+
         private ReadOnlySpan<byte> Take(int count)
         {
-            RequireAhead(count);
-            if (this.source is not null)
+            if (count < 0 || this.offset + count > this.payload.Length)
             {
-                return this.source.Take(count);
+                throw new InvalidDataException(
+                    $"Payload ended after {this.payload.Length} bytes while reading " +
+                    $"{count} more at offset {this.offset}. It is truncated or does not " +
+                    "have the shape this structure expects.");
             }
 
             var span = this.payload.Slice(this.offset, count);
