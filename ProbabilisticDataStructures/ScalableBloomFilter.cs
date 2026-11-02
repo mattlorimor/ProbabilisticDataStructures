@@ -601,8 +601,13 @@ namespace ProbabilisticDataStructures
         /// and the bits are asked of the sizing functions the contained filter's
         /// constructor calls, rather than restated, so the two cannot disagree about
         /// where the ceiling is.
+        /// <para>
+        /// Internal so that a test can ask it about a capacity near 2^32 items without
+        /// building a filter that size. AddFilter calls this and nothing else to size
+        /// the next filter, so the test runs the rule that ships.
+        /// </para>
         /// </remarks>
-        private uint NextCapacity(double fpRate)
+        internal uint NextCapacity(double fpRate)
         {
             var index = this.Filters.Count;
 

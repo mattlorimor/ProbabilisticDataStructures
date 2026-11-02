@@ -273,6 +273,57 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// The capacity check refuses exactly the capacities past what a contained filter
+        /// is sized for, uint.MaxValue items, and accepts everything up to it. At
+        /// practical rates the bits check binds first -- a billion items at 1% already
+        /// need more than 2^32 bits -- so the rows above never reach this one, and a check
+        /// refusing at half the ceiling survived the whole suite. At a rate of about 0.9
+        /// an item costs under a quarter of a bit, so even uint.MaxValue items fit and
+        /// the capacity alone decides.
+        /// <para>
+        /// The rows straddle 2^32 three ways: 65,535 * 65,537 is uint.MaxValue exactly and
+        /// 65,536^2 is one past it; 2^31, at hint 1 and growth 2, is the first capacity a
+        /// check at half the ceiling refuses, and 2^32 is the next; and hint 3 at growth 2
+        /// reaches 3 * 2^30, between the two halves, then 3 * 2^31. The filter count is
+        /// set through the list rather than grown into, since only its length sizes the
+        /// next filter, and NextCapacity is asked directly so that nothing of 2^32 items
+        /// is built.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [DataRow(65_535u, 65_537u, 1, 4_294_967_295UL, true)]
+        [DataRow(65_536u, 65_536u, 1, 4_294_967_296UL, false)]
+        [DataRow(1u, 2u, 31, 2_147_483_648UL, true)]
+        [DataRow(1u, 2u, 32, 4_294_967_296UL, false)]
+        [DataRow(3u, 2u, 30, 3_221_225_472UL, true)]
+        [DataRow(3u, 2u, 31, 6_442_450_944UL, false)]
+        public void TestTheCapacityCeilingIsExactlyWhatAContainedFilterIsSizedFor(
+            uint hint, uint growth, int index, ulong capacity, bool accepted)
+        {
+            const double Fp = 0.9, R = 0.99;
+            var f = new ScalableBloomFilter(hint, Fp, R, growth);
+            f.Filters = Enumerable.Repeat(f.Filters[0], index).ToList();
+            var rate = Fp * Math.Pow(R, index);
+
+            // The bits check cannot be what decides: at this rate even the largest
+            // capacity a contained filter is sized for fits in its bits.
+            Assert.IsLessThan(uint.MaxValue, Utils.OptimalM(uint.MaxValue, rate),
+                "the bits check binds at this rate, so this row does not isolate the capacity check");
+
+            if (accepted)
+            {
+                Assert.AreEqual(capacity, (ulong)f.NextCapacity(rate),
+                    $"{hint} * {growth}^{index} is a capacity a contained filter holds");
+            }
+            else
+            {
+                var ex = Assert.ThrowsExactly<InvalidOperationException>(() => f.NextCapacity(rate),
+                    $"{hint} * {growth}^{index} = {capacity:N0} is past what a contained filter holds");
+                StringAssert.Contains(ex.Message, "more items than");
+            }
+        }
+
         [TestMethod]
         public void BenchmarkScalableBloomAdd()
         {
