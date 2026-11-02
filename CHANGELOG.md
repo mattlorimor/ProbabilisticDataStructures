@@ -884,6 +884,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Build` and in CAPACITY.md. The format is unchanged; widening the identity would change
   it, and has not been done.
 
+- **A payload whose byte run claimed almost `int.MaxValue` bytes was refused with an
+  `ArgumentOutOfRangeException`, not the `InvalidDataException` every other payload the
+  library will not read gets.** The reader checked a run against the payload as
+  `offset + count > length` in an `int`, and a claim within the offset of `int.MaxValue`
+  wrapped that sum negative, passed as short of the end, and failed in `Slice`. A run that
+  begins at offset 12 wrapped from a claim of 2,147,483,636, and one at offset 1,000 from
+  2,147,482,648; a claim of 2,147,483,584 did not wrap and was refused properly, while
+  2,147,483,647 was not. It needs a payload edited on purpose with its checksum repaired,
+  and it reached every structure that reads a run of bytes: the Bloom filters, the
+  counting, deletable, partitioned, stable, inverse and cuckoo filters (for payloads of
+  the layouts before the packed one), `ScalableBloomFilter`, `TopK`, `HeavyKeeper`,
+  `VarOpt`, `CountSketch`, the HyperLogLog family, `UltraLogLog`, `DDSketch`, the binary
+  fuse, Bloomier and quotient filters, and `InvertibleBloomLookupTable`. The check is now
+  made against the bytes that remain, which cannot wrap. The check was the same from 3.2.0
+  through 6.2.0, and no payload this library wrote is refused that was not before. The
+  other arithmetic in the payload reader and writer was audited for the same pattern and
+  holds: the writer's growth was already worked out in 64 bits.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

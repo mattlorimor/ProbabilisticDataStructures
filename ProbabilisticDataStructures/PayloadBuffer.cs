@@ -230,7 +230,12 @@ namespace ProbabilisticDataStructures
 
         private ReadOnlySpan<byte> Take(int count)
         {
-            if (count < 0 || this.offset + count > this.payload.Length)
+            // Against what remains, not offset + count against the length: that sum is
+            // an int, and a run claiming within the offset of int.MaxValue wrapped it
+            // negative, passed as short of the end, and failed in Slice with an
+            // ArgumentOutOfRangeException rather than as the payload ending. The offset
+            // never passes the length, so the subtraction cannot wrap.
+            if (count < 0 || count > this.payload.Length - this.offset)
             {
                 throw new InvalidDataException(
                     $"Payload ended after {this.payload.Length} bytes while reading " +
