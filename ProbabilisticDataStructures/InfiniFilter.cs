@@ -113,12 +113,35 @@ namespace ProbabilisticDataStructures
                     "once the address has taken its share.");
             }
 
-            var slots = (uint)Math.Max(4.0,
-                Math.Pow(2, Math.Ceiling(Math.Log2(initialCapacity / ExpansionThreshold))));
-            var quotientBits = (int)Math.Log2(slots);
+            var quotientBits = InitialQuotientBits(initialCapacity);
 
             this.Segments.Add(new InfiniSegment(quotientBits, fingerprintBits));
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
+        }
+
+        /// <summary>
+        /// The most address bits a table has: its slot count is a uint holding 2^q, and
+        /// 2^32 is not one.
+        /// </summary>
+        internal const int MaxQuotientBits = 31;
+
+        /// <summary>
+        /// The most address bits this filter lets a table grow to. It is
+        /// <see cref="MaxQuotientBits"/>; a test lowers it to reach the refusal at the
+        /// limit without building a table of gigabytes.
+        /// </summary>
+        internal int QuotientBitsLimit { get; set; } = MaxQuotientBits;
+
+        /// <summary>
+        /// The address bits the first table gets for an initial capacity: enough slots
+        /// that the capacity fills no more than the expansion threshold of them, a
+        /// power of two, and at least four.
+        /// </summary>
+        internal static int InitialQuotientBits(uint initialCapacity)
+        {
+            var slots = (uint)Math.Max(4.0,
+                Math.Pow(2, Math.Ceiling(Math.Log2(initialCapacity / ExpansionThreshold))));
+            return (int)Math.Log2(slots);
         }
 
         private InfiniFilter(bool empty)

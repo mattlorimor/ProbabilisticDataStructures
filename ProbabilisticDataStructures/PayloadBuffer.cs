@@ -54,11 +54,24 @@ namespace ProbabilisticDataStructures
             value.CopyTo(Reserve(value.Length));
         }
 
+        /// <summary>
+        /// How long the buffer should be once it has to hold <paramref name="count"/> more
+        /// bytes after <paramref name="length"/> that are already written: double what it
+        /// was, so that growing is amortised, or exactly enough if doubling is not.
+        /// </summary>
+        /// <param name="capacity">The buffer's present length.</param>
+        /// <param name="length">How many bytes have been written.</param>
+        /// <param name="count">How many more are about to be.</param>
+        internal static int GrownCapacity(int capacity, int length, int count)
+        {
+            return Math.Max(capacity * 2, length + count);
+        }
+
         private Span<byte> Reserve(int count)
         {
             if (this.length + count > this.buffer.Length)
             {
-                var grown = new byte[Math.Max(this.buffer.Length * 2, this.length + count)];
+                var grown = new byte[GrownCapacity(this.buffer.Length, this.length, count)];
                 this.buffer.AsSpan(0, this.length).CopyTo(grown);
                 this.buffer = grown;
             }

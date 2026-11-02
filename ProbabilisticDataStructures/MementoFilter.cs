@@ -117,10 +117,33 @@ namespace ProbabilisticDataStructures
 
             this.MementoBits = (int)Math.Ceiling(Math.Log2(maxRangeSize));
 
+            this.Segments.Add(new MementoSegment(
+                InitialQuotientBits(initialCapacity), fingerprintBits, this.MementoBits));
+        }
+
+        /// <summary>
+        /// The most address bits a table has: its slot count is a uint holding 2^q, and
+        /// 2^32 is not one.
+        /// </summary>
+        internal const int MaxQuotientBits = 31;
+
+        /// <summary>
+        /// The most address bits this filter lets a table grow to. It is
+        /// <see cref="MaxQuotientBits"/>; a test lowers it to reach the refusal at the
+        /// limit without building a table of gigabytes.
+        /// </summary>
+        internal int QuotientBitsLimit { get; set; } = MaxQuotientBits;
+
+        /// <summary>
+        /// The address bits the first table gets for an initial capacity: enough slots
+        /// that the capacity fills no more than the expansion threshold of them, a
+        /// power of two, and at least four.
+        /// </summary>
+        internal static int InitialQuotientBits(uint initialCapacity)
+        {
             var slots = (uint)Math.Max(4.0,
                 Math.Pow(2, Math.Ceiling(Math.Log2(initialCapacity / ExpansionThreshold))));
-            this.Segments.Add(new MementoSegment(
-                (int)Math.Log2(slots), fingerprintBits, this.MementoBits));
+            return (int)Math.Log2(slots);
         }
 
         private MementoFilter(bool empty)

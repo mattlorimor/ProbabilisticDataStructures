@@ -121,6 +121,29 @@ namespace ProbabilisticDataStructures
         internal static readonly int MaxDepth = (int)Math.Ceiling(Math.Log(double.MaxValue));
 
         /// <summary>
+        /// The most counters a row can hold. A width is a power of two held in an int,
+        /// and the largest of those is 2^30.
+        /// </summary>
+        internal const int MaxWidth = 1 << 30;
+
+        /// <summary>
+        /// The widest this sketch lets a row grow. It is <see cref="MaxWidth"/>; a test
+        /// lowers it to reach the refusal at the limit without building a sketch
+        /// of a gigabyte.
+        /// </summary>
+        internal int WidthLimit { get; set; } = MaxWidth;
+
+        /// <summary>
+        /// The width a row starts at: a chunk's worth of counters over the size factor,
+        /// rounded down to a power of two.
+        /// </summary>
+        internal static int StartingWidth(int countersPerChunk, double sizeFactor)
+        {
+            var wanted = Math.Max(1.0, countersPerChunk / sizeFactor);
+            return 1 << BitOperations.Log2((uint)Math.Min(wanted, MaxWidth));
+        }
+
+        /// <summary>
         /// Creates a sketch whose estimates hold with probability at least 1 - delta
         /// and whose arrays grow as the square root of the stream's length.
         /// </summary>
@@ -185,8 +208,7 @@ namespace ProbabilisticDataStructures
             // The paper starts each array at one chunk, scaled by the size factor. A
             // width has to be a power of two for a hash's low bits to pick a counter,
             // so the chunk's worth is rounded down to one.
-            var wanted = Math.Max(1.0, this.countersPerChunk / sizeFactor);
-            this.width = 1 << BitOperations.Log2((uint)Math.Min(wanted, 1 << 30));
+            this.width = StartingWidth(this.countersPerChunk, sizeFactor);
 
             var rows = Math.Ceiling(Math.Log(1 / delta));
             if (rows > MaxDepth)
@@ -387,8 +409,7 @@ namespace ProbabilisticDataStructures
             this.countersPerChunk = ValeCounterArray.DefaultCountersPerChunk;
             this.stubBits = ValeCounterArray.DefaultStubBits;
 
-            var wanted = Math.Max(1.0, this.countersPerChunk / this.sizeFactor);
-            this.width = 1 << BitOperations.Log2((uint)Math.Min(wanted, 1 << 30));
+            this.width = StartingWidth(this.countersPerChunk, this.sizeFactor);
 
             for (var i = 0; i < this.rows.Length; i++)
             {
@@ -575,7 +596,7 @@ namespace ProbabilisticDataStructures
                     $"than {MaxDepth} would mean a delta whose reciprocal no double can " +
                     "express.");
             }
-            if (width == 0 || width > 1 << 30 || BitOperations.PopCount(width) != 1)
+            if (width == 0 || width > MaxWidth || BitOperations.PopCount(width) != 1)
             {
                 throw new InvalidDataException(
                     $"Sketch claims {width} counters a row. A width is a power of two " +

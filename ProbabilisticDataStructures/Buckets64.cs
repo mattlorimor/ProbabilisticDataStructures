@@ -142,6 +142,18 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Refuses a size this type cannot build, naming the parameter the caller knows
+        /// it by.
+        /// </summary>
+        /// <param name="count">Number of buckets.</param>
+        /// <param name="bucketSize">Number of bits per bucket.</param>
+        /// <param name="paramName">The parameter the refusal is reported against.</param>
+        internal static void CheckSize(ulong count, byte bucketSize, string paramName)
+        {
+            ValidBucketSize(bucketSize);
+        }
+
+        /// <summary>
         /// Creates a new Buckets64 with the provided number of buckets where each bucket
         /// is the specified number of bits.
         /// </summary>
@@ -149,7 +161,7 @@ namespace ProbabilisticDataStructures
         /// <param name="bucketSize">Number of bits per bucket.</param>
         internal Buckets64(ulong count, byte bucketSize)
         {
-            ValidBucketSize(bucketSize);
+            CheckSize(count, bucketSize, nameof(count));
 
             this.count = count;
             this.bucketSize = bucketSize;

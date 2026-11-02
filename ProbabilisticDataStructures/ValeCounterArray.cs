@@ -225,7 +225,7 @@ namespace ProbabilisticDataStructures
         internal ulong Get(int index)
         {
             var chunk = ChunkOf(index, out var i);
-            var at = chunk * ChunkBits;
+            var at = ChunkStart(chunk);
 
             var stub = ReadBits(_words, at + _stubBase + i * _stubBits, _stubBits);
             if (ReadBits(_words, at + i, 1) == 0)
@@ -242,7 +242,7 @@ namespace ProbabilisticDataStructures
         internal void Set(int index, ulong value)
         {
             var chunk = ChunkOf(index, out var i);
-            var at = chunk * ChunkBits;
+            var at = ChunkStart(chunk);
 
             WriteBits(_words, at + _stubBase + i * _stubBits, _stubBits,
                 ValeCounter.StubOf(value, _stubBits));
@@ -272,7 +272,7 @@ namespace ProbabilisticDataStructures
         internal void Increment(int index)
         {
             var chunk = ChunkOf(index, out var i);
-            var stubAt = chunk * ChunkBits + _stubBase + i * _stubBits;
+            var stubAt = ChunkStart(chunk) + _stubBase + i * _stubBits;
 
             var stub = ReadBits(_words, stubAt, _stubBits);
             if (stub != _stubMask)
@@ -290,7 +290,7 @@ namespace ProbabilisticDataStructures
         internal void Decrement(int index)
         {
             var chunk = ChunkOf(index, out var i);
-            var at = chunk * ChunkBits;
+            var at = ChunkStart(chunk);
             var stubAt = at + _stubBase + i * _stubBits;
 
             var stub = ReadBits(_words, stubAt, _stubBits);
@@ -306,6 +306,11 @@ namespace ProbabilisticDataStructures
                 Set(index, value - 1);
             }
         }
+
+        /// <summary>
+        /// The bit position of a chunk's first bit in the array.
+        /// </summary>
+        internal static int ChunkStart(int chunk) => chunk * ChunkBits;
 
         /// <summary>
         /// Which chunk a counter lives in, and where in that chunk.
@@ -414,7 +419,7 @@ namespace ProbabilisticDataStructures
 
             Array.Clear(_pool);
             WritePool(chunk);
-            WriteBits(_words, chunk * ChunkBits + _modeBit, 1, 1);
+            WriteBits(_words, ChunkStart(chunk) + _modeBit, 1, 1);
 
             return tails;
         }
@@ -580,7 +585,7 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         private void ReadPool(int chunk)
         {
-            var at = chunk * ChunkBits + _poolBase;
+            var at = ChunkStart(chunk) + _poolBase;
             for (var w = 0; w < _poolWords; w++)
             {
                 var width = Math.Min(WordBits, _poolBits - w * WordBits);
@@ -590,7 +595,7 @@ namespace ProbabilisticDataStructures
 
         private void WritePool(int chunk)
         {
-            var at = chunk * ChunkBits + _poolBase;
+            var at = ChunkStart(chunk) + _poolBase;
             for (var w = 0; w < _poolWords; w++)
             {
                 var width = Math.Min(WordBits, _poolBits - w * WordBits);

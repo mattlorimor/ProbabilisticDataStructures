@@ -107,8 +107,29 @@ namespace ProbabilisticDataStructures
         /// <param name="count">Number of buckets.</param>
         /// <param name="bucketSize">Number of bits per bucket.</param>
         internal Buckets(uint count, byte bucketSize)
-            : this(count, bucketSize, new byte[DataLength(count, bucketSize)])
+            : this(count, bucketSize, Allocate(count, bucketSize))
         {
+        }
+
+        /// <summary>
+        /// The empty array a new Buckets starts with, after the size has been checked.
+        /// </summary>
+        private static byte[] Allocate(uint count, byte bucketSize)
+        {
+            CheckSize(count, bucketSize, nameof(count));
+            return new byte[DataLength(count, bucketSize)];
+        }
+
+        /// <summary>
+        /// Refuses a size this type cannot build, naming the parameter the caller knows
+        /// it by.
+        /// </summary>
+        /// <param name="count">Number of buckets.</param>
+        /// <param name="bucketSize">Number of bits per bucket.</param>
+        /// <param name="paramName">The parameter the refusal is reported against.</param>
+        internal static void CheckSize(uint count, byte bucketSize, string paramName)
+        {
+            ValidBucketSize(bucketSize);
         }
 
         private Buckets(uint count, byte bucketSize, byte[] data)
@@ -123,7 +144,14 @@ namespace ProbabilisticDataStructures
         /// The bytes <paramref name="count"/> buckets of <paramref name="bucketSize"/>
         /// bits occupy, refusing a bucket size this type cannot hold.
         /// </summary>
-        private static long DataLength(uint count, byte bucketSize)
+        internal static long DataLength(uint count, byte bucketSize)
+        {
+            ValidBucketSize(bucketSize);
+
+            return (count * bucketSize + 7) / 8;
+        }
+
+        private static void ValidBucketSize(byte bucketSize)
         {
             if (bucketSize == 0)
             {
@@ -140,8 +168,14 @@ namespace ProbabilisticDataStructures
                     "maximum value is stored in a byte, so wider buckets would allocate " +
                     "the extra space without being able to hold a larger value.");
             }
+        }
 
-            return (count * bucketSize + 7) / 8;
+        /// <summary>
+        /// Where in the bit array a bucket begins.
+        /// </summary>
+        internal static uint BitOffset(uint bucket, byte bucketSize)
+        {
+            return bucket * bucketSize;
         }
 
         /// <summary>
@@ -166,14 +200,15 @@ namespace ProbabilisticDataStructures
         /// <returns>The modified bucket.</returns>
         internal Buckets Increment(uint bucket, int delta)
         {
-            int val = (int)(GetBits(bucket * this.bucketSize, this.bucketSize) + delta);
+            var offset = BitOffset(bucket, this.bucketSize);
+            int val = (int)(GetBits(offset, this.bucketSize) + delta);
 
             if (val > this.Max)
                 val = this.Max;
             else if (val < 0)
                 val = 0;
 
-            SetBits((uint)bucket * (uint)this.bucketSize, this.bucketSize, (uint)val);
+            SetBits(offset, this.bucketSize, (uint)val);
             return this;
         }
 
@@ -189,7 +224,7 @@ namespace ProbabilisticDataStructures
             if (value > this._max)
                 value = this._max;
 
-            SetBits(bucket * this.bucketSize, this.bucketSize, value);
+            SetBits(BitOffset(bucket, this.bucketSize), this.bucketSize, value);
             return this;
         }
 
@@ -200,7 +235,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The specified bucket.</returns>
         internal uint Get(uint bucket)
         {
-            return GetBits(bucket * this.bucketSize, this.bucketSize);
+            return GetBits(BitOffset(bucket, this.bucketSize), this.bucketSize);
         }
 
         /// <summary>
@@ -282,7 +317,7 @@ namespace ProbabilisticDataStructures
         /// <returns>The Buckets object the reset operation was performed on.</returns>
         internal Buckets Reset()
         {
-            this.Data = new byte[(this.count * this.bucketSize + 7) / 8];
+            this.Data = new byte[DataLength(this.count, this.bucketSize)];
             return this;
         }
 
