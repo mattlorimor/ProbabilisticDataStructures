@@ -1031,9 +1031,19 @@ The original, kept because replacing it would change the number an existing esti
 answers with — including one read back from a payload written years ago.
 
 **Reach for it when** you have stored `HyperLogLog` payloads to read, or need answers that
-match what earlier versions gave.
+match what earlier versions gave. They match, to within 0.03%, below about 143 million
+distinct items. Above that, earlier versions overestimated — by 3% at 2^28 and 13% at
+2^30 — and from about 5.7 billion they returned 0; a stored sketch now reads back to the
+corrected estimate.
 
 **Look elsewhere for new work.** Use `HyperLogLogPlus`.
+
+**Its range is set by its 32-bit hash.** It is close to its nominal error up to about 2^33
+distinct items, 8.6 billion, with 16 registers or more. Past that its registers fill, the
+error grows, and the estimate stops at a ceiling of about 2^32 × ln *m*: 11 billion with 16
+registers, 42 billion with 2^14. A sketch at its ceiling has probably seen at least that
+many and may have seen far more. `HyperLogLogPlus` and `UltraLogLog` hash to 64 bits and
+have no such limit in practice.
 
 Described by Flajolet, Fusy, Gandouet and Meunier in
 [HyperLogLog](http://algo.inria.fr/flajolet/Publications/FlFuGaMe07.pdf).

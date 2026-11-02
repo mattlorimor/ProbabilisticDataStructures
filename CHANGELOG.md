@@ -533,6 +533,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refusal now names the filter that could not be built, the reason, what the filter
   holds, and what would hold more; the filter is as it was and goes on answering. (#171)
 
+- **`HyperLogLog` overestimated large counts, and from about 5.7 billion distinct items
+  returned 0.** It applied the original paper's large-range correction, -2^32 ln(1 -
+  E/2^32), once its raw estimate E passed 2^32/30, about 143 million. The correction
+  assumes the raw estimate counts distinct 32-bit hash values and adds back the items
+  that collisions hid. The registers hide none: an item whose 32 bits match another's
+  moves them exactly as it would have under a wider hash, unless its run of zeros reaches
+  the end of the 32 bits. So the correction inflated every estimate it touched — by 3.2%
+  at 2^28 distinct items, 13% at 2^30, 29% at 2^31, 84% at 2^32 and 2.6 times at 5.5
+  billion, the same at every register count up to 2^24 (above that, linear counting
+  covered the start of the band). Once the raw estimate passed 2^32 the logarithm's
+  argument was negative, and the NaN converted to a count of 0 (on .NET 9 and later,
+  which recent releases target): for every sketch from about 5.7 billion items, 2^32.4,
+  and for any sketch whose registers were all full. The correction arrived with
+  `HyperLogLog` itself, in 2015, so every release is affected.
+  <br><br>
+  The correction is gone. What 32 bits do limit is how long a run of zeros a register can
+  record, and a register at that cap is now counted with Ertl's tau term, as
+  `HyperLogLogPlus` counts its own. The estimate is now close to its nominal error up to
+  about 2^33 distinct items with 16 registers or more; at 2^14 registers its mean is within
+  0.25% of the truth from 2^20 to 2^34. Past 2^33 the registers fill and the error grows,
+  and a sketch whose every register is full reports the largest estimate it can make,
+  about 2^32 × ln m — 11 billion with 16 registers, 42 billion with 2^14 — rather than 0.
+  A non-empty sketch never counts 0 now: the count is at least the number of registers
+  set. That also corrects the smallest sketches, where one register counted 0 after an
+  item and two registers could count 1 after two.
+  <br><br>
+  A sketch of one register could not be added to at all, in any release. Its register
+  index was taken with a 32-bit shift by 32, which C# performs as a shift by 0, so the
+  index was the whole hash and `Add` threw `IndexOutOfRangeException` for nearly every
+  item.
+  <br><br>
+  The stored format does not change, and neither does anything stored: a payload any
+  version wrote reads back holding the same registers, writes back the same bytes, and
+  estimates by the corrected rule. Below about 143 million distinct items, where the old
+  correction did not engage, estimates move only where a register has already reached the
+  cap, which is rare there, and by at most 0.03%.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added
