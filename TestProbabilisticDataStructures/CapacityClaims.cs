@@ -200,10 +200,13 @@ namespace TestProbabilisticDataStructures
                     return Enumerable.Range(0, 7).All(i =>
                         positions[(uint)i] == unchecked((uint)sum + (uint)(sum >> 32) * (uint)i) % m);
                 })),
+            // The rule, and a new filter built either side of it: 16 MiB of bits each.
             new Claim("a new filter whose positions are reduced modulo 2^27 or more", () =>
                 BitPlacement.WideFrom == WideFrom
                 && BitPlacement.For(WideFrom - 1) == Placement.Narrow
-                && BitPlacement.For(WideFrom) == Placement.Wide),
+                && BitPlacement.For(WideFrom) == Placement.Wide
+                && new BloomFilter((uint)LastNarrow(), 0.01).Placement == Placement.Narrow
+                && new BloomFilter((uint)LastNarrow() + 1, 0.01).Placement == Placement.Wide),
             new Claim("16 MiB of bits", () => WideFrom / 8 == 16 * 1024 * 1024),
             new Claim("about 14 million items at 1%", () =>
                 Rounds(LastNarrow() / 1e6, 14, 0)
