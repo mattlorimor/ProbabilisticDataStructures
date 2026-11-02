@@ -715,8 +715,12 @@ namespace TestProbabilisticDataStructures
             var bytes = new QuotientFilter(100, 0.01).ToByteArray();
             AssertRefused<QuotientFilter>(
                 PokeUInt32(bytes, 0, (uint)QuotientFilter.MaxQuotientBits + 2), "quotient bits");
+
+            // One bit past the hash, exactly: the remainder that, with this filter's
+            // quotient, makes sixty-five.
+            var quotientBits = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart));
             AssertRefused<QuotientFilter>(
-                PokeUInt32(bytes, 4, (uint)QuotientFilter.HashBits), "not a split of a");
+                PokeUInt32(bytes, 4, (uint)QuotientFilter.HashBits - quotientBits + 1), "not a split of a");
         }
 
         // ---- Exemptions, and the tests that check their reasons --------------------
