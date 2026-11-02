@@ -422,5 +422,53 @@ namespace TestProbabilisticDataStructures
                 bytes.AsSpan(bytes.Length - 4), crc.GetCurrentHashAsUInt32());
         }
 
+        // ---- The fingerprints are one array --------------------------------------------
+
+        /// <summary>
+        /// What sizing a filter for this many keys does, reached without the keys: the
+        /// same private step <see cref="BinaryFuseFilter.Build(IEnumerable{byte[]})"/> takes
+        /// once it has hashed them. Building a set this large is not a test, and the step
+        /// is what allocates.
+        /// </summary>
+        private static Exception ShapeFails(uint keys, BinaryFuseWidth width)
+        {
+            var filter = (BinaryFuseFilter)System.Runtime.CompilerServices.RuntimeHelpers
+                .GetUninitializedObject(typeof(BinaryFuseFilter));
+            typeof(BinaryFuseFilter).GetField(
+                "width", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .SetValue(filter, width);
+
+            var shape = typeof(BinaryFuseFilter).GetMethod(
+                "Shape", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+            var ex = Assert.ThrowsExactly<System.Reflection.TargetInvocationException>(
+                () => shape.Invoke(filter, new object[] { keys }));
+            return ex.InnerException!;
+        }
+
+        /// <summary>
+        /// The fingerprints are one array of bytes, which holds 2,147,483,591: about 1.9
+        /// billion keys at one byte each and 954 million at two. A set with more distinct
+        /// keys is refused, naming the items, where it used to fail inside the allocation
+        /// with an <see cref="OutOfMemoryException"/> once the array was too long to exist.
+        /// </summary>
+        [TestMethod]
+        public void TestMoreKeysThanOneArrayHoldsAreRefusedBeforeAnythingIsAllocated()
+        {
+            var cases = new[]
+            {
+                (BinaryFuseWidth.Eight, 1_950_000_000u),
+                (BinaryFuseWidth.Eight, 2_000_000_000u),
+                (BinaryFuseWidth.Sixteen, 1_000_000_000u),
+                (BinaryFuseWidth.Sixteen, 2_000_000_000u),
+            };
+
+            foreach (var (width, keys) in cases)
+            {
+                var ex = ShapeFails(keys, width);
+                Assert.IsInstanceOfType<ArgumentOutOfRangeException>(ex,
+                    $"{keys:N0} keys at {(int)width} bits failed with {ex.GetType().Name}: {ex.Message}");
+                Assert.AreEqual("items", ((ArgumentOutOfRangeException)ex).ParamName);
+            }
+        }
     }
 }

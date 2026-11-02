@@ -216,5 +216,106 @@ namespace TestProbabilisticDataStructures
             StringAssert.Contains(ex.Message, "bits");
         }
 
+        // ---- Two keys the filter cannot tell apart ----------------------------------------
+
+        /// <summary>
+        /// A key is identified by its 64-bit hash alone, and the keys themselves are not
+        /// kept. Two different keys with the same hash and different values therefore
+        /// cannot both be held, and the build is refused: about 2.4% of builds at the 954
+        /// million keys 8-bit values allow, and 39% at 2^32. It used to say that "a key
+        /// appears twice with different values", which for two different keys is false and
+        /// sends the caller looking for a repeat that is not there. The message now says
+        /// what happened, how likely it is, and what to do. A hash that sends both keys to
+        /// one value stands in for the chance.
+        /// </summary>
+        [TestMethod]
+        public void TestTwoKeysWithOneHashAreRefusedWithAnExplanationOfTheCollision()
+        {
+            var distinct = new[]
+            {
+                new KeyValuePair<byte[], ulong>(Key("a"), 1),
+                new KeyValuePair<byte[], ulong>(Key("b"), 2),
+            };
+
+            var ex = Assert.ThrowsExactly<ArgumentException>(
+                () => BloomierFilter.Build(distinct, 8, hash: data => 42UL));
+            Assert.AreEqual("pairs", ex.ParamName);
+            StringAssert.Contains(ex.Message, "different keys",
+                "a refusal that two different keys share a hash should say so");
+            StringAssert.Contains(ex.Message, "64-bit hash");
+            StringAssert.Contains(ex.Message, "hash function",
+                "the way out is a different hash function, and the message should say so");
+            StringAssert.Contains(ex.Message, "1 and 2",
+                "the two values it could not both keep should be named");
+
+            // Distinct keys that share a hash and a value are one entry, as they always were:
+            // either answers with the value, and nothing is lost.
+            var sameValue = new[]
+            {
+                new KeyValuePair<byte[], ulong>(Key("a"), 7),
+                new KeyValuePair<byte[], ulong>(Key("b"), 7),
+            };
+            var filter = BloomierFilter.Build(sameValue, 8, hash: data => 42UL);
+            Assert.AreEqual(1u, filter.Count());
+            Assert.IsTrue(filter.TryGetValue(Key("a"), out var value));
+            Assert.AreEqual(7UL, value);
+        }
+
+        /// <summary>
+        /// The same key twice is still the case the refusal was written for, and the
+        /// message still says it, beside the other possibility.
+        /// </summary>
+        [TestMethod]
+        public void TestTheRefusalNamesBothWaysTwoEntriesCanShareAHash()
+        {
+            var conflicting = new[]
+            {
+                new KeyValuePair<byte[], ulong>(Key("a"), 1),
+                new KeyValuePair<byte[], ulong>(Key("a"), 2),
+            };
+
+            var ex = Assert.ThrowsExactly<ArgumentException>(
+                () => BloomierFilter.Build(conflicting, 8));
+            StringAssert.Contains(ex.Message, "twice with different values");
+            StringAssert.Contains(ex.Message, "different keys");
+        }
+
+        // ---- The cells are one array ------------------------------------------------------
+
+        /// <summary>
+        /// The cells are one array of bytes, which holds 2,147,483,591: about 954 million
+        /// keys at 8-bit values, 636 million at 16 and 318 million at 40. Past that the
+        /// build is refused, naming the pairs, where it used to fail inside the
+        /// allocation. The sizing step is reached without the keys, since building a map
+        /// this large is not a test.
+        /// </summary>
+        [TestMethod]
+        public void TestMoreKeysThanOneArrayHoldsAreRefusedBeforeAnythingIsAllocated()
+        {
+            var cases = new[]
+            {
+                (8, 1_000_000_000u),
+                (16, 800_000_000u),
+                (40, 400_000_000u),
+                (8, 2_000_000_000u),
+            };
+
+            foreach (var (valueBits, keys) in cases)
+            {
+                var filter = (BloomierFilter)System.Runtime.CompilerServices.RuntimeHelpers
+                    .GetUninitializedObject(typeof(BloomierFilter));
+                typeof(BloomierFilter).GetField(
+                    "valueBits", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .SetValue(filter, valueBits);
+                var shape = typeof(BloomierFilter).GetMethod(
+                    "Shape", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+
+                var ex = Assert.ThrowsExactly<System.Reflection.TargetInvocationException>(
+                    () => shape.Invoke(filter, new object[] { keys })).InnerException!;
+                Assert.IsInstanceOfType<ArgumentOutOfRangeException>(ex,
+                    $"{keys:N0} keys at {valueBits} bits failed with {ex.GetType().Name}: {ex.Message}");
+                Assert.AreEqual("pairs", ((ArgumentOutOfRangeException)ex).ParamName);
+            }
+        }
     }
 }
