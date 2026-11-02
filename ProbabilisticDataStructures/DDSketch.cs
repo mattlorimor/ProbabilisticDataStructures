@@ -611,9 +611,54 @@ namespace ProbabilisticDataStructures
         /// The value a bucket reports: the point within it that is no further than the
         /// relative accuracy from anything the bucket can hold.
         /// </summary>
+        /// <remarks>
+        /// The midpoint is 2 * gamma^i / (gamma + 1), and written that way the working
+        /// leaves the range of a double before the answer does. Twice gamma^i is
+        /// infinite from 2^1023 upward, and gamma^i is itself infinite just past the
+        /// largest double, though the answer, (1 - a) * gamma^i, is at most the largest
+        /// value the bucket holds: a quantile over the largest doubles came back as
+        /// infinity. And at the other end, at a coarse accuracy the answer for the
+        /// smallest doubles rounds to zero, which is not within the accuracy of anything
+        /// positive.
+        /// <para>
+        /// So an answer that is finite and nonzero is the one it always was, bit for bit,
+        /// and the two kinds that are not are replaced. An infinite one is worked out
+        /// again without an intermediate outside the doubles: gamma^i as the product of
+        /// two halves of the power, each between 1e-162 and 1e155, with (1 - a) between
+        /// them. If that is infinite too, the largest double stands in for it: every
+        /// value the bucket holds is at most the largest double and above the midpoint
+        /// over (1 + a), so the largest double is within the accuracy of all of them. A
+        /// zero is the smallest double, for the bucket holds one, so the midpoint was
+        /// no more than half of it over (1 - a), and so no value in the bucket is more
+        /// than 1 / (1 - a) of it.
+        /// </para>
+        /// <para>
+        /// Among the subnormals the answer is still gamma^i rounded to a multiple of
+        /// 4.9e-324 and then rounded again, which can leave it a unit from the nearest
+        /// double to the midpoint. It is not corrected, because the same sum answers
+        /// correctly for most buckets there and telling which is which needs the bucket's
+        /// own largest and smallest doubles; a bucket that answered within the accuracy
+        /// keeps its answer.
+        /// </para>
+        /// </remarks>
         private double ValueAt(long index)
         {
-            return 2 * Math.Pow(this.gamma, index) / (this.gamma + 1);
+            var value = 2 * Math.Pow(this.gamma, index) / (this.gamma + 1);
+
+            if (value == 0)
+            {
+                return double.Epsilon;
+            }
+
+            if (!double.IsInfinity(value))
+            {
+                return value;
+            }
+
+            var half = index / 2;
+            value = Math.Pow(this.gamma, half) * (2 / (this.gamma + 1)) * Math.Pow(this.gamma, index - half);
+
+            return double.IsInfinity(value) ? double.MaxValue : value;
         }
 
         /// <summary>
