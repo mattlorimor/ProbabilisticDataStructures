@@ -619,9 +619,27 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Will decrement a random cell and (p-1) adjacent cells by 1. This is faster
         /// than generating p random numbers. Although the processes of picking the p
-        /// cells are not independent, each cell has a probability of p/m for being
+        /// cells are not independent, each cell has a probability close to p/m of being
         /// picked at each iteration, which means the properties still hold.
         /// </summary>
+        /// <remarks>
+        /// Exactly p/m only when m is a power of two. <see cref="SeededRandom.NextBelow"/>
+        /// gives each start floor(2^32 / m) of its 2^32 inputs or one more, so past 2^31
+        /// cells some starts are drawn twice as often as others. A cell is reached from p
+        /// consecutive starts, though, and their shares add up to floor(p * 2^32 / m) or
+        /// one more: each cell is decremented at one of two rates, both within
+        /// m / (p * 2^32) of p/m as a share of it, and the two average exactly p/m over
+        /// the cells. With the average exact, the stable point moves only with the
+        /// spread, at second order. At the cell counts where the spread is widest, near
+        /// the top of the range, that raises the false positive rate above what
+        /// <see cref="FalsePositiveRate"/> says by 0.4% of itself for one-bit cells built
+        /// for 1%, 1.1% for 10% and 3% for 50%, where p is 1. Wider cells decrement more
+        /// at a time and are moved less: two-bit cells by 0.04% for 1% and 0.6% for 50%.
+        /// An item whose cells all have the higher rate is forgotten sooner by about the
+        /// share its cells' rate is higher. These figures are worked out from the two
+        /// rates with Deng and Rafiei's per-cell model, which a scaled-down simulation of
+        /// the draw reproduced, and are not rebuilt by the suite.
+        /// </remarks>
         private void Decrement()
         {
             var r = this.random.NextBelow(this.M);
