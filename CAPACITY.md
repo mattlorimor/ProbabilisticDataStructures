@@ -105,6 +105,26 @@ which records the placement in a byte of its own and the item count in 64 bits, 
 records it when saved again. It does not merge with a new filter of the same size; to have
 the rate it was sized for, add its items to a new filter.
 
+## How the sketches place their columns
+
+`CountMinSketch`, `PrivateCountMinSketch` and `HeavyKeeper` count an item in one column of
+each row, and `InverseBloomFilter` holds it in one slot. Until the release after 6.2.0 each
+chose it as the 32-bit filters chose their positions, reducing a 32-bit value modulo the
+width, which gives the first `2^32 mod w` columns `1 / floor(2^32 / w)` more of the stream
+than the rest: about 3% more just past 2^27 columns, a quarter more at 2^29.8, and half as
+much again from a third of 2^32 to the widest row. A heavier column collects more of other
+items' counts, so the items counted there are overcounted by more than the bound assumes,
+and the inverse filter overwrites what its first slots hold sooner.
+
+From the release after 6.2.0 a new one 2^27 columns, buckets or slots wide or wider places
+with 64-bit values, as the 32-bit filters do from there, and a narrower one is placed as
+before. A count-min sketch is that wide from an `ε` of about 2.03e-8, and a row of it is a
+gigabyte, twice that to read, so it reads back only with a budget raised to match. Every
+save of these is written at format version 9, which records the placement in a byte of
+its own. One read from a payload written before keeps the 32-bit placement whatever its
+width, and records it when saved again; a count-min sketch read so does not merge with a
+new one of the same width.
+
 ## Sized for n items
 
 ### `BloomFilter`

@@ -344,6 +344,78 @@ namespace TestProbabilisticDataStructures
                     return true;
                 }
             }),
+            // ---- How the sketches place their columns -----------------------------------
+            new Claim("reducing a 32-bit value modulo the width", () =>
+                Enumerable.Range(0, 50).All(t =>
+                {
+                    // Widths in the band where the fold is largest, so a reduction that
+                    // did not wrap at 2^32 would come out different.
+                    var key = Key(t);
+                    var w = 1_500_000_000u + 7_919u * (uint)t;
+                    var hash = Defaults.GetDefaultHashFunction();
+                    var sum = hash(key);
+                    var columns = CountMinSketch.ColumnsOf(key, hash, Placement.Narrow, w);
+                    var buckets = HeavyKeeper.BucketsOf(sum, hash, Placement.Narrow, w);
+                    return Enumerable.Range(0, 5).All(i =>
+                            columns[(uint)i] == unchecked((uint)sum + (uint)(sum >> 32) * (uint)i) % w
+                            && PrivateCountMinSketch.ColumnsOf(key, hash, Placement.Narrow, w)[(uint)i] == columns[(uint)i]
+                            && buckets[(uint)i] == columns[(uint)i])
+                        && InverseBloomFilter.SlotOf(sum, Placement.Narrow, w) == (uint)sum % w;
+                })),
+            // floor(2^32 / w) just past 2^27, at 2^29.8, and from a third of 2^32 to the
+            // widest an array holds.
+            new Claim("about 3% more just past 2^27 columns, a quarter more at 2^29.8, and half as much again from a third of 2^32 to the widest row", () =>
+                Rounds(100.0 / ((1UL << 32) / ((1UL << 27) + 1)), 3, 0)
+                && (ulong)(4294967296.0 / Math.Pow(2, 29.8)) == 4
+                && (1UL << 32) / ((1UL << 32) / 3 + 1) == 2
+                && (1UL << 32) / (ulong)Array.MaxLength == 2),
+            // Each structure's own choice, either side of the threshold. Built for real
+            // there it is a gigabyte, which TestSketchPlacementAtTheThreshold does.
+            new Claim("a new one 2^27 columns, buckets or slots wide or wider places with 64-bit values", () =>
+                TestSketchPlacement.Kinds().All(k =>
+                    k.PlacementFor((uint)WideFrom) == Placement.Wide
+                    && k.PlacementFor((uint)Array.MaxLength) == Placement.Wide)),
+            new Claim("and a narrower one is placed as before", () =>
+                TestSketchPlacement.Kinds().All(k =>
+                    k.PlacementFor((uint)WideFrom - 1) == Placement.Narrow
+                    && k.PlacementOf(k.Build(null)) == Placement.Narrow)),
+            // The width is ceil(e / ε), so it reaches 2^27 at ε = e / 2^27.
+            new Claim("A count-min sketch is that wide from an `ε` of about 2.03e-8", () =>
+                Rounds(Math.E / WideFrom * 1e8, 2.03, 2)),
+            // Eight bytes a counter, and a read charges the payload and the row.
+            new Claim("a row of it is a gigabyte, twice that to read, so it reads back only with a budget raised to match", () =>
+                WideFrom * sizeof(ulong) == 1UL << 30
+                && Near(Slope("CountMinSketch"), 16, 0.01)
+                && Slope("CountMinSketch") * WideFrom > ReadOptions.DefaultMemoryBudget),
+            new Claim("Every save of these is written at format version 9", () =>
+                TestSketchPlacement.Kinds().All(k =>
+                    new Placement?[] { null, Placement.Narrow, Placement.Wide }.All(p => k.Write(k.Build(p))[4] == 9))
+                && new DpswSketch(128, 1.0, width: 8, depth: 2, seed: 1).Add(Key(1)).ToByteArray()[4] == 9),
+            // A version 1 payload, the count-min sketch's earlier layout: no placement
+            // byte. It reads placed with 32-bit values, and saved again says so.
+            new Claim("keeps the 32-bit placement whatever its width, and records it when saved again", () =>
+            {
+                var old = TestSketchPlacement.Downgraded(new CountMinSketch(0.01, 0.01).ToByteArray(), 24);
+                var read = Persistence.FromByteArray<CountMinSketch>(old);
+                var again = read.ToByteArray();
+                return System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(old.AsSpan(4)) == 1
+                    && read.Placement == Placement.Narrow
+                    && System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(again.AsSpan(4)) == 9 && again[14 + 24] == 0;
+            }),
+            new Claim("a count-min sketch read so does not merge with a new one of the same width", () =>
+            {
+                var old = new CountMinSketch(0.01, 0.01, null, Placement.Narrow);
+                var fresh = new CountMinSketch(0.01, 0.01, null, Placement.Wide);
+                try
+                {
+                    old.Merge(fresh);
+                    return false;
+                }
+                catch (ArgumentException)
+                {
+                    return true;
+                }
+            }),
             new Claim("a slot that holds an item is written as an index, a length and the item", () =>
                 Near(Facts["inverse slot bytes"], 16, 0.01)),
 
