@@ -703,6 +703,21 @@ rest of a message survives, as it should, and one that deletes the guard does no
 - Corruption is tested exhaustively at distance 1 (every single-bit flip must be
   rejected) plus structured hostile payloads for what bit flips can't reach. This is
   stronger than random fuzzing for the same class and fully reproducible.
+- **A run's claimed length is held to the bytes present, at the edge of an `int`.**
+  `PayloadReader` checked a run as `offset + count > length` in 32 bits, so a claim
+  within the offset of `int.MaxValue` wrapped the sum negative, passed, and failed in
+  `Slice` with an `ArgumentOutOfRangeException` where every other payload the library
+  will not read is an `InvalidDataException`. `TestPayloadReader` holds the reader to the
+  claims either side of the wrap point, which moves with the offset, and sweeps every
+  structure through its own payloads. It finds the runs by probing rather than by a layout
+  kept beside FORMAT.md: an offset is a run's length prefix when a u32 claiming more than
+  the whole payload, checksum repaired, is refused as "payload ended" at the offset just
+  after it. That claim is far from the edge, so the finding does not depend on the
+  arithmetic under test and works on a reader that has the defect. The roster is
+  `StructureId`; a structure no payload of which holds a run is exempt with a reason, and
+  the exemption is checked. The stored fixtures are swept with the samples because the
+  cuckoo filter's current layout writes no run, and the layouts before it read one per
+  entry.
 - Round-trip tests must cross the structure's interesting thresholds. The theta
   sketch's trim-boundary bug survived because every round-trip test used sub-trim
   streams; the first sketch to see real volume was the first to fail.
