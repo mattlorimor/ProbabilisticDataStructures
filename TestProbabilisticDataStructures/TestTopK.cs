@@ -1,5 +1,6 @@
 ﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
+using System;
 using System.Text;
 using System.Linq;
 
@@ -62,6 +63,137 @@ namespace TestProbabilisticDataStructures
 
             Assert.IsEmpty(topK.Elements());
             Assert.AreEqual(0u, topK.N);
+        }
+
+        // ---- The count of items added is 64-bit ------------------------------------------
+
+        private const int PayloadStart = 14;
+
+        /// <summary>
+        /// A payload of the given structure, edited so that it says it has seen
+        /// <paramref name="sketchCount"/> items by its sketch and <paramref name="stored"/>
+        /// by its own count, which is how a structure that has been running for four billion
+        /// adds is reached without them. Both checksums are repaired, so what the reader
+        /// has to say about it is its own.
+        /// </summary>
+        private static byte[] SeenItems(byte[] payload, ulong sketchCount, uint stored)
+        {
+            var bytes = (byte[])payload.Clone();
+
+            // u32 k, u32 n, then the sketch as a length-prefixed envelope of its own: a
+            // 14-byte header, and in its payload f64 epsilon, f64 delta, u32 width, u32
+            // depth and the u64 count.
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
+                bytes.AsSpan(PayloadStart + 4), stored);
+            var nestedLength = (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+                bytes.AsSpan(PayloadStart + 8));
+            var nested = PayloadStart + 12;
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
+                bytes.AsSpan(nested + PayloadStart + 8 + 8 + 4 + 4), sketchCount);
+
+            RepairChecksum(bytes.AsSpan(nested, nestedLength));
+            RepairChecksum(bytes);
+            return bytes;
+        }
+
+        private static void RepairChecksum(System.Span<byte> envelope)
+        {
+            var crc = new System.IO.Hashing.Crc32();
+            crc.Append(envelope.Slice(4, envelope.Length - 8));
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
+                envelope.Slice(envelope.Length - 4), crc.GetCurrentHashAsUInt32());
+        }
+
+        private static TopK AfterSeeing(ulong items)
+        {
+            var seed = new TopK(0.01, 0.01, 3);
+            seed.Add(BOB_BYTES);
+            return Persistence.FromByteArray<TopK>(
+                SeenItems(seed.ToByteArray(), items, (uint)System.Math.Min(items, uint.MaxValue)));
+        }
+
+        /// <summary>
+        /// The count of items passes four billion without wrapping, and is written
+        /// saturated and read back exact. It was a <c>uint</c> that went to zero at 2^32
+        /// and was written that way, a count of nothing in a structure that had seen four
+        /// billion items. The sketch inside has counted them in 64 bits all along, so the
+        /// count is read from it.
+        /// </summary>
+        [TestMethod]
+        public void TestTheItemCountDoesNotWrapAtFourBillion()
+        {
+            var topK = AfterSeeing(uint.MaxValue - 1UL);
+            Assert.AreEqual(uint.MaxValue - 1UL, topK.N);
+
+            topK.Add(BOB_BYTES).Add(BOB_BYTES).Add(BOB_BYTES);
+
+            const ulong expected = uint.MaxValue + 2UL;
+            Assert.AreEqual(expected, topK.N,
+                "three adds from 2^32 - 2 are 2^32 + 1, and a count that wrapped says 1");
+
+            // The stored field is 32 bits, so it holds what fits and no more.
+            var written = topK.ToByteArray();
+            Assert.AreEqual(uint.MaxValue,
+                System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+                    written.AsSpan(PayloadStart + 4)),
+                "past the 32-bit field the stored count stays at its largest");
+
+            // And what is read back is the real count, from the sketch.
+            var restored = Persistence.FromByteArray<TopK>(written);
+            Assert.AreEqual(expected, restored.N);
+            CollectionAssert.AreEqual(written, restored.ToByteArray(),
+                "a structure past four billion items did not write what it read");
+        }
+
+        /// <summary>
+        /// Merging adds the counts, and past four billion between them it does not wrap.
+        /// </summary>
+        [TestMethod]
+        public void TestMergingCountsPastFourBillionItems()
+        {
+            var big = AfterSeeing(uint.MaxValue - 1UL);
+            var small = AfterSeeing(5);
+
+            big.Merge(small);
+
+            Assert.AreEqual(uint.MaxValue + 4UL, big.N,
+                "2^32 - 2 and 5 items are 2^32 + 3");
+        }
+
+        /// <summary>
+        /// Below the field's limit nothing changes: the stored count is the count.
+        /// </summary>
+        [TestMethod]
+        public void TestTheStoredCountIsTheCountBelowTheFieldsLimit()
+        {
+            var topK = new TopK(0.01, 0.01, 3);
+            for (var i = 0; i < 7; i++) topK.Add(BOB_BYTES);
+
+            var written = topK.ToByteArray();
+            Assert.AreEqual(7u,
+                System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+                    written.AsSpan(PayloadStart + 4)));
+            Assert.AreEqual(7UL, Persistence.FromByteArray<TopK>(written).N);
+        }
+
+        /// <summary>
+        /// A payload written before this was fixed reads, and reads with the real count.
+        /// Its field is whatever the count was modulo 2^32, which is nothing to rely on, so
+        /// it is the sketch's count that is used: here the sketch has seen 2^32 + 3 items
+        /// and the field says 3, as a structure of that age wrote it.
+        /// </summary>
+        [TestMethod]
+        public void TestTheCountComesFromTheSketchWhateverTheFieldSays()
+        {
+            var topK = new TopK(0.01, 0.01, 3);
+            for (var i = 0; i < 7; i++) topK.Add(BOB_BYTES);
+            var written = topK.ToByteArray();
+
+            var disagreeing = SeenItems(written, 7, 12345);
+            Assert.AreEqual(7UL, Persistence.FromByteArray<TopK>(disagreeing).N);
+
+            var wrapped = SeenItems(written, uint.MaxValue + 4UL, 3);
+            Assert.AreEqual(uint.MaxValue + 4UL, Persistence.FromByteArray<TopK>(wrapped).N);
         }
 
         [TestMethod]

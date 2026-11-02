@@ -584,6 +584,16 @@ namespace TestProbabilisticDataStructures
                 PokeUInt32(bytes, LowWordsOffset, Grafite.MaxLowWords));
             AssertRefusedOnlyForMissingBytes<Grafite>(
                 PokeUInt32(bytes, highWordsOffset, Grafite.MaxHighWords));
+
+            // The reduced universe, a u64 at 0, is at most the hash's modulus less one. The
+            // builder refuses a request that wants more (TestGrafite holds the edge), the
+            // reader a payload that carries more, and a payload at the limit, which is what
+            // earlier releases wrote when they capped, reads. (A constant, so its value is
+            // pinned by the FORMAT.md table and not by an assertion the compiler evaluates.)
+            var past = PokeUInt32(PokeUInt32(bytes, 0, 0xFFFFFFFF), 4, 0x1FFFFFFF);
+            AssertRefused<Grafite>(past, PastTheLimit);
+            var atTheLimit = PokeUInt32(PokeUInt32(bytes, 0, 0xFFFFFFFE), 4, 0x1FFFFFFF);
+            Assert.AreEqual(Grafite.MaxUniverse, Persistence.FromByteArray<Grafite>(atTheLimit).R);
         }
 
         /// <summary>
@@ -643,6 +653,145 @@ namespace TestProbabilisticDataStructures
                     PokeUInt32(deepest.ToByteArray(), widthOffset, (uint)SublimeCountMinSketch.MaxWidth)));
             Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
                 "a payload at the widest row should be refused for what it costs, not its size");
+        }
+
+        /// <summary>
+        /// A row is one array, and the depth is the rows the smallest delta with a
+        /// reciprocal gives. The deepest sketch is small, so it is built and read back;
+        /// the widest is gigabytes a row, so its side is the constructor's refusal one
+        /// past, the reader's refusals, and at the limit the cost it is refused for.
+        /// </summary>
+        [TestMethod]
+        public void TestCountMinSketchLimitsAreShared()
+        {
+            Assert.AreEqual((uint)Array.MaxLength, CountMinSketch.MaxWidth);
+            // The same depth as the Sublime sketch, whose limit is worked out separately.
+            Assert.AreEqual((uint)SublimeCountMinSketch.MaxDepth, CountMinSketch.MaxDepth);
+
+            Assert.AreEqual("epsilon", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new CountMinSketch(Math.E / (Array.MaxLength + 0.5), 0.5)).ParamName);
+            Assert.AreEqual("delta", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new CountMinSketch(0.5, double.Epsilon)).ParamName);
+
+            var deepest = new CountMinSketch(0.5, 1e-308);
+            Assert.AreEqual(CountMinSketch.MaxDepth, deepest.Depth);
+            for (var i = 0; i < 100; i++) deepest.Add(Key(i));
+            AssertRoundTrips(deepest);
+
+            // f64 epsilon, f64 delta, u32 width, u32 depth.
+            var bytes = new CountMinSketch(0.5, 0.5).ToByteArray();
+            AssertRefused<CountMinSketch>(PokeUInt32(bytes, 16, CountMinSketch.MaxWidth + 1), PastTheLimit);
+            AssertRefused<CountMinSketch>(PokeUInt32(bytes, 20, CountMinSketch.MaxDepth + 1), PastTheLimit);
+
+            var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() =>
+                Persistence.FromByteArray<CountMinSketch>(
+                    PokeUInt32(bytes, 16, CountMinSketch.MaxWidth)));
+            Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
+                "a payload at the widest row should be refused for what it costs, not its size");
+
+            // At the deepest, the size is accepted and the rows it claims are not there.
+            AssertRefused<CountMinSketch>(
+                PokeUInt32(bytes, 20, CountMinSketch.MaxDepth), "Payload ended");
+
+            // The edges of what the constructor's two checks accept, which are reached
+            // here without the arrays: the widest row is the largest array, and the
+            // deepest sketch is the smallest delta that has a reciprocal.
+            Assert.AreEqual((uint)Array.MaxLength, Guard.SketchWidth(Array.MaxLength, 1.0, "epsilon"));
+            Assert.AreEqual(1u, Guard.SketchWidth(1.0, 1.0, "epsilon"));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => Guard.SketchWidth(Array.MaxLength + 1.0, 1.0, "epsilon"));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => Guard.SketchWidth(0.0, 1.0, "epsilon"));
+            Assert.AreEqual(CountMinSketch.MaxDepth, Guard.SketchRows(5.6e-309, "delta"));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => Guard.SketchRows(5.5e-309, "delta"));
+            Assert.AreEqual(1u, Guard.SketchRows(0.9999, "delta"));
+        }
+
+        /// <summary>
+        /// The rows and the counters in each are arrays. Structural at the limit, where a
+        /// sketch is gigabytes of noise: the constructor's refusal one past, the reader's
+        /// the same, and the cost a payload at the limit is refused for.
+        /// </summary>
+        [TestMethod]
+        public void TestPrivateCountMinSketchLimitsAreShared()
+        {
+            Assert.AreEqual((uint)Array.MaxLength, PrivateCountMinSketch.MaxWidth);
+            Assert.AreEqual((uint)Array.MaxLength, PrivateCountMinSketch.MaxDepth);
+
+            Assert.AreEqual("width", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new PrivateCountMinSketch(PrivateCountMinSketch.MaxWidth + 1, 1, 1.0)).ParamName);
+            Assert.AreEqual("depth", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new PrivateCountMinSketch(1, PrivateCountMinSketch.MaxDepth + 1, 1.0)).ParamName);
+
+            // u32 width, u32 depth.
+            var bytes = new PrivateCountMinSketch(64, 2, 1.0, seed: 1).ToByteArray();
+            AssertRefused<PrivateCountMinSketch>(
+                PokeUInt32(bytes, 0, PrivateCountMinSketch.MaxWidth + 1), PastTheLimit);
+            AssertRefused<PrivateCountMinSketch>(
+                PokeUInt32(bytes, 4, PrivateCountMinSketch.MaxDepth + 1), PastTheLimit);
+
+            foreach (var offset in new[] { 0, 4 })
+            {
+                var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() =>
+                    Persistence.FromByteArray<PrivateCountMinSketch>(
+                        PokeUInt32(bytes, offset, (uint)Array.MaxLength)));
+                Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
+                    "a payload at the limit should be refused for what it costs, not its size");
+            }
+        }
+
+        /// <summary>
+        /// The slots are one array of references, sixteen gigabytes at the limit. The
+        /// constructor refuses one past it, the reader refuses a payload that claims
+        /// one past it, and a payload at it is refused for what the slots cost.
+        /// </summary>
+        [TestMethod]
+        public void TestInverseBloomFilterLimitIsShared()
+        {
+            Assert.AreEqual((uint)Array.MaxLength, InverseBloomFilter.MaxCapacity);
+            Assert.AreEqual("capacity", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new InverseBloomFilter(InverseBloomFilter.MaxCapacity + 1)).ParamName);
+
+            // u32 capacity, then u32 occupied.
+            var bytes = new InverseBloomFilter(100).ToByteArray();
+            AssertRefused<InverseBloomFilter>(
+                PokeUInt32(bytes, 0, InverseBloomFilter.MaxCapacity + 1), PastTheLimit);
+
+            var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() =>
+                Persistence.FromByteArray<InverseBloomFilter>(
+                    PokeUInt32(bytes, 0, InverseBloomFilter.MaxCapacity)));
+            Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
+                "a payload at the limit should be refused for what it costs, not its size");
+        }
+
+        /// <summary>
+        /// A substream's checkpoints are a list with a slot for each item, so the
+        /// longest substream is the longest list. The constructor refuses a window and
+        /// factor that make more, before building the list; the reader refuses a payload
+        /// that claims more, and one that claims exactly that is refused for what the
+        /// list would cost. (<see cref="TestDpswSketch"/> holds the sizing rule to its
+        /// edge, one item either side.)
+        /// </summary>
+        [TestMethod]
+        public void TestDpswSketchLimitIsShared()
+        {
+            Assert.AreEqual(Array.MaxLength, DpswSketch.MaxSubstreamSize);
+            Assert.AreEqual("window", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new DpswSketch(1L << 40, 1.0, beta: 0.9)).ParamName);
+
+            // u64 window, f64 rho, f64 alpha, then u32 substream size at 24.
+            var bytes = new DpswSketch(100, 1.0, seed: 1).ToByteArray();
+            AssertRefused<DpswSketch>(
+                PokeUInt32(bytes, 24, (uint)DpswSketch.MaxSubstreamSize + 1), PastTheLimit);
+
+            // A window the low word of which is 2^32 - 1 can have a substream at the limit.
+            var wide = PokeUInt32(bytes, 0, uint.MaxValue);
+            var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() =>
+                Persistence.FromByteArray<DpswSketch>(
+                    PokeUInt32(wide, 24, (uint)DpswSketch.MaxSubstreamSize)));
+            Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
+                "a payload at the limit should be refused for what it costs, not its size");
         }
 
         /// <summary>
@@ -1203,19 +1352,12 @@ namespace TestProbabilisticDataStructures
                 (StructureId.BloomFilter, NoCap, nameof(TestBloomFilterReadsPastTheOldCeiling)),
                 (StructureId.DeletableBloomFilter, NoCap,
                     nameof(TestDeletableBloomFilterReadsPastTheOldCeiling)),
-                (StructureId.InverseBloomFilter, NoCap,
-                    nameof(TestInverseBloomFilterReadsPastTheOldCeiling)),
-                (StructureId.CountMinSketch, NoCap,
-                    nameof(TestCountMinSketchReadsPastTheOldCeiling)),
                 (StructureId.CountSketch, NoCap, nameof(TestCountSketchReadsPastTheOldCeiling)),
                 (StructureId.BinaryFuseFilter, NoCap,
                     nameof(TestBinaryFuseFilterReadsPastTheOldCeiling)),
                 (StructureId.DDSketch, NoCap, nameof(TestDDSketchReadsPastTheOldCeiling)),
                 (StructureId.InvertibleBloomLookupTable, NoCap,
                     nameof(TestInvertibleBloomLookupTableReadsPastTheOldCeiling)),
-                (StructureId.PrivateCountMinSketch, NoCap,
-                    nameof(TestPrivateCountMinSketchReadsPastTheOldCeiling)),
-                (StructureId.DpswSketch, NoCap, nameof(TestDpswSketchReadsPastTheOldCeiling)),
                 (StructureId.HyperLogLog, NoCap, nameof(TestHyperLogLogReadsPastTheOldCeiling)),
             };
 
@@ -1291,6 +1433,18 @@ namespace TestProbabilisticDataStructures
                 (StructureId.SublimeCountMinSketch,
                     new[] { nameof(TestSublimeCountMinSketchPastTheOldRowCeilingRoundTrips) },
                     nameof(TestSublimeCountMinSketchLimitIsShared)),
+                (StructureId.CountMinSketch,
+                    new[] { nameof(TestCountMinSketchReadsPastTheOldCeiling) },
+                    nameof(TestCountMinSketchLimitsAreShared)),
+                (StructureId.PrivateCountMinSketch,
+                    new[] { nameof(TestPrivateCountMinSketchReadsPastTheOldCeiling) },
+                    nameof(TestPrivateCountMinSketchLimitsAreShared)),
+                (StructureId.InverseBloomFilter,
+                    new[] { nameof(TestInverseBloomFilterReadsPastTheOldCeiling) },
+                    nameof(TestInverseBloomFilterLimitIsShared)),
+                (StructureId.DpswSketch,
+                    new[] { nameof(TestDpswSketchReadsPastTheOldCeiling) },
+                    nameof(TestDpswSketchLimitIsShared)),
                 (StructureId.ScalableBloomFilter,
                     new[] { nameof(TestScalableFilterReaderTakesAFilterCountPastTheOldCeiling) },
                     nameof(TestScalableFilterLimitIsShared)),
@@ -1335,7 +1489,14 @@ namespace TestProbabilisticDataStructures
                 [("HeavyKeeper", "`k`")] = ElementHeap.MaxCapacity,
                 [("HeavyKeeper", "width")] = HeavyKeeper.MaxWidth,
                 [("HeavyKeeper", "depth")] = HeavyKeeper.MaxDepth,
+                [("CountMinSketch", "width")] = CountMinSketch.MaxWidth,
+                [("CountMinSketch", "depth")] = CountMinSketch.MaxDepth,
+                [("PrivateCountMinSketch", "width")] = PrivateCountMinSketch.MaxWidth,
+                [("PrivateCountMinSketch", "depth")] = PrivateCountMinSketch.MaxDepth,
+                [("InverseBloomFilter", "capacity")] = InverseBloomFilter.MaxCapacity,
+                [("DpswSketch", "items in a substream")] = (ulong)DpswSketch.MaxSubstreamSize,
                 [("VarOpt", "`k`")] = VarOpt.MaxK,
+                [("Grafite", "reduced universe `r`")] = Grafite.MaxUniverse,
                 [("Grafite", "words of low bits")] = Grafite.MaxLowWords,
                 [("Grafite", "words of high bits")] = Grafite.MaxHighWords,
                 [("SetSketch", "`m`")] = (ulong)SetSketch.MaxRegisters,

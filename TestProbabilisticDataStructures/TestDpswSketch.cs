@@ -20,6 +20,38 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestDpswSketch
     {
+        /// <summary>
+        /// A substream is the window raised to the substream factor, and the checkpoints
+        /// of one are a list with a slot for every item in it, so it holds at most what an
+        /// array does. A window and factor that make it more are refused, naming the
+        /// window: the size was cast to an int, which saturates, so the substream became
+        /// 2^31 - 1 items whatever it was meant to be. The hook is called directly, since
+        /// building the checkpoints of a substream this long is the failure.
+        /// </summary>
+        [TestMethod]
+        public void TestASubstreamNoListCouldHoldIsRefusedNotSaturated()
+        {
+            // 2^40 to the 0.9 is 2^36 items.
+            var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => DpswSketch.SubstreamSizeFor(1L << 40, 0.9));
+            Assert.AreEqual("window", ex.ParamName);
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => DpswSketch.SubstreamSizeFor(long.MaxValue, 0.99));
+
+            // The line itself, straddled: a factor a hair under one takes a window of
+            // Array.MaxLength to a substream of Array.MaxLength (the power is a twentieth
+            // of an item short), and a window one longer to one item past it.
+            const double beta = 1 - 1e-12;
+            Assert.AreEqual(Array.MaxLength, DpswSketch.SubstreamSizeFor(Array.MaxLength, beta));
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => DpswSketch.SubstreamSizeFor(Array.MaxLength + 1L, beta));
+
+            // And sizes that built before are unchanged.
+            Assert.AreEqual(389, DpswSketch.SubstreamSizeFor(5000, 0.7));
+            Assert.AreEqual(1, DpswSketch.SubstreamSizeFor(1, 0.5));
+            Assert.AreEqual(50, DpswSketch.SubstreamSizeFor(2500, 0.5));
+        }
+
         private static byte[] Key(int i) => Encoding.UTF8.GetBytes("k" + i);
 
         /// <summary>

@@ -183,15 +183,39 @@ so the default budget reads one of 2^28 slots at 1%.
 
 Built once from the whole set, so there is no `n` to guess. The table has about 1.126 cells
 per key, rounded up to a whole segment, each cell 1 byte (a false positive rate of 0.39%)
-or 2 bytes (0.0015%). Nothing in the builder limits the set but memory. A read is charged
+or 2 bytes (0.0015%). The fingerprints are one array, which holds 2,147,483,591 bytes, so
+the most distinct keys are 1,908,641,337 at 8 bits and 954,204,160 at 16; a set with more
+is refused, naming `items`, before the fingerprints are allocated. A read is charged
 twice the table, which is about 2.25 bytes a key for 8-bit fingerprints.
 
 ### `BloomierFilter`
 
 Built once from the whole set of keys and their values, at about the same cells per key. A
 cell holds an 8-bit fingerprint and a value of `v` bits, rounded up to whole bytes: 2
-bytes at `v = 8`, and 6 at `v = 40`, the widest. The builder limits the set to memory;
-a read is charged twice the table.
+bytes at `v = 8`, and 6 at `v = 40`, the widest. The cells are one array, so the most
+distinct keys are 954,204,160 at `v` up to 8, 636,136,107 up to 16 and 318,068,053 up to
+40; a set with more is refused, naming `pairs`, before the cells are allocated. A read is
+charged twice the table.
+
+A key is known to the map by its 64-bit hash alone, and the keys are not kept, so two
+different keys with one hash are one key to it. With the same value that costs nothing; with
+different values the build is refused, with an `ArgumentException` that says the keys
+collided. The chance is chance, and grows with the square of the size: the expected number
+of colliding pairs among `n` keys is `n(n−1) / 2^65`, so the chance some two collide is
+
+| Keys | Chance two share a hash |
+| --- | --- |
+| 1 million | 0.000003% |
+| 10 million | 0.0003% |
+| 100 million | 0.03% |
+| 318 million, the most at 40-bit values | 0.27% |
+| 636 million, the most at 16-bit values | 1.1% |
+| 954 million, the most at 8-bit values | 2.4% |
+| 2^32, which no map builds | 39% |
+
+and the chance of a refusal is at most that, since the values must differ as well. Building
+again with a different hash function moves the collision. Widening the hash would change
+the stored format, and has not been done.
 
 ### `Grafite`
 
@@ -200,6 +224,16 @@ Built once from the whole set of keys, for ranges up to `L` wide at a false posi
 about `log2(L/fp)` bits a key for the low parts, and between 2 and 3 for the high parts.
 A wider range, or a smaller rate, costs more bits a key and so lowers the number a gibibyte
 reads.
+
+The universe is at most 2^61 − 2, the modulus of the hash less one, so `n · L / fp` has to
+stay under 2^61. A request that needs more is refused with an `ArgumentOutOfRangeException`,
+naming `maxRangeSize` and saying the largest range that works for that many keys at that
+rate. That is `L < 2^61 · fp / n`, to within the rounding of a double: for four keys at 1%,
+ranges up to about 5.8e15; for a million keys at 1%, about 2.3e10. When not even a range of
+one key fits, `n / fp` of 2^61 and over, it names `falsePositiveRate` and the finest rate
+those keys can have, a little over `n / 2^61`. Earlier releases built such a filter at the
+largest universe instead, and delivered a weaker rate than they were asked for without
+saying; one they wrote still reads, and answers as it did.
 
 The high parts are addressed with an `int`, so a filter has at most 2,147,483,647 bits of
 them. How many depends on where the keys' largest code falls in the universe, which
@@ -366,15 +400,25 @@ the truth for `N` items added, so a sketch for a stream you expect to reach `N` 
 about the error you can accept divided by `N`. Width is `⌈e/ε⌉` and depth `⌈ln(1/δ)⌉`,
 5 at δ = 1%. A read charges 16 bytes a counter.
 
+A row is one array, so the widest is 2,147,483,591, an `ε` of about 1.27e-9, and the
+constructor refuses a finer one with an `ArgumentOutOfRangeException` naming `epsilon`. The
+depth is at most 710, for a `δ` of about 5.6e-309, whose reciprocal is the largest a
+double holds: a smaller `δ` is refused, naming `delta`. A payload that claims more of
+either is refused as beyond anything built.
+
 ### `CountSketch`
 
 The same, with width `⌈1/ε²⌉`, so a rate ten times finer costs a hundred times the
-width, and counters of 8 bytes that are signed. A read charges 24 bytes a counter.
+width, and counters of 8 bytes that are signed. A read charges 24 bytes a counter. The
+widest row is the same 2,147,483,591, an `ε` of about 2.16e-5, and the depth is limited
+the same way.
 
 ### `PrivateCountMinSketch`
 
 You choose the width and depth directly, and the privacy budget `ρ` sets the noise and
-not the size. A read charges 16 bytes a counter.
+not the size. A read charges 16 bytes a counter. A row is one array and the rows are one
+array, so each is at most 2,147,483,591; a constructor given more refuses it, naming
+`width` or `depth`, and so does the reader.
 
 ### `SublimeCountMinSketch`
 
@@ -402,8 +446,23 @@ A value of one sign spans at most every positive double, which at 1% is a few te
 and finer accuracies cost proportionally more. A read charges 24 bytes a bucket of span,
 for each sign.
 
+Two limits sit beneath that, and `Add` refuses a value that passes either, with an
+`ArgumentOutOfRangeException` and the sketch unchanged. A bucket is numbered by a 32-bit
+integer, so a value has a bucket only if `|ln v| < 2^31 · ln((1+α)/(1−α))`: every double
+does from an accuracy of about 1.74e-7, and below that the range narrows, to 0.014 – 73 at
+1e-9 and 0.65 – 1.54 at 1e-10. And the buckets of one sign are one array, so the span from
+the lowest bucket in use to the highest is at most 2,147,483,591, which is 16 GiB of
+counts. The constructor refuses an accuracy below about 5.6e-17, where
+`(1+α)/(1−α)` rounds to exactly 1 and no value has a bucket of its own.
+
 ### `DpswSketch`
 
 Takes any number of items, and what it holds is a window of the most recent `window`
 of them, as a set of sketches whose number grows slowly with the window. The table gives the
 window it reads back at with the default width and depth, which is a measurement.
+
+A substream holds `window^β` items (β of 0.7 unless you say otherwise) and the checkpoints of
+one are a list with a slot for each, so `window^β` is at most 2,147,483,591, the longest
+list. The constructor refuses a window and β that make more, naming `window`. At the
+default β that is a window of 21,445,114,182,289, which is the table's figure for what is
+built; memory is what stops a real one long before.

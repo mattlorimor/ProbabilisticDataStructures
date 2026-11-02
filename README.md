@@ -207,11 +207,11 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `CuckooBloomFilter` | n, fp 0.1%, empty | 2,040,109,465 | 510,027,366 | as built |
 | `QuotientFilter` | n, fp 1% | 1,610,612,736 | 201,326,592 | 805,306,368 |
 | `QuotientFilter` | n, fp 0.1% | 1,610,612,736 | 100,663,296 | 805,306,368 |
-| `BinaryFuseFilter` | keys, 8-bit fingerprints | memory | ≈ 476.99 million | ≈ 1.91 billion |
-| `BinaryFuseFilter` | keys, 16-bit fingerprints | memory | ≈ 238.38 million | ≈ 954.20 million |
-| `BloomierFilter` | keys, 8-bit values | memory | ≈ 238.38 million | ≈ 954.20 million |
-| `BloomierFilter` | keys, 16-bit values | memory | ≈ 159.03 million | ≈ 636.14 million |
-| `BloomierFilter` | keys, 40-bit values | memory | ≈ 79.46 million | ≈ 318.07 million |
+| `BinaryFuseFilter` | keys, 8-bit fingerprints | 1,908,641,337 | ≈ 476.99 million | ≈ 1.91 billion |
+| `BinaryFuseFilter` | keys, 16-bit fingerprints | 954,204,160 | ≈ 238.38 million | ≈ 954.20 million |
+| `BloomierFilter` | keys, 8-bit values | 954,204,160 | ≈ 238.38 million | ≈ 954.20 million |
+| `BloomierFilter` | keys, 16-bit values | 636,136,107 | ≈ 159.03 million | ≈ 636.14 million |
+| `BloomierFilter` | keys, 40-bit values | 318,068,053 | ≈ 79.46 million | ≈ 318.07 million |
 | `Grafite` | keys, fp 1%, ranges up to 64, worst case | ≈ 838.04 million | ≈ 282.51 million | as built |
 | `Grafite` | keys, fp 0.1%, ranges up to 64, worst case | ≈ 727.19 million | ≈ 229.78 million | as built |
 | `Grafite` | keys, fp 1%, ranges up to 1,024, worst case | ≈ 838.04 million | ≈ 223.66 million | as built |
@@ -262,8 +262,8 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `SublimeCountMinSketch` | width w per row (a power of two), δ 1% (5 rows) | 1,073,741,824 | 2,097,152 † | 16,777,216 |
 | `TopK` | width w of the count-min sketch inside, δ 1% (5 rows) | 2,147,483,591 | ≈ 6.71 million | 53,687,082 |
 | `HeavyKeeper` | width w per row, depth 2 | 2,147,483,591 | ≈ 26.84 million | 107,374,175 |
-| `DDSketch` | bucket span, values of one sign | memory | ≈ 44.74 million | ≈ 268.44 million |
-| `DpswSketch` | window (items), width 512, depth 5 | memory | 1,500,000,000 † | 100,000,000,000 † |
+| `DDSketch` | bucket span, values of one sign | 2,147,483,591 | ≈ 44.74 million | ≈ 268.44 million |
+| `DpswSketch` | window (items), width 512, depth 5 | 21,445,114,182,289 | 1,500,000,000 † | 100,000,000,000 † |
 
 ---
 
@@ -782,8 +782,12 @@ rejected instead, at 2^-8 per lookup. It costs one byte per cell and turns the f
 into the bounded, quotable kind the rest of this library deals in.
 
 A key appearing twice with different values is refused: a map cannot hold both, and since
-the filter does not keep keys it could not tell you which one it dropped. A value too wide
-for `valueBits` is refused rather than truncated.
+the filter does not keep keys it could not tell you which one it dropped. The same goes for
+two *different* keys with the same 64-bit hash, which is all the filter knows a key by: chance,
+at about n²/2⁶⁵ for n keys — 0.03% at 100 million, 2.4% at the 954 million that 8-bit values
+build — and the refusal says so and suggests a different `hash`, which moves the collision.
+[CAPACITY.md](CAPACITY.md) has the odds by size. A value too wide for `valueBits` is refused
+rather than truncated.
 
 From Chazelle, Kilian, Rubinfeld and Tal,
 [The Bloomier Filter](https://dl.acm.org/doi/10.5555/982792.982797).
@@ -1801,6 +1805,11 @@ memory grows with the *logarithm* of the dynamic range — a stream spanning 10�
 fits in well under a megabyte. It is the only structure here that takes numbers rather than
 bytes, and so the only one that never hashes.
 
+A bucket is numbered by a 32-bit integer, so an accuracy finer than about 1.74e-7 cannot
+bucket every double: `Add` refuses a value outside the range the accuracy reaches (0.65 to
+1.54 at 1e-10) rather than answering for it from the wrong bucket. [CAPACITY.md](CAPACITY.md)
+has the range at each accuracy.
+
 From Masson, Rim and Lee,
 [DDSketch](https://arxiv.org/abs/1908.10693).
 
@@ -1855,6 +1864,14 @@ bool point = filter.Test(400);    // a point query is a range of one
 Shorter ranges do proportionally better: a range of length ℓ is wrong with probability
 at most ℓ/`maxRangeSize` of the headline rate. Longer ones still answer correctly —
 there are never false negatives — but their rate grows in proportion.
+
+The hash works in a universe of `n · maxRangeSize / falsePositiveRate`, and that has to stay
+under 2^61. A request that needs more is refused, naming `maxRangeSize` and the largest range
+that does work for that many keys at that rate — for four keys at 1%, ranges up to about
+5.8e15; for a million keys at 1%, about 2.3e10 — or, when not even a range of one key fits,
+naming `falsePositiveRate` and the finest rate those keys can have. Earlier releases built it
+anyway, at the largest universe and a weaker rate than you asked for; one they wrote still
+reads.
 
 Keys are numbers rather than byte arrays, because a range is a question about order and
 bytes have none a caller would agree with.

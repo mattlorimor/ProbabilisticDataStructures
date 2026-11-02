@@ -52,16 +52,66 @@ namespace ProbabilisticDataStructures
         /// zero and one. 0.01 means every quantile comes back within 1% of its real
         /// value.
         /// </param>
+        /// <remarks>
+        /// <b>A bucket is numbered by a 32-bit integer</b>, so an accuracy finer than
+        /// about 1.74e-7 cannot bucket every double. Bucket i holds the values up to
+        /// gamma^i, and ln(gamma) is about twice the accuracy, so the indices an int
+        /// holds run from ln(v) = -2^31 ln(gamma) to +2^31 ln(gamma): at 1e-9 that is
+        /// about 0.014 to 73, at 1e-10 about 0.65 to 1.54. <see cref="Add"/> refuses a
+        /// value outside the range, where it used to file it in the last bucket there is
+        /// and answer with that bucket's value for all of them. The smallest double needs
+        /// 744.44 / ln(gamma) indices, which is where the 1.74e-7 comes from.
+        /// <para>
+        /// The buckets are also one array, from the lowest bucket in use to the highest,
+        /// so values spread over more than 2,147,483,591 buckets are refused too, whatever
+        /// the accuracy: ln(max / min) over 2 × that × ln(gamma). That is gigabytes of
+        /// counts long before it is a limit, and it grows as the logarithm of the spread
+        /// of the values rather than with how many were added.
+        /// </para>
+        /// </remarks>
         /// <exception cref="ArgumentOutOfRangeException">
-        /// The accuracy is not strictly between zero and one.
+        /// The accuracy is not strictly between zero and one, or is so fine that
+        /// (1 + a) / (1 - a) rounds to exactly one and no two values have different
+        /// buckets, which is anything below about 5.6e-17.
         /// </exception>
         public DDSketch(double relativeAccuracy)
         {
             Guard.ValidRelativeAccuracy(relativeAccuracy, nameof(relativeAccuracy));
 
+            if (!HasBucketRatio(relativeAccuracy))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(relativeAccuracy), relativeAccuracy,
+                    $"A relative accuracy of {relativeAccuracy} is finer than a double can " +
+                    "tell one bucket from the next: the ratio between buckets, " +
+                    "(1 + a) / (1 - a), rounds to exactly 1, so no value would have a " +
+                    "bucket of its own. The finest accuracy a sketch can have is about " +
+                    "5.6e-17, and a sketch that fine can only bucket values very near 1.");
+            }
+
             this.relativeAccuracy = relativeAccuracy;
             this.gamma = (1 + relativeAccuracy) / (1 - relativeAccuracy);
             this.logGamma = Math.Log(this.gamma);
+        }
+
+        /// <summary>
+        /// Whether a double can tell one bucket from the next at this accuracy, which is
+        /// whether the ratio between buckets is more than one. The constructor and the
+        /// reader both ask, so a payload is refused for the accuracies a sketch is not
+        /// built at.
+        /// </summary>
+        internal static bool HasBucketRatio(double relativeAccuracy)
+        {
+            return Math.Log((1 + relativeAccuracy) / (1 - relativeAccuracy)) > 0;
+        }
+
+        /// <summary>
+        /// Whether a run of this many buckets fits in the one array the store holds
+        /// them in.
+        /// </summary>
+        internal static bool SpanFits(long buckets)
+        {
+            return buckets <= Array.MaxLength;
         }
 
         /// <summary>
@@ -70,6 +120,9 @@ namespace ProbabilisticDataStructures
         /// <param name="value">The value to add. Negative values and zero are allowed.</param>
         /// <exception cref="ArgumentOutOfRangeException">
         /// The value is NaN or infinite, neither of which has a place in a distribution.
+        /// Or its bucket is outside the 32-bit indices, or so far from the buckets already
+        /// in use that no array could hold the run between them: see the remarks on the
+        /// constructor. The sketch is unchanged.
         /// </exception>
         public void Add(double value)
         {
@@ -83,11 +136,15 @@ namespace ProbabilisticDataStructures
 
             if (value > 0)
             {
-                this.positive.Add(this.IndexOf(value), 1);
+                var index = this.IndexOf(value);
+                this.RequireRoom(this.positive, index, value);
+                this.positive.Add(index, 1);
             }
             else if (value < 0)
             {
-                this.negative.Add(this.IndexOf(-value), 1);
+                var index = this.IndexOf(-value);
+                this.RequireRoom(this.negative, index, value);
+                this.negative.Add(index, 1);
             }
             else
             {
@@ -136,8 +193,10 @@ namespace ProbabilisticDataStructures
             // the distribution, so they come first when walking it in order.
             if (rank < this.negative.Total)
             {
+                // A long, so that the walk ends at the lowest index an int has instead of
+                // wrapping past it.
                 double seen = 0;
-                for (var i = this.negative.MaxIndex; i >= this.negative.MinIndex; i--)
+                for (var i = (long)this.negative.MaxIndex; i >= this.negative.MinIndex; i--)
                 {
                     seen += this.negative.CountAt(i);
                     if (seen > rank)
@@ -158,7 +217,7 @@ namespace ProbabilisticDataStructures
 
             {
                 double seen = 0;
-                for (var i = this.positive.MinIndex; i <= this.positive.MaxIndex; i++)
+                for (long i = this.positive.MinIndex; i <= this.positive.MaxIndex; i++)
                 {
                     seen += this.positive.CountAt(i);
                     if (seen > rank)
@@ -187,7 +246,9 @@ namespace ProbabilisticDataStructures
         /// <exception cref="ArgumentNullException">The other sketch is null.</exception>
         /// <exception cref="ArgumentException">
         /// The sketches have different relative accuracies, so their buckets do not
-        /// describe the same ranges and their counts cannot be added.
+        /// describe the same ranges and their counts cannot be added. Or the merged
+        /// buckets would span more than one array holds. Either way this sketch is
+        /// unchanged.
         /// </exception>
         public DDSketch Merge(DDSketch other)
         {
@@ -207,6 +268,18 @@ namespace ProbabilisticDataStructures
             if (other.count == 0)
             {
                 return this;
+            }
+
+            // Both stores are checked before either is changed, so a merge that cannot
+            // be held does not leave one half of it done.
+            if (!this.positive.CanHold(other.positive) || !this.negative.CanHold(other.negative))
+            {
+                throw new ArgumentException(
+                    "The merged buckets would run further than one array holds, " +
+                    $"{Array.MaxLength:N0} buckets from the lowest in use to the highest. " +
+                    "The two sketches hold values too far apart to be one sketch at this " +
+                    "relative accuracy.",
+                    nameof(other));
             }
 
             this.positive.Merge(other.positive);
@@ -407,6 +480,16 @@ namespace ProbabilisticDataStructures
                     "describe a sketch: it must be greater than zero and less than one.");
             }
 
+            // The constructor's own limit, so that every sketch it builds reads back and
+            // none it refuses does.
+            if (!HasBucketRatio(accuracy))
+            {
+                throw new InvalidDataException(
+                    $"Sketch has a relative accuracy of {accuracy}, which is finer than a " +
+                    "double can tell one bucket from the next: the ratio between buckets " +
+                    "rounds to exactly 1. This library builds no sketch that fine.");
+            }
+
             // The stores and the zero count are the whole of what was added, so a total
             // that disagrees with them would put every quantile at the wrong rank while
             // each individual bucket still looked reasonable.
@@ -436,18 +519,56 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Which bucket a positive value falls in.
+        /// Which bucket a positive value falls in, refusing a value whose bucket is not a
+        /// 32-bit index. Cast to an int unchecked, an index past either end saturates, and
+        /// every value beyond it is filed in the same last bucket.
         /// </summary>
         private int IndexOf(double value)
         {
-            return (int)Math.Ceiling(Math.Log(value) / this.logGamma);
+            var index = Math.Ceiling(Math.Log(value) / this.logGamma);
+
+            if (!(index >= int.MinValue && index <= int.MaxValue))
+            {
+                // Bucket i holds the values up to gamma^i, so the last index an int has
+                // holds up to gamma^int.MaxValue, and the first holds what is above
+                // gamma^(int.MinValue - 1).
+                var highest = Math.Min(Math.Exp(int.MaxValue * this.logGamma), double.MaxValue);
+                var lowest = Math.Max(Math.Exp((int.MinValue - 1.0) * this.logGamma), double.Epsilon);
+
+                throw new ArgumentOutOfRangeException(
+                    nameof(value), value,
+                    $"At a relative accuracy of {this.relativeAccuracy} a bucket is numbered " +
+                    "by a 32-bit integer, so only values from about " +
+                    $"{lowest:G3} to {highest:G3} (in magnitude) have a bucket, and " +
+                    $"{Math.Abs(value):G3} does not. A coarser accuracy reaches further: " +
+                    "every double has a bucket from about 1.74e-7.");
+            }
+
+            return (int)index;
+        }
+
+        /// <summary>
+        /// Refuses a value whose bucket is further from the ones in use than one array
+        /// holds, before anything has been changed.
+        /// </summary>
+        private void RequireRoom(Store store, int index, double value)
+        {
+            if (!store.CanHold(index))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(value), value,
+                    "The buckets from the lowest in use to this value's would number more " +
+                    $"than the {Array.MaxLength:N0} one array holds, at a relative accuracy " +
+                    $"of {this.relativeAccuracy}. Values this far apart need a coarser " +
+                    "accuracy, or sketches of their own.");
+            }
         }
 
         /// <summary>
         /// The value a bucket reports: the point within it that is no further than the
         /// relative accuracy from anything the bucket can hold.
         /// </summary>
-        private double ValueAt(int index)
+        private double ValueAt(long index)
         {
             return 2 * Math.Pow(this.gamma, index) / (this.gamma + 1);
         }
@@ -466,7 +587,13 @@ namespace ProbabilisticDataStructures
             private const int InitialCapacity = 64;
 
             private ulong[] counts = Array.Empty<ulong>();
-            private int offset;
+
+            /// <summary>
+            /// The bucket index of the array's first slot. A long because a window around
+            /// an index near either end of the ints reaches past it: the first slot of
+            /// the window around int.MinValue sits below int.MinValue.
+            /// </summary>
+            private long offset;
 
             internal int MinIndex { get; private set; } = int.MaxValue;
 
@@ -565,17 +692,48 @@ namespace ProbabilisticDataStructures
                     return;
                 }
 
-                for (var i = other.MinIndex; i <= other.MaxIndex; i++)
+                // A long, so that a run ending at int.MaxValue ends the loop instead of
+                // wrapping to int.MinValue and starting again.
+                for (long i = other.MinIndex; i <= other.MaxIndex; i++)
                 {
                     var amount = other.CountAt(i);
                     if (amount != 0)
                     {
-                        this.Add(i, amount);
+                        this.Add((int)i, amount);
                     }
                 }
             }
 
-            internal ulong CountAt(int index)
+            /// <summary>
+            /// Whether a bucket at this index can be added without the run from the lowest
+            /// bucket in use to the highest outgrowing one array.
+            /// </summary>
+            internal bool CanHold(int index)
+            {
+                return SpanFits(this.SpanWith(index, index));
+            }
+
+            /// <summary>
+            /// Whether the other store's buckets can be added to this one's, as
+            /// <see cref="CanHold(int)"/> asks of one.
+            /// </summary>
+            internal bool CanHold(Store other)
+            {
+                return other.IsEmpty || SpanFits(this.SpanWith(other.MinIndex, other.MaxIndex));
+            }
+
+            /// <summary>
+            /// How many buckets the run from the lowest in use to the highest would be with
+            /// these two indices included.
+            /// </summary>
+            private long SpanWith(int low, int high)
+            {
+                var lowest = this.IsEmpty ? low : Math.Min(low, this.MinIndex);
+                var highest = this.IsEmpty ? high : Math.Max(high, this.MaxIndex);
+                return (long)highest - lowest + 1;
+            }
+
+            internal ulong CountAt(long index)
             {
                 return index < this.MinIndex || index > this.MaxIndex
                     ? 0
@@ -617,7 +775,7 @@ namespace ProbabilisticDataStructures
                 if (this.counts.Length == 0)
                 {
                     this.counts = new ulong[InitialCapacity];
-                    this.offset = index - (InitialCapacity / 2);
+                    this.offset = (long)index - (InitialCapacity / 2);
                     return;
                 }
 
@@ -630,14 +788,18 @@ namespace ProbabilisticDataStructures
                 var high = Math.Max(index, this.IsEmpty ? index : this.MaxIndex);
                 var needed = (long)high - low + 1;
 
+                // Callers have checked the run fits (CanHold), so doubling stops at the
+                // largest array rather than asking for one that cannot exist.
                 long capacity = this.counts.Length;
                 while (capacity < needed)
                 {
                     capacity *= 2;
                 }
 
+                capacity = Math.Min(capacity, Array.MaxLength);
+
                 var grown = new ulong[capacity];
-                var newOffset = low - (int)((capacity - needed) / 2);
+                var newOffset = low - ((capacity - needed) / 2);
 
                 if (!this.IsEmpty)
                 {
@@ -646,7 +808,7 @@ namespace ProbabilisticDataStructures
                         this.MinIndex - this.offset,
                         grown,
                         this.MinIndex - newOffset,
-                        this.MaxIndex - this.MinIndex + 1);
+                        (long)this.MaxIndex - this.MinIndex + 1);
                 }
 
                 this.counts = grown;
