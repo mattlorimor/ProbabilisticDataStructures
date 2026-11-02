@@ -90,6 +90,13 @@ namespace ProbabilisticDataStructures
         private readonly int[] checkpoints;
         private readonly List<Substream> substreams = new List<Substream>();
         private readonly Func<ReadOnlySpan<byte>, ulong>? hash;
+
+        /// <summary>
+        /// The placement every sketch this window builds is given, or null for each to
+        /// place as its width calls for, which is what the public constructor asks.
+        /// </summary>
+        private readonly Placement? placement;
+
         private SeededRandom seeds;
         private long position;
 
@@ -157,6 +164,30 @@ namespace ProbabilisticDataStructures
             uint depth = 5,
             ulong? seed = null,
             Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            : this(window, rho, alpha, beta, width, depth, seed, hash, null)
+        {
+        }
+
+        /// <summary>
+        /// Builds a window as the public constructor does, whose sketches place their
+        /// counts as <paramref name="placement"/> says, or as their width calls for when
+        /// that is null.
+        /// </summary>
+        /// <remarks>
+        /// The choice is made by width, and a sketch wide enough for it to matter is a
+        /// gigabyte of noise a row, many times over in a window. This lets a test have a
+        /// small window hold sketches placed the way wide ones will be.
+        /// </remarks>
+        internal DpswSketch(
+            long window,
+            double rho,
+            double alpha,
+            double beta,
+            uint width,
+            uint depth,
+            ulong? seed,
+            Func<ReadOnlySpan<byte>, ulong>? hash,
+            Placement? placement)
         {
             if (window < 1)
             {
@@ -204,6 +235,7 @@ namespace ProbabilisticDataStructures
             this.width = width;
             this.depth = depth;
             this.hash = hash;
+            this.placement = placement;
             this.seeds = seed.HasValue
                 ? new SeededRandom(seed.Value)
                 : SeededRandom.Unpredictable();
@@ -306,6 +338,21 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         public long SizeInBytes =>
             (long)this.SketchesHeld * this.width * this.depth * sizeof(double);
+
+        /// <summary>
+        /// Every sketch the window holds, substream by substream and in plan order, for a
+        /// test to see how each places its counts.
+        /// </summary>
+        internal IEnumerable<PrivateCountMinSketch> Sketches()
+        {
+            foreach (var substream in this.substreams)
+            {
+                foreach (var segment in substream.Segments)
+                {
+                    yield return segment.Sketch;
+                }
+            }
+        }
 
         /// <summary>How many private sketches are currently being kept.</summary>
         public int SketchesHeld
@@ -518,7 +565,7 @@ namespace ProbabilisticDataStructures
                     planned.From, planned.To,
                     new PrivateCountMinSketch(
                         this.width, this.depth, planned.Budget,
-                        this.seeds.Next(), this.hash),
+                        this.seeds.Next(), this.hash, this.placement),
                     planned.Budget));
             }
 

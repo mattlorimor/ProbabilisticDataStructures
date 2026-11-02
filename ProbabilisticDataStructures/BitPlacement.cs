@@ -166,12 +166,13 @@ namespace ProbabilisticDataStructures
 
     /// <summary>
     /// The positions of one item in a filter, or a partition of one, of <c>m</c>
-    /// positions, under one placement.
+    /// positions, under one placement; or its columns in the rows of a sketch <c>m</c>
+    /// wide, row <c>i</c> taking the <c>i</c>th.
     /// </summary>
     /// <remarks>
-    /// Every filter that places by <see cref="Placement"/> asks this for its positions
+    /// Every structure that places by <see cref="Placement"/> asks this for its positions
     /// rather than computing them itself, so that what a test of it shows is what the
-    /// filters do.
+    /// structures do.
     /// </remarks>
     internal readonly struct Positions
     {
@@ -193,17 +194,49 @@ namespace ProbabilisticDataStructures
         /// <paramref name="placement"/>, among <paramref name="m"/>.
         /// </summary>
         internal static Positions Of(
-            ReadOnlySpan<byte> data, Func<ReadOnlySpan<byte>, ulong> hash, Placement placement, uint m)
+            ReadOnlySpan<byte> data, Func<ReadOnlySpan<byte>, ulong> hash, Placement placement, uint m) =>
+            OfHash(hash(data), hash, placement, m);
+
+        /// <summary>
+        /// The positions of an item whose hash, under <paramref name="function"/>, is
+        /// <paramref name="hash"/>, for a structure that also uses the hash for something
+        /// else and so has it already.
+        /// </summary>
+        /// <remarks>
+        /// The 32-bit scheme splits the hash into its halves, as
+        /// <see cref="Utils.HashKernel(ReadOnlySpan{byte}, Func{ReadOnlySpan{byte}, ulong})"/>
+        /// does. The 64-bit one takes the hash and the hash of its eight little-endian
+        /// bytes, as
+        /// <see cref="Utils.HashKernel128(ReadOnlySpan{byte}, Func{ReadOnlySpan{byte}, ulong})"/>
+        /// does.
+        /// </remarks>
+        internal static Positions OfHash(
+            ulong hash, Func<ReadOnlySpan<byte>, ulong> function, Placement placement, uint m)
         {
             if (placement == Placement.Wide)
             {
-                var wide = Utils.HashKernel128(data, hash);
-                return new Positions(wide.LowerBaseHash, wide.UpperBaseHash, m, wide: true);
+                Span<byte> bytes = stackalloc byte[sizeof(ulong)];
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes, hash);
+                return new Positions(hash, function(bytes), m, wide: true);
             }
 
-            var narrow = Utils.HashKernel(data, hash);
-            return new Positions(narrow.LowerBaseHash, narrow.UpperBaseHash, m, wide: false);
+            return new Positions((uint)hash, (uint)(hash >> 32), m, wide: false);
         }
+
+        /// <summary>
+        /// The first position of an item whose hash is <paramref name="hash"/>, among
+        /// <paramref name="m"/>: the one position a structure that takes one per item
+        /// takes, which is <c>this[0]</c> under the same placement.
+        /// </summary>
+        /// <remarks>
+        /// The first position needs no second value, so this is the hash reduced modulo
+        /// <paramref name="m"/>: its low 32 bits under the 32-bit scheme, all 64 under the
+        /// 64-bit one. Where <paramref name="m"/> is a power of two the two agree.
+        /// </remarks>
+        internal static uint FirstOf(ulong hash, Placement placement, uint m) =>
+            placement == Placement.Wide
+                ? (uint)(hash % m)
+                : (uint)hash % m;
 
         /// <summary>
         /// The <paramref name="i"/>th position, below <c>m</c>.

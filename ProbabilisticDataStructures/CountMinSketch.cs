@@ -63,6 +63,11 @@ namespace ProbabilisticDataStructures
         internal Func<ReadOnlySpan<byte>, ulong> HashFunction => this.Hash;
 
         /// <summary>
+        /// How an item's hash becomes the column it is counted in, in each row.
+        /// </summary>
+        internal Placement Placement { get; private set; }
+
+        /// <summary>
         /// The most counters a row can hold, which is the most an array holds.
         /// The constructor refuses an epsilon that asks for more, and the reader refuses
         /// a payload that claims more.
@@ -100,6 +105,21 @@ namespace ProbabilisticDataStructures
         /// once anything has been added, the hash can no longer be replaced.
         /// </param>
         public CountMinSketch(double epsilon, double delta, Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            : this(epsilon, delta, hash, null)
+        {
+        }
+
+        /// <summary>
+        /// Creates a sketch as the public constructor does, placing its counts as
+        /// <paramref name="placement"/> says, or as its width calls for when that is null.
+        /// </summary>
+        /// <remarks>
+        /// The choice is made by width, and a sketch wide enough for it to matter is a
+        /// gigabyte a row. This lets a test have a small sketch place its counts the way a
+        /// wide one will.
+        /// </remarks>
+        internal CountMinSketch(
+            double epsilon, double delta, Func<ReadOnlySpan<byte>, ulong>? hash, Placement? placement)
         {
             Guard.ValidSketchEpsilon(epsilon, nameof(epsilon));
             Guard.ValidSketchDelta(delta, nameof(delta));
@@ -120,7 +140,33 @@ namespace ProbabilisticDataStructures
             this.epsilon = epsilon;
             this.delta = delta;
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
+            this.Placement = placement ?? PlacementFor(width);
         }
+
+        /// <summary>
+        /// The placement a new sketch <paramref name="width"/> columns wide is built with.
+        /// </summary>
+        /// <remarks>
+        /// The constructor's choice, reachable on its own so that the widths at which it
+        /// changes can be checked without allocating sketches of those widths. Nothing
+        /// chooses the 64-bit scheme for a sketch yet: every sketch places with 32-bit
+        /// values, as every sketch always has.
+        /// </remarks>
+        internal static Placement PlacementFor(uint width) => Placement.Narrow;
+
+        /// <summary>
+        /// The columns <paramref name="data"/> is counted in under
+        /// <paramref name="placement"/>, in a sketch <paramref name="width"/> wide: row
+        /// <c>i</c> takes the <c>i</c>th.
+        /// </summary>
+        /// <remarks>
+        /// What <see cref="Add(ReadOnlySpan{byte})"/> and
+        /// <see cref="Count(ReadOnlySpan{byte})"/> use, reachable without a sketch so that
+        /// a test can ask it at widths no test can allocate.
+        /// </remarks>
+        internal static Positions ColumnsOf(
+            ReadOnlySpan<byte> data, Func<ReadOnlySpan<byte>, ulong> hash, Placement placement, uint width) =>
+            Positions.Of(data, hash, placement, width);
 
         /// <summary>
         /// Returns the relative-accuracy factor, epsilon.
@@ -164,14 +210,12 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Add(byte[])"/>
         public CountMinSketch Add(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var columns = ColumnsOf(data, this.Hash, this.Placement, this.Width);
 
             // Increment count in each row.
             for (uint i = 0; i < this.Depth; i++)
             {
-                this.Matrix[i][(lower + upper * i) % this.Width]++;
+                this.Matrix[i][columns[i]]++;
             }
 
             this.count++;
@@ -194,14 +238,12 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Count(byte[])"/>
         public UInt64 Count(ReadOnlySpan<byte> data)
         {
-            var hashKernel = Utils.HashKernel(data, this.Hash);
-            var lower = hashKernel.LowerBaseHash;
-            var upper = hashKernel.UpperBaseHash;
+            var columns = ColumnsOf(data, this.Hash, this.Placement, this.Width);
             var count = UInt64.MaxValue;
 
             for (uint i = 0; i < this.Depth; i++)
             {
-                count = Math.Min(count, this.Matrix[i][(lower + upper * i) % this.Width]);
+                count = Math.Min(count, this.Matrix[i][columns[i]]);
             }
 
             return count;
@@ -422,6 +464,7 @@ namespace ProbabilisticDataStructures
                 epsilon = epsilon,
                 delta = delta,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+                Placement = Placement.Narrow,
             };
         }
 

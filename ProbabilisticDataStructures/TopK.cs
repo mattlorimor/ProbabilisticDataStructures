@@ -45,6 +45,21 @@ namespace ProbabilisticDataStructures
         /// </param>
         public TopK(double epsilon, double delta, uint k,
             Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            : this(epsilon, delta, k, hash, null)
+        {
+        }
+
+        /// <summary>
+        /// Creates a structure as the public constructor does, with its sketch placing its
+        /// counts as <paramref name="placement"/> says, or as its width calls for when that
+        /// is null.
+        /// </summary>
+        /// <remarks>
+        /// So that a test can have a small top-k hold a sketch placed the way a wide one
+        /// will be.
+        /// </remarks>
+        internal TopK(double epsilon, double delta, uint k,
+            Func<ReadOnlySpan<byte>, ulong>? hash, Placement? placement)
         {
             Guard.ValidItemCount(k, nameof(k));
             if (k > ElementHeap.MaxCapacity)
@@ -54,10 +69,15 @@ namespace ProbabilisticDataStructures
                     "most its heap and the index beside it can hold.");
             }
 
-            this.Cms = new CountMinSketch(epsilon, delta, hash);
+            this.Cms = new CountMinSketch(epsilon, delta, hash, placement);
             this.K = k;
             this.elements = new ElementHeap((int)k);
         }
+
+        /// <summary>
+        /// The sketch the counts are kept in, for a test to see how it places them.
+        /// </summary>
+        internal CountMinSketch Sketch => this.Cms;
 
         /// <summary>
         /// Will add the data to the Count-Min Sketch and update the top-k heap if

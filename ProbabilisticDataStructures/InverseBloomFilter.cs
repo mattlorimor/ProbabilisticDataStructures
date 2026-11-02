@@ -32,6 +32,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 using System.Linq;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 
@@ -63,6 +64,11 @@ namespace ProbabilisticDataStructures
         private byte[][] Array { get; set; }
         internal Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
         private uint capacity { get; set; }
+
+        /// <summary>
+        /// How an item's hash becomes the slot it is held in.
+        /// </summary>
+        internal Placement Placement { get; private set; }
 
         /// <summary>
         /// Whether any slot is occupied, which is what decides if the hash can
@@ -106,6 +112,22 @@ namespace ProbabilisticDataStructures
         /// 2,147,483,591 (sixteen gigabytes of slots, before anything is stored in them).
         /// </exception>
         public InverseBloomFilter(uint capacity, Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            : this(capacity, hash, null)
+        {
+        }
+
+        /// <summary>
+        /// Instantiates a filter as the public constructor does, placing its items as
+        /// <paramref name="placement"/> says, or as its capacity calls for when that is
+        /// null.
+        /// </summary>
+        /// <remarks>
+        /// The choice is made by capacity, and a filter large enough for it to matter is a
+        /// gigabyte of empty slots. This lets a test have a small filter place its items
+        /// the way a large one will.
+        /// </remarks>
+        internal InverseBloomFilter(
+            uint capacity, Func<ReadOnlySpan<byte>, ulong>? hash, Placement? placement)
         {
             Guard.ValidItemCount(capacity, nameof(capacity));
 
@@ -121,7 +143,31 @@ namespace ProbabilisticDataStructures
             this.Array = new byte[capacity][];
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.capacity = capacity;
+            this.Placement = placement ?? PlacementFor(capacity);
         }
+
+        /// <summary>
+        /// The placement a new filter of <paramref name="capacity"/> slots is built with.
+        /// </summary>
+        /// <remarks>
+        /// The constructor's choice, reachable on its own so that the capacities at which
+        /// it changes can be checked without allocating filters of those capacities.
+        /// Nothing chooses the 64-bit scheme for this filter yet: every one places with
+        /// 32-bit values, as every one always has.
+        /// </remarks>
+        internal static Placement PlacementFor(uint capacity) => Placement.Narrow;
+
+        /// <summary>
+        /// The slot an item whose hash is <paramref name="hash"/> is held in under
+        /// <paramref name="placement"/>, in a filter of <paramref name="capacity"/> slots.
+        /// </summary>
+        /// <remarks>
+        /// What every operation uses, reachable without a filter so that a test can ask
+        /// it at capacities no test can allocate. One position per item, so the first of
+        /// the scheme's: the hash reduced modulo the capacity, in 32 bits or in 64.
+        /// </remarks>
+        internal static uint SlotOf(ulong hash, Placement placement, uint capacity) =>
+            Positions.FirstOf(hash, placement, capacity);
 
 
         /// <summary>
@@ -254,18 +300,22 @@ namespace ProbabilisticDataStructures
         /// <returns>The array index for the given data</returns>
         private uint Index(ReadOnlySpan<byte> data)
         {
-            var index = this.ComputeHashSum32(data) % this.capacity;
-            return index;
+            return SlotOf(this.Hash(data), this.Placement, this.capacity);
         }
 
         /// <summary>
-        /// Returns a 32-bit hash value for the given data.
+        /// The slots that hold an item, in order, so that a test can hold each item to the
+        /// slot its placement says it goes in.
         /// </summary>
-        /// <param name="data">Data</param>
-        /// <returns>32-bit hash value</returns>
-        private uint ComputeHashSum32(ReadOnlySpan<byte> data)
+        internal IEnumerable<uint> OccupiedSlots()
         {
-            return (uint)(this.Hash(data) & 0xffffffff);
+            for (uint i = 0; i < this.capacity; i++)
+            {
+                if (this.Array[i] is not null)
+                {
+                    yield return i;
+                }
+            }
         }
 
         /// <summary>
@@ -405,6 +455,7 @@ namespace ProbabilisticDataStructures
                 Array = slots,
                 capacity = capacity,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+                Placement = Placement.Narrow,
             };
         }
 

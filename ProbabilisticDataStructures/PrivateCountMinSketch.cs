@@ -47,9 +47,15 @@ namespace ProbabilisticDataStructures
         private readonly uint width;
         private readonly uint depth;
         private readonly double rho;
+        private readonly Placement placement;
         private ulong count;
 
         private Func<ReadOnlySpan<byte>, ulong> Hash { get; set; }
+
+        /// <summary>
+        /// How an item's hash becomes the column it is counted in, in each row.
+        /// </summary>
+        internal Placement Placement => this.placement;
 
         /// <summary>
         /// The most counters a row can hold, which is the most an array holds. The
@@ -88,6 +94,25 @@ namespace ProbabilisticDataStructures
             uint width, uint depth, double rho,
             ulong? seed = null,
             Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            : this(width, depth, rho, seed, hash, null)
+        {
+        }
+
+        /// <summary>
+        /// Builds a sketch as the public constructor does, placing its counts as
+        /// <paramref name="placement"/> says, or as its width calls for when that is null.
+        /// </summary>
+        /// <remarks>
+        /// The choice is made by width, and a sketch wide enough for it to matter is a
+        /// gigabyte of noise a row. This lets a test have a small sketch place its counts
+        /// the way a wide one will, and a <see cref="DpswSketch"/> pass on what its test
+        /// asks of it.
+        /// </remarks>
+        internal PrivateCountMinSketch(
+            uint width, uint depth, double rho,
+            ulong? seed,
+            Func<ReadOnlySpan<byte>, ulong>? hash,
+            Placement? placement)
         {
             if (width == 0)
             {
@@ -122,6 +147,7 @@ namespace ProbabilisticDataStructures
             this.width = width;
             this.depth = depth;
             this.rho = rho;
+            this.placement = placement ?? PlacementFor(width);
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
 
             // The l2-sensitivity of a Count-Min Sketch is the square root of twice its
@@ -239,11 +265,11 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Add(byte[])"/>
         public PrivateCountMinSketch Add(ReadOnlySpan<byte> data)
         {
-            var kernel = Utils.HashKernel(data, this.Hash);
+            var columns = ColumnsOf(data, this.Hash, this.placement, this.width);
 
             for (uint i = 0; i < this.depth; i++)
             {
-                this.matrix[i][ColumnOf(kernel, i)]++;
+                this.matrix[i][columns[i]]++;
             }
 
             this.count++;
@@ -277,19 +303,41 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Count(byte[])"/>
         public double Count(ReadOnlySpan<byte> data)
         {
-            var kernel = Utils.HashKernel(data, this.Hash);
+            var columns = ColumnsOf(data, this.Hash, this.placement, this.width);
             var smallest = double.MaxValue;
 
             for (uint i = 0; i < this.depth; i++)
             {
-                smallest = Math.Min(smallest, this.matrix[i][ColumnOf(kernel, i)]);
+                smallest = Math.Min(smallest, this.matrix[i][columns[i]]);
             }
 
             return smallest;
         }
 
-        private uint ColumnOf(in HashKernelReturnValue kernel, uint row) =>
-            (uint)((kernel.LowerBaseHash + (kernel.UpperBaseHash * row)) % this.width);
+        /// <summary>
+        /// The placement a new sketch <paramref name="width"/> columns wide is built with.
+        /// </summary>
+        /// <remarks>
+        /// The constructor's choice, reachable on its own so that the widths at which it
+        /// changes can be checked without drawing the noise for sketches of those widths.
+        /// Nothing chooses the 64-bit scheme for a sketch yet: every sketch places with
+        /// 32-bit values, as every sketch always has.
+        /// </remarks>
+        internal static Placement PlacementFor(uint width) => Placement.Narrow;
+
+        /// <summary>
+        /// The columns <paramref name="data"/> is counted in under
+        /// <paramref name="placement"/>, in a sketch <paramref name="width"/> wide: row
+        /// <c>i</c> takes the <c>i</c>th.
+        /// </summary>
+        /// <remarks>
+        /// What <see cref="Add(ReadOnlySpan{byte})"/> and
+        /// <see cref="Count(ReadOnlySpan{byte})"/> use, reachable without a sketch so that
+        /// a test can ask it at widths no test can allocate.
+        /// </remarks>
+        internal static Positions ColumnsOf(
+            ReadOnlySpan<byte> data, Func<ReadOnlySpan<byte>, ulong> hash, Placement placement, uint width) =>
+            Positions.Of(data, hash, placement, width);
 
         /// <summary>
         /// Writes this sketch to a stream, in the format documented in FORMAT.md.
@@ -518,7 +566,7 @@ namespace ProbabilisticDataStructures
                     "rather than handing back a sketch that guarantees nothing.");
             }
 
-            return new PrivateCountMinSketch(width, depth, rho, count, matrix, hash);
+            return new PrivateCountMinSketch(width, depth, rho, count, matrix, hash, Placement.Narrow);
         }
 
         /// <summary>
@@ -528,7 +576,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private PrivateCountMinSketch(
             uint width, uint depth, double rho, ulong count,
-            double[][] matrix, Func<ReadOnlySpan<byte>, ulong> hash)
+            double[][] matrix, Func<ReadOnlySpan<byte>, ulong> hash, Placement placement)
         {
             this.width = width;
             this.depth = depth;
@@ -536,6 +584,7 @@ namespace ProbabilisticDataStructures
             this.count = count;
             this.matrix = matrix;
             this.Hash = hash;
+            this.placement = placement;
         }
 
         /// <summary>
