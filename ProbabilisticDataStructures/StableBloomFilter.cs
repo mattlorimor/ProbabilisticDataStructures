@@ -619,26 +619,12 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Will decrement a random cell and (p-1) adjacent cells by 1. This is faster
         /// than generating p random numbers. Although the processes of picking the p
-        /// cells are not independent, each cell has a probability close to p/m of being
+        /// cells are not independent, each cell has a probability of p/m for being
         /// picked at each iteration, which means the properties still hold.
         /// </summary>
         /// <remarks>
-        /// Exactly p/m only when m is a power of two. <see cref="SeededRandom.NextBelow"/>
-        /// gives each start floor(2^32 / m) of its 2^32 inputs or one more, so past 2^31
-        /// cells some starts are drawn twice as often as others. A cell is reached from p
-        /// consecutive starts, though, and their shares add up to floor(p * 2^32 / m) or
-        /// one more: each cell is decremented at one of two rates, both within
-        /// m / (p * 2^32) of p/m as a share of it, and the two average exactly p/m over
-        /// the cells. With the average exact, the stable point moves only with the
-        /// spread, at second order. At the cell counts where the spread is widest, near
-        /// the top of the range, that raises the false positive rate above what
-        /// <see cref="FalsePositiveRate"/> says by 0.4% of itself for one-bit cells built
-        /// for 1%, 1.1% for 10% and 3% for 50%, where p is 1. Wider cells decrement more
-        /// at a time and are moved less: two-bit cells by 0.04% for 1% and 0.6% for 50%.
-        /// An item whose cells all have the higher rate is forgotten sooner by about the
-        /// share its cells' rate is higher. These figures are worked out from the two
-        /// rates with Deng and Rafiei's per-cell model, which a scaled-down simulation of
-        /// the draw reproduced, and are not rebuilt by the suite.
+        /// p/m to within 2^-32 of itself at every size, which <see cref="DecayStart"/>
+        /// explains.
         /// </remarks>
         private void Decrement()
         {
@@ -651,26 +637,55 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// The cell a decay run starts at, for the generator's next 64 bits and a filter
-        /// of <paramref name="m"/> cells.
+        /// of <paramref name="m"/> cells: the high half of their 128-bit product.
         /// </summary>
         /// <remarks>
-        /// Decrement draws through this, so a test can count the inputs that start a run
-        /// at each cell without a filter of that size. It is
-        /// <see cref="SeededRandom.NextBelow"/>, written out over the value that method
-        /// would have drawn.
+        /// Each start is drawn by floor(2^64 / m) of the 2^64 inputs or by one more, so
+        /// it is within 2^-32 of its share of the draw. A cell is reached from p
+        /// consecutive starts, and their shares add up to within one input of
+        /// p * 2^64 / m, so every cell is decremented with probability p/m to within
+        /// 2^-32 / p of itself.
+        /// <para>
+        /// Until the release after 6.2.0 the start came from
+        /// <see cref="SeededRandom.NextBelow"/>, which multiplies only the top 32 bits.
+        /// That gives each start floor(2^32 / m) of 2^32 inputs or one more, so past 2^31
+        /// cells some starts were drawn twice as often as others, and each cell was
+        /// decremented at one of two rates up to 1/p apart. At the sizes where they were
+        /// furthest apart, that raised the stable false positive rate above what
+        /// <see cref="FalsePositiveRate"/> says by 0.4% of itself for one-bit cells built
+        /// for 1%, 1.1% for 10% and 3% for 50%, and by 0.04% for two-bit cells at 1%.
+        /// Those figures come from the two rates and Deng and Rafiei's per-cell model,
+        /// which a scaled-down simulation of the draw reproduced. The suite does not
+        /// rebuild them.
+        /// </para>
+        /// <para>
+        /// One input is still drawn per add, so after any number of adds the generator
+        /// stands where it did before, and a payload's stored position means what it
+        /// meant. The start is the one the 32-bit draw gave, or the cell after it. It
+        /// moves in a share of draws that grows with m: about m / 2^33 below a billion
+        /// cells, too few for a small seeded filter to meet one in practice.
+        /// <see cref="SeededRandom.NextBelow"/> itself is unchanged, because other
+        /// structures depend on it, among them <see cref="SetSketch"/>'s stored
+        /// sketches. Decrement draws through this so that a test can count the inputs
+        /// that start a run at each cell without a filter of that size.
+        /// </para>
         /// </remarks>
         internal static uint DecayStart(ulong next, uint m)
         {
-            return (uint)(((ulong)(uint)(next >> 32) * m) >> 32);
+            return (uint)Math.BigMul(next, m, out _);
         }
 
         /// <summary>
         /// The <paramref name="i"/>-th cell of a decay run that starts at
         /// <paramref name="start"/>, in a filter of <paramref name="m"/> cells.
         /// </summary>
+        /// <remarks>
+        /// The sum is taken in 64 bits. In 32 it wrapped once m was within p of 2^32, and
+        /// sent the rest of that run 2^32 - m cells short of where it belonged.
+        /// </remarks>
         internal static uint DecayCell(uint start, uint i, uint m)
         {
-            return (start + i) % m;
+            return (uint)(((ulong)start + i) % m);
         }
 
         /// <summary>
