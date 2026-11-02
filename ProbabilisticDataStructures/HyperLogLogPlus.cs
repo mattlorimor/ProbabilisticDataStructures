@@ -141,7 +141,14 @@ namespace ProbabilisticDataStructures
         /// disagree. The cap is floored at this size, so the minimum changes nothing
         /// today; it is here so the cap stays the one thing that decides.
         /// </summary>
-        private int InitialSparseEntries => Math.Min(InitialSparseCapacity, this.MaxSparseEntries);
+        private int InitialSparseEntries => InitialSparseEntriesAt(this.m);
+
+        /// <summary>
+        /// <see cref="InitialSparseEntries"/> for an estimator of <paramref name="m"/>
+        /// registers, for a price that has no estimator.
+        /// </summary>
+        private static int InitialSparseEntriesAt(uint m) =>
+            Math.Min(InitialSparseCapacity, MaxSparseEntriesAt(m));
 
         /// <summary>
         /// Creates an estimator whose relative error is about the one given.
@@ -239,8 +246,10 @@ namespace ProbabilisticDataStructures
         /// precision 7 the floor changes nothing and the cap is the paper's.
         /// </para>
         /// </remarks>
-        internal int MaxSparseEntries =>
-            Math.Max(InitialSparseCapacity, (int)(this.m / sizeof(ulong)));
+        internal int MaxSparseEntries => MaxSparseEntriesAt(this.m);
+
+        private static int MaxSparseEntriesAt(uint m) =>
+            Math.Max(InitialSparseCapacity, (int)(m / sizeof(ulong)));
 
         /// <summary>
         /// Sorts and deduplicates the sparse buffer, growing it if the distinct items
@@ -708,17 +717,11 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.HyperLogLogPlus);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.HyperLogLogPlus, out var hashId, budget);
+                stream, StructureId.HyperLogLogPlus, out var hashId, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             var precision = reader.ReadUInt32();
-
-            if (precision < MinPrecision || precision > MaxPrecision)
-            {
-                throw new InvalidDataException(
-                    $"Estimator has a precision of {precision}, and this library builds " +
-                    $"them between {MinPrecision} and {MaxPrecision}.");
-            }
+            CheckPrecision(precision);
 
             var representation = reader.ReadByte();
             var estimator = new HyperLogLogPlus(precision)
@@ -728,21 +731,13 @@ namespace ProbabilisticDataStructures
 
             if (representation == 0)
             {
-                var held = reader.ReadUInt32();
-
-                if (held > PersistenceFormat.MaxNestedCount)
-                {
-                    throw new InvalidDataException(
-                        $"Estimator claims {held} stored hashes, beyond anything this " +
-                        "library builds.");
-                }
+                var held = ReadHeld(ref reader);
 
                 // Room for what was written, and at least a fresh buffer's worth, which
                 // never exceeds the cap -- a buffer above it with room to spare would
                 // move the conversion point. A payload holding exactly the cap comes back
                 // full, so its first new item converts it and a repeat does not.
-                budget.Charge(ReadBudget.ArrayOf(
-                    (ulong)Math.Max(estimator.InitialSparseEntries, (long)held), sizeof(ulong)));
+                budget.Charge(SparseCost(estimator.m, held));
                 var buffer = new ulong[Math.Max(estimator.InitialSparseEntries, (int)held)];
                 var previous = 0UL;
 
@@ -803,5 +798,55 @@ namespace ProbabilisticDataStructures
             reader.ExpectEnd();
             return estimator;
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the sparse buffer,
+        /// or the copy of the dense registers. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var precision = reader.ReadUInt32();
+            CheckPrecision(precision);
+
+            var representation = reader.ReadByte();
+            if (representation == 0)
+            {
+                reader.Budget.Price(SparseCost(1u << (int)precision, ReadHeld(ref reader)));
+            }
+            else if (representation == 1)
+            {
+                reader.SkipBytes();
+            }
+        }
+
+        private static void CheckPrecision(uint precision)
+        {
+            if (precision < MinPrecision || precision > MaxPrecision)
+            {
+                throw new InvalidDataException(
+                    $"Estimator has a precision of {precision}, and this library builds " +
+                    $"them between {MinPrecision} and {MaxPrecision}.");
+            }
+        }
+
+        private static uint ReadHeld(ref PayloadReader reader)
+        {
+            var held = reader.ReadUInt32();
+
+            if (held > PersistenceFormat.MaxNestedCount)
+            {
+                throw new InvalidDataException(
+                    $"Estimator claims {held} stored hashes, beyond anything this " +
+                    "library builds.");
+            }
+            return held;
+        }
+
+        /// <summary>
+        /// The sparse buffer of an estimator of <paramref name="m"/> registers read back
+        /// holding <paramref name="held"/> hashes.
+        /// </summary>
+        private static long SparseCost(uint m, uint held) => ReadBudget.ArrayOf(
+            (ulong)Math.Max(InitialSparseEntriesAt(m), (long)held), sizeof(ulong));
     }
 }

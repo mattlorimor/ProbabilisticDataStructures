@@ -148,7 +148,7 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.MinHashSignature);
-            var payload = PersistenceFormat.Read(stream, StructureId.MinHashSignature, out var hashId, budget);
+            var payload = PersistenceFormat.Read(stream, StructureId.MinHashSignature, out var hashId, budget, Price);
 
             if (hashId != HashId.XxHash3_64)
             {
@@ -181,6 +181,17 @@ namespace ProbabilisticDataStructures
 
             reader.ExpectEnd();
             return new MinHashSignature(values);
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the values. See
+        /// <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var length = reader.ReadUInt32();
+            reader.RequireHolds(length, sizeof(ulong), "values");
+            reader.Budget.Price(ReadBudget.ArrayOf(length, sizeof(ulong)));
         }
     }
 }

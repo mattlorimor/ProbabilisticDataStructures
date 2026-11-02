@@ -403,7 +403,7 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.PartitionedBloomFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.PartitionedBloomFilter, out var hashId, out var version, budget);
+                stream, StructureId.PartitionedBloomFilter, out var hashId, out var version, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             var m = reader.ReadUInt32();
@@ -414,24 +414,9 @@ namespace ProbabilisticDataStructures
             var placement = BitPlacement.Read(ref reader, version);
             var count = BitPlacement.ReadCount(ref reader, version);
             var partitionCount = reader.ReadUInt32();
+            CheckPartitions(partitionCount, k);
 
-            if (partitionCount == 0 || partitionCount > PersistenceFormat.MaxNestedCount)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims {partitionCount} partitions, which is not a filter " +
-                    "this library builds.");
-            }
-
-            // One partition per hash function is what makes this filter partitioned;
-            // any other number is a payload describing something else.
-            if (partitionCount != k)
-            {
-                throw new InvalidDataException(
-                    $"Filter has {k} hash functions and {partitionCount} partitions. A " +
-                    "partitioned filter has one partition per hash function.");
-            }
-
-            budget.Charge(ReadBudget.ArrayOf(partitionCount, sizeof(long)));
+            budget.Charge(PartitionsCost(partitionCount));
             var partitions = new Buckets[partitionCount];
             for (uint i = 0; i < partitionCount; i++)
             {
@@ -463,6 +448,50 @@ namespace ProbabilisticDataStructures
                 Placement = placement,
             };
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the array of
+        /// partitions and each partition's buckets. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            reader.ReadUInt32();
+            var k = reader.ReadUInt32();
+            reader.ReadUInt32();
+            BitPlacement.Read(ref reader, version);
+            BitPlacement.ReadCount(ref reader, version);
+            var partitionCount = reader.ReadUInt32();
+            CheckPartitions(partitionCount, k);
+
+            reader.Budget.Price(PartitionsCost(partitionCount));
+            for (uint i = 0; i < partitionCount; i++)
+            {
+                PersistenceFormat.PriceBuckets(ref reader);
+            }
+        }
+
+        private static void CheckPartitions(uint partitionCount, uint k)
+        {
+            if (partitionCount == 0 || partitionCount > PersistenceFormat.MaxNestedCount)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {partitionCount} partitions, which is not a filter " +
+                    "this library builds.");
+            }
+
+            // One partition per hash function is what makes this filter partitioned;
+            // any other number is a payload describing something else.
+            if (partitionCount != k)
+            {
+                throw new InvalidDataException(
+                    $"Filter has {k} hash functions and {partitionCount} partitions. A " +
+                    "partitioned filter has one partition per hash function.");
+            }
+        }
+
+        /// <summary>The array holding <paramref name="partitionCount"/> partitions.</summary>
+        private static long PartitionsCost(uint partitionCount) =>
+            ReadBudget.ArrayOf(partitionCount, sizeof(long));
 
         /// <summary>
         /// Used only by <see cref="Read"/>, which sets every field itself.

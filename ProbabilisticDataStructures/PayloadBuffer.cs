@@ -120,10 +120,35 @@ namespace ProbabilisticDataStructures
         private readonly ReadOnlySpan<byte> payload;
         private int offset;
 
+        // Set when the payload is read from the stream instead of from memory, which only
+        // pricing does, for a payload too large for its budget to be held. The span is
+        // then empty, the source's position stands for the offset, and this reader's
+        // payload ends at the source position given.
+        private readonly PayloadSource? source;
+        private readonly long start;
+        private readonly long end;
+
         internal PayloadReader(ReadOnlySpan<byte> payload, ReadBudget budget)
         {
             this.payload = payload;
             this.offset = 0;
+            this.source = null;
+            this.start = 0;
+            this.end = 0;
+            this.Budget = budget;
+        }
+
+        /// <summary>
+        /// A reader of the next <paramref name="length"/> bytes of a payload that is not
+        /// held, for pricing it. It reads fields and skips runs; it cannot copy one.
+        /// </summary>
+        internal PayloadReader(PayloadSource source, long length, ReadBudget budget)
+        {
+            this.payload = default;
+            this.offset = 0;
+            this.source = source;
+            this.start = source.Position;
+            this.end = source.Position + length;
             this.Budget = budget;
         }
 
@@ -180,9 +205,121 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Prices what <see cref="ReadBytes"/> allocates for the run that comes next, after
+        /// the same checks, and leaves the reader at the start of the run. Returns its
+        /// length.
+        /// </summary>
+        internal int PriceBytes()
+        {
+            var count = ReadUInt32();
+            if (count > int.MaxValue)
+            {
+                throw new InvalidDataException(
+                    $"Payload holds a {count}-byte run, which cannot be read into a " +
+                    "single array.");
+            }
+
+            RequireAhead((int)count);
+            this.Budget.Price(ReadBudget.ArrayOf(count, 1));
+            return (int)count;
+        }
+
+        /// <summary>
+        /// Prices what <see cref="ReadBytes"/> allocates for the run that comes next, and
+        /// skips it. Returns its length.
+        /// </summary>
+        internal int SkipBytes()
+        {
+            var count = PriceBytes();
+            Skip(count);
+            return count;
+        }
+
+        /// <summary>
+        /// Moves past <paramref name="count"/> bytes without reading them, refusing to run
+        /// off the end as a read would.
+        /// </summary>
+        internal void Skip(long count)
+        {
+            RequireAhead(count);
+            if (this.source is null)
+            {
+                this.offset += (int)count;
+            }
+            else
+            {
+                this.source.Skip(count);
+            }
+        }
+
+        /// <summary>
+        /// Moves past everything not yet read, so that the reader this one was sliced from
+        /// goes on after it.
+        /// </summary>
+        internal void SkipRest()
+        {
+            Skip(Remaining);
+        }
+
+        /// <summary>
+        /// Reads <paramref name="count"/> bytes in place, at most sixteen, for a field
+        /// wider than the fixed ones -- a nested envelope's header.
+        /// </summary>
+        internal ReadOnlySpan<byte> ReadSpan(int count)
+        {
+            return Take(count);
+        }
+
+        /// <summary>
+        /// A reader of the next <paramref name="length"/> bytes, drawing on the same
+        /// budget, which this one is moved past once that reader has been read to its end
+        /// with <see cref="SkipRest"/>.
+        /// </summary>
+        /// <remarks>
+        /// Over a held payload this reader moves past the slice at once. Over one that is
+        /// not held both read from the same stream, so this one follows wherever the slice
+        /// leaves it, and the slice has to be skipped to its end before this one goes on.
+        /// </remarks>
+        internal PayloadReader Slice(int length)
+        {
+            RequireAhead(length);
+            if (this.source is null)
+            {
+                var slice = new PayloadReader(this.payload.Slice(this.offset, length), this.Budget);
+                this.offset += length;
+                return slice;
+            }
+
+            return new PayloadReader(this.source, length, this.Budget);
+        }
+
+        /// <summary>
         /// The bytes not yet read.
         /// </summary>
-        internal int Remaining => this.payload.Length - this.offset;
+        internal int Remaining => this.source is null
+            ? this.payload.Length - this.offset
+            : (int)(this.end - this.source.Position);
+
+        /// <summary>How far into its payload the reader is.</summary>
+        private long Offset => this.source is null ? this.offset : this.source.Position - this.start;
+
+        /// <summary>How long the reader's payload is.</summary>
+        private long Length => this.source is null ? this.payload.Length : this.end - this.start;
+
+        /// <summary>
+        /// Refuses to go <paramref name="count"/> bytes further than the payload goes, as
+        /// a read past its end is refused.
+        /// </summary>
+        private void RequireAhead(long count)
+        {
+            if (count < 0 || count > this.Remaining)
+            {
+                throw new InvalidDataException(
+                    $"Payload ended after {this.Length} bytes while reading " +
+                    $"{count} more at offset {this.Offset}. It is truncated or does not " +
+                    "have the shape this structure expects.");
+            }
+        }
 
         /// <summary>
         /// Refuses a count that the rest of the payload could not hold, before anything
@@ -219,28 +356,117 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal void ExpectEnd()
         {
-            if (this.offset != this.payload.Length)
+            if (this.Offset != this.Length)
             {
                 throw new InvalidDataException(
-                    $"Payload has {this.payload.Length - this.offset} bytes left over " +
-                    $"after reading {this.offset} of {this.payload.Length}. It does not " +
+                    $"Payload has {this.Length - this.Offset} bytes left over " +
+                    $"after reading {this.Offset} of {this.Length}. It does not " +
                     "have the shape this structure expects.");
             }
         }
 
         private ReadOnlySpan<byte> Take(int count)
         {
-            if (count < 0 || this.offset + count > this.payload.Length)
+            RequireAhead(count);
+            if (this.source is not null)
             {
-                throw new InvalidDataException(
-                    $"Payload ended after {this.payload.Length} bytes while reading " +
-                    $"{count} more at offset {this.offset}. It is truncated or does not " +
-                    "have the shape this structure expects.");
+                return this.source.Take(count);
             }
 
             var span = this.payload.Slice(this.offset, count);
             this.offset += count;
             return span;
         }
+    }
+
+    /// <summary>
+    /// A payload read from its stream a field at a time rather than held, so that one
+    /// too large for its read's budget can still be priced.
+    /// </summary>
+    /// <remarks>
+    /// Only pricing reads this way, and only to name the total in a refusal: the read it
+    /// prices is refused whatever the total comes to, so how far into the stream it is
+    /// left does not matter. Runs are skipped, by seeking where the stream can and by
+    /// reading through a small buffer where it cannot, so the price of a payload of
+    /// gigabytes costs a few hundred bytes to work out.
+    /// </remarks>
+    internal sealed class PayloadSource
+    {
+        /// <summary>The widest field taken in place: a nested envelope's header.</summary>
+        internal const int WidestField = 16;
+
+        private readonly Stream stream;
+        private readonly byte[] field = new byte[WidestField];
+        private byte[]? skipped;
+
+        internal PayloadSource(Stream stream)
+        {
+            this.stream = stream;
+        }
+
+        /// <summary>How many of the payload's bytes have been read or skipped.</summary>
+        internal long Position { get; private set; }
+
+        /// <summary>
+        /// The next <paramref name="count"/> bytes, at most <see cref="WidestField"/>,
+        /// until the next call.
+        /// </summary>
+        /// <exception cref="InvalidDataException">The stream ends first.</exception>
+        internal ReadOnlySpan<byte> Take(int count)
+        {
+            if (count > WidestField)
+            {
+                throw new InvalidOperationException(
+                    $"A payload that is not held is read a field at a time, of at most " +
+                    $"{WidestField} bytes, and {count} were asked for. Only a price reads " +
+                    "a payload this way, and a price skips runs rather than copying them.");
+            }
+
+            var span = this.field.AsSpan(0, count);
+            this.Fill(span);
+            this.Position += count;
+            return span;
+        }
+
+        /// <summary>Moves past the next <paramref name="count"/> bytes.</summary>
+        /// <exception cref="InvalidDataException">The stream ends first.</exception>
+        internal void Skip(long count)
+        {
+            if (this.stream.CanSeek)
+            {
+                if (this.stream.Length - this.stream.Position < count)
+                {
+                    throw Truncated();
+                }
+                this.stream.Seek(count, SeekOrigin.Current);
+            }
+            else
+            {
+                this.skipped ??= new byte[4096];
+                for (var left = count; left > 0; left -= this.skipped.Length)
+                {
+                    this.Fill(this.skipped.AsSpan(0, (int)Math.Min(left, this.skipped.Length)));
+                }
+            }
+
+            this.Position += count;
+        }
+
+        private void Fill(Span<byte> buffer)
+        {
+            while (buffer.Length > 0)
+            {
+                var n = this.stream.Read(buffer);
+                if (n == 0)
+                {
+                    throw Truncated();
+                }
+                buffer = buffer.Slice(n);
+            }
+        }
+
+        private static InvalidDataException Truncated() => new(
+            "The stream ended before the end of the payload its header claims. The data " +
+            "has been truncated.");
     }
 }

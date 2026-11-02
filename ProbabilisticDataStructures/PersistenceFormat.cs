@@ -91,6 +91,26 @@ namespace ProbabilisticDataStructures
     }
 
     /// <summary>
+    /// Prices the read of a structure's payload, written at <paramref name="version"/>:
+    /// walks its fields in the order the structure's reader reads them, and adds to the
+    /// reader's budget, through <see cref="ReadBudget.Price(long)"/>, everything the
+    /// reader charges for, without allocating any of it.
+    /// </summary>
+    /// <remarks>
+    /// A price reads a field the reader reads, makes the checks the reader makes before it
+    /// allocates for that field, by calling the code the reader calls, and prices what the
+    /// reader charges, through the helpers the reader charges through. Where the reader
+    /// would refuse the payload a price throws too, and what it priced up to there stands:
+    /// the reader then refuses the payload with its own explanation, or the budget refuses
+    /// what came before, as it did when every charge was made as the read went.
+    /// <para>
+    /// The reader may be over a held payload or over one read from its stream; a price
+    /// reads fields and skips runs, which both allow, and never copies one.
+    /// </para>
+    /// </remarks>
+    internal delegate void PayloadPrice(ref PayloadReader reader, ushort version);
+
+    /// <summary>
     /// The envelope every persisted structure is wrapped in.
     /// </summary>
     /// <remarks>
@@ -209,7 +229,7 @@ namespace ProbabilisticDataStructures
         /// others. Accepting every version up to the highest anywhere would read a
         /// version some other structure defined as though it were this one's newest
         /// layout;
-        /// <see cref="Read(Stream, StructureId, out HashId, out ushort, ReadBudget)"/> refuses
+        /// <see cref="Read(Stream, StructureId, out HashId, out ushort, ReadBudget, PayloadPrice)"/> refuses
         /// it instead, and says which versions it does read.
         /// <para>
         /// Every structure is listed, including those that have only ever written the
@@ -387,9 +407,10 @@ namespace ProbabilisticDataStructures
         /// structure, or has been corrupted.
         /// </exception>
         internal static byte[] Read(
-            Stream stream, StructureId expected, out HashId hash, ReadBudget budget)
+            Stream stream, StructureId expected, out HashId hash, ReadBudget budget,
+            PayloadPrice price)
         {
-            return Read(stream, expected, out hash, out _, budget);
+            return Read(stream, expected, out hash, out _, budget, price);
         }
 
         /// <summary>
@@ -401,60 +422,47 @@ namespace ProbabilisticDataStructures
         /// the structure never defined (a later one included), holds a different
         /// structure, or has been corrupted.
         /// </exception>
+        /// <remarks>
+        /// A read is priced whole before it allocates anything a payload claims, beginning
+        /// with the payload itself, so that a refusal names everything the read takes and
+        /// a budget of that loads it. <paramref name="price"/> is the structure's own
+        /// price, which walks the payload's fields as its reader does. When the payload
+        /// fits the budget it is read and its checksum checked first, so a corrupted
+        /// payload is refused as corrupted, and priced from memory. When the payload
+        /// alone is more than the budget it is never held: it is priced from the stream, a
+        /// field at a time, its runs skipped, and refused.
+        /// <para>
+        /// A structure nested inside another is read under the budget its outer read has
+        /// already priced, nested envelope included, so its own reads draw on that.
+        /// </para>
+        /// </remarks>
         internal static byte[] Read(
             Stream stream, StructureId expected, out HashId hash, out ushort version,
-            ReadBudget budget)
+            ReadBudget budget, PayloadPrice price)
         {
             var header = ReadExactly(stream, HeaderLength, "header");
+            var length = CheckHeader(header, expected, out version, out hash);
+            var envelope = EnvelopeCost(length);
 
-            if (!header.AsSpan(0, MagicLength).SequenceEqual(Magic))
+            var pricing = !budget.IsSettled;
+            if (pricing)
             {
-                throw new InvalidDataException(
-                    "The stream does not begin with a probabilistic data structure " +
-                    "payload; its first bytes are not the expected marker.");
+                // The payload is the first thing a header's claim allocates, and it is
+                // priced before it is: a header claiming two gigabytes is refused on that
+                // claim, and on everything else the payload claims, before the read has
+                // made room for any of it. The header and checksum buffers and the
+                // checksum's state come with it.
+                budget.Price(envelope);
+                if (budget.Charged > budget.Limit)
+                {
+                    PriceUnheld(stream, length, version, budget, price);
+                    throw budget.Refusal(budget.Charged);
+                }
             }
-
-            version = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(4));
-
-            // Before the structure is compared, as it always was: a version this library
-            // has never heard of may lay the header out differently, and then there is
-            // no structure id to trust.
-            if (version == 0 || version > MaxSupportedVersion)
+            else
             {
-                throw RefuseVersion(expected, version);
+                budget.Charge(envelope);
             }
-
-            var structure = (StructureId)BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(6));
-            if (structure != expected)
-            {
-                throw new InvalidDataException(
-                    $"Payload holds a {Describe(structure)} and was read as a " +
-                    $"{Describe(expected)}.");
-            }
-
-            // After it, because which versions are acceptable depends on which structure
-            // this is. A version some other structure defined is not an older or newer
-            // layout of this one, and reading it as one is a guess.
-            if (!ReadableVersions(expected).Contains(version))
-            {
-                throw RefuseVersion(expected, version);
-            }
-
-            hash = (HashId)BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(8));
-
-            var length = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(10));
-            if (length > Array.MaxLength)
-            {
-                throw new InvalidDataException(
-                    $"Payload claims a length of {length} bytes, which cannot be read " +
-                    "into a single array.");
-            }
-
-            // The payload is the first thing a header's claim allocates, and it is
-            // charged before it is: a header claiming two gigabytes is refused on that
-            // claim, not after the read has made room for it. The header and checksum
-            // buffers and the checksum's state come with it.
-            budget.Charge(EnvelopeCost(length));
 
             var payload = ReadExactly(stream, (int)length, "payload");
             var checksum = ReadExactly(stream, ChecksumLength, "checksum");
@@ -472,7 +480,102 @@ namespace ProbabilisticDataStructures
                     $"found {actualCrc:X8}. The data has been corrupted or truncated.");
             }
 
+            if (pricing)
+            {
+                var reader = new PayloadReader(payload, budget);
+                try
+                {
+                    price(ref reader, version);
+                }
+                catch (InvalidDataException)
+                {
+                    // Malformed somewhere past what has been priced. Its reader refuses it
+                    // there, or before, with its own explanation, unless what was priced up
+                    // to there is already more than the budget.
+                }
+
+                budget.Settle();
+                budget.Charge(envelope);
+            }
+
             return payload;
+        }
+
+        /// <summary>
+        /// Prices a payload too large for its budget to be held, reading it from the
+        /// stream, so that the refusal can name the whole of the read.
+        /// </summary>
+        /// <remarks>
+        /// Its checksum cannot be checked without reading it all, so the price rests on
+        /// fields nothing has vouched for, as the refusal it names always did. A payload
+        /// that ends early, or is malformed before its sizes have all been read, is
+        /// priced as far as it goes.
+        /// </remarks>
+        private static void PriceUnheld(
+            Stream stream, uint length, ushort version, ReadBudget budget, PayloadPrice price)
+        {
+            var reader = new PayloadReader(new PayloadSource(stream), length, budget);
+            try
+            {
+                price(ref reader, version);
+            }
+            catch (InvalidDataException)
+            {
+                // What could be priced is what the refusal names.
+            }
+        }
+
+        /// <summary>
+        /// Checks an envelope's header, as its reader does and as a price looking into a
+        /// nested one does, and returns the payload length it claims.
+        /// </summary>
+        private static uint CheckHeader(
+            ReadOnlySpan<byte> header, StructureId expected, out ushort version, out HashId hash)
+        {
+            if (!header.Slice(0, MagicLength).SequenceEqual(Magic))
+            {
+                throw new InvalidDataException(
+                    "The stream does not begin with a probabilistic data structure " +
+                    "payload; its first bytes are not the expected marker.");
+            }
+
+            version = BinaryPrimitives.ReadUInt16LittleEndian(header.Slice(4));
+
+            // Before the structure is compared, as it always was: a version this library
+            // has never heard of may lay the header out differently, and then there is
+            // no structure id to trust.
+            if (version == 0 || version > MaxSupportedVersion)
+            {
+                throw RefuseVersion(expected, version);
+            }
+
+            var structure = (StructureId)BinaryPrimitives.ReadUInt16LittleEndian(header.Slice(6));
+            if (structure != expected)
+            {
+                throw new InvalidDataException(
+                    $"Payload holds a {Describe(structure)} and was read as a " +
+                    $"{Describe(expected)}.");
+            }
+
+            // After it, because which versions are acceptable depends on which structure
+            // this is. A version some other structure defined is not an older or newer
+            // layout of this one, and reading it as one is a guess.
+            if (!ReadableVersions(expected).Contains(version))
+            {
+                throw RefuseVersion(expected, version);
+            }
+
+            hash = (HashId)BinaryPrimitives.ReadUInt16LittleEndian(header.Slice(8));
+
+            var length = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(10));
+            if (length > Array.MaxLength)
+            {
+                throw new InvalidDataException(
+                    $"Payload claims a length of {length} bytes, which cannot be read " +
+                    "into a single array.");
+            }
+
+            return length;
         }
 
         /// <summary>
@@ -584,6 +687,19 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Prices what <see cref="ReadBuckets"/> allocates, and moves past what it reads.
+        /// Returns the bucket count, for a price that checks it as its reader does.
+        /// </summary>
+        internal static uint PriceBuckets(ref PayloadReader reader)
+        {
+            var count = reader.ReadUInt32();
+            reader.ReadByte();
+            reader.SkipBytes();
+            reader.Budget.Price(Buckets.ObjectSize);
+            return count;
+        }
+
+        /// <summary>
         /// Writes a <see cref="Buckets64"/> into a payload.
         /// </summary>
         internal static void WriteBuckets64(PayloadWriter payload, Buckets64 buckets)
@@ -606,17 +722,9 @@ namespace ProbabilisticDataStructures
         {
             var count = reader.ReadUInt64();
             var bucketSize = reader.ReadByte();
-            var arrayCount = reader.ReadUInt32();
+            var arrayCount = ReadArrayCount(ref reader);
 
-            if (arrayCount > MaxNestedCount)
-            {
-                throw new InvalidDataException(
-                    $"Bucket data claims {arrayCount} arrays, beyond anything this " +
-                    "library builds.");
-            }
-
-            reader.Budget.Charge(ReadBudget.Sum(
-                ReadBudget.ArrayOf(arrayCount, sizeof(long)), ReadBudget.SmallObject));
+            reader.Budget.Charge(ArraysCost(arrayCount));
             var arrays = new byte[arrayCount][];
             for (uint i = 0; i < arrayCount; i++)
             {
@@ -625,6 +733,38 @@ namespace ProbabilisticDataStructures
 
             return Buckets64.Restore(count, bucketSize, arrays);
         }
+
+        /// <summary>
+        /// Prices what <see cref="ReadBuckets64"/> allocates, and moves past what it reads.
+        /// </summary>
+        internal static void PriceBuckets64(ref PayloadReader reader)
+        {
+            reader.ReadUInt64();
+            reader.ReadByte();
+            var arrayCount = ReadArrayCount(ref reader);
+
+            reader.Budget.Price(ArraysCost(arrayCount));
+            for (uint i = 0; i < arrayCount; i++)
+            {
+                reader.SkipBytes();
+            }
+        }
+
+        private static uint ReadArrayCount(ref PayloadReader reader)
+        {
+            var arrayCount = reader.ReadUInt32();
+            if (arrayCount > MaxNestedCount)
+            {
+                throw new InvalidDataException(
+                    $"Bucket data claims {arrayCount} arrays, beyond anything this " +
+                    "library builds.");
+            }
+            return arrayCount;
+        }
+
+        /// <summary>The array of a 64-bit table's arrays, and the table around them.</summary>
+        private static long ArraysCost(uint arrayCount) => ReadBudget.Sum(
+            ReadBudget.ArrayOf(arrayCount, sizeof(long)), ReadBudget.SmallObject);
 
         /// <summary>
         /// Writes one structure inside another's payload, as a length-prefixed run
@@ -659,10 +799,38 @@ namespace ProbabilisticDataStructures
             // The nested structure draws on the same allowance as the one around it, so
             // that a composite cannot spend its budget once per part. The run it was
             // copied from is charged by ReadBytes; this is the stream and options around
-            // it, and the nested envelope then charges its own payload.
+            // it, and the nested envelope then charges its own payload. All of it was
+            // priced with the structure around it, by PriceNested.
             reader.Budget.Charge(NestedReadCost);
             var options = new ReadOptions(reader.Budget);
             return hash is null ? T.ReadFrom(buffer, options) : T.ReadFrom(buffer, hash, options);
+        }
+
+        /// <summary>
+        /// Prices what <see cref="ReadNested"/> allocates for a <paramref name="nested"/>
+        /// structure, by looking into its envelope where it sits in the payload, and moves
+        /// past it.
+        /// </summary>
+        /// <remarks>
+        /// The run the nested read copies, the stream and options around it, the nested
+        /// envelope's payload and buffers, and whatever the nested structure's own price
+        /// says, read from the nested payload as it lies inside this one -- the same
+        /// sums, in the same order, that the nested read charges. Its header is checked
+        /// as its reader checks it, so a nested envelope that is not the structure it
+        /// should be stops the price where the read will stop.
+        /// </remarks>
+        internal static void PriceNested(ref PayloadReader reader, StructureId nested, PayloadPrice price)
+        {
+            var run = reader.PriceBytes();
+            reader.Budget.Price(NestedReadCost);
+
+            var envelope = reader.Slice(run);
+            var length = CheckHeader(envelope.ReadSpan(HeaderLength), nested, out var version, out _);
+            envelope.Budget.Price(EnvelopeCost(length));
+
+            var payload = envelope.Slice((int)length);
+            price(ref payload, version);
+            envelope.SkipRest();
         }
 
         /// <summary>

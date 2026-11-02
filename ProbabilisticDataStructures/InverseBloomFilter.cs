@@ -359,27 +359,15 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.InverseBloomFilter);
-            var payload = PersistenceFormat.Read(stream, StructureId.InverseBloomFilter, out var hashId, budget);
+            var payload = PersistenceFormat.Read(stream, StructureId.InverseBloomFilter, out var hashId, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             var capacity = reader.ReadUInt32();
-            if (capacity == 0)
-            {
-                throw new InvalidDataException(
-                    "Filter has a capacity of zero, leaving nowhere to put anything; it " +
-                    "divides by that on first use.");
-            }
-
-            var occupied = reader.ReadUInt32();
-            if (occupied > capacity)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims {occupied} occupied slots in a capacity of {capacity}.");
-            }
+            var occupied = ReadOccupied(ref reader, capacity);
 
             // Every slot is allocated, occupied or not; the occupied ones' data are
             // runs, charged as they are copied.
-            budget.Charge(ReadBudget.ArrayOf(capacity, sizeof(long)));
+            budget.Charge(SlotsCost(capacity));
             var slots = new byte[capacity][];
             for (uint n = 0; n < occupied; n++)
             {
@@ -403,6 +391,48 @@ namespace ProbabilisticDataStructures
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
             };
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: every slot, and
+        /// the copy of each occupied one's data. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var capacity = reader.ReadUInt32();
+            var occupied = ReadOccupied(ref reader, capacity);
+
+            reader.Budget.Price(SlotsCost(capacity));
+            for (uint n = 0; n < occupied; n++)
+            {
+                reader.ReadUInt32();
+                reader.SkipBytes();
+            }
+        }
+
+        /// <summary>
+        /// Reads the occupied count, after checking the capacity before it, as both the
+        /// read and its price do before the slots are allocated.
+        /// </summary>
+        private static uint ReadOccupied(ref PayloadReader reader, uint capacity)
+        {
+            if (capacity == 0)
+            {
+                throw new InvalidDataException(
+                    "Filter has a capacity of zero, leaving nowhere to put anything; it " +
+                    "divides by that on first use.");
+            }
+
+            var occupied = reader.ReadUInt32();
+            if (occupied > capacity)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {occupied} occupied slots in a capacity of {capacity}.");
+            }
+            return occupied;
+        }
+
+        /// <summary>The array of <paramref name="capacity"/> slots.</summary>
+        private static long SlotsCost(uint capacity) => ReadBudget.ArrayOf(capacity, sizeof(long));
 
         /// <summary>
         /// Used only by <see cref="Read"/>, which sets every field itself.

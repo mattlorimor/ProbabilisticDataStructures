@@ -695,25 +695,14 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.UltraLogLog);
-            var payload = PersistenceFormat.Read(stream, StructureId.UltraLogLog, out var hashId, budget);
+            var payload = PersistenceFormat.Read(stream, StructureId.UltraLogLog, out var hashId, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             var precision = reader.ReadUInt32();
-            if (precision < MinPrecision || precision > MaxPrecision)
-            {
-                throw new InvalidDataException(
-                    $"Structure claims precision {precision}, and this library only " +
-                    $"builds precisions {MinPrecision} through {MaxPrecision}.");
-            }
+            CheckPrecision(precision);
 
             var registers = reader.ReadBytes();
-            if (registers.Length != 1 << (int)precision)
-            {
-                throw new InvalidDataException(
-                    $"Structure claims precision {precision}, which is " +
-                    $"{1 << (int)precision} registers, and carries " +
-                    $"{registers.Length}.");
-            }
+            CheckRegisters(precision, registers.Length);
 
             // A register records the position of a bit that a hash of this
             // precision could actually have stopped at: never below p - 1, and
@@ -737,6 +726,40 @@ namespace ProbabilisticDataStructures
                 PersistenceFormat.ResolveOrThrow(hashId, hash));
             registers.CopyTo(restored.Registers, 0);
             return restored;
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the copy of the
+        /// registers, and the structure's own. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var precision = reader.ReadUInt32();
+            CheckPrecision(precision);
+            CheckRegisters(precision, reader.SkipBytes());
+            reader.ExpectEnd();
+            reader.Budget.Price(ReadBudget.ArrayOf(1UL << (int)precision, 1));
+        }
+
+        private static void CheckPrecision(uint precision)
+        {
+            if (precision < MinPrecision || precision > MaxPrecision)
+            {
+                throw new InvalidDataException(
+                    $"Structure claims precision {precision}, and this library only " +
+                    $"builds precisions {MinPrecision} through {MaxPrecision}.");
+            }
+        }
+
+        private static void CheckRegisters(uint precision, int stored)
+        {
+            if (stored != 1 << (int)precision)
+            {
+                throw new InvalidDataException(
+                    $"Structure claims precision {precision}, which is " +
+                    $"{1 << (int)precision} registers, and carries " +
+                    $"{stored}.");
+            }
         }
 
         /// <summary>

@@ -512,7 +512,7 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.HeavyKeeper);
-            var payload = PersistenceFormat.Read(stream, StructureId.HeavyKeeper, out var hashId, budget);
+            var payload = PersistenceFormat.Read(stream, StructureId.HeavyKeeper, out var hashId, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             var k = reader.ReadUInt32();
@@ -521,51 +521,9 @@ namespace ProbabilisticDataStructures
             var decay = reader.ReadDouble();
             var randomState = reader.ReadUInt64();
             var n = reader.ReadUInt64();
+            CheckShape(ref reader, k, width, depth, decay);
 
-            if (k == 0)
-            {
-                throw new InvalidDataException(
-                    "Structure tracks no elements, and indexes its empty heap on the " +
-                    "first add.");
-            }
-            // The constructor's own limits, so that every structure it builds reads back.
-            if (k > ElementHeap.MaxCapacity)
-            {
-                throw new InvalidDataException(
-                    $"Structure claims room for {k} tracked elements, beyond " +
-                    $"anything this library builds: it tracks at most " +
-                    $"{ElementHeap.MaxCapacity}.");
-            }
-            if (width == 0 || depth == 0)
-            {
-                throw new InvalidDataException(
-                    "Structure claims arrays with no buckets, and every insertion " +
-                    "indexes one.");
-            }
-            if (width > MaxWidth || depth > MaxDepth)
-            {
-                throw new InvalidDataException(
-                    $"Structure claims {depth} arrays of {width} buckets, beyond " +
-                    $"anything this library builds: at most {MaxDepth} arrays of " +
-                    $"{MaxWidth}.");
-            }
-            if (double.IsNaN(decay) || double.IsInfinity(decay) || decay <= 1.0)
-            {
-                throw new InvalidDataException(
-                    $"Structure claims a decay base of {decay}, under which no " +
-                    "bucket could hold anything; this library never builds one.");
-            }
-
-            // Every bucket is written, a fingerprint and a counter, so the arrays are
-            // checked against the bytes behind them before they are allocated.
-            reader.RequireHolds(
-                (ulong)width * depth, sizeof(ushort) + sizeof(ulong), "buckets");
-
-            budget.Charge(ReadBudget.Sum(
-                ReadBudget.Times(2, ReadBudget.ArrayOf(depth, sizeof(long))),
-                ReadBudget.Times(depth, ReadBudget.Sum(
-                    ReadBudget.ArrayOf(width, sizeof(ushort)),
-                    ReadBudget.ArrayOf(width, sizeof(ulong))))));
+            budget.Charge(ArraysCost(width, depth));
             var restored = new HeavyKeeper(PersistenceFormat.ResolveOrThrow(hashId, hash),
                 k, width, depth, decay, randomState)
             {
@@ -612,6 +570,90 @@ namespace ProbabilisticDataStructures
             reader.ExpectEnd();
 
             return restored;
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the fingerprint
+        /// and counter arrays, the heap, and the copy of each element's data. See
+        /// <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var k = reader.ReadUInt32();
+            var width = reader.ReadUInt32();
+            var depth = reader.ReadUInt32();
+            var decay = reader.ReadDouble();
+            reader.ReadUInt64();
+            reader.ReadUInt64();
+            CheckShape(ref reader, k, width, depth, decay);
+
+            reader.Budget.Price(ArraysCost(width, depth));
+            reader.Skip((long)width * depth * (sizeof(ushort) + sizeof(ulong)));
+
+            var elementCount = reader.ReadUInt32();
+            reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
+            reader.Budget.Price(ElementHeap.RestoreCost(elementCount));
+            for (uint i = 0; i < elementCount; i++)
+            {
+                reader.SkipBytes();
+                reader.ReadUInt64();
+            }
+        }
+
+        /// <summary>
+        /// The arrays of <paramref name="depth"/> rows of <paramref name="width"/>
+        /// fingerprints and counters.
+        /// </summary>
+        private static long ArraysCost(uint width, uint depth) => ReadBudget.Sum(
+            ReadBudget.Times(2, ReadBudget.ArrayOf(depth, sizeof(long))),
+            ReadBudget.Times(depth, ReadBudget.Sum(
+                ReadBudget.ArrayOf(width, sizeof(ushort)),
+                ReadBudget.ArrayOf(width, sizeof(ulong)))));
+
+        /// <summary>
+        /// Checks the shape a payload claims, as both the read and its price do before
+        /// the arrays are allocated.
+        /// </summary>
+        private static void CheckShape(ref PayloadReader reader, uint k, uint width, uint depth, double decay)
+        {
+            if (k == 0)
+            {
+                throw new InvalidDataException(
+                    "Structure tracks no elements, and indexes its empty heap on the " +
+                    "first add.");
+            }
+            // The constructor's own limits, so that every structure it builds reads back.
+            if (k > ElementHeap.MaxCapacity)
+            {
+                throw new InvalidDataException(
+                    $"Structure claims room for {k} tracked elements, beyond " +
+                    $"anything this library builds: it tracks at most " +
+                    $"{ElementHeap.MaxCapacity}.");
+            }
+            if (width == 0 || depth == 0)
+            {
+                throw new InvalidDataException(
+                    "Structure claims arrays with no buckets, and every insertion " +
+                    "indexes one.");
+            }
+            if (width > MaxWidth || depth > MaxDepth)
+            {
+                throw new InvalidDataException(
+                    $"Structure claims {depth} arrays of {width} buckets, beyond " +
+                    $"anything this library builds: at most {MaxDepth} arrays of " +
+                    $"{MaxWidth}.");
+            }
+            if (double.IsNaN(decay) || double.IsInfinity(decay) || decay <= 1.0)
+            {
+                throw new InvalidDataException(
+                    $"Structure claims a decay base of {decay}, under which no " +
+                    "bucket could hold anything; this library never builds one.");
+            }
+
+            // Every bucket is written, a fingerprint and a counter, so the arrays are
+            // checked against the bytes behind them before they are allocated.
+            reader.RequireHolds(
+                (ulong)width * depth, sizeof(ushort) + sizeof(ulong), "buckets");
         }
     }
 }

@@ -839,7 +839,7 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.QuotientFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.QuotientFilter, out var hashId, budget);
+                stream, StructureId.QuotientFilter, out var hashId, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             var quotientBits = reader.ReadUInt32();
@@ -847,7 +847,60 @@ namespace ProbabilisticDataStructures
             var count = reader.ReadUInt32();
             var bytes = reader.ReadBytes();
             reader.ExpectEnd();
+            CheckWidths(quotientBits, remainderBits);
 
+            // The table is allocated whole, from the two widths alone, before the bytes
+            // carried are compared with it.
+            budget.Charge(TableCost(quotientBits, remainderBits));
+            var filter = Build(quotientBits, remainderBits, PersistenceFormat.ResolveOrThrow(hashId, hash));
+
+            if (count > filter.slots)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {count} entries and has {filter.slots} slots.");
+            }
+
+            if (bytes.Length != BytesOf(filter.data.Length))
+            {
+                throw new InvalidDataException(
+                    $"Filter has {filter.slots} slots of {filter.bitsPerSlot} bits, " +
+                    $"needing {BytesOf(filter.data.Length)} bytes, and carries " +
+                    $"{bytes.Length}.");
+            }
+
+            for (var i = 0; i < filter.data.Length; i++)
+            {
+                filter.data[i] = BinaryPrimitives.ReadUInt64LittleEndian(
+                    bytes.AsSpan(i * sizeof(ulong)));
+            }
+
+            filter.count = count;
+            return filter;
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the copy of the
+        /// stored table, and the table it is unpacked into, sized by the two widths alone.
+        /// See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var quotientBits = reader.ReadUInt32();
+            var remainderBits = reader.ReadUInt32();
+            reader.ReadUInt32();
+            reader.SkipBytes();
+            reader.ExpectEnd();
+            CheckWidths(quotientBits, remainderBits);
+            reader.Budget.Price(TableCost(quotientBits, remainderBits));
+        }
+
+        /// <summary>The table a filter of these widths is built with, and the filter.</summary>
+        private static long TableCost(uint quotientBits, uint remainderBits) => ReadBudget.Sum(
+            ReadBudget.ArrayOf((ulong)TableWords(quotientBits, remainderBits), sizeof(ulong)),
+            ReadBudget.SmallObject);
+
+        private static void CheckWidths(uint quotientBits, uint remainderBits)
+        {
             // 32, although the constructor stops at 31 now. Before it refused, a request
             // for more items than the largest table is sized for came out as a quotient
             // of 32 bits, whose 1u << 32 wraps to one slot, and the filter was written
@@ -875,36 +928,6 @@ namespace ProbabilisticDataStructures
                     $"{remainderBits} remainder bits, which is not a split of a {HashBits}-bit " +
                     "hash.");
             }
-
-            // The table is allocated whole, from the two widths alone, before the bytes
-            // carried are compared with it.
-            budget.Charge(ReadBudget.Sum(
-                ReadBudget.ArrayOf((ulong)TableWords(quotientBits, remainderBits), sizeof(ulong)),
-                ReadBudget.SmallObject));
-            var filter = Build(quotientBits, remainderBits, PersistenceFormat.ResolveOrThrow(hashId, hash));
-
-            if (count > filter.slots)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims {count} entries and has {filter.slots} slots.");
-            }
-
-            if (bytes.Length != BytesOf(filter.data.Length))
-            {
-                throw new InvalidDataException(
-                    $"Filter has {filter.slots} slots of {filter.bitsPerSlot} bits, " +
-                    $"needing {BytesOf(filter.data.Length)} bytes, and carries " +
-                    $"{bytes.Length}.");
-            }
-
-            for (var i = 0; i < filter.data.Length; i++)
-            {
-                filter.data[i] = BinaryPrimitives.ReadUInt64LittleEndian(
-                    bytes.AsSpan(i * sizeof(ulong)));
-            }
-
-            filter.count = count;
-            return filter;
         }
 
         /// <summary>

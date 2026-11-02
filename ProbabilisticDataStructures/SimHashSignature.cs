@@ -125,7 +125,7 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.SimHashSignature);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.SimHashSignature, out var hashId, budget);
+                stream, StructureId.SimHashSignature, out var hashId, budget, Price);
 
             if (hashId != HashId.XxHash3_64)
             {
@@ -140,6 +140,15 @@ namespace ProbabilisticDataStructures
             reader.ExpectEnd();
 
             return new SimHashSignature(value);
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope, which is nothing
+        /// a payload's claims can size: the fingerprint is one fixed field. See
+        /// <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
         }
     }
 }

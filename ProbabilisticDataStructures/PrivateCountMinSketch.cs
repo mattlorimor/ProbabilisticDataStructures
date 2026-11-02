@@ -363,25 +363,39 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.PrivateCountMinSketch);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.PrivateCountMinSketch, out var hashId, budget);
+                stream, StructureId.PrivateCountMinSketch, out var hashId, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             return ReadBody(ref reader, PersistenceFormat.ResolveOrThrow(hashId, hash));
         }
 
         /// <summary>
-        /// Reads the body of a sketch from a payload already positioned at one, so that
-        /// <see cref="DpswSketch"/> can read the sketches it holds without each one
-        /// carrying its own frame.
+        /// Prices what <see cref="Read"/> allocates beyond the envelope. See
+        /// <see cref="PayloadPrice"/>.
         /// </summary>
-        internal static PrivateCountMinSketch ReadBody(
-            ref PayloadReader reader, Func<ReadOnlySpan<byte>, ulong> hash)
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            PriceBody(ref reader);
+        }
+
+        /// <summary>
+        /// Prices what <see cref="ReadBody"/> allocates, the matrix, and moves past the
+        /// body.
+        /// </summary>
+        internal static void PriceBody(ref PayloadReader reader)
         {
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
             var rho = reader.ReadDouble();
-            var count = reader.ReadUInt64();
+            reader.ReadUInt64();
+            CheckShape(width, depth, rho);
 
+            reader.Budget.Price(MatrixCost(width, depth));
+            reader.Skip((long)width * depth * sizeof(double));
+        }
+
+        private static void CheckShape(uint width, uint depth, double rho)
+        {
             if (width == 0 || depth == 0)
             {
                 throw new InvalidDataException(
@@ -396,12 +410,30 @@ namespace ProbabilisticDataStructures
                     "number: at nought the noise would be infinite and at infinity " +
                     "there would be none, and neither is a sketch.");
             }
+        }
+
+        /// <summary>A matrix of <paramref name="depth"/> rows of <paramref name="width"/> counters, and the sketch.</summary>
+        private static long MatrixCost(uint width, uint depth) => ReadBudget.Sum(
+            ReadBudget.ArrayOf(depth, sizeof(long)),
+            ReadBudget.Times(depth, ReadBudget.ArrayOf(width, sizeof(double))),
+            ReadBudget.SmallObject);
+
+        /// <summary>
+        /// Reads the body of a sketch from a payload already positioned at one, so that
+        /// <see cref="DpswSketch"/> can read the sketches it holds without each one
+        /// carrying its own frame.
+        /// </summary>
+        internal static PrivateCountMinSketch ReadBody(
+            ref PayloadReader reader, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            var width = reader.ReadUInt32();
+            var depth = reader.ReadUInt32();
+            var rho = reader.ReadDouble();
+            var count = reader.ReadUInt64();
+            CheckShape(width, depth, rho);
 
             // Each row is allocated before it is read.
-            reader.Budget.Charge(ReadBudget.Sum(
-                ReadBudget.ArrayOf(depth, sizeof(long)),
-                ReadBudget.Times(depth, ReadBudget.ArrayOf(width, sizeof(double))),
-                ReadBudget.SmallObject));
+            reader.Budget.Charge(MatrixCost(width, depth));
             var matrix = new double[depth][];
             var anyNoise = false;
 

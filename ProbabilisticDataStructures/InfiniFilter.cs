@@ -557,26 +557,13 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.InfiniFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.InfiniFilter, out var hashId, budget);
+                stream, StructureId.InfiniFilter, out var hashId, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             var added = reader.ReadUInt64();
             var expansions = reader.ReadUInt32();
             var segmentCount = reader.ReadUInt32();
-
-            if (segmentCount == 0)
-            {
-                throw new InvalidDataException(
-                    "Filter carries no tables at all, and every query begins by " +
-                    "asking the first one.");
-            }
-            if (segmentCount > 64)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims a chain of {segmentCount} tables. The chain grows " +
-                    "with the logarithm of the item count, so this is longer than a " +
-                    "64-bit hash could ever justify.");
-            }
+            CheckChain(segmentCount);
 
             var filter = new InfiniFilter(true)
             {
@@ -591,49 +578,10 @@ namespace ProbabilisticDataStructures
                 var fingerprintBits = (int)reader.ReadUInt32();
                 var count = reader.ReadUInt32();
                 var words = reader.ReadUInt32();
-
-                if (quotientBits < 2 || quotientBits > MaxQuotientBits)
-                {
-                    throw new InvalidDataException(
-                        $"Table {i} claims {quotientBits} bits of address, and this " +
-                        $"library builds tables between 2 and {MaxQuotientBits}: a table's " +
-                        "slot count is a 32-bit number holding 2^q, and 2^32 is not one.");
-                }
-                if (fingerprintBits < 2 || fingerprintBits > 32)
-                {
-                    throw new InvalidDataException(
-                        $"Table {i} claims {fingerprintBits}-bit fingerprints, and " +
-                        "this library builds between 2 and 32.");
-                }
-                if (quotientBits + fingerprintBits > 64)
-                {
-                    throw new InvalidDataException(
-                        $"Table {i} would need {quotientBits + fingerprintBits} bits " +
-                        "of hash to address and fingerprint an entry, and a hash has " +
-                        "sixty-four.");
-                }
-
-                var slots = 1u << quotientBits;
-                if (count > slots)
-                {
-                    throw new InvalidDataException(
-                        $"Table {i} holds {count} entries in {slots} slots, and a " +
-                        "quotient filter stores one entry per slot.");
-                }
-
-                var expectedWords =
-                    ((((long)slots * (fingerprintBits + 1 + 3)) >> 6) + 2);
-                if (words != expectedWords)
-                {
-                    throw new InvalidDataException(
-                        $"Table {i} carries {words} words where its shape needs " +
-                        $"{expectedWords}.");
-                }
+                CheckSegment(i, quotientBits, fingerprintBits, count, words);
 
                 // Read into one array, then copied into the table the segment builds.
-                budget.Charge(ReadBudget.Sum(
-                    ReadBudget.Times(2, ReadBudget.ArrayOf(words, sizeof(ulong))),
-                    ReadBudget.SmallObject));
+                budget.Charge(SegmentCost(words));
                 var data = new ulong[words];
                 for (var w = 0; w < words; w++)
                 {
@@ -648,6 +596,98 @@ namespace ProbabilisticDataStructures
 
             filter.Hash = PersistenceFormat.ResolveOrThrow(hashId, hash);
             return filter;
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: each table's
+        /// words, read into one array and copied into the table. See
+        /// <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            reader.ReadUInt64();
+            reader.ReadUInt32();
+            var segmentCount = reader.ReadUInt32();
+            CheckChain(segmentCount);
+
+            for (var i = 0; i < segmentCount; i++)
+            {
+                var quotientBits = (int)reader.ReadUInt32();
+                var fingerprintBits = (int)reader.ReadUInt32();
+                var count = reader.ReadUInt32();
+                var words = reader.ReadUInt32();
+                CheckSegment(i, quotientBits, fingerprintBits, count, words);
+
+                reader.Budget.Price(SegmentCost(words));
+                reader.Skip((long)words * sizeof(ulong));
+            }
+        }
+
+        /// <summary>One table's words, read into one array and copied into the table.</summary>
+        private static long SegmentCost(uint words) => ReadBudget.Sum(
+            ReadBudget.Times(2, ReadBudget.ArrayOf(words, sizeof(ulong))),
+            ReadBudget.SmallObject);
+
+        private static void CheckChain(uint segmentCount)
+        {
+            if (segmentCount == 0)
+            {
+                throw new InvalidDataException(
+                    "Filter carries no tables at all, and every query begins by " +
+                    "asking the first one.");
+            }
+            if (segmentCount > 64)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims a chain of {segmentCount} tables. The chain grows " +
+                    "with the logarithm of the item count, so this is longer than a " +
+                    "64-bit hash could ever justify.");
+            }
+        }
+
+        /// <summary>
+        /// Checks the shape a table claims, as both the read and its price do before its
+        /// words are allocated.
+        /// </summary>
+        private static void CheckSegment(int i, int quotientBits, int fingerprintBits, uint count, uint words)
+        {
+            if (quotientBits < 2 || quotientBits > MaxQuotientBits)
+            {
+                throw new InvalidDataException(
+                    $"Table {i} claims {quotientBits} bits of address, and this " +
+                    $"library builds tables between 2 and {MaxQuotientBits}: a table's " +
+                    "slot count is a 32-bit number holding 2^q, and 2^32 is not one.");
+            }
+            if (fingerprintBits < 2 || fingerprintBits > 32)
+            {
+                throw new InvalidDataException(
+                    $"Table {i} claims {fingerprintBits}-bit fingerprints, and " +
+                    "this library builds between 2 and 32.");
+            }
+            if (quotientBits + fingerprintBits > 64)
+            {
+                throw new InvalidDataException(
+                    $"Table {i} would need {quotientBits + fingerprintBits} bits " +
+                    "of hash to address and fingerprint an entry, and a hash has " +
+                    "sixty-four.");
+            }
+
+            var slots = 1u << quotientBits;
+            if (count > slots)
+            {
+                throw new InvalidDataException(
+                    $"Table {i} holds {count} entries in {slots} slots, and a " +
+                    "quotient filter stores one entry per slot.");
+            }
+
+            var expectedWords =
+                ((((long)slots * (fingerprintBits + 1 + 3)) >> 6) + 2);
+            if (words != expectedWords)
+            {
+                throw new InvalidDataException(
+                    $"Table {i} carries {words} words where its shape needs " +
+                    $"{expectedWords}.");
+            }
         }
     }
 }

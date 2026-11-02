@@ -721,7 +721,7 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.Grafite);
-            var payload = PersistenceFormat.Read(stream, StructureId.Grafite, out var hashId, budget);
+            var payload = PersistenceFormat.Read(stream, StructureId.Grafite, out var hashId, budget, Price);
 
             if (hash is not null)
             {
@@ -793,33 +793,17 @@ namespace ProbabilisticDataStructures
             // The builder's own limits, so that every filter it builds reads back. Both
             // arrays are written whole, so each is checked against the bytes behind it
             // before it is allocated.
-            var lowWords = reader.ReadUInt32();
-            if (lowWords > MaxLowWords)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims {lowWords} words of low bits, beyond anything " +
-                    $"this library builds: they are one array, of at most {MaxLowWords}.");
-            }
-            reader.RequireHolds(lowWords, sizeof(ulong), "words of low bits");
-            budget.Charge(ReadBudget.ArrayOf(lowWords, sizeof(ulong)));
+            var lowWords = ReadLowWords(ref reader);
+            budget.Charge(LowsCost(lowWords));
             filter.Lows = new ulong[lowWords];
             for (var i = 0; i < lowWords; i++)
             {
                 filter.Lows[i] = reader.ReadUInt64();
             }
 
-            var highWords = reader.ReadUInt32();
-            if (highWords > MaxHighWords)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims {highWords} words of high bits, beyond anything " +
-                    $"this library builds: its high parts fit in {MaxHighWords}.");
-            }
-            reader.RequireHolds(highWords, sizeof(ulong), "words of high bits");
+            var highWords = ReadHighWords(ref reader);
             // And the select index built over them below, a count per word.
-            budget.Charge(ReadBudget.Sum(
-                ReadBudget.ArrayOf(highWords, sizeof(ulong)),
-                ReadBudget.ArrayOf((ulong)highWords + 1, sizeof(int))));
+            budget.Charge(HighsCost(highWords));
             filter.Highs = new ulong[highWords];
             for (var i = 0; i < highWords; i++)
             {
@@ -838,5 +822,57 @@ namespace ProbabilisticDataStructures
             filter.BuildSelectIndex();
             return filter;
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the words of low
+        /// bits, the words of high bits, and the select index over them. See
+        /// <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            // R, C1, C2, KeyCount and MaxRange; LowBits, CodeCount and HighBitCount;
+            // FirstCode and LastCode.
+            reader.Skip(5 * sizeof(ulong) + 3 * sizeof(uint) + 2 * sizeof(ulong));
+
+            var lowWords = ReadLowWords(ref reader);
+            reader.Budget.Price(LowsCost(lowWords));
+            reader.Skip(lowWords * sizeof(ulong));
+
+            reader.Budget.Price(HighsCost(ReadHighWords(ref reader)));
+        }
+
+        private static uint ReadLowWords(ref PayloadReader reader)
+        {
+            var lowWords = reader.ReadUInt32();
+            if (lowWords > MaxLowWords)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {lowWords} words of low bits, beyond anything " +
+                    $"this library builds: they are one array, of at most {MaxLowWords}.");
+            }
+            reader.RequireHolds(lowWords, sizeof(ulong), "words of low bits");
+            return lowWords;
+        }
+
+        private static uint ReadHighWords(ref PayloadReader reader)
+        {
+            var highWords = reader.ReadUInt32();
+            if (highWords > MaxHighWords)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {highWords} words of high bits, beyond anything " +
+                    $"this library builds: its high parts fit in {MaxHighWords}.");
+            }
+            reader.RequireHolds(highWords, sizeof(ulong), "words of high bits");
+            return highWords;
+        }
+
+        /// <summary>The words of low bits.</summary>
+        private static long LowsCost(uint lowWords) => ReadBudget.ArrayOf(lowWords, sizeof(ulong));
+
+        /// <summary>The words of high bits, and the select index's count per word.</summary>
+        private static long HighsCost(uint highWords) => ReadBudget.Sum(
+            ReadBudget.ArrayOf(highWords, sizeof(ulong)),
+            ReadBudget.ArrayOf((ulong)highWords + 1, sizeof(int)));
     }
 }

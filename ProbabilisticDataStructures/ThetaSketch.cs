@@ -449,7 +449,7 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.ThetaSketch);
-            var payload = PersistenceFormat.Read(stream, StructureId.ThetaSketch, out var hashId, budget);
+            var payload = PersistenceFormat.Read(stream, StructureId.ThetaSketch, out var hashId, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             var nominalEntries = reader.ReadUInt32();
@@ -483,7 +483,7 @@ namespace ProbabilisticDataStructures
                 theta = theta,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
             };
-            budget.Charge(ReadBudget.ArrayOf((ulong)Math.Max(16L, held), sizeof(ulong)));
+            budget.Charge(ValuesCost(held));
             sketch.values = new ulong[sketch.Capacity((int)held)];
 
             var previous = 0UL;
@@ -526,6 +526,23 @@ namespace ProbabilisticDataStructures
             reader.ExpectEnd();
             return sketch;
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the buffer of
+        /// values held. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            reader.ReadUInt32();
+            reader.ReadUInt64();
+            var held = reader.ReadUInt32();
+            reader.RequireHolds(held, sizeof(ulong), "values");
+            reader.Budget.Price(ValuesCost(held));
+        }
+
+        /// <summary>The buffer a sketch read back holding <paramref name="held"/> values starts with.</summary>
+        private static long ValuesCost(uint held) =>
+            ReadBudget.ArrayOf((ulong)Math.Max(16L, held), sizeof(ulong));
 
         /// <summary>
         /// Theta as a fraction of the hash range, which is the probability that any

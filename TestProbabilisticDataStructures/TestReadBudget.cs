@@ -68,6 +68,7 @@ namespace TestProbabilisticDataStructures
             byte[] Bytes,
             Func<byte[], ReadOptions, object> Read,
             Func<byte[], ReadOptions, object> ReadWithHash,
+            Func<Stream, ReadOptions, object> ReadStream,
             Func<object, byte[]> Write,
             string RefusesAHashBecause = null,
             string SmallBecause = null);
@@ -79,9 +80,36 @@ namespace TestProbabilisticDataStructures
                 structure.ToByteArray(),
                 (bytes, options) => Persistence.FromByteArray<T>(bytes, options),
                 (bytes, options) => Persistence.FromByteArray<T>(bytes, DefaultHash, options),
+                (stream, options) => T.ReadFrom(stream, options),
                 restored => ((T)restored).ToByteArray(),
                 refusesAHashBecause,
                 smallBecause);
+
+        /// <summary>
+        /// A stream that can only be read forward, as a network stream or a pipe is: a
+        /// payload too large to hold is priced from one by reading past its runs rather
+        /// than seeking past them.
+        /// </summary>
+        private sealed class OneWay(byte[] bytes) : Stream
+        {
+            private readonly MemoryStream inner = new(bytes, writable: false);
+
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => throw new NotSupportedException();
+            public override long Position
+            {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+
+            public override int Read(byte[] buffer, int offset, int count) => this.inner.Read(buffer, offset, count);
+            public override void Flush() { }
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        }
 
         private static T Filled<T>(T structure, Action<T, byte[]> add, int count)
         {
@@ -456,6 +484,14 @@ namespace TestProbabilisticDataStructures
                 Assert.AreEqual(budget, why.MemoryBudget);
             }
 
+            // From a stream that cannot seek, the runs are read past rather than skipped,
+            // and the total is the same.
+            Assert.IsTrue(RefusedForBudget(() => sample.ReadStream(new OneWay(bytes), new ReadOptions(0)), out var oneWay),
+                $"{sample.Name} loaded from a stream that cannot seek under a budget of nothing");
+            Assert.AreEqual(total, oneWay!.RequiredBytes,
+                $"{sample.Name} named {oneWay.RequiredBytes} bytes read from a stream that cannot seek, " +
+                $"and {total} from one that can");
+
             Assert.IsFalse(RefusedForBudget(() => sample.Read(bytes, new ReadOptions(total)), out var again),
                 $"{sample.Name} was refused needing {total} bytes, and refused again under exactly that, " +
                 $"needing {again?.RequiredBytes}");
@@ -469,6 +505,12 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(total, unlimited.Charged,
                 $"{sample.Name} named {total} bytes when refused and was charged {unlimited.Charged} " +
                 "when nothing limited it");
+
+            // And the reader, charging as it allocates, spends exactly that: the price and
+            // the charges are the same sums, so neither has drifted from the other.
+            Assert.AreEqual(unlimited.Charged, unlimited.Spent,
+                $"{sample.Name} was priced at {unlimited.Charged} bytes and its reader charged " +
+                $"{unlimited.Spent}");
 
             var allocated = Allocated(() => sample.Read(bytes, new ReadOptions(total)));
             Console.WriteLine(
@@ -542,6 +584,72 @@ namespace TestProbabilisticDataStructures
             var run = (int)BinaryPrimitives.ReadUInt32LittleEndian(topKBytes.AsSpan(PayloadStart + 8));
             var sketch = topKBytes.AsSpan(PayloadStart + 12, run).ToArray();
             AssertPricedWithWhatItHolds<TopK>(topKBytes, new[] { Total<CountMinSketch>(sketch) });
+        }
+
+        /// <summary>
+        /// A windowed sketch is priced with the plan its checkpoints lay out, and the price
+        /// cannot build the checkpoints to count them: the list they are built from is the
+        /// substream size long, which is what is being priced. The count it works out
+        /// instead is the length of the array the read builds, at every size up to a few
+        /// thousand and at factors from coarse to fine, and at sizes far past those.
+        /// </summary>
+        [TestMethod]
+        public void TestTheCheckpointCountAPriceUsesIsTheOneTheReadBuilds()
+        {
+            var alphas = new[] { 0.001, 0.01, 0.05, 0.1, 0.25, 1.0 / 3, 0.5, 0.75, 0.9, 0.999 };
+            var compared = 0;
+            foreach (var alpha in alphas)
+            {
+                for (var size = 1; size <= 3000; size += size < 64 ? 1 : 37)
+                {
+                    Assert.AreEqual(DpswSketch.Checkpoints(size, alpha).Length,
+                        DpswSketch.CheckpointCount(size, alpha), $"substream {size}, alpha {alpha}");
+                    compared++;
+                }
+            }
+
+            foreach (var (size, alpha) in new[] { (200_000, 0.5), (65_536, 0.01), (100_003, 0.3) })
+            {
+                Assert.AreEqual(DpswSketch.Checkpoints(size, alpha).Length,
+                    DpswSketch.CheckpointCount(size, alpha), $"substream {size}, alpha {alpha}");
+                compared++;
+            }
+
+            Assert.IsGreaterThan(1000, compared);
+        }
+
+        /// <summary>
+        /// A read whose reader charges past its price -- a price that missed something --
+        /// still goes no further than its budget: the charges past the price are held to
+        /// the limit, as every charge was before reads were priced, and the refusal then
+        /// names what had been charged. No structure's read gets here, since the sweep
+        /// holds every price to its reader's charges; this is what keeps a mistake in a
+        /// future price from being a way past the budget.
+        /// </summary>
+        [TestMethod]
+        public void TestAChargePastThePriceIsStillHeldToTheLimit()
+        {
+            var budget = new ReadBudget(150, StructureId.BloomFilter);
+            budget.Price(100);
+            budget.Settle();
+            Assert.IsTrue(budget.IsSettled);
+
+            budget.Charge(100);
+            Assert.AreEqual(100L, budget.Charged);
+            budget.Charge(20);
+            Assert.AreEqual(120L, budget.Spent);
+            Assert.AreEqual(120L, budget.Charged, "a charge past the price was not counted");
+            budget.Charge(30);
+
+            var refusal = Assert.ThrowsExactly<InvalidDataException>(() => budget.Charge(1));
+            var why = Assert.IsInstanceOfType<ReadBudgetExceededException>(refusal.InnerException);
+            Assert.AreEqual(151L, why.RequiredBytes);
+            Assert.AreEqual(150L, why.MemoryBudget);
+
+            var priced = new ReadBudget(150, StructureId.BloomFilter);
+            priced.Price(151);
+            Assert.ThrowsExactly<InvalidDataException>(priced.Settle);
+            Assert.IsFalse(priced.IsSettled);
         }
 
         private static long Total<T>(byte[] bytes) where T : IBinaryPersistable<T>

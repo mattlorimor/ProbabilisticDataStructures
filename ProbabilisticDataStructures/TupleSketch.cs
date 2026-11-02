@@ -669,7 +669,7 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.TupleSketch);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.TupleSketch, out var hashId, budget);
+                stream, StructureId.TupleSketch, out var hashId, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             var nominalEntries = reader.ReadUInt32();
@@ -710,8 +710,7 @@ namespace ProbabilisticDataStructures
                 theta = theta,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
             };
-            budget.Charge(ReadBudget.Times(
-                2, ReadBudget.ArrayOf((ulong)Math.Max(16L, held), sizeof(ulong))));
+            budget.Charge(EntriesCost(held));
             var size = sketch.Capacity((int)held);
             sketch.values = new ulong[size];
             sketch.summaries = new double[size];
@@ -760,5 +759,26 @@ namespace ProbabilisticDataStructures
             sketch.ordered = sketch.held;
             return sketch;
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the buffers of
+        /// keys and summaries held. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            reader.ReadUInt32();
+            reader.ReadByte();
+            reader.ReadUInt64();
+            var held = reader.ReadUInt32();
+            reader.RequireHolds(held, sizeof(ulong) + sizeof(double), "keys");
+            reader.Budget.Price(EntriesCost(held));
+        }
+
+        /// <summary>
+        /// The two buffers a sketch read back holding <paramref name="held"/> keys starts
+        /// with.
+        /// </summary>
+        private static long EntriesCost(uint held) => ReadBudget.Times(
+            2, ReadBudget.ArrayOf((ulong)Math.Max(16L, held), sizeof(ulong)));
     }
 }

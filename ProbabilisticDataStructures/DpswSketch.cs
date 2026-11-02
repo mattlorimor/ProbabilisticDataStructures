@@ -634,7 +634,7 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.DpswSketch);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.DpswSketch, out var hashId, budget);
+                stream, StructureId.DpswSketch, out var hashId, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             var window = (long)reader.ReadUInt64();
@@ -644,42 +644,7 @@ namespace ProbabilisticDataStructures
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
             var position = (long)reader.ReadUInt64();
-
-            if (window < 1)
-            {
-                throw new InvalidDataException(
-                    $"Window covers {window} items, and a window covers at least one.");
-            }
-            if (double.IsNaN(rho) || rho <= 0 || double.IsInfinity(rho))
-            {
-                throw new InvalidDataException(
-                    $"Window claims a privacy budget of {rho}, which has to be a " +
-                    "positive number.");
-            }
-            if (double.IsNaN(alpha) || alpha <= 0 || alpha >= 1)
-            {
-                throw new InvalidDataException(
-                    $"Window claims a checkpoint factor of {alpha}, which lies " +
-                    "strictly between nought and one.");
-            }
-            if (substreamSize < 1 || substreamSize > window)
-            {
-                throw new InvalidDataException(
-                    $"Window claims substreams of {substreamSize} items against a " +
-                    $"window of {window}. A substream holds at least one item and " +
-                    "never more than the window it divides.");
-            }
-            if (width == 0 || depth == 0)
-            {
-                throw new InvalidDataException(
-                    $"Window claims sketches of {depth} by {width}. A sketch needs at " +
-                    "least one counter and one row.");
-            }
-            if (position < 0)
-            {
-                throw new InvalidDataException(
-                    $"Window claims {position} items seen, which cannot be negative.");
-            }
+            CheckShape(window, rho, alpha, substreamSize, width, depth, position);
 
             var resolved = PersistenceFormat.ResolveOrThrow(hashId, hash);
 
@@ -690,25 +655,11 @@ namespace ProbabilisticDataStructures
             {
                 position = position,
             };
-
-            // The same refusal the constructor makes, so a payload is not a way around
-            // it: a configuration whose leanest sketch is drowned in its own noise
-            // answers with thousands of counts of nothing.
-            var leanest = BudgetAt(sketch.checkpoints.Length, rho, alpha);
-            var worstDeviation = Math.Sqrt(depth / leanest);
-            if (worstDeviation > window)
-            {
-                throw new InvalidDataException(
-                    $"Window claims a checkpoint factor of {alpha}, which leaves its " +
-                    $"leanest sketch a budget of {leanest:E2} -- noise of deviation " +
-                    $"{worstDeviation:E2} against a window of {window} items. The " +
-                    "constructor refuses this shape, and a payload is not a way " +
-                    "around it.");
-            }
+            CheckLeanest(sketch.checkpoints.Length, window, rho, alpha, depth);
 
             // One segment for the whole substream and two for every checkpoint past
             // the first, as PlanFor lays them out.
-            var segmentsPlanned = 2UL * (ulong)sketch.checkpoints.Length - 1;
+            var segmentsPlanned = SegmentsPlanned(sketch.checkpoints.Length);
             budget.Charge(PlanCost(segmentsPlanned));
             var plan = sketch.PlanFor(0);
 
@@ -749,8 +700,7 @@ namespace ProbabilisticDataStructures
 
                 // The substream, and a segment list as long as the plan; each segment's
                 // sketch charges itself as it is read.
-                budget.Charge(ReadBudget.Sum(
-                    ReadBudget.SmallObject, PlanCost((ulong)plan.Count)));
+                budget.Charge(SubstreamCost((ulong)plan.Count));
                 var substream = new Substream(start) { Held = held };
                 foreach (var planned in plan)
                 {
@@ -773,6 +723,122 @@ namespace ProbabilisticDataStructures
 
             reader.ExpectEnd();
             return sketch;
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the checkpoints
+        /// rebuilt from the substream size, the plan laid out over them, the list of
+        /// substreams, and for each substream its segment list and every segment's
+        /// sketch. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var window = (long)reader.ReadUInt64();
+            var rho = reader.ReadDouble();
+            var alpha = reader.ReadDouble();
+            var substreamSize = (int)reader.ReadUInt32();
+            var width = reader.ReadUInt32();
+            var depth = reader.ReadUInt32();
+            var position = (long)reader.ReadUInt64();
+            CheckShape(window, rho, alpha, substreamSize, width, depth, position);
+
+            reader.Budget.Price(CheckpointsCost(substreamSize));
+            var checkpoints = CheckpointCount(substreamSize, alpha);
+            CheckLeanest(checkpoints, window, rho, alpha, depth);
+
+            var segments = SegmentsPlanned(checkpoints);
+            reader.Budget.Price(PlanCost(segments));
+
+            var substreamCount = reader.ReadUInt32();
+            reader.RequireHolds(substreamCount, sizeof(ulong) + sizeof(uint), "substreams");
+            reader.Budget.Price(ReadBudget.ListOf(substreamCount, sizeof(long)));
+
+            for (var s = 0u; s < substreamCount; s++)
+            {
+                reader.ReadUInt64();
+                reader.ReadUInt32();
+                reader.Budget.Price(SubstreamCost(segments));
+                for (var i = 0UL; i < segments; i++)
+                {
+                    PrivateCountMinSketch.PriceBody(ref reader);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The segments <see cref="PlanFor"/> lays out over <paramref name="checkpoints"/>
+        /// checkpoints: one for the whole substream, and two for every checkpoint past the
+        /// first.
+        /// </summary>
+        private static ulong SegmentsPlanned(int checkpoints) => 2UL * (ulong)checkpoints - 1;
+
+        /// <summary>A substream, and a segment list as long as the plan.</summary>
+        private static long SubstreamCost(ulong segments) =>
+            ReadBudget.Sum(ReadBudget.SmallObject, PlanCost(segments));
+
+        /// <summary>
+        /// Checks the shape a payload claims, as both the read and its price do before the
+        /// checkpoints are rebuilt.
+        /// </summary>
+        private static void CheckShape(
+            long window, double rho, double alpha, int substreamSize, uint width, uint depth,
+            long position)
+        {
+            if (window < 1)
+            {
+                throw new InvalidDataException(
+                    $"Window covers {window} items, and a window covers at least one.");
+            }
+            if (double.IsNaN(rho) || rho <= 0 || double.IsInfinity(rho))
+            {
+                throw new InvalidDataException(
+                    $"Window claims a privacy budget of {rho}, which has to be a " +
+                    "positive number.");
+            }
+            if (double.IsNaN(alpha) || alpha <= 0 || alpha >= 1)
+            {
+                throw new InvalidDataException(
+                    $"Window claims a checkpoint factor of {alpha}, which lies " +
+                    "strictly between nought and one.");
+            }
+            if (substreamSize < 1 || substreamSize > window)
+            {
+                throw new InvalidDataException(
+                    $"Window claims substreams of {substreamSize} items against a " +
+                    $"window of {window}. A substream holds at least one item and " +
+                    "never more than the window it divides.");
+            }
+            if (width == 0 || depth == 0)
+            {
+                throw new InvalidDataException(
+                    $"Window claims sketches of {depth} by {width}. A sketch needs at " +
+                    "least one counter and one row.");
+            }
+            if (position < 0)
+            {
+                throw new InvalidDataException(
+                    $"Window claims {position} items seen, which cannot be negative.");
+            }
+        }
+
+        /// <summary>
+        /// The same refusal the constructor makes, so a payload is not a way around it:
+        /// a configuration whose leanest sketch is drowned in its own noise answers with
+        /// thousands of counts of nothing. Made by the read and by its price.
+        /// </summary>
+        private static void CheckLeanest(int checkpoints, long window, double rho, double alpha, uint depth)
+        {
+            var leanest = BudgetAt(checkpoints, rho, alpha);
+            var worstDeviation = Math.Sqrt(depth / leanest);
+            if (worstDeviation > window)
+            {
+                throw new InvalidDataException(
+                    $"Window claims a checkpoint factor of {alpha}, which leaves its " +
+                    $"leanest sketch a budget of {leanest:E2} -- noise of deviation " +
+                    $"{worstDeviation:E2} against a window of {window} items. The " +
+                    "constructor refuses this shape, and a payload is not a way " +
+                    "around it.");
+            }
         }
 
         /// <summary>
@@ -878,7 +944,48 @@ namespace ProbabilisticDataStructures
             ReadBudget.ListOf(segments, sizeof(long)),
             ReadBudget.Times(segments, ReadBudget.SmallObject));
 
-        private static int[] Checkpoints(int substreamSize, double alpha)
+        /// <summary>
+        /// How many checkpoints <see cref="Checkpoints"/> keeps for a substream of
+        /// <paramref name="substreamSize"/> items, worked out without the list of every
+        /// offset it builds them from, so that a price can know the plan's size without
+        /// paying for what it prices.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="Checkpoints"/> starts from every offset, largest first, and at each
+        /// one it keeps drops the run after it down to the last offset still at least
+        /// <c>1 - alpha</c> times it. What follows a kept offset is then always every
+        /// smaller offset, so the walk needs only the offset it is at and how many remain:
+        /// the last offset it keeps after <c>v</c> is the smallest whole number at or above
+        /// <c>(1 - alpha) * v</c>, the comparison <see cref="Checkpoints"/> makes, worked
+        /// out in the same doubles, or <c>v - 1</c> if none below <c>v</c> is that large.
+        /// <c>TestReadBudget</c> holds the two to the same count across sizes and factors.
+        /// </remarks>
+        internal static int CheckpointCount(int substreamSize, double alpha)
+        {
+            var count = (long)substreamSize;
+            var at = 0L;
+            var value = (long)substreamSize;
+
+            while (at < count - 2)
+            {
+                var smallest = Math.Max(1L, (long)Math.Ceiling((1 - alpha) * (int)value));
+                if (smallest <= value - 1)
+                {
+                    count -= value - smallest - 1;
+                    value = smallest;
+                }
+                else
+                {
+                    value--;
+                }
+
+                at++;
+            }
+
+            return (int)count;
+        }
+
+        internal static int[] Checkpoints(int substreamSize, double alpha)
         {
             // CheckpointsCost bounds what this allocates; keep the two together.
             var indices = new List<int>();

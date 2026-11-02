@@ -278,26 +278,12 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.TopK);
-            var payload = PersistenceFormat.Read(stream, StructureId.TopK, out _, budget);
+            var payload = PersistenceFormat.Read(stream, StructureId.TopK, out _, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             var k = reader.ReadUInt32();
             var n = reader.ReadUInt32();
-
-            if (k == 0)
-            {
-                throw new InvalidDataException(
-                    "Structure has room for no elements, and indexes its empty heap on " +
-                    "the first add.");
-            }
-
-            // The constructor's own limit, so that every structure it builds reads back.
-            if (k > ElementHeap.MaxCapacity)
-            {
-                throw new InvalidDataException(
-                    $"Structure claims room for {k} elements, beyond anything this " +
-                    $"library builds: it tracks at most {ElementHeap.MaxCapacity}.");
-            }
+            CheckRoom(k);
 
             var sketch = PersistenceFormat.ReadNested<CountMinSketch>(ref reader, hash);
 
@@ -335,6 +321,47 @@ namespace ProbabilisticDataStructures
                 N = n,
                 elements = heap,
             };
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the whole of the
+        /// nested sketch's read, priced from its envelope where it lies in this payload,
+        /// the heap, and the copy of each element's data. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var k = reader.ReadUInt32();
+            reader.ReadUInt32();
+            CheckRoom(k);
+
+            PersistenceFormat.PriceNested(ref reader, StructureId.CountMinSketch, CountMinSketch.Price);
+
+            var elementCount = reader.ReadUInt32();
+            reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
+            reader.Budget.Price(ElementHeap.RestoreCost(elementCount));
+            for (uint i = 0; i < elementCount; i++)
+            {
+                reader.SkipBytes();
+                reader.ReadUInt64();
+            }
+        }
+
+        private static void CheckRoom(uint k)
+        {
+            if (k == 0)
+            {
+                throw new InvalidDataException(
+                    "Structure has room for no elements, and indexes its empty heap on " +
+                    "the first add.");
+            }
+
+            // The constructor's own limit, so that every structure it builds reads back.
+            if (k > ElementHeap.MaxCapacity)
+            {
+                throw new InvalidDataException(
+                    $"Structure claims room for {k} elements, beyond anything this " +
+                    $"library builds: it tracks at most {ElementHeap.MaxCapacity}.");
+            }
         }
 
         /// <summary>

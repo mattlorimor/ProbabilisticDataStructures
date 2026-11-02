@@ -322,10 +322,19 @@ would have been; the structure is untouched. A reader refuses a length field abo
 
 Every read has a budget: the most memory, in bytes, reading one payload may allocate — the
 payload itself, the copies made of runs within it, the structure, and any structure nested
-inside it, all from one allowance. A reader works out what each allocation will cost from
-the fields that size it, before making it, and refuses the payload when the allowance
-would be passed. The refusal is an `InvalidDataException` whose inner exception is a
-`ReadBudgetExceededException` naming the bytes needed and the budget.
+inside it, all from one allowance. A reader prices the whole read before allocating
+anything a payload claims: from the envelope's length and the fields that size the
+structure, read in the order the structure's reader reads them, and for a nested structure
+from its own envelope and fields where they lie inside the outer payload. It refuses the
+payload when that total is more than the budget. The refusal is an `InvalidDataException`
+whose inner exception is a `ReadBudgetExceededException` naming the total and the budget;
+the total is the same whatever the budget was, and a budget of it reads the payload.
+
+A payload that fits the budget is read and its checksum checked before it is priced, so a
+corrupted one is refused as corrupted. One whose length alone is more than the budget is
+never held: its fields are read from the stream and its runs skipped, to name the total,
+before its checksum could be checked. A payload that ends early, or whose fields are not
+ones its reader accepts, is priced as far as it goes.
 
 The default is 1,073,741,824 bytes, one gibibyte (`ReadOptions.DefaultMemoryBudget`).
 `ReadFrom` without options reads under it; the overloads taking `ReadOptions` read under

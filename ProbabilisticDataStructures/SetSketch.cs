@@ -801,7 +801,7 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.SetSketch);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.SetSketch, out var hashId, out var version, budget);
+                stream, StructureId.SetSketch, out var hashId, out var version, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             var b = reader.ReadDouble();
@@ -859,9 +859,7 @@ namespace ProbabilisticDataStructures
             reader.RequireHolds(m, sizeof(ushort), "registers");
 
             // The registers, and the two arrays that order their updates.
-            budget.Charge(ReadBudget.Sum(
-                ReadBudget.ArrayOf(m, sizeof(ushort)),
-                ReadBudget.Times(2, ReadBudget.ArrayOf(m, sizeof(uint)))));
+            budget.Charge(RegistersCost(m));
             var sketch = new SetSketch(
                 (int)m, b, a, (int)q,
                 PersistenceFormat.ResolveOrThrow(hashId, hash),
@@ -885,6 +883,32 @@ namespace ProbabilisticDataStructures
             sketch.RescanLowerBound();
             return sketch;
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the registers and
+        /// the two arrays that order their updates. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            reader.ReadDouble();
+            reader.ReadDouble();
+            var m = reader.ReadUInt32();
+            reader.ReadUInt32();
+            if (version >= PersistenceFormat.SetSketchVariantVersion)
+            {
+                reader.ReadByte();
+            }
+
+            reader.RequireHolds(m, sizeof(ushort), "registers");
+            reader.Budget.Price(RegistersCost(m));
+        }
+
+        /// <summary>
+        /// <paramref name="m"/> registers, and the two arrays that order their updates.
+        /// </summary>
+        private static long RegistersCost(uint m) => ReadBudget.Sum(
+            ReadBudget.ArrayOf(m, sizeof(ushort)),
+            ReadBudget.Times(2, ReadBudget.ArrayOf(m, sizeof(uint))));
 
         /// <summary>
         /// Sets the hashing function used in the sketch.

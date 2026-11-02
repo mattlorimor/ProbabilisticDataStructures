@@ -768,6 +768,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an old payload read back and a new filter, with an `ArgumentException` saying so,
   since the same item sets different bits in each.
 
+- **A read refused for its budget named a number that did not load it.**
+  `ReadBudgetExceededException.RequiredBytes` was the running total at the allocation
+  that failed, so a payload was refused at its first allocation the budget did not cover,
+  and refused again, for more, under exactly the budget it had named. A 1.89 GB
+  `BloomFilter64` was refused needing 1,893,049,288 bytes, then under that at
+  1,893,049,496, then at 3,786,098,576, and loaded at about 3.8 GB. Every read is now
+  priced whole before it allocates anything a payload claims: each structure works out,
+  from the payload's header and the fields that size it, everything its reader will
+  allocate — the payload, every array, every copy of a run, and every structure nested
+  inside it, read from the nested envelopes where they lie in the outer payload — and the
+  budget is compared with that once. `RequiredBytes` is that total whatever the budget
+  was, a budget of it loads the payload the first time, and the message names it once,
+  digits grouped, in the call that reads it: `BloomFilter64.ReadFrom(stream, new
+  ReadOptions(…))`. A payload too large for its budget to be held is priced from the
+  stream without being held, its runs skipped. What each structure is charged is
+  unchanged, so every figure in the README's table and in CAPACITY.md stands.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

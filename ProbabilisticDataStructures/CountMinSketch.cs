@@ -357,7 +357,7 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.CountMinSketch);
-            var payload = PersistenceFormat.Read(stream, StructureId.CountMinSketch, out var hashId, budget);
+            var payload = PersistenceFormat.Read(stream, StructureId.CountMinSketch, out var hashId, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             var epsilon = reader.ReadDouble();
@@ -370,18 +370,10 @@ namespace ProbabilisticDataStructures
             // what the sketch indexes by, and recomputing them would silently relocate
             // every cell if the sizing were ever adjusted. Epsilon and delta are kept
             // only because Epsilon() and Delta() report them.
-            if (width == 0 || depth == 0)
-            {
-                throw new InvalidDataException(
-                    $"Sketch has a {depth} by {width} matrix. A sketch with no rows " +
-                    "reports every element as seen ulong.MaxValue times, and one with " +
-                    "no columns divides by zero.");
-            }
+            CheckMatrix(width, depth);
 
             // Each row is allocated before it is read.
-            budget.Charge(ReadBudget.Sum(
-                ReadBudget.ArrayOf(depth, sizeof(long)),
-                ReadBudget.Times(depth, ReadBudget.ArrayOf(width, sizeof(ulong)))));
+            budget.Charge(RowsCost(width, depth));
             var matrix = new UInt64[depth][];
             for (uint i = 0; i < depth; i++)
             {
@@ -405,6 +397,37 @@ namespace ProbabilisticDataStructures
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
             };
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the matrix. See
+        /// <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            reader.ReadDouble();
+            reader.ReadDouble();
+            var width = reader.ReadUInt32();
+            var depth = reader.ReadUInt32();
+            reader.ReadUInt64();
+            CheckMatrix(width, depth);
+            reader.Budget.Price(RowsCost(width, depth));
+        }
+
+        private static void CheckMatrix(uint width, uint depth)
+        {
+            if (width == 0 || depth == 0)
+            {
+                throw new InvalidDataException(
+                    $"Sketch has a {depth} by {width} matrix. A sketch with no rows " +
+                    "reports every element as seen ulong.MaxValue times, and one with " +
+                    "no columns divides by zero.");
+            }
+        }
+
+        /// <summary>A matrix of <paramref name="depth"/> rows of <paramref name="width"/> counters.</summary>
+        private static long RowsCost(uint width, uint depth) => ReadBudget.Sum(
+            ReadBudget.ArrayOf(depth, sizeof(long)),
+            ReadBudget.Times(depth, ReadBudget.ArrayOf(width, sizeof(ulong))));
 
         /// <summary>
         /// Used only by <see cref="Read"/>, which sets every field itself. The public

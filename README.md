@@ -375,9 +375,9 @@ wrong hash looks like.
 A payload says how large its structure is, and reading it means allocating that
 structure — often far more than the file itself, since a filter that holds little still
 has its whole table. So every read has a **memory budget**: the most it may allocate,
-payload and structure together. A reader works out what a payload will cost from its
-header before allocating anything, and refuses one that would cost more, so a small file
-cannot ask for a machine's memory.
+payload and structure together. A reader works out the whole of what a payload will cost,
+from its header and the fields that size it, before allocating anything, and refuses one
+that would cost more, so a small file cannot ask for a machine's memory.
 
 The default is `ReadOptions.DefaultMemoryBudget`, one gibibyte (1,073,741,824 bytes). A
 read holds the payload while it builds the structure, so it costs about the two together,
@@ -402,6 +402,30 @@ catch (InvalidDataException e) when (e.InnerException is ReadBudgetExceededExcep
     // budget.RequiredBytes, budget.MemoryBudget
 }
 ```
+
+The number works as given. `RequiredBytes` is the whole read — the payload, the
+structure, and any structure nested inside it — and the same whatever budget was
+refused, so a budget of exactly that loads the payload on the next attempt, and the
+message names it in the call to make. A refused read has consumed some of the stream, so
+read again from the payload's start:
+
+```C#
+try
+{
+    filter = BloomFilter.ReadFrom(file);
+}
+catch (InvalidDataException e) when (e.InnerException is ReadBudgetExceededException budget)
+{
+    // A file you trust that is larger than the default allows.
+    file.Position = 0;
+    filter = BloomFilter.ReadFrom(file, new ReadOptions(budget.RequiredBytes));
+}
+```
+
+A payload too large for its budget is never held to work this out: its sizes are read from
+the stream and the rest skipped. Only a payload that is malformed, or ends early, before
+its sizes have all been read names less, and is then refused for what is wrong with it
+under a budget that covers what it named.
 
 ### Merging
 

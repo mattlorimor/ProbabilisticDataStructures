@@ -487,7 +487,7 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.ScalableBloomFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.ScalableBloomFilter, out _, out var version, budget);
+                stream, StructureId.ScalableBloomFilter, out _, out var version, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             var r = reader.ReadDouble();
@@ -533,8 +533,7 @@ namespace ProbabilisticDataStructures
             reader.RequireHolds(
                 filterCount, PersistenceFormat.MinNestedLength, "contained filters");
 
-            budget.Charge(ReadBudget.Sum(
-                ReadBudget.ArrayOf(filterCount, sizeof(long)), ReadBudget.SmallObject));
+            budget.Charge(FiltersCost(filterCount));
             var filters = new List<PartitionedBloomFilter>((int)filterCount);
             for (uint i = 0; i < filterCount; i++)
             {
@@ -553,6 +552,38 @@ namespace ProbabilisticDataStructures
                 Growth = growth,
             };
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the list of
+        /// contained filters and the whole of each one's nested read, priced from its
+        /// envelope where it lies in this payload. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            reader.ReadDouble();
+            reader.ReadDouble();
+            reader.ReadDouble();
+            reader.ReadUInt32();
+            if (version >= PersistenceFormat.ScalableGrowthVersion)
+            {
+                reader.ReadUInt32();
+            }
+
+            var filterCount = reader.ReadUInt32();
+            reader.RequireHolds(
+                filterCount, PersistenceFormat.MinNestedLength, "contained filters");
+
+            reader.Budget.Price(FiltersCost(filterCount));
+            for (uint i = 0; i < filterCount; i++)
+            {
+                PersistenceFormat.PriceNested(
+                    ref reader, StructureId.PartitionedBloomFilter, PartitionedBloomFilter.Price);
+            }
+        }
+
+        /// <summary>The list holding <paramref name="filterCount"/> contained filters.</summary>
+        private static long FiltersCost(uint filterCount) => ReadBudget.Sum(
+            ReadBudget.ArrayOf(filterCount, sizeof(long)), ReadBudget.SmallObject);
 
         /// <summary>
         /// Used only by <see cref="Read"/>, which sets every field itself.

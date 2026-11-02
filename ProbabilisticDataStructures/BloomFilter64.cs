@@ -315,7 +315,7 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.BloomFilter64);
-            var payload = PersistenceFormat.Read(stream, StructureId.BloomFilter64, out var hashId, budget);
+            var payload = PersistenceFormat.Read(stream, StructureId.BloomFilter64, out var hashId, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             var m = reader.ReadUInt64();
@@ -345,6 +345,18 @@ namespace ProbabilisticDataStructures
                 count = count,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
             };
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the buckets'
+        /// arrays and the copies of their runs. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            reader.ReadUInt64();
+            reader.ReadUInt32();
+            reader.ReadUInt64();
+            PersistenceFormat.PriceBuckets64(ref reader);
         }
 
         /// <summary>

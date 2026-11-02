@@ -424,7 +424,7 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.CountingBloomFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.CountingBloomFilter, out var hashId, out var version, budget);
+                stream, StructureId.CountingBloomFilter, out var hashId, out var version, budget, Price);
             var reader = new PayloadReader(payload, budget);
 
             var m = reader.ReadUInt32();
@@ -435,16 +435,10 @@ namespace ProbabilisticDataStructures
             var count = BitPlacement.ReadCount(ref reader, version);
             var buckets = PersistenceFormat.ReadBuckets(ref reader);
             reader.ExpectEnd();
-
-            if (m == 0 || buckets.count != m)
-            {
-                throw new InvalidDataException(
-                    $"Filter has a capacity of {m} bits and {buckets.count} buckets to " +
-                    "hold them, which do not describe the same filter.");
-            }
+            CheckBuckets(m, buckets.count);
 
             // The scratch buffer below is sized by the hash count the payload claims.
-            budget.Charge(ReadBudget.ArrayOf(k, sizeof(uint)));
+            budget.Charge(ScratchCost(k));
 
             return new CountingBloomFilter
             {
@@ -459,6 +453,35 @@ namespace ProbabilisticDataStructures
                 Placement = placement,
             };
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the counters and
+        /// the scratch buffer. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var m = reader.ReadUInt32();
+            var k = reader.ReadUInt32();
+            BitPlacement.Read(ref reader, version);
+            BitPlacement.ReadCount(ref reader, version);
+            var buckets = PersistenceFormat.PriceBuckets(ref reader);
+            reader.ExpectEnd();
+            CheckBuckets(m, buckets);
+            reader.Budget.Price(ScratchCost(k));
+        }
+
+        private static void CheckBuckets(uint m, uint buckets)
+        {
+            if (m == 0 || buckets != m)
+            {
+                throw new InvalidDataException(
+                    $"Filter has a capacity of {m} bits and {buckets} buckets to " +
+                    "hold them, which do not describe the same filter.");
+            }
+        }
+
+        /// <summary>The scratch buffer of a filter of <paramref name="k"/> hash functions.</summary>
+        private static long ScratchCost(uint k) => ReadBudget.ArrayOf(k, sizeof(uint));
 
         /// <summary>
         /// Used only by <see cref="Read"/>, which sets every field itself.
