@@ -348,36 +348,43 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Each filter a scalable Bloom filter adds is built to the rate p0*r^i --
-        /// section 3 of Almeida, Baquero, Preguica and Hutchison, "Scalable Bloom
-        /// Filters" (2007), where the compounded rate telescopes to at most
-        /// p0/(1-r). The series is only observable through the geometry the rate
-        /// buys, so the assertion goes through OptimalK and OptimalM, which the
-        /// tests above hold to their own papers. With p0 = 0.05 and r = 0.8, k
-        /// crosses a ceiling boundary between filters 2 and 3 (log2(1/rate) passes
-        /// 5), so a mutation that stops tightening -- r^i frozen at r, or applied to
-        /// the wrong exponent -- shifts the transition and fails.
+        /// Each filter a scalable Bloom filter adds is built to the rate p0*r^i, and for
+        /// s0*s^i items -- Almeida, Baquero, Preguica and Hutchison, "Scalable Bloom
+        /// Filters" (2007), where the compounded rate telescopes to at most p0/(1-r)
+        /// and each new filter is s times the size of the last. s = 1 is the
+        /// fixed-size series this library built until the growth factor existed, and
+        /// the one a payload without one still grows by.
         /// <para>
-        /// The paper also grows each successive filter's capacity geometrically.
-        /// This implementation adds fixed-size filters instead and only tightens the
-        /// rates; the union bound the series exists for cares about the rates alone,
-        /// so that is what this pins.
+        /// The series is only observable through the geometry the rate and the
+        /// capacity buy, so the assertion goes through OptimalK and OptimalM, which the
+        /// tests above hold to their own papers. With p0 = 0.05 and r = 0.8, k crosses a
+        /// ceiling boundary between filters 2 and 3 (log2(1/rate) passes 5), so a
+        /// mutation that stops tightening -- r^i frozen at r, or applied to the wrong
+        /// exponent -- shifts the transition and fails. Six filters at s = 2 and five
+        /// at s = 4 are what separate s^i from its look-alikes: s*i agrees with 2^i at
+        /// i = 1 and 2 and parts from it at 3, and with 4^i at 1 only.
         /// </para>
         /// </summary>
         [TestMethod]
-        public void TestScalableFilterRatesFollowTheTighteningSeries()
+        [DataRow(1u, 600, 6)]
+        [DataRow(2u, 6_400, 6)]
+        [DataRow(3u, 13_000, 5)]
+        [DataRow(4u, 34_200, 5)]
+        public void TestScalableFilterFollowsTheTighteningAndGrowthSeries(uint growth, int adds, int atLeast)
         {
-            var s = new ScalableBloomFilter(1000, 0.05, 0.8);
-            for (int i = 0; i < 5000; i++)
+            const uint Hint = 100;
+            var s = new ScalableBloomFilter(Hint, 0.05, 0.8, growth);
+            for (int i = 0; i < adds; i++)
             {
                 s.Add(System.Text.Encoding.ASCII.GetBytes($"series-{i}"));
             }
 
-            Assert.IsGreaterThanOrEqualTo(4, s.Filters.Count,
-                "5,000 additions against a 1,000-item hint must force at least four " +
-                "filters, or the series below is asserted on air.");
+            Assert.IsGreaterThanOrEqualTo(atLeast, s.Filters.Count,
+                $"{adds:N0} additions at s = {growth} must force {atLeast} filters, or the " +
+                "series below is asserted on air.");
 
             double compounded = 0;
+            ulong capacity = Hint;
             for (int i = 0; i < s.Filters.Count; i++)
             {
                 var rate = 0.05 * Math.Pow(0.8, i);
@@ -385,8 +392,11 @@ namespace TestProbabilisticDataStructures
 
                 Assert.AreEqual(Utils.OptimalK(rate), s.Filters[i].PartitionCount,
                     $"filter {i} must be built with k for the tightened rate 0.05*0.8^{i}.");
-                Assert.AreEqual(Utils.OptimalM(1000, rate), s.Filters[i].BitCount,
-                    $"filter {i} must be sized for the tightened rate 0.05*0.8^{i}.");
+                Assert.AreEqual(Utils.OptimalM(checked((uint)capacity), rate), s.Filters[i].BitCount,
+                    $"filter {i} must be sized for {capacity} items, {Hint}*{growth}^{i}, at " +
+                    $"the tightened rate 0.05*0.8^{i}.");
+
+                capacity *= growth;
             }
 
             Assert.IsLessThan(0.05 / (1 - 0.8), compounded,
