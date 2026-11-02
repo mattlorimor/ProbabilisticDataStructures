@@ -303,13 +303,22 @@ Past that the array is truncated.
 
 ### `HyperLogLog`
 
-`m` registers, a power of two, one byte each; the error is `1.04 / √m`. It uses 32 bits of
-the hash, so it cannot tell apart more than 2^32 distinct items, 4,294,967,296, and its
-estimate corrects for collisions in a 32-bit space from about 143 million. A raw estimate
-past 2^32 makes `Count()` return 0. Measured at master 596071f by the investigation of
-issue 172, not rebuilt by the suite: it overestimates past about 143 million distinct
-items, by +3.2% at 2^28 and +13% at 2^30, and returns 0 from 2^33. It suits cardinalities
-well below 100 million; for more use `HyperLogLogPlus` or `UltraLogLog`, which use 64 bits.
+`m` registers, a power of two, one byte each; the error is `1.04 / √m`. It takes the
+register index and the run of zeros from 32 bits of the hash, so a register records a run
+of at most 32 − log2 m zeros. One hash value in 2^32 caps any given register, so after n
+distinct items each register has reached that cap with probability 1 − e^(−n/2^32),
+whatever m is. A register holds what a wider hash would have given it, cut off at the cap,
+so collisions in those 32 bits do not bias the estimate, and `Count()` accounts for the
+capped registers. With 16 registers or more the estimate stays close to its nominal error
+up to about 2^33 distinct items, 8,589,934,592. Past that the error grows, to about 1.5–2
+times nominal at 2^34 with 1,024 registers or more, and a sketch whose every register is
+capped reports its ceiling, about 2^32 × ln m: 11,280,826,639 with 16 registers,
+29,737,154,114 with 1,024 and 41,673,492,339 with 16,384. Below 16 registers the ceiling is
+under 2^33; with one register it is 1,490,120,207. It never reports 0 once anything has
+been added. Earlier releases, measured on the estimator of master 596071f and not rebuilt
+by the suite, overestimated past about 143 million distinct items, by +3.2% at 2^28 and
++13% at 2^30, and returned 0 from about 5.7 billion (2^32.4). For more than a few billion
+distinct items use `HyperLogLogPlus` or `UltraLogLog`, which use 64 bits.
 
 ### `HyperLogLogPlus`
 
