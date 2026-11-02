@@ -345,6 +345,12 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Adds the data to the sketch.
         /// </summary>
+        /// <remarks>
+        /// A counter holds at most <c>ulong.MaxValue</c>, and an add to one that has got
+        /// there leaves it there rather than wrapping it to nought, so an estimate never
+        /// falls for want of room. That takes 2^64 adds to one counter, or a counter read
+        /// from a payload or folded back to it.
+        /// </remarks>
         /// <param name="data">The data to add.</param>
         /// <returns>The sketch.</returns>
         public SublimeCountMinSketch Add(byte[] data)
@@ -657,6 +663,13 @@ namespace ProbabilisticDataStructures
             sketch.width = (int)width;
             sketch.rows = ReadCounters(ref reader, (int)depth, (int)width);
             reader.ExpectEnd();
+
+            // The constructor left the defaults, and the rows were built at a tuning chosen
+            // from the counts. The properties describe the rows, not the records of earlier
+            // states, which were tuned separately at their own widths. A sketch has at
+            // least one row, and every row is built at the same tuning.
+            sketch.countersPerChunk = sketch.rows[0].CountersPerChunk;
+            sketch.stubBits = sketch.rows[0].StubBits;
 
             return sketch;
         }

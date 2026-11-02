@@ -48,6 +48,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes version 1, readable by earlier libraries. Payloads from earlier versions read as
   filters with a factor of 1, and go on growing that way. (#171)
 
+- **`HyperLogLog.IsSaturated()` says when a sketch is at its ceiling.** It returns true when
+  every register has reached the longest run of zeros the 32-bit hash has room for, which is
+  when `Count()` reports its ceiling, about 2^32 × ln m, and that number is a floor and not
+  an estimate: the sketch has probably seen at least that many items and may have seen far
+  more. Since the fix that made a full sketch report its ceiling rather than 0, nothing in
+  the result said so, and the registers are internal. It is a method, like `FillRatio()` and
+  `Count()`, since it reads every register when the answer is yes. It is not an early
+  warning, and the documentation says so: the error grows from about 2^33 distinct items,
+  and a sketch is more likely than not full only from about 2^33.7 items with 16 registers,
+  2^34.9 with 1,024 and 2^35.3 with 16,384, where the mean estimate is 20%, 7% and 5% low
+  and one doubling of items later 59%, 53% and 52% low. Compare `Count()` with 2^33 for an
+  earlier warning. `HyperLogLogPlus` and `UltraLogLog` have no
+  such member: they use the whole 64-bit hash, and a register reaches its cap only around
+  2^64 items, more than a `ulong` count holds. Nothing stored changes. (#194)
+
 ### Changed
 
 - **The package's minimum `System.IO.Hashing` rises from 10.0.11 to 10.0.14.** A project
@@ -981,6 +996,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reader took before is refused, the payload holds counts rather than their packing, and
   the format is as it was.
 
+- **An `Add` to a `SublimeCountMinSketch` counter at `ulong.MaxValue` wrapped it to nought,
+  and the estimate with it.** A key's estimate is the smallest of its counters across the
+  rows, so one wrapped counter in one row dropped it to 0, below what it was before the
+  add: an undercount, which a Count-Min sketch never gives. A stream cannot
+  get a counter there, since it takes 2^64 adds, but a payload can hold one (the writer
+  writes every `u64` and the reader takes them) and so can the fold back after removals,
+  which stops at `ulong.MaxValue`. An add to such a counter now leaves it there, as a
+  removal already left a counter at nought. Before this change, a one-row sketch read from
+  a payload with every counter at `ulong.MaxValue` estimated 0 after one add, and a sketch
+  of five rows with one row's counters at `ulong.MaxValue` and the others at 40 estimated
+  0 where 41 is right, whichever row was the saturated one. 6.2.0 could not get there by
+  either road, since it could not read a counter of 2^63 or more and its fold took one to
+  nought; the entry above fixed both, and this is what that left. A sketch with no
+  counter that large is unchanged, in memory and on the wire, and so is the format. A
+  counter that has stopped at the largest count no longer records how far past it the key
+  has gone, so a removal after such an add takes one off the largest count and no more.
+  (#189)
+
 - **A read refused for its budget named a number that did not load it.**
   `ReadBudgetExceededException.RequiredBytes` was the running total at the allocation
   that failed, so a payload was refused at its first allocation the budget did not cover,
@@ -1009,6 +1042,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anything is priced, with the message it always had. `ScalableBloomFilter` and `TopK`
   check the hash their own header names, as every other reader does; they had checked
   only the structures inside them, and their header always names the first of those.
+
+- **A `SublimeCountMinSketch` read back reported the default tuning, not its rows'.** The
+  two internal properties behind diagnostics, counters per chunk and stub width, said 68 and
+  5 whatever the rows were built with; nothing public read them and the payload is unchanged.
 
 - **A `SublimeCountMinSketch` whose counts are too large for any packing no longer lays
   itself out again on every add.** A sketch repacks its counters when more than 3 in 100

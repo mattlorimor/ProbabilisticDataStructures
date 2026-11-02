@@ -262,12 +262,21 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Adds one to a counter.
+        /// Adds one to a counter, which stays at the largest count a <c>ulong</c> holds if
+        /// it is already there.
         /// </summary>
         /// <remarks>
         /// A stub with room left is incremented where it lies. This is the paper's
         /// point that most insertions stop at the stub, without its trick of
         /// precomputing each stub's word and offset to make that a single addition.
+        /// <para>
+        /// The mirror of <see cref="Decrement"/>, which stops at nought. One more than the
+        /// largest count is nought in a <c>ulong</c>, and a counter that wrapped to it would
+        /// be read as the smallest count there is: for a sketch that takes the least of
+        /// several counters, an estimate below what was added. The largest count has every
+        /// stub bit set, so the check sits after the short cut and costs the common
+        /// increment nothing.
+        /// </para>
         /// </remarks>
         internal void Increment(int index)
         {
@@ -281,7 +290,11 @@ namespace ProbabilisticDataStructures
                 return;
             }
 
-            Set(index, Get(index) + 1);
+            var value = Get(index);
+            if (value != ulong.MaxValue)
+            {
+                Set(index, value + 1);
+            }
         }
 
         /// <summary>
