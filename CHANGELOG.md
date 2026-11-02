@@ -884,6 +884,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Build` and in CAPACITY.md. The format is unchanged; widening the identity would change
   it, and has not been done.
 
+- **`DpswSketch` built with a width or depth no `PrivateCountMinSketch` holds, and failed
+  on its first `Add`.** Every sketch a window holds is a private sketch, whose row is one
+  array and whose rows are one array, so each of the width and the depth is at most
+  2,147,483,591. A window given more constructed, and the failure came when the first item
+  began the first substream, as that sketch's `ArgumentOutOfRangeException` naming that
+  type. A depth past the limit was worse at a small budget: the guard on the noise of the
+  window's leanest checkpoint divides the depth by the budget that checkpoint is left, so
+  it refused the depth first, as an `ArgumentOutOfRangeException` naming `alpha`.
+  <br><br>
+  The constructor now refuses a width or depth past the limit with an
+  `ArgumentOutOfRangeException` naming `width` or `depth` and saying what the limit is,
+  before the checkpoints are built, from the same symbols the private sketch uses so that
+  the two cannot drift. The reader refuses a payload that claims either past it, as beyond
+  anything built; it loaded one that held no substreams, since no inner sketch was there to
+  refuse the size. FORMAT.md's table of sizes has the two new rows. No size that built
+  before stops building: the limit is the sketch's own.
+
+- **`DDSketch.WriteTo` failed with an `OverflowException`, or ran off the end of an array,
+  for a sign of 2^28 buckets or more.** A sign's run of buckets was copied into a byte array
+  sized `buckets * 8` in an `int`, which is negative from 268,435,456 buckets (two gibibytes
+  of counts) and wraps to a small positive length from 2^29, so the loop that filled it
+  failed with an `ArgumentOutOfRangeException` instead. The constructor allows a run of
+  2,147,483,591 buckets, so a sketch could be built and used that could not be written, and
+  said so as an overflow. The length is now counted in 64 bits, and a sketch whose payload
+  would pass 2,147,483,573 bytes, the most an envelope holds, throws the
+  `InvalidOperationException` every structure too large to write throws, naming the size it
+  would be and the size one can be, before anything is allocated and with the sketch
+  unchanged. That is 268,435,439 buckets between both signs, since the two share a payload.
+  Every payload that wrote before is byte-identical, and the reader needed no change: it
+  divides the bytes it is given by eight and multiplies nothing.
+
+- **`DDSketch.Quantile` answered infinity for a value in the top binade of the doubles, and
+  zero for the smallest at the coarsest accuracy.** A bucket reports 2·γⁱ/(γ+1), and written
+  that way the working leaves the range of a double before the answer does: twice γⁱ is
+  infinite from 2^1023 (8.99e307) up, and γⁱ itself just past `double.MaxValue`, though the
+  answer, (1−a)·γⁱ, is never above the largest value its bucket holds. A sketch holding
+  `double.MaxValue` answered `PositiveInfinity` at every accuracy, and `NegativeInfinity` for
+  its negative. At the other end, at an accuracy of 0.99 the smallest 29 multiples of
+  `double.Epsilon` answered zero, which is not within 99% of anything positive.
+  <br><br>
+  An infinite answer is now worked out again from two halves of the power, and if that
+  overflows too the bucket reports `double.MaxValue`, which is within the accuracy of every
+  value it can hold since none is larger; a zero is `double.Epsilon`, likewise. Every other
+  answer is the one it was, bit for bit: the stored indices and counts are untouched, so
+  nothing persisted changes, and of 249,408 answers swept across 12 accuracies and both
+  signs the only ones that moved were the 34,734 infinite and the 58 zero. Among the subnormals the
+  answer is still gamma^i rounded to a multiple of 4.9e-324 and then rounded again, which
+  can leave it up to a unit (0.75 at worst, measured) outside the accuracy; it is not
+  corrected, because a bucket there that answered within the accuracy must keep its answer.
+
 - **A payload whose byte run claimed almost `int.MaxValue` bytes was refused with an
   `ArgumentOutOfRangeException`, not the `InvalidDataException` every other payload the
   library will not read gets.** The reader checked a run against the payload as
