@@ -578,14 +578,15 @@ bool wasAlreadyThere = filter.TestAndAdd(bytes);
 
 The same structure with 64-bit sizing throughout.
 
-**Reach for it when** the filter needs more than about **121 million items at 1%**.
-`BloomFilter` places its bits with a 32-bit hash, and from there to its limit of 4.29
-billion bits — about 448 million items at 1% — it delivers a worse false positive rate than
-the one it was asked for: a filter sized for 1% measured 1.42% at three quarters of that
-size, where this one measured 1.00%. The band, and what was measured, are in
-[CAPACITY.md](CAPACITY.md#the-bloomfilter-32-bit-band). `BloomFilter` and
-`PartitionedBloomFilter` also refuse past 4.29 billion bits, naming this structure when
-they do.
+**Reach for it when** the filter needs more than 4.29 billion bits — about **448 million
+items at 1%** — which is where `BloomFilter` and `PartitionedBloomFilter` refuse, naming
+this structure when they do. Below that the two deliver the same rate: a `BloomFilter` of
+2^27 bits or more, about 14 million items at 1%, places its bits exactly as this one does.
+One read back from a payload written before the release after 6.2.0 keeps the 32-bit
+placement it was written with, whose rate rises at large sizes: sized for 1%, it measured
+1.42% at three quarters of 2^32 bits, where this one measured 1.00%. How the two
+placements differ, and what was measured, are in
+[CAPACITY.md](CAPACITY.md#how-the-32-bit-filters-place-their-bits).
 
 `CountingBloomFilter` and `DeletableBloomFilter` size in 32 bits too, and **this structure
 is not a replacement for either**: it cannot delete. For a set that large that has to
@@ -595,8 +596,8 @@ shrink, `CuckooBloomFilter` and `QuotientFilter` hold well over a billion items.
 truncated one and fails when you add to it; the sizes where that begins are the "Builds
 up to" figures in [the table](#how-much-each-one-holds).
 
-**Look elsewhere otherwise.** Below about 121 million items it is the same filter with
-wider arithmetic, so `BloomFilter` is the plainer choice. And if you do not know the size
+**Look elsewhere otherwise.** Below 4.29 billion bits it is the same filter with wider
+arithmetic, so `BloomFilter` is the plainer choice. And if you do not know the size
 in advance, `ScalableBloomFilter` takes it from you, but it does not reach much further:
 every filter it adds is itself a 32-bit filter, so at its default growth it stops at the
 items in [the table](#how-much-each-one-holds), a few hundred million. Past that, size a
