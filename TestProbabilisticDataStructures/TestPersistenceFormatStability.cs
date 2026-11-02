@@ -838,6 +838,42 @@ namespace TestProbabilisticDataStructures
             Assert.IsTrue(filter.Test(Key("beta")));
         }
 
+        /// <summary>
+        /// 6.0.0 through 6.2.0 sized a table for more items than a 31-bit quotient can
+        /// index with a 32-bit one, and the slot count shifted to one slot. The payload
+        /// such a filter wrote says 32 quotient bits and carries the one slot's bytes,
+        /// which is the table it was, so it reads as that and goes on being the full
+        /// one-slot filter it always was. The constructor no longer builds one; the
+        /// bytes are the fixture, written by 6.2.0's constructor for 2,000,000,000 items
+        /// at a rate of 1e-6 with "alpha" added, and they stay readable.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredQuotientFilterFromAnOversizedRequestStillReads()
+        {
+            var stored = ReadFixture("quotientfilter-q32-v1.bin");
+            var filter = QuotientFilter.ReadFrom(Fixture("quotientfilter-q32-v1.bin"));
+
+            Assert.AreEqual(1u, filter.Count());
+            Assert.AreEqual(1u, filter.Capacity());
+            Assert.IsTrue(filter.Test(Key("alpha")));
+
+            // The remainder is wide enough that these absent keys, which were checked
+            // against the bytes when the fixture was made, do not collide with it.
+            for (var i = 0; i < 1000; i++)
+            {
+                Assert.IsFalse(filter.Test(Key($"absent-{i}")));
+            }
+
+            CollectionAssert.AreEqual(stored, filter.ToByteArray(),
+                "the filter does not write back the bytes it was read from");
+
+            // Still the one-slot table it was: full with one entry, usable once emptied.
+            Assert.ThrowsExactly<InvalidOperationException>(() => filter.Add(Key("beta")));
+            Assert.IsTrue(filter.TestAndRemove(Key("alpha")));
+            filter.Add(Key("beta"));
+            Assert.IsTrue(filter.Test(Key("beta")));
+        }
+
         [TestMethod]
         public void TestStoredDDSketchStillReads()
         {
@@ -1231,6 +1267,7 @@ namespace TestProbabilisticDataStructures
                 ("hyperloglogplus-dense-v1.bin", 16, 1),
                 ("hyperloglogplus-sparse-p4-v1.bin", 16, 1),
                 ("quotientfilter-v1.bin", 17, 1),
+                ("quotientfilter-q32-v1.bin", 17, 1),
                 ("thetasketch-v1.bin", 18, 1),
                 ("thetasketch-v1b.bin", 18, 1),
                 ("simhashsignature-v1.bin", 19, 1),
