@@ -567,6 +567,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   naming `sizeFactor`. No width that worked is refused. The stored format does not change
   and a payload claiming a width past 2^30 is refused with that limit named.
 
+- **An `InfiniFilter` or `MementoFilter` that grew to 2^31 slots failed obscurely on its
+  next expansion, and their readers accepted tables that cannot exist.** A table's slot
+  count was `1u << quotientBits`, and C# takes a shift count mod 32, so a table of 2^32
+  slots was built with one. The tables double to 2^28 slots at about a hundred million
+  items, so the doubling into 2^32 comes at about 1.6 billion: the add that triggered it
+  threw `IndexOutOfRangeException` part way through moving the entries (the old table was
+  kept, so the filter survived, with an error that said nothing of why). Separately, the
+  readers accepted 32 to 40 bits of address, building a segment of 1 to 256 slots that
+  disagreed with its own claim; no writer produced such a payload. Every release since
+  `InfiniFilter` and `MementoFilter` shipped in 6.2.0 is affected.
+  <br><br>
+  A table now has at most 31 bits of address, the same limit and the same reason as
+  `QuotientFilter`'s: the slot count is a 32-bit number holding 2^q. The add that would
+  expand past it throws an `InvalidOperationException` first, naming the table's size and
+  the limit, and changes nothing; the filter can still be queried and written, and removing
+  keys makes room. The readers refuse more than 31 bits of address and say what the limit
+  is. A bigger table is not a matter of wider arithmetic: it could not be written (at the
+  narrowest fingerprint it is three gibibytes of payload, in an envelope that holds two) and
+  the expansion into it lists every entry it moves, 1.6 billion at sixteen bytes. An initial
+  capacity past three quarters of 2^31 starts the first table at the widest, as it did,
+  now by a rule and not by a saturating conversion. No size that worked is refused.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

@@ -229,6 +229,8 @@ address.
 | `ScalableBloomFilter` | filter count | 2,147,483,591 | the filters are a list; a filter that grows stops sooner, at the count its rates allow, which is a limit on growing and not on reading |
 | `CountingBloomFilter` | bytes of counters, `m` × `b` bits, rounded up | 2,147,483,591 | the counters are one array; from four-bit counters up that is fewer counters than a `u32` counts |
 | `StableBloomFilter` | bytes of cells, `m` × `d` bits, rounded up | 2,147,483,591 | the cells are one array, as the counters are |
+| `InfiniFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; a filter stops expanding there |
+| `MementoFilter` | quotient bits | 31 | as `InfiniFilter` |
 | `QuotientFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; the reader also reads 32, which earlier constructors wrote as a wrapped one-slot table |
 | `QuotientFilter` | quotient + remainder bits | 64 | a fingerprint is cut from a 64-bit hash |
 | `QuotientFilter` | remainder bits | 61 | a slot is its remainder and three bits of bookkeeping in one 64-bit word; the reader also reads the wider remainders earlier constructors wrote |
@@ -901,7 +903,9 @@ takes the next bit up, so an entry's address is a growing prefix of its hash and
 table can double without the original keys.
 
 A reader rejects a chain of no tables, a chain longer than a 64-bit hash could justify,
-a table holding more entries than it has slots, a table whose address and fingerprint
+a table with more than 31 bits of address (releases up to 6.2.0 read up to 40, with a slot
+count that wrapped and gave a table of 1 to 256 slots; no writer ever produced one), a
+table holding more entries than it has slots, a table whose address and fingerprint
 together exceed the hash, and a word count that disagrees with the shape claimed. The
 tables are stored newest first, and the count of entries per table is stored rather than
 recomputed, because a table's occupancy cannot be derived from its bits alone.
@@ -938,7 +942,8 @@ The count is written in memento-sized pieces, an all-ones piece meaning "add thi
 read another", so a small count costs as much as one memento and a large one still fits.
 
 A reader rejects an impossible memento width, a chain of no tables or absurdly many, a
-table with more entries than slots, and a word count disagreeing with the shape claimed.
+table with more than 31 bits of address (as `InfiniFilter`'s), a table with more entries
+than slots, and a word count disagreeing with the shape claimed.
 
 ### `SublimeCountMinSketch` (id 29)
 

@@ -730,7 +730,7 @@ right after it grows, so memory arrives in steps rather than smoothly.
 
 ```C#
 var filter = new InfiniFilter(initialCapacity: 1024, fingerprintBits: 8);
-filter.Add(bytes);              // grows itself; never refuses
+filter.Add(bytes);              // grows itself, to 2^31 slots (about 1.6 billion items)
 
 bool maybe = filter.Test(bytes);
 bool wasThere = filter.TestAndRemove(bytes);
