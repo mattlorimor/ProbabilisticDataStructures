@@ -248,6 +248,10 @@ namespace TestProbabilisticDataStructures
                 ["varopt-badmerge-v1.bin"] =
                     "written by 6.2.0 after a merge that left it holding a wrong sample, " +
                     "and refused with its cause rather than read as if it were sound",
+                ["mementofilter-lostkeys-v1.bin"] =
+                    "written by 6.2.0 for slots of 64 bits, whose mask came to zero, so that " +
+                    "it counts 200 keys and holds none; refused with its cause rather than " +
+                    "read as a filter that denies what it says it holds",
                 ["bloomfilter-wrapped-v1.bin"] = WrappedBucketBytes,
                 ["countingbloomfilter-wrapped-v1.bin"] = WrappedBucketBytes,
                 ["stablebloomfilter-wrapped-v5.bin"] = WrappedBucketBytes,

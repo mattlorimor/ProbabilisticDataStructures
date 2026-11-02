@@ -53,9 +53,9 @@ namespace TestProbabilisticDataStructures
         /// thing wrong with it.
         /// </summary>
         internal static byte[] OnePayload(
-            StructureId id, int quotientBits, int fingerprintBits, bool includeWords)
+            StructureId id, int quotientBits, int fingerprintBits, bool includeWords,
+            int mementoBits = 3)
         {
-            var mementoBits = 3;
             var slots = 1u << quotientBits;
             var bitsPerSlot = id == StructureId.MementoFilter
                 ? fingerprintBits + 1 + mementoBits + 3

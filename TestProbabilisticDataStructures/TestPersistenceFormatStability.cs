@@ -978,6 +978,28 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// 6.2.0 and every release before it built a Memento filter whose slots are 64
+        /// bits -- a 32-bit range with a 28-bit fingerprint, say -- with a mask that
+        /// shifted a ulong by 64 and so came to zero. Every key it was given was counted and
+        /// none stored. The stored payload is that filter after 200 keys: it says 200 are
+        /// held, in a table whose every word is zero. It answers no to all of them.
+        /// <para>
+        /// Nothing in it can be recovered, and reading it would hand back a filter that
+        /// claims to hold keys and says it does not, which is the one thing a filter must not
+        /// do. It is refused, and the refusal says where the payload came from.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestStoredMementoFilterThatLostEveryKeyIsRefusedWithItsCause()
+        {
+            var ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => MementoFilter.ReadFrom(Fixture("mementofilter-lostkeys-v1.bin")));
+
+            StringAssert.Contains(ex.Message, "mask",
+                "the refusal should say why the table is empty");
+        }
+
         [TestMethod]
         public void TestStoredSimHashSignatureStillReads()
         {
@@ -1459,6 +1481,7 @@ namespace TestProbabilisticDataStructures
                 ("varopt-v1.bin", 24, 1),
                 ("varopt-exact-v1.bin", 24, 1),
                 ("varopt-badmerge-v1.bin", 24, 1),
+                ("mementofilter-lostkeys-v1.bin", 28, 1),
                 ("bloomfilter-wrapped-v1.bin", 1, 1),
                 ("countingbloomfilter-wrapped-v1.bin", 3, 1),
                 ("stablebloomfilter-wrapped-v5.bin", 7, 5),
