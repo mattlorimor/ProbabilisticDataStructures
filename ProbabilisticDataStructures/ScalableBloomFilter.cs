@@ -76,6 +76,16 @@ namespace ProbabilisticDataStructures
         /// Filter size hint
         /// </summary>
         internal uint Hint { get; set; }
+
+        /// <summary>
+        /// The growth factor a filter is built with unless it is given one.
+        /// </summary>
+        internal const uint DefaultGrowth = 2;
+
+        /// <summary>
+        /// Growth factor (not yet applied).
+        /// </summary>
+        internal uint Growth { get; private set; }
         /// <summary>
         /// The hash every contained filter is built with, or null for the default.
         /// Held because filters are added as the structure grows, long after the
@@ -105,7 +115,23 @@ namespace ProbabilisticDataStructures
         /// </param>
         public ScalableBloomFilter(uint hint, double fpRate, double r,
             Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            : this(hint, fpRate, r, DefaultGrowth, hash)
         {
+        }
+
+        /// <summary>
+        /// Creates a new Scalable Bloom Filter whose contained filters grow by the given
+        /// factor (not yet applied).
+        /// </summary>
+        /// <param name="hint"></param>
+        /// <param name="fpRate"></param>
+        /// <param name="r"></param>
+        /// <param name="growth"></param>
+        /// <param name="hash"></param>
+        public ScalableBloomFilter(uint hint, double fpRate, double r, uint growth,
+            Func<ReadOnlySpan<byte>, ulong>? hash = null)
+        {
+            this.Growth = growth;
             Guard.ValidItemCount(hint, nameof(hint));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
             Guard.ValidTighteningRatio(r, nameof(r));

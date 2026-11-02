@@ -637,16 +637,20 @@ namespace TestProbabilisticDataStructures
         {
             Assert.AreEqual(Array.MaxLength, ScalableBloomFilter.MaxFilters);
 
+            // At version 7 the growth factor sits between the hint and the count.
             const int FilterCountOffset = 8 + 8 + 8 + 4;
-            var filter = new ScalableBloomFilter(100, 0.01, 0.8);
-            for (var i = 0; i < 500; i++) filter.Add(Key(i));
-            var bytes = filter.ToByteArray();
+            foreach (var (growth, offset) in new[] { (1u, FilterCountOffset), (2u, FilterCountOffset + 4) })
+            {
+                var filter = new ScalableBloomFilter(100, 0.01, 0.8, growth);
+                for (var i = 0; i < 500; i++) filter.Add(Key(i));
+                var bytes = filter.ToByteArray();
 
-            AssertRefused<ScalableBloomFilter>(
-                PokeUInt32(bytes, FilterCountOffset, (uint)ScalableBloomFilter.MaxFilters + 1),
-                PastTheLimit);
-            AssertRefusedOnlyForMissingBytes<ScalableBloomFilter>(
-                PokeUInt32(bytes, FilterCountOffset, (uint)ScalableBloomFilter.MaxFilters));
+                AssertRefused<ScalableBloomFilter>(
+                    PokeUInt32(bytes, offset, (uint)ScalableBloomFilter.MaxFilters + 1),
+                    PastTheLimit);
+                AssertRefusedOnlyForMissingBytes<ScalableBloomFilter>(
+                    PokeUInt32(bytes, offset, (uint)ScalableBloomFilter.MaxFilters));
+            }
         }
 
         /// <summary>

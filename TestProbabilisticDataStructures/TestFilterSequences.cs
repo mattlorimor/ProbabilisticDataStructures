@@ -832,21 +832,27 @@ namespace TestProbabilisticDataStructures
         /// The scalable filter's state depends on arrival order -- growth happens when
         /// the newest filter's estimated fill crosses a line -- so its twin is the same
         /// adds in the same order. Hinted small so every trial grows several times, and
-        /// across save and load.
+        /// across save and load. A growing filter's next filter is sized by a factor
+        /// the payload has to carry, so a save and a load that dropped it would show up
+        /// at the first filter added after the load; a Reset that dropped it, at the
+        /// first after the Reset.
         /// </summary>
         [TestMethod]
         public void TestScalableBloomFilterSequencesMatchTheirTwin()
         {
-            foreach (var (hint, p, ratio) in new[] { (50u, 0.01, 0.8), (10u, 0.5, 0.5) })
+            foreach (var (hint, p, ratio, growth) in new[]
+            {
+                (50u, 0.01, 0.8, 1u), (10u, 0.5, 0.5, 1u), (10u, 0.5, 0.5, 2u), (5u, 0.01, 0.8, 4u),
+            })
             {
                 var spec = new Spec<ScalableBloomFilter>
                 {
                     Name = nameof(ScalableBloomFilter),
-                    Fresh = () => new ScalableBloomFilter(hint, p, ratio),
+                    Fresh = () => new ScalableBloomFilter(hint, p, ratio, growth),
                     Reset = f => f.Reset(),
                     NeverForgets = true,
                 };
-                var config = $"hint={hint},p={p},r={ratio}";
+                var config = $"hint={hint},p={p},r={ratio},s={growth}";
                 AssertExercised(spec, config, RunAll(spec, config));
             }
         }

@@ -1,4 +1,5 @@
-﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
+﻿using System;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 using System.Linq;
 using System.Text;
@@ -170,6 +171,73 @@ namespace TestProbabilisticDataStructures
                         Assert.Fail("Expected all bits to be unset");
                     } 
                 }
+            }
+        }
+
+        /// <summary>
+        /// The constructors that are not given a growth factor all take the one default,
+        /// so choosing a different default is a change to that constant and nothing else.
+        /// </summary>
+        [TestMethod]
+        public void TestTheConstructorsWithoutAGrowthFactorShareOneDefault()
+        {
+            Assert.AreEqual(ScalableBloomFilter.DefaultGrowth, new ScalableBloomFilter(100, 0.01, 0.8).Growth);
+            Assert.AreEqual(ScalableBloomFilter.DefaultGrowth,
+                new ScalableBloomFilter(100, 0.01, 0.8, ProbabilisticDataStructures.Defaults.GetDefaultHashFunction()).Growth);
+            Assert.AreEqual(ScalableBloomFilter.DefaultGrowth, ScalableBloomFilter.NewDefaultScalableBloomFilter(0.01).Growth);
+
+            // A factor given is the factor kept, including one.
+            Assert.AreEqual(1u, new ScalableBloomFilter(100, 0.01, 0.8, 1).Growth);
+            Assert.AreEqual(4u, new ScalableBloomFilter(100, 0.01, 0.8, 4).Growth);
+        }
+
+        /// <summary>
+        /// A filter that cannot add the contained filter it needs refuses the add that
+        /// needed it, before anything changes, and says why. There are three ways to
+        /// get there, each reached here through real adds at the parameters that reach
+        /// it soonest (measured: the adds that succeed and the filters built are the
+        /// probe's, against today's sizing).
+        /// <list type="bullet">
+        /// <item>The rate tightens past what sizing can use: at a growth of one with
+        /// hint 1, a rate of one half and r = 0.5, filter 1,023 is built for 2^-1024,
+        /// whose reciprocal is not a finite double. This is the wall a filter of hint
+        /// 1,000 at 1% and r = 0.8 meets after about 3.16 million items. A growing
+        /// filter meets it too when r is small enough: at r = 1e-300 the second filter's
+        /// rate is 5e-301 and the third's underflows to zero.</item>
+        /// <item>The next filter needs more bits than a contained filter addresses: a
+        /// billion items at 0.8% need about ten billion.</item>
+        /// <item>The next filter's capacity is more items than a contained filter is
+        /// sized for: 1,000 times five million.</item>
+        /// </list>
+        /// One type stands for all three, so each is told apart by the condition its
+        /// message names.
+        /// </summary>
+        [TestMethod]
+        [DataRow(1u, 0.5, 0.5, 1u, 2046, 1023, "no finite reciprocal")]
+        [DataRow(1u, 0.5, 1e-300, 2u, 5, 2, "no finite reciprocal")]
+        [DataRow(1000u, 0.01, 0.8, 1_000_000u, 950, 1, "more bits than")]
+        [DataRow(1000u, 0.01, 0.8, 5_000_000u, 950, 1, "more items than")]
+        public void TestAnAddPastTheCeilingIsRefusedBeforeAnythingChanges(
+            uint hint, double fp, double r, uint growth, int succeed, int filters, string condition)
+        {
+            var f = new ScalableBloomFilter(hint, fp, r, growth);
+            for (int i = 0; i < succeed; i++)
+            {
+                f.Add(Encoding.ASCII.GetBytes($"w{i}"));
+            }
+
+            Assert.AreEqual(filters, f.Filters.Count, "the wall is not where it was measured to be");
+            var before = f.ToByteArray();
+            var next = Encoding.ASCII.GetBytes($"w{succeed}");
+
+            var ex = Assert.ThrowsExactly<InvalidOperationException>(() => f.Add(next));
+            StringAssert.Contains(ex.Message, condition);
+            Assert.ThrowsExactly<InvalidOperationException>(() => f.TestAndAdd(next));
+
+            CollectionAssert.AreEqual(before, f.ToByteArray(), "a refused add changed the filter");
+            for (int i = 0; i < succeed; i++)
+            {
+                Assert.IsTrue(f.Test(Encoding.ASCII.GetBytes($"w{i}")), $"w{i} was lost at the ceiling");
             }
         }
 

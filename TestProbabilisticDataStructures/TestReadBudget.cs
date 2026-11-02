@@ -298,9 +298,11 @@ namespace TestProbabilisticDataStructures
                 },
                 [StructureId.ScalableBloomFilter] = new[]
                 {
+                    // Growth 1: a filter that adds every filter at its hint is the one
+                    // that reaches thousands of them.
                     ("the list of contained filters and what each nested read costs, over two thousand of them",
                         Of("ScalableBloomFilter of many filters",
-                            Filled(new ScalableBloomFilter(10, 0.01, 0.999), (f, k) => f.Add(k), 20_000))),
+                            Filled(new ScalableBloomFilter(10, 0.01, 0.999, 1), (f, k) => f.Add(k), 20_000))),
                 },
                 [StructureId.Grafite] = new[]
                 {
