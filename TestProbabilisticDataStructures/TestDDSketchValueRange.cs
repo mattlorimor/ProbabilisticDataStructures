@@ -26,7 +26,8 @@ namespace TestProbabilisticDataStructures
     /// So what is held here is the same promise: finite, the sign of the values it
     /// stands for, and within the accuracy. And, because correcting the ends must not
     /// move the middle, that wherever the direct formula gave a finite number other
-    /// than zero the answer is that number, bit for bit.
+    /// than zero the answer is that number, bit for bit, and a zero is the smallest
+    /// double.
     /// </para>
     /// <para>
     /// The subnormals are the one place the promise is held only to a unit. Their
@@ -213,10 +214,12 @@ namespace TestProbabilisticDataStructures
         /// The corrections are for an answer that was infinite or zero. Wherever the
         /// direct formula gave anything else it was what a stored sketch has always
         /// answered, and it still does, to the bit: the normal numbers, and the
-        /// subnormals the corrected formula would have moved by a unit.
+        /// subnormals the corrected formula would have moved by a unit. A zero is the
+        /// smallest double, which the accuracy alone would not pin: at 0.99 the next one
+        /// up is also within it of the smallest values, so it is held here.
         /// </summary>
         [TestMethod]
-        public void TestWhereTheDirectFormulaWasFiniteAndNonzeroTheAnswerIsItsBits()
+        public void TestOnlyAnInfiniteOrZeroDirectAnswerIsReplaced()
         {
             var compared = 0;
             var subnormal = 0;
@@ -231,7 +234,7 @@ namespace TestProbabilisticDataStructures
                     {
                         total++;
                         var direct = Direct(accuracy, Math.Abs(value));
-                        if (!double.IsFinite(direct) || direct == 0)
+                        if (double.IsInfinity(direct))
                         {
                             continue;
                         }
@@ -242,7 +245,7 @@ namespace TestProbabilisticDataStructures
                             subnormal++;
                         }
 
-                        var expected = Math.CopySign(direct, value);
+                        var expected = Math.CopySign(direct == 0 ? double.Epsilon : direct, value);
                         var answer = Answer(accuracy, value);
                         if (BitConverter.DoubleToInt64Bits(answer)
                             != BitConverter.DoubleToInt64Bits(expected))
@@ -260,7 +263,7 @@ namespace TestProbabilisticDataStructures
             // The comparison engaged on most of the roster, and on a good many subnormals,
             // so an empty or all-normal one cannot pass.
             Assert.IsTrue(compared > total * 0.5,
-                $"only {compared} of {total} cases had a finite nonzero direct answer to compare");
+                $"only {compared} of {total} cases had a direct answer that was not infinite to compare");
             Assert.IsTrue(subnormal >= 1000,
                 $"only {subnormal} of the direct answers compared were subnormal");
         }
