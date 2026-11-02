@@ -115,25 +115,27 @@ namespace TestProbabilisticDataStructures
                     "operation, so a sequence over it means something. Cover it.");
             }
 
-            // The filters are the other slices of #144, which bring membership models
-            // (no false negatives, fingerprint multisets) this harness does not have.
-            var filters = new[]
-            {
-                StructureId.BloomFilter, StructureId.BloomFilter64,
-                StructureId.CountingBloomFilter, StructureId.DeletableBloomFilter,
-                StructureId.PartitionedBloomFilter, StructureId.ScalableBloomFilter,
-                StructureId.StableBloomFilter, StructureId.InverseBloomFilter,
-                StructureId.CuckooBloomFilter, StructureId.QuotientFilter,
-                StructureId.InfiniFilter, StructureId.MementoFilter,
-            };
-            foreach (var id in filters)
+            // The filters are the other files' slices of #144, which bring membership
+            // models (no false negatives, fingerprint multisets) this harness does not
+            // have. Which structures those are is what those files say they sequence,
+            // not a list kept here: a filter they stop sequencing is then a gap in this
+            // roster, and one this file also runs is a stale exemption, both by name.
+            var filters = TestFilterSequences.SequencedStructures
+                .Select(id => (Id: id, File: nameof(TestFilterSequences)))
+                .Concat(TestQuotientFamilySequences.SequencedStructures
+                    .Select(id => (Id: id, File: nameof(TestQuotientFamilySequences))))
+                .GroupBy(f => f.Id)
+                .Select(g => g.First())
+                .ToArray();
+            foreach (var (id, file) in filters)
             {
                 var type = library.GetType($"ProbabilisticDataStructures.{id}", throwOnError: true)!;
                 Assert.IsTrue(
                     type.GetMethods(BindingFlags.Public | BindingFlags.Instance)
                         .Any(m => m.Name == "Test"),
-                    $"{id} is exempt as a filter, but it has no membership query to model, " +
-                    "so it is a sketch and a sequence over it belongs in this sweep.");
+                    $"{file} sequences {id}, which is exempt here as a filter, but it has no " +
+                    "membership query to model, so it is a sketch and a sequence over it " +
+                    "belongs in this sweep.");
             }
 
             StructureRoster.AssertCoversEveryStructure(
@@ -141,9 +143,131 @@ namespace TestProbabilisticDataStructures
                 Specs.Select(s => s.Id).Distinct(),
                 builtOnce.Select(id => (id, "built once from a whole input; no operation " +
                         "changes it afterwards, so there is no sequence to run"))
-                    .Concat(filters.Select(id => (id, "a filter: sequenced in the filter " +
-                        "slices of #144 against a membership model")))
+                    .Concat(filters.Select(f => (f.Id, $"a filter, sequenced by {f.File} " +
+                        "against a membership model")))
                     .ToArray());
+        }
+
+        // ---------------------------------------------------------------------------
+        // The public surface.
+        // ---------------------------------------------------------------------------
+
+        /// <summary>
+        /// Operations by name, whatever their shape. The rest are found by signature, so
+        /// an operation named otherwise still shows up: it returns the type, or it takes
+        /// another instance of it.
+        /// </summary>
+        private static readonly string[] OperationNames =
+            { "Add", "Remove", "Merge", "Reset", "Union", "Intersect", "Difference", "Subtract" };
+
+        /// <summary>
+        /// Methods that take another instance of the type and change neither, so the
+        /// signature rule would take them for operations. Each is checked to be matched
+        /// by it on some sequenced type, so a classification nobody needs goes stale.
+        /// </summary>
+        private static readonly (string Name, string Why)[] Comparisons =
+        {
+            ("Jaccard", "estimates how two sketches relate from their registers and changes neither"),
+            ("Compare", "estimates how two sketches relate from their registers and changes neither"),
+        };
+
+        /// <summary>
+        /// Operations a type offers that its specs do not sequence, each with the existing
+        /// test that covers it as a single scenario. Sequencing Theta and Tuple
+        /// <c>Intersect</c> and <c>Difference</c> is not cheap: the generator would need
+        /// both as operations, the models would need to follow what each does to the
+        /// events they read, and the tuple model would need the summaries' folds too. The
+        /// scenarios named here cover what they do.
+        /// </summary>
+        private static readonly (Type Structure, string Operation, Type TestClass, string Test)[] CoveredElsewhere =
+        {
+            (typeof(ThetaSketch), nameof(ThetaSketch.Intersect),
+                typeof(TestModelBased), nameof(TestModelBased.TestThetaSketchValuesAreExactlyTheHashesBelowTheta)),
+            (typeof(ThetaSketch), nameof(ThetaSketch.Difference),
+                typeof(TestModelBased), nameof(TestModelBased.TestThetaSketchValuesAreExactlyTheHashesBelowTheta)),
+            (typeof(TupleSketch), nameof(TupleSketch.Intersect),
+                typeof(TestTupleSketch), nameof(TestTupleSketch.TestSetOperationsFoldTheSummariesTheyShould)),
+            (typeof(TupleSketch), nameof(TupleSketch.Difference),
+                typeof(TestTupleSketch), nameof(TestTupleSketch.TestSetOperationsFoldTheSummariesTheyShould)),
+        };
+
+        private static bool IsOperation(MethodInfo method, Type type) =>
+            OperationNames.Contains(method.Name)
+            || method.ReturnType == type
+            || method.GetParameters().Any(p => p.ParameterType == type);
+
+        /// <summary>
+        /// A spec runs what its type offers, as the Bloom file's check does for its
+        /// filters. The operations are derived from the public surface by reflection, so
+        /// a sketch that gains one fails here until a spec sequences it or a test that
+        /// covers it as a single scenario is named, and a spec cannot quietly stop
+        /// running one it still has.
+        /// </summary>
+        [TestMethod]
+        public void TestEverySpecRunsWhatItsTypeOffers()
+        {
+            var comparisonsMatched = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var group in Specs.GroupBy(s => s.Structure))
+            {
+                var type = group.Key;
+                var runs = group.SelectMany(s => s.Runs).ToHashSet(StringComparer.Ordinal);
+                var methods = type
+                    .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                    .Where(m => !m.IsSpecialName && IsOperation(m, type))
+                    .Select(m => m.Name)
+                    .ToHashSet(StringComparer.Ordinal);
+
+                foreach (var (name, _) in Comparisons.Where(c => methods.Contains(c.Name)))
+                {
+                    comparisonsMatched.Add(name);
+                }
+                var offered = methods.Except(Comparisons.Select(c => c.Name)).ToArray();
+
+                var covered = CoveredElsewhere.Where(c => c.Structure == type).ToArray();
+
+                var stale = runs.Except(offered).ToArray();
+                Assert.IsEmpty(stale,
+                    $"{type.Name}'s specs run {string.Join(", ", stale)}, which it does not " +
+                    "offer; the spec is out of date.");
+
+                var unaccounted = offered.Except(runs).Except(covered.Select(c => c.Operation)).ToArray();
+                Assert.IsEmpty(unaccounted,
+                    $"{type.Name} offers {string.Join(", ", unaccounted)}, which none of its " +
+                    "specs sequences and no single-scenario test is named as covering. " +
+                    "Sequence it, or name the test that covers it in CoveredElsewhere.");
+
+                foreach (var (_, operation, testClass, test) in covered)
+                {
+                    Assert.Contains(operation, offered,
+                        $"{type.Name}.{operation} is covered elsewhere, but {type.Name} no " +
+                        "longer offers it; the entry is out of date.");
+                    Assert.DoesNotContain(operation, runs,
+                        $"{type.Name}.{operation} is covered elsewhere and sequenced anyway; " +
+                        "the entry is out of date.");
+
+                    // A named test that has lost its attribute vouches for nothing.
+                    var method = testClass.GetMethod(test);
+                    Assert.IsNotNull(method,
+                        $"{type.Name}.{operation} names {testClass.Name}.{test}, which does not exist.");
+                    Assert.IsNotNull(method.GetCustomAttribute<TestMethodAttribute>(),
+                        $"{type.Name}.{operation} names {testClass.Name}.{test}, which is not a test.");
+                }
+            }
+
+            // Every entry names a type that is sequenced, or it was never reachable.
+            var sequenced = Specs.Select(s => s.Structure).ToHashSet();
+            var orphaned = CoveredElsewhere.Where(c => !sequenced.Contains(c.Structure))
+                .Select(c => $"{c.Structure.Name}.{c.Operation}").ToArray();
+            Assert.IsEmpty(orphaned,
+                $"{string.Join(", ", orphaned)} is covered elsewhere, but no spec sequences " +
+                "its type; the entry is out of date.");
+
+            var unusedComparisons = Comparisons.Select(c => c.Name).Except(comparisonsMatched).ToArray();
+            Assert.IsEmpty(unusedComparisons,
+                $"{string.Join(", ", unusedComparisons)} is classified as a comparison, but " +
+                "no sequenced type offers a method that the signature rule would take for an " +
+                "operation by that name; the classification is out of date.");
         }
 
         // ---------------------------------------------------------------------------
@@ -363,6 +487,7 @@ namespace TestProbabilisticDataStructures
                 Fresh = () => new CountSketch(0.5, 0.5),
                 Add = (s, op) => s.Add(K(op.Key), CountSketchDelta(op)),
                 Remove = (s, op) => s.Add(K(op.Key), -1),
+                RemoveVia = nameof(CountSketch.Add),
                 Query = (s, op) => s.Count(K(op.Key)).ToString(),
                 Merge = (a, b) => a.Merge(b),
                 MergeIsUnion = true,
@@ -504,6 +629,7 @@ namespace TestProbabilisticDataStructures
                     Add = (s, op) => s.Add(K(op.Key)),
                     Query = (s, op) => s.Count().ToString(),
                     Merge = (a, b) => a.Union(b),
+                    MergeVia = nameof(ThetaSketch.Union),
                     Model = ThetaModel,
                     Phase = s => s.ThetaValue == ulong.MaxValue ? "exact" : "sampling",
                     MinPhases = 2,
@@ -519,6 +645,7 @@ namespace TestProbabilisticDataStructures
                     Add = (s, op) => s.Add(K(op.Key), op.Value),
                     Query = (s, op) => s.Count() + "|" + s.Total().ToString("R"),
                     Merge = (a, b) => a.Union(b),
+                    MergeVia = nameof(TupleSketch.Union),
                     Model = (s, events) => TupleModel(s, events, policy),
                     Phase = s => s.ThetaValue == ulong.MaxValue ? "exact" : "sampling",
                     MinPhases = 2,
@@ -562,6 +689,7 @@ namespace TestProbabilisticDataStructures
                     Query = (s, op) => s.TryDecode(out var a, out var r)
                         ? $"{a.Count}+{r.Count}" : "undecodable",
                     Merge = (a, b) => a.Subtract(fresh().Subtract(b)),
+                    MergeVia = nameof(InvertibleBloomLookupTable.Subtract),
                     MergeIsUnion = true,
                     Model = (s, events) => IbltModel(s, events, tally),
                     Undo = (s, key, net) =>
@@ -781,6 +909,10 @@ namespace TestProbabilisticDataStructures
         internal interface ISpec
         {
             StructureId Id { get; }
+            Type Structure { get; }
+
+            /// <summary>The public operations this configuration's delegates run.</summary>
+            IReadOnlyCollection<string> Runs { get; }
             string Label { get; }
             bool HasReset { get; }
             bool MergeIsUnion { get; }
@@ -814,6 +946,19 @@ namespace TestProbabilisticDataStructures
             public Func<T, T>? FreshAfterReset { get; init; }
             public Func<T, T, T>? Merge { get; init; }
             public bool MergeIsUnion { get; init; }
+
+            /// <summary>
+            /// The public method the Merge delegate calls, where it is not named Merge:
+            /// a theta or tuple union, an IBLT's subtraction. Declared beside the
+            /// delegate so that the surface check can tell which operation it sequences.
+            /// </summary>
+            public string MergeVia { get; init; } = "Merge";
+
+            /// <summary>
+            /// The public method the Remove delegate calls, where it is not named Remove:
+            /// a Count Sketch removes by adding a negative count.
+            /// </summary>
+            public string RemoveVia { get; init; } = "Remove";
             public bool MergeIsIdempotent { get; init; }
             public Func<T, IReadOnlyList<Event>, string?>? Model { get; init; }
             public Func<T, byte[]> Canon { get; init; } = s => s.ToByteArray();
@@ -863,6 +1008,20 @@ namespace TestProbabilisticDataStructures
             public bool HasReset => this.Reset is not null;
             public bool HasModel => this.Model is not null;
             public bool HasUndo => this.Undo is not null;
+
+            public Type Structure => typeof(T);
+
+            public IReadOnlyCollection<string> Runs
+            {
+                get
+                {
+                    var runs = new List<string> { "Add" };
+                    if (this.Reset is not null) runs.Add("Reset");
+                    if (this.Merge is not null) runs.Add(this.MergeVia);
+                    if (this.Remove is not null) runs.Add(this.RemoveVia);
+                    return runs;
+                }
+            }
 
             // --- generation ---------------------------------------------------------
 

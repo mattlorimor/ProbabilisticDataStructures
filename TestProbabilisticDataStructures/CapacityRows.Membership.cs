@@ -1,0 +1,560 @@
+using System;
+using System.Buffers.Binary;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+using ProbabilisticDataStructures;
+using static TestProbabilisticDataStructures.CapacityModel;
+
+namespace TestProbabilisticDataStructures
+{
+    internal static partial class CapacityRows
+    {
+        private static byte[] Key(long i)
+        {
+            var key = new byte[8];
+            BinaryPrimitives.WriteInt64LittleEndian(key, i);
+            return key;
+        }
+
+        /// <summary>The rows built from the filters that are not the Bloom filters proper.</summary>
+        internal static IEnumerable<CapacityRow> Membership()
+        {
+            foreach (var row in Inverse())
+            {
+                yield return row;
+            }
+
+            yield return ScalableRow(1000, 0.01, "1%", 0.8, 2);
+            yield return ScalableRow(1000, 0.01, "1%", 0.9, 2);
+            yield return ScalableRow(1000, 0.01, "1%", 0.8, 1);
+            yield return ScalableRow(1000, 0.01, "1%", 0.9, 1);
+            yield return CuckooRow(0.01, "1%", filled: false);
+            yield return CuckooRow(0.01, "1%", filled: true);
+            yield return CuckooRow(0.001, "0.1%", filled: false);
+            yield return QuotientRow(0.01, "1%");
+            yield return QuotientRow(0.001, "0.1%");
+            yield return FuseRow(BinaryFuseWidth.Eight);
+            yield return FuseRow(BinaryFuseWidth.Sixteen);
+            yield return BloomierRow(8);
+            yield return BloomierRow(16);
+            yield return BloomierRow(40);
+        }
+
+        // ---- InverseBloomFilter ----------------------------------------------------------
+
+        private static long Occupied(byte[] inverse) =>
+            BinaryPrimitives.ReadUInt32LittleEndian(inverse.AsSpan(14 + sizeof(uint)));
+
+        /// <summary>
+        /// The slots are an array of references, so the capacity is the longest array.
+        /// Allocating one that long is not a test; one past it is refused before anything
+        /// is allocated, which shows the limit is the array's.
+        /// </summary>
+        private static string InverseBuilds()
+        {
+            Assert.Throws<OutOfMemoryException>(() => new InverseBloomFilter((uint)Array.MaxLength + 1));
+            return Exact((ulong)Array.MaxLength);
+        }
+
+        internal static IEnumerable<CapacityRow> Inverse()
+        {
+            ChargeLine Empty() => ChargeLine.Fit("InverseBloomFilter", 64,
+                new[] { 100_000u, 200_000u, 400_000u, 800_000u }
+                    .Select(c => ((long)c, ChargeOf(StructureId.InverseBloomFilter, new InverseBloomFilter(c))))
+                    .ToArray());
+
+            yield return Row(StructureId.InverseBloomFilter, "capacity (slots), empty",
+                InverseBuilds,
+                () => LoadsAbout(Empty(), uint.MaxValue, c => c));
+
+            yield return Row(StructureId.InverseBloomFilter, "capacity (slots), every slot holding an 8-byte item",
+                InverseBuilds,
+                () =>
+                {
+                    // Each occupied slot costs the same whatever the capacity: measured as
+                    // the difference a fill makes, and the fill is the one the filter keeps.
+                    var empty = new InverseBloomFilter(100_000);
+                    var filled = new InverseBloomFilter(100_000);
+                    for (var i = 0L; i < 400_000; i++)
+                    {
+                        filled.Add(Key(i));
+                    }
+
+                    var occupied = Occupied(filled.ToByteArray());
+                    Assert.IsGreaterThan(90_000L, occupied, "the fill left a tenth of the slots empty");
+                    var each = (ChargeOf(StructureId.InverseBloomFilter, filled)
+                        - ChargeOf(StructureId.InverseBloomFilter, empty)) / (double)occupied;
+                    Assert.AreEqual(48.0, each, 0.5, "an occupied slot is no longer charged 48 bytes");
+
+                    var full = Empty().Plus(48, "InverseBloomFilter full");
+                    return LoadsAbout(full, uint.MaxValue, c => c);
+                });
+        }
+
+        // ---- ScalableBloomFilter ---------------------------------------------------------
+
+        /// <summary>
+        /// The items a contained filter takes before the next is started: the next filter
+        /// is started by the Add after the one that finds this one at its fill ratio, so a
+        /// filter takes the items it takes to get there. Its partitions are
+        /// <paramref name="slots"/> bits each.
+        /// </summary>
+        private static ulong ItemsBeforeNext(uint slots)
+        {
+            var items = (ulong)Math.Ceiling(slots * Math.Log(2));
+            while (1 - Math.Exp(-(double)items / slots) < Defaults.FILL_RATIO)
+            {
+                items++;
+            }
+
+            while (items > 1 && 1 - Math.Exp(-(double)(items - 1) / slots) >= Defaults.FILL_RATIO)
+            {
+                items--;
+            }
+
+            return items;
+        }
+
+        /// <summary>
+        /// The contained filters a scalable filter grows to, in order, as each one is
+        /// sized: the items it takes before the next is started, and the bytes of bits it
+        /// holds. Ends where the filter's own sizing, which is asked and not restated,
+        /// says the next cannot be built, so no filter is allocated.
+        /// </summary>
+        internal static List<(ulong Items, ulong Units)> Shape(uint hint, double fp, double r, uint growth)
+        {
+            // The filter is asked how large its next filter is, and answers by how many it
+            // has, so it is given placeholders for the ones it would have.
+            var scalable = new ScalableBloomFilter(hint, fp, r, growth);
+            scalable.Filters.Clear();
+            var steps = new List<(ulong, ulong)>();
+            while (true)
+            {
+                var rate = fp * Math.Pow(r, scalable.Filters.Count);
+                uint capacity;
+                try
+                {
+                    capacity = scalable.NextCapacity(rate);
+                }
+                catch (InvalidOperationException)
+                {
+                    return steps;
+                }
+
+                scalable.Filters.Add(Placeholder);
+                var k = Utils.OptimalK(rate);
+                var slots = (uint)Math.Ceiling((double)Utils.OptimalM(capacity, rate) / k);
+                steps.Add((ItemsBeforeNext(slots), k * TrueBytes(slots, 1)));
+            }
+        }
+
+        /// <summary>
+        /// A filter standing for one a scalable filter would have, empty and tiny, so that
+        /// the scalable filter can count them and total what they hold.
+        /// </summary>
+        internal static readonly PartitionedBloomFilter Placeholder = new(1, 0.5);
+
+        private static readonly Dictionary<(uint, double, double, uint), List<(ulong Items, ulong Units)>> ShapeCache = new();
+
+        internal static List<(ulong Items, ulong Units)> ShapeOf(uint hint, double fp, double r, uint growth)
+        {
+            lock (ShapeCache)
+            {
+                if (!ShapeCache.TryGetValue((hint, fp, r, growth), out var shape))
+                {
+                    shape = Shape(hint, fp, r, growth);
+                    ShapeCache[(hint, fp, r, growth)] = shape;
+                }
+
+                return shape;
+            }
+        }
+
+        /// <summary>
+        /// The contained filters of a scalable filter that does not grow them, in order,
+        /// with what a read of each alone is charged. Every filter is built, so this is the
+        /// measured side of <see cref="Shape"/>, and it is kept for the filters whose
+        /// partitions, a thousand to a filter by the end, make their charge more than their bits.
+        /// </summary>
+        private static List<(ulong Items, long Charge)> ScalableSteps(uint hint, double fp, double r)
+        {
+            var steps = new List<(ulong, long)>();
+            var totalLength = 0L;
+            for (var i = 0; ; i++)
+            {
+                PartitionedBloomFilter filter;
+                try
+                {
+                    filter = new PartitionedBloomFilter(hint, fp * Math.Pow(r, i));
+                }
+                catch (OverflowException)
+                {
+                    return steps;
+                }
+
+                var slots = (uint)Math.Ceiling((double)filter.BitCount / filter.PartitionCount);
+                var items = ItemsBeforeNext(slots);
+
+                // Read nested, a filter is also in the outer payload and copied out of it once more,
+                // each the length of its own envelope.
+                var length = filter.ToByteArray().Length;
+                totalLength += length;
+                steps.Add((items, ChargeOf(StructureId.PartitionedBloomFilter, filter) + 2L * length));
+                Facts[$"scalable bytes ratio {hint} {fp} {r}"] = (double)steps.Sum(s => s.Item2) / totalLength;
+                Facts[$"scalable length {hint} {fp} {r}"] = totalLength;
+            }
+        }
+
+        private static readonly Dictionary<(uint, double, double), List<(ulong Items, long Charge)>> ScalableCache = new();
+
+        internal static List<(ulong Items, long Charge)> Steps(uint hint, double fp, double r)
+        {
+            lock (ScalableCache)
+            {
+                if (!ScalableCache.TryGetValue((hint, fp, r), out var steps))
+                {
+                    steps = ScalableSteps(hint, fp, r);
+                    ScalableCache[(hint, fp, r)] = steps;
+                }
+
+                return steps;
+            }
+        }
+
+        internal static CapacityRow ScalableRow(uint hint, double fp, string fpLabel, double r, uint growth) => Row(
+            StructureId.ScalableBloomFilter, $"items added, hint {hint:N0}, growth {growth}, fp {fpLabel}, r {r}",
+            () =>
+            {
+                // Items added before the filter that cannot be sized is wanted; the Add
+                // that wants it throws.
+                var total = ShapeOf(hint, fp, r, growth).Aggregate(0UL, (sum, s) => sum + s.Items);
+                if (growth == 1)
+                {
+                    // The same, found by building every filter.
+                    Assert.AreEqual(total, Steps(hint, fp, r).Aggregate(0UL, (sum, s) => sum + s.Items));
+                }
+
+                return About(total, total, 2);
+            },
+            () => growth == 1 ? ScalableLoadsUngrown(hint, fp, r) : ScalableLoadsGrown(hint, fp, r, growth));
+
+        /// <summary>
+        /// A filter that does not grow its filters is read as them one after another, each
+        /// as a read of its own plus the same fixed charge for being nested. The fixed
+        /// charges are found from real reads of a few filters, and the sum is then taken
+        /// over the filters, each charged as the filter it is.
+        /// </summary>
+        private static string ScalableLoadsUngrown(uint hint, double fp, double r)
+        {
+            var steps = Steps(hint, fp, r);
+            var counts = new[] { 1, 2, 3, 4 };
+            var measured = counts.Select(f =>
+            {
+                var filter = new ScalableBloomFilter(hint, fp, r, 1);
+                var items = steps.Take(f - 1).Aggregate(0UL, (sum, s) => sum + s.Items) + 1;
+                for (var i = 0UL; i < items; i++)
+                {
+                    filter.Add(Key((long)i));
+                }
+
+                Assert.HasCount(f, filter.Filters, "the filter did not grow as the sum of its steps says");
+                return (Filters: f, Charge: ChargeOf(StructureId.ScalableBloomFilter, filter));
+            }).ToArray();
+
+            var line = ChargeLine.Fit("ScalableBloomFilter's fixed charges", 32 * 4,
+                measured.Select(m => ((long)m.Filters,
+                    m.Charge - steps.Take(m.Filters).Sum(s => s.Charge))).ToArray());
+
+            // The items that make the most filters read under the budget.
+            ulong ItemsThatFit(bool surely)
+            {
+                var charge = 0L;
+                var items = 0UL;
+                var most = 0UL;
+                for (var f = 1; f <= steps.Count; f++)
+                {
+                    charge += steps[f - 1].Charge;
+                    items += steps[f - 1].Items;
+                    var fits = surely
+                        ? line.Surely((ulong)f, Budget - charge)
+                        : line.Possibly((ulong)f, Budget - charge);
+                    if (!fits)
+                    {
+                        break;
+                    }
+
+                    most = items;
+                }
+
+                return most;
+            }
+
+            return About(ItemsThatFit(true), ItemsThatFit(false));
+        }
+
+        /// <summary>
+        /// A filter that grows its filters is read mostly as its last few, which are the
+        /// largest by far, so the read is a line in the bytes of bits the contained filters
+        /// hold; the line is found from real reads of the first few filters, and the number
+        /// of filters it stops at has to be the same whichever way the slack goes.
+        /// </summary>
+        private static string ScalableLoadsGrown(uint hint, double fp, double r, uint growth)
+        {
+            var shape = ShapeOf(hint, fp, r, growth);
+            var points = Enumerable.Range(2, 10).Select(f =>
+            {
+                var filter = new ScalableBloomFilter(hint, fp, r, growth);
+                var items = shape.Take(f - 1).Aggregate(0UL, (sum, s) => sum + s.Items) + 1;
+                for (var i = 0UL; i < items; i++)
+                {
+                    filter.Add(Key((long)i));
+                }
+
+                Assert.HasCount(f, filter.Filters, "the filter did not grow as the sum of its steps says");
+                return ((long)shape.Take(f).Aggregate(0UL, (sum, s) => sum + s.Units),
+                    ChargeOf(StructureId.ScalableBloomFilter, filter));
+            }).ToArray();
+
+            // The partitions of each filter cost a few bytes each beyond their bits, which
+            // is a few thousand bytes over the filters measured.
+            var line = ChargeLine.Fit($"ScalableBloomFilter growth {growth}", 12_000, points);
+
+            ulong ItemsThatFit(bool surely)
+            {
+                var units = 0UL;
+                var items = 0UL;
+                var most = 0UL;
+                foreach (var step in shape)
+                {
+                    units += step.Units;
+                    items += step.Items;
+                    if (!(surely ? line.Surely(units) : line.Possibly(units)))
+                    {
+                        break;
+                    }
+
+                    most = items;
+                }
+
+                return most;
+            }
+
+            var low = ItemsThatFit(true);
+            var high = ItemsThatFit(false);
+            Assert.AreEqual(low, high, "the slack leaves the number of filters the read stops at undecided");
+            Facts[$"scalable growth {growth} {r} loads"] = low;
+
+            return About(low, high, 2);
+        }
+
+        // ---- CuckooBloomFilter -------------------------------------------------------------
+
+        private static readonly MethodInfo CuckooPower2 =
+            typeof(CuckooBloomFilter).GetMethod("Power2", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        private static readonly MethodInfo CuckooFingerprintBits =
+            typeof(CuckooBloomFilter).GetMethod("CalculateFingerprintBits", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        internal static readonly double CuckooLoadFactor = (double)typeof(CuckooBloomFilter)
+            .GetField("LoadFactor", BindingFlags.NonPublic | BindingFlags.Static)!.GetRawConstantValue()!;
+
+        /// <summary>The buckets a filter sized for <paramref name="n"/> items gets: its own sizing.</summary>
+        private static ulong CuckooBuckets(ulong n) =>
+            (uint)CuckooPower2.Invoke(null, new object[] { (uint)Math.Ceiling(n / (4 * CuckooLoadFactor)) })!;
+
+        internal static uint CuckooBits(double fp) =>
+            (uint)CuckooFingerprintBits.Invoke(null, new object[] { 4u, fp })!;
+
+        private static ulong CuckooLargest(double fp)
+        {
+            // Up to 2^31 items, past which the sizing wraps (see the note in the notes).
+            var most = Largest(1, 1UL << 31, n =>
+                CuckooBloomFilter.GeometryProblem(CuckooBuckets(n), 4, CuckooBits(fp)) is null);
+            Assert.Throws<ArgumentOutOfRangeException>(() => new CuckooBloomFilter((uint)most + 1, fp));
+            return most;
+        }
+
+        internal static CapacityRow CuckooRow(double fp, string label, bool filled) => Row(
+            StructureId.CuckooBloomFilter,
+            filled ? $"n, fp {label}, holding n items" : $"n, fp {label}, empty",
+            () => Exact(CuckooLargest(fp)),
+            () =>
+            {
+                var tables = Enumerable.Range(14, 4).Select(k => (ulong)Math.Floor(3.8 * (1UL << k))).ToArray();
+                foreach (var n in tables)
+                {
+                    Assert.AreEqual(1UL << Array.IndexOf(tables, n) + 14, CuckooBuckets(n));
+                }
+
+                var line = ChargeLine.Fit($"CuckooBloomFilter {label}", 64,
+                    tables.Select(n => ((long)CuckooBuckets(n),
+                        ChargeOf(StructureId.CuckooBloomFilter, new CuckooBloomFilter((uint)n, fp, seed: 1)))).ToArray());
+
+                if (!filled)
+                {
+                    // The table doubles, so the number steps, and the step is far from the
+                    // budget on both sides: the slack cannot move it.
+                    var buckets = 1UL << Enumerable.Range(1, 31).Last(k => line.Surely(1UL << k));
+                    Assert.AreEqual(buckets, 1UL << Enumerable.Range(1, 31).Last(k => line.Possibly(1UL << k)));
+                    return Exact(Largest(1, CuckooLargest(fp), n => CuckooBuckets(n) <= buckets));
+                }
+
+                // Every entry the filter holds is written, at the same price whatever
+                // the size of the table: found from two fills of one table.
+                var some = new CuckooBloomFilter((uint)tables[1], fp, seed: 1);
+                var more = new CuckooBloomFilter((uint)tables[1], fp, seed: 1);
+                for (var i = 0; i < 2000; i++) some.Add(Key(i));
+                for (var i = 0; i < 20000; i++) more.Add(Key(i));
+                Assert.AreEqual(20000u, more.Count(), "the fill did not all fit, so it is not a fill");
+                var each = (ChargeOf(StructureId.CuckooBloomFilter, more)
+                    - ChargeOf(StructureId.CuckooBloomFilter, some)) / (double)(more.Count() - some.Count());
+                Assert.AreEqual(Math.Round(each), each, 0.01, "an entry is not a whole number of bytes");
+                Facts[$"cuckoo entry bytes {label}"] = each;
+
+                // A filter sized for n and holding n: the largest n for which the table
+                // it gets and its n entries are charged within the budget. Not monotone in
+                // n, since the table doubles, so each table size is tried.
+                ulong Best(Func<double, double> charged)
+                {
+                    ulong best = 0;
+                    for (var k = 10; k <= 30; k++)
+                    {
+                        var top = Largest(1, CuckooLargest(fp), n => CuckooBuckets(n) <= 1UL << k);
+                        var fit = (ulong)Math.Max(0, (Budget - charged(1UL << k)) / each);
+                        var n = Math.Min(top, fit);
+                        if (n > 0 && CuckooBuckets(n) == 1UL << k && n > best)
+                        {
+                            best = n;
+                        }
+                    }
+
+                    return best;
+                }
+
+                return About(Best(line.Upper), Best(line.Lower));
+            });
+
+        // ---- QuotientFilter ----------------------------------------------------------------
+
+        internal static CapacityRow QuotientRow(double fp, string label) => Row(
+            StructureId.QuotientFilter, $"n, fp {label}",
+            () =>
+            {
+                var most = ProbabilisticDataStructures.QuotientFilter.MaxItems;
+                Assert.AreEqual((uint)ProbabilisticDataStructures.QuotientFilter.MaxQuotientBits,
+                    ProbabilisticDataStructures.QuotientFilter.Split(most, 0.5).QuotientBits);
+                Assert.Throws<ArgumentOutOfRangeException>(
+                    () => ProbabilisticDataStructures.QuotientFilter.Split(most + 1, 0.5));
+                return Exact(most);
+            },
+            () =>
+            {
+                // The table is 2^q slots of r + 3 bits in 64-bit words, and a power of two,
+                // so it is the table that steps the number.
+                var (_, r) = ProbabilisticDataStructures.QuotientFilter.Split(1000, fp);
+                long Words(int q) => (((long)(1u << q)) * (r + 3) >> 6) + 2;
+                var line = ChargeLine.Fit($"QuotientFilter {label}", 64,
+                    Enumerable.Range(12, 5).Select(q => (Words(q),
+                        ChargeOf(StructureId.QuotientFilter,
+                            new ProbabilisticDataStructures.QuotientFilter((uint)(0.75 * (1u << q)), fp)))).ToArray());
+                var q = Enumerable.Range(1, 31).Last(q => line.Surely((ulong)Words(q)));
+                return Exact(Largest(1, ProbabilisticDataStructures.QuotientFilter.MaxItems,
+                    n => ProbabilisticDataStructures.QuotientFilter.Split((uint)n, fp).QuotientBits <= q));
+            });
+
+        // ---- BinaryFuseFilter and BloomierFilter ----------------------------------------------
+
+        private static readonly MethodInfo FuseSegmentLength =
+            typeof(BinaryFuseFilter).GetMethod("SegmentLengthFor", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        /// <summary>
+        /// The cells a fuse-style filter for <paramref name="keys"/> keys has: the
+        /// reference implementation's sizing, which both filters share. Checked against
+        /// the filters' own sizing, which allocates, at sizes up to tens of millions.
+        /// </summary>
+        internal static ulong FuseCells(ulong keys)
+        {
+            const uint MaxSegmentLength = 262144;
+            const uint Arity = 3;
+            var n = (uint)keys;
+            var segment = Math.Min((uint)FuseSegmentLength.Invoke(null, new object[] { n })!, MaxSegmentLength);
+            var factor = n <= 1 ? 0 : Math.Max(1.125, 0.875 + 0.25 * Math.Log(1000000.0) / Math.Log(n));
+            var capacity = n <= 1 ? 0 : (uint)Math.Round(n * factor);
+            uint length, count;
+            unchecked
+            {
+                length = (capacity + segment - 1) / segment - (Arity - 1);
+                length = (length + Arity - 1) * segment;
+            }
+
+            count = (length + segment - 1) / segment;
+            count = count <= Arity - 1 ? 1 : count - (Arity - 1);
+            return (ulong)(count + Arity - 1) * segment;
+        }
+
+        private static void CheckFuseCells()
+        {
+            foreach (var keys in new uint[] { 5_000, 123_456, 1_000_000, 5_000_000, 25_000_000 })
+            {
+                var fuse = (BinaryFuseFilter)RuntimeHelpers.GetUninitializedObject(typeof(BinaryFuseFilter));
+                typeof(BinaryFuseFilter).GetField("width", BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .SetValue(fuse, BinaryFuseWidth.Eight);
+                typeof(BinaryFuseFilter).GetMethod("Shape", BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .Invoke(fuse, new object[] { keys });
+                Assert.AreEqual((uint)FuseCells(keys), fuse.ArrayLengthChosen,
+                    $"the fuse sizing, restated here, gives {FuseCells(keys):N0} cells for {keys:N0} keys, and the filter's own does not");
+
+                var bloomier = (BloomierFilter)RuntimeHelpers.GetUninitializedObject(typeof(BloomierFilter));
+                typeof(BloomierFilter).GetField("valueBits", BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .SetValue(bloomier, 8);
+                typeof(BloomierFilter).GetMethod("Shape", BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .Invoke(bloomier, new object[] { keys });
+                Assert.AreEqual((uint)FuseCells(keys),
+                    (uint)typeof(BloomierFilter).GetField("arrayLength", BindingFlags.NonPublic | BindingFlags.Instance)!
+                        .GetValue(bloomier)!,
+                    $"the fuse sizing, restated here, gives {FuseCells(keys):N0} cells for {keys:N0} keys, and the Bloomier filter's own does not");
+            }
+        }
+
+        internal static CapacityRow FuseRow(BinaryFuseWidth width) => Row(
+            StructureId.BinaryFuseFilter, $"keys, {(int)width}-bit fingerprints",
+            () => Memory,
+            () =>
+            {
+                CheckFuseCells();
+                var stride = (int)width / 8;
+                var line = ChargeLine.Fit($"BinaryFuseFilter {(int)width}-bit", 64,
+                    new[] { 100_000, 200_000, 400_000, 800_000 }.Select(n =>
+                    {
+                        var filter = ProbabilisticDataStructures.BinaryFuseFilter.Build(
+                            Enumerable.Range(0, n).Select(i => Key(i)), width);
+                        return ((long)filter.ArrayLengthChosen * stride,
+                            ChargeOf(StructureId.BinaryFuseFilter, filter));
+                    }).ToArray());
+                return LoadsAbout(line, uint.MaxValue, n => FuseCells(n) * (ulong)stride);
+            });
+
+        internal static CapacityRow BloomierRow(int valueBits) => Row(
+            StructureId.BloomierFilter, $"keys, {valueBits}-bit values",
+            () => Memory,
+            () =>
+            {
+                var stride = (8 + valueBits + 7) / 8;
+                var line = ChargeLine.Fit($"BloomierFilter {valueBits}-bit", 64,
+                    new[] { 100_000, 200_000, 400_000, 800_000 }.Select(n =>
+                    {
+                        var filter = ProbabilisticDataStructures.BloomierFilter.Build(
+                            Enumerable.Range(0, n).Select(i =>
+                                new KeyValuePair<byte[], ulong>(Key(i), (ulong)(i % 200))), valueBits);
+                        var cells = (uint)typeof(ProbabilisticDataStructures.BloomierFilter)
+                            .GetField("arrayLength", BindingFlags.NonPublic | BindingFlags.Instance)!
+                            .GetValue(filter)!;
+                        return ((long)cells * stride, ChargeOf(StructureId.BloomierFilter, filter));
+                    }).ToArray());
+                return LoadsAbout(line, uint.MaxValue, n => FuseCells(n) * (ulong)stride);
+            });
+    }
+}
