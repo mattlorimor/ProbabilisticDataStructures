@@ -126,8 +126,14 @@ namespace ProbabilisticDataStructures
         /// 0.5, 0.6, 0.7, 0.8 and 0.9, while the memory fell from 80 MB to 3 MB. The
         /// default is where those two stop pulling in the same direction.
         /// </param>
-        /// <param name="width">How many counters each sketch row holds.</param>
-        /// <param name="depth">How many rows each sketch has.</param>
+        /// <param name="width">
+        /// How many counters each sketch row holds: at most
+        /// <see cref="PrivateCountMinSketch"/>'s limit, 2,147,483,591.
+        /// </param>
+        /// <param name="depth">
+        /// How many rows each sketch has: at most <see cref="PrivateCountMinSketch"/>'s
+        /// limit, 2,147,483,591.
+        /// </param>
         /// <param name="seed">
         /// The seed for the noise. For tests only: a deployment must not supply one,
         /// since anyone who knows it can subtract the noise back off.
@@ -138,6 +144,9 @@ namespace ProbabilisticDataStructures
         /// more than 2,147,483,591 items: the checkpoints of a substream are a list with a
         /// slot for each, and a list holds no more than an array does. This was a cast to
         /// an <c>int</c> that saturated, so a larger substream was built as that long.
+        /// Or the width or the depth is more than a <see cref="PrivateCountMinSketch"/>
+        /// holds, 2,147,483,591 each, which the first <c>Add</c> would have refused when
+        /// it built the first of the window's sketches.
         /// </exception>
         public DpswSketch(
             long window,
@@ -168,6 +177,25 @@ namespace ProbabilisticDataStructures
             {
                 throw new ArgumentOutOfRangeException(nameof(beta),
                     "The substream factor lies strictly between nought and one.");
+            }
+
+            // Every sketch the window holds is a PrivateCountMinSketch, so its limits are
+            // that sketch's, by the same symbols; a shape it refuses would build here and
+            // fail on the first Add, when the first substream begins. Checked before the
+            // checkpoints are built, which a shape that cannot be used should not cost, and
+            // before the guard on the leanest checkpoint, which divides the depth by a
+            // budget and would otherwise answer a depth past the limit and blame alpha.
+            if (width > PrivateCountMinSketch.MaxWidth)
+            {
+                throw new ArgumentOutOfRangeException(nameof(width), width,
+                    $"A row of {width} counters is more than the " +
+                    $"{PrivateCountMinSketch.MaxWidth:N0} one sketch of the window holds.");
+            }
+            if (depth > PrivateCountMinSketch.MaxDepth)
+            {
+                throw new ArgumentOutOfRangeException(nameof(depth), depth,
+                    $"{depth} rows is more than the " +
+                    $"{PrivateCountMinSketch.MaxDepth:N0} one sketch of the window holds.");
             }
 
             this.window = window;
@@ -730,6 +758,25 @@ namespace ProbabilisticDataStructures
                 throw new InvalidDataException(
                     $"Window claims sketches of {depth} by {width}. A sketch needs at " +
                     "least one counter and one row.");
+            }
+            // The constructor's own limits, which are the private sketch's. Without them a
+            // window of no substreams claims a shape that no sketch of it could be built
+            // in, and loads; with substreams it would be refused by the first inner sketch,
+            // naming that sketch and not the window. Before the guard on the leanest
+            // checkpoint below, which a depth this large would trip for the wrong reason.
+            if (width > PrivateCountMinSketch.MaxWidth)
+            {
+                throw new InvalidDataException(
+                    $"Window claims sketches {width} counters wide, beyond anything this " +
+                    $"library builds: a row is one array, of at most " +
+                    $"{PrivateCountMinSketch.MaxWidth}.");
+            }
+            if (depth > PrivateCountMinSketch.MaxDepth)
+            {
+                throw new InvalidDataException(
+                    $"Window claims sketches {depth} rows deep, beyond anything this " +
+                    $"library builds: they are one array, of at most " +
+                    $"{PrivateCountMinSketch.MaxDepth}.");
             }
             if (position < 0)
             {

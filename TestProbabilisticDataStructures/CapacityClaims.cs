@@ -667,6 +667,13 @@ namespace TestProbabilisticDataStructures
                 new CountMinSketch(0.01, 0.01).Depth == 5 && Near(Slope("CountMinSketch"), 16, 0.01)),
             new Claim("A read charges 24 bytes a counter.", () => Near(Slope("CountSketch"), 24, 0.01)),
             new Claim("A read charges 16 bytes a counter.", () => Near(Slope("PrivateCountMinSketch"), 16, 0.01)),
+            new Claim("sketches of a window are at most as wide and as deep as a `PrivateCountMinSketch` is, 2,147,483,591", () =>
+                PrivateCountMinSketch.MaxWidth == 2_147_483_591 && PrivateCountMinSketch.MaxDepth == 2_147_483_591
+                && Assert.Throws<ArgumentOutOfRangeException>(
+                    () => new DpswSketch(100, 1.0, width: PrivateCountMinSketch.MaxWidth + 1)).ParamName == "width"
+                && Assert.Throws<ArgumentOutOfRangeException>(
+                    () => new DpswSketch(100, 1.0, depth: PrivateCountMinSketch.MaxDepth + 1)).ParamName == "depth"
+                && new DpswSketch(100, 1e9, width: PrivateCountMinSketch.MaxWidth, depth: PrivateCountMinSketch.MaxDepth).SketchesHeld == 0),
             new Claim("20 bytes a bucket to read", () => Near(Slope("HeavyKeeper"), 20, 0.01)),
             new Claim("a width of 2^14 from 67,108,864 items and 2^15 from 268,435,456", () =>
             {

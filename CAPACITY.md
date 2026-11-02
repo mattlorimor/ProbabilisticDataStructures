@@ -466,3 +466,7 @@ one are a list with a slot for each, so `window^β` is at most 2,147,483,591, th
 list. The constructor refuses a window and β that make more, naming `window`. At the
 default β that is a window of 21,445,114,182,289, which is the table's figure for what is
 built; memory is what stops a real one long before.
+
+The sketches of a window are at most as wide and as deep as a `PrivateCountMinSketch` is, 2,147,483,591
+each: the constructor refuses a width or a depth past that, naming it, before anything is built, and
+so does the reader.
