@@ -520,7 +520,7 @@ namespace ProbabilisticDataStructures
 
             // The data is the run just copied, charged as it was; Restore keeps it rather
             // than allocating its own, so what is left is the object holding it.
-            reader.Budget.Charge(ReadBudget.SmallObject);
+            reader.Budget.Charge(Buckets.ObjectSize);
             return Buckets.Restore(count, bucketSize, data);
         }
 
@@ -646,9 +646,12 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// What a nested read allocates around the run it reads from: a stream over it
-        /// and the options that carry the shared budget.
+        /// and the options that carry the shared budget, measured at 64 and 32 bytes on
+        /// a 64-bit runtime, and a small object's margin over both. A scalable filter
+        /// makes one of these per contained filter, so it is charged near its size
+        /// rather than at the general bound for each object.
         /// </summary>
-        internal const long NestedReadCost = 4 * ReadBudget.SmallObject;
+        internal const long NestedReadCost = 128;
 
         private static byte[] ReadExactly(Stream stream, int count, string what)
         {

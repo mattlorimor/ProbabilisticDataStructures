@@ -66,6 +66,15 @@ namespace ProbabilisticDataStructures
         internal byte BucketSize => this.bucketSize;
 
         /// <summary>
+        /// What a Buckets object occupies apart from its data: header, method table, the
+        /// data reference, the count and two bytes, padded to eight -- measured at 32 bytes
+        /// on a 64-bit runtime. A read charges it for every bucket array it restores, and
+        /// a partitioned filter restores up to a thousand of them, so it is charged at its
+        /// size rather than at the general bound for a small object.
+        /// </summary>
+        internal const long ObjectSize = 32;
+
+        /// <summary>
         /// Rebuilds a Buckets from data previously taken from <see cref="RawData"/>.
         /// </summary>
         /// <exception cref="InvalidDataException">
