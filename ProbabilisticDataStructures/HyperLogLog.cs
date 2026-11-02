@@ -159,7 +159,23 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Add(byte[])"/>
         public HyperLogLog Add(ReadOnlySpan<byte> data)
         {
-            var hash = CalculateHash(data);
+            this.AddHash(CalculateHash(data));
+            return this;
+        }
+
+        /// <summary>
+        /// Records one 32-bit hash: its top b bits pick the register, and the
+        /// position of the first set bit in the rest is what the register keeps the
+        /// largest of.
+        /// </summary>
+        /// <remarks>
+        /// Internal so that tests can drive the register update with chosen hash
+        /// values, which is how a sketch of billions of distinct items is reached
+        /// without billions of calls to the hash. <see cref="Add(ReadOnlySpan{byte})"/>
+        /// goes through it, so the update a test drives is the one that ships.
+        /// </remarks>
+        internal void AddHash(uint hash)
+        {
             var k = 32 - this.B;
             var r = CalculateRho(hash << (int)this.B, k);
             var j = hash >> (int)k;
@@ -168,8 +184,6 @@ namespace ProbabilisticDataStructures
             {
                 this.Registers[j] = r;
             }
-
-            return this;
         }
 
         /// <summary>
