@@ -141,18 +141,19 @@ namespace ProbabilisticDataStructures
         /// <returns>A HashKernel128</returns>
         public static HashKernel128ReturnValue HashKernel128(byte[] data, Func<ReadOnlySpan<byte>, ulong> hash)
         {
-            ulong lower = hash(data);
-
-            Span<byte> lowerBytes = stackalloc byte[8];
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(lowerBytes, lower);
-            ulong upper = hash(lowerBytes);
-
-            return HashKernel128ReturnValue.Create(lower, upper);
+            return HashKernel128((ReadOnlySpan<byte>)data, hash);
         }
 
         /// <summary>
         /// The 128-bit kernel, for data that is not held in an array.
         /// </summary>
+        /// <remarks>
+        /// The first value's eight bytes are held in an inline array rather than a
+        /// <c>stackalloc</c>. The bytes hashed are the same, so the bits a filter sets are
+        /// too. What differs is the cost: a method with a <c>stackalloc</c> cannot be
+        /// inlined and carries a zeroed frame with a stack check, and every add and test
+        /// of a filter placed with 64-bit values went through it.
+        /// </remarks>
         /// <param name="data">The data to hash.</param>
         /// <param name="hash">The hash function to use.</param>
         /// <returns>A 128-bit HashKernel</returns>
@@ -160,11 +161,20 @@ namespace ProbabilisticDataStructures
         {
             ulong lower = hash(data);
 
-            Span<byte> lowerBytes = stackalloc byte[8];
+            EightBytes lowerBytes = default;
             System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(lowerBytes, lower);
             ulong upper = hash(lowerBytes);
 
             return HashKernel128ReturnValue.Create(lower, upper);
+        }
+
+        /// <summary>
+        /// Eight bytes of storage for the first value, as an ordinary local.
+        /// </summary>
+        [System.Runtime.CompilerServices.InlineArray(8)]
+        private struct EightBytes
+        {
+            private byte element;
         }
 
         /// <summary>
