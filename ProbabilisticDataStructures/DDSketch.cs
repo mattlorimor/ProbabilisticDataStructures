@@ -488,22 +488,9 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.DDSketch);
-            var payload = PersistenceFormat.Read(stream, StructureId.DDSketch, out var hashId, budget);
-
-            if (hash is not null)
-            {
-                throw new InvalidDataException(
-                    "A DDSketch does not hash anything -- it holds numbers rather than " +
-                    "bytes -- so it cannot be read with a supplied hash function. Read " +
-                    "it with the overload that takes none.");
-            }
-
-            if (hashId != HashId.None)
-            {
-                throw new InvalidDataException(
-                    $"Payload names hash function {(ushort)hashId}, and a DDSketch does " +
-                    "not hash anything. It was not written by this structure.");
-            }
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.DDSketch, out _, budget, Price,
+                hash, CheckHash);
 
             var reader = new PayloadReader(payload, budget);
 
@@ -559,6 +546,43 @@ namespace ProbabilisticDataStructures
                 positive = positive,
                 negative = negative,
             };
+        }
+
+        /// <summary>
+        /// Refuses a supplied hash, and a payload naming any hash but none: this
+        /// structure hashes nothing. See <see cref="HashCheck"/>.
+        /// </summary>
+        private static void CheckHash(HashId recorded, Func<ReadOnlySpan<byte>, ulong>? supplied)
+        {
+            if (supplied is not null)
+            {
+                throw new InvalidDataException(
+                    "A DDSketch does not hash anything -- it holds numbers rather than " +
+                    "bytes -- so it cannot be read with a supplied hash function. Read " +
+                    "it with the overload that takes none.");
+            }
+
+            if (recorded != HashId.None)
+            {
+                throw new InvalidDataException(
+                    $"Payload names hash function {(ushort)recorded}, and a DDSketch does " +
+                    "not hash anything. It was not written by this structure.");
+            }
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: each store's run
+        /// and the window it is restored into. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            reader.ReadDouble();
+            reader.ReadUInt64();
+            reader.ReadUInt64();
+            reader.ReadDouble();
+            reader.ReadDouble();
+            Store.Price(ref reader, "positive");
+            Store.Price(ref reader, "negative");
         }
 
         /// <summary>
@@ -739,26 +763,12 @@ namespace ProbabilisticDataStructures
                 // carries: the read fails before anything is allocated for them.
                 var bytes = reader.ReadBytes();
 
-                if (bytes.Length % sizeof(ulong) != 0)
-                {
-                    throw new InvalidDataException(
-                        $"The {which} buckets are {bytes.Length} bytes, which is not a " +
-                        "whole number of counts.");
-                }
-
-                var span = bytes.Length / sizeof(ulong);
+                var span = SpanOf(minIndex, bytes.Length, which);
                 var store = new Store();
 
                 if (span == 0)
                 {
                     return store;
-                }
-
-                if ((long)minIndex + span - 1 > int.MaxValue)
-                {
-                    throw new InvalidDataException(
-                        $"The {which} buckets start at {minIndex} and run past the " +
-                        "largest index a bucket can have.");
                 }
 
                 // One array for the whole run, sized from it. Left to Add, the window
@@ -780,6 +790,44 @@ namespace ProbabilisticDataStructures
                 }
 
                 return store;
+            }
+
+            /// <summary>
+            /// Prices what <see cref="ReadFrom"/> allocates: the copy of the run, and the
+            /// window it is restored into.
+            /// </summary>
+            internal static void Price(ref PayloadReader reader, string which)
+            {
+                var minIndex = unchecked((int)reader.ReadUInt32());
+                var span = SpanOf(minIndex, reader.SkipBytes(), which);
+                if (span > 0)
+                {
+                    reader.Budget.Price(ReadBudget.ArrayOf((ulong)span, sizeof(ulong)));
+                }
+            }
+
+            /// <summary>
+            /// How many buckets a run of <paramref name="length"/> bytes starting at
+            /// <paramref name="minIndex"/> holds, after checking it can be read as them.
+            /// </summary>
+            private static int SpanOf(int minIndex, int length, string which)
+            {
+                if (length % sizeof(ulong) != 0)
+                {
+                    throw new InvalidDataException(
+                        $"The {which} buckets are {length} bytes, which is not a " +
+                        "whole number of counts.");
+                }
+
+                var span = length / sizeof(ulong);
+                if (span > 0 && (long)minIndex + span - 1 > int.MaxValue)
+                {
+                    throw new InvalidDataException(
+                        $"The {which} buckets start at {minIndex} and run past the " +
+                        "largest index a bucket can have.");
+                }
+
+                return span;
             }
 
             internal void Merge(Store other)

@@ -343,28 +343,16 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.CountSketch);
-            var payload = PersistenceFormat.Read(stream, StructureId.CountSketch, out var hashId, budget);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.CountSketch, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
             var bytes = reader.ReadBytes();
             reader.ExpectEnd();
-
-            if (width == 0 || depth == 0)
-            {
-                throw new InvalidDataException(
-                    $"Sketch is {depth} rows by {width} columns, leaving no cells to " +
-                    "count in.");
-            }
-
-            var expected = (long)width * depth * sizeof(long);
-            if (bytes.LongLength != expected)
-            {
-                throw new InvalidDataException(
-                    $"Sketch is {depth} by {width}, which needs {expected} bytes of " +
-                    $"cells, and carries {bytes.LongLength}.");
-            }
+            CheckCells(width, depth, bytes.LongLength);
 
             var sketch = new CountSketch(0.5, 0.5)
             {
@@ -373,9 +361,7 @@ namespace ProbabilisticDataStructures
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
             };
 
-            budget.Charge(ReadBudget.Sum(
-                ReadBudget.ArrayOf(depth, sizeof(long)),
-                ReadBudget.Times(depth, ReadBudget.ArrayOf(width, sizeof(long)))));
+            budget.Charge(RowsCost(width, depth));
             sketch.table = new long[depth][];
             var at = 0;
             for (var row = 0; row < depth; row++)
@@ -391,6 +377,43 @@ namespace ProbabilisticDataStructures
 
             return sketch;
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the copy of the
+        /// cells, and the table they are unpacked into. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var width = reader.ReadUInt32();
+            var depth = reader.ReadUInt32();
+            var stored = reader.SkipBytes();
+            reader.ExpectEnd();
+            CheckCells(width, depth, stored);
+            reader.Budget.Price(RowsCost(width, depth));
+        }
+
+        private static void CheckCells(uint width, uint depth, long stored)
+        {
+            if (width == 0 || depth == 0)
+            {
+                throw new InvalidDataException(
+                    $"Sketch is {depth} rows by {width} columns, leaving no cells to " +
+                    "count in.");
+            }
+
+            var expected = (long)width * depth * sizeof(long);
+            if (stored != expected)
+            {
+                throw new InvalidDataException(
+                    $"Sketch is {depth} by {width}, which needs {expected} bytes of " +
+                    $"cells, and carries {stored}.");
+            }
+        }
+
+        /// <summary>A table of <paramref name="depth"/> rows of <paramref name="width"/> cells.</summary>
+        private static long RowsCost(uint width, uint depth) => ReadBudget.Sum(
+            ReadBudget.ArrayOf(depth, sizeof(long)),
+            ReadBudget.Times(depth, ReadBudget.ArrayOf(width, sizeof(long))));
 
         /// <summary>The number of cells in each row.</summary>
         public uint Width() => this.width;

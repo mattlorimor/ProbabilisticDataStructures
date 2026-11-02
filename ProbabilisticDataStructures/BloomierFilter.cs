@@ -670,7 +670,9 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.BloomierFilter);
-            var payload = PersistenceFormat.Read(stream, StructureId.BloomierFilter, out var hashId, budget);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.BloomierFilter, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var size = reader.ReadUInt32();
@@ -727,6 +729,20 @@ namespace ProbabilisticDataStructures
                 cells = cells,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
             };
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the copy of the
+        /// cells, which the map keeps. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            reader.ReadUInt32();
+            reader.ReadUInt32();
+            reader.ReadUInt32();
+            reader.ReadUInt64();
+            reader.ReadUInt32();
+            reader.SkipBytes();
         }
 
         /// <summary>The number of distinct keys the map was built from.</summary>

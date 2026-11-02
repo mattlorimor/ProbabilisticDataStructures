@@ -294,7 +294,13 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.TopK);
-            var payload = PersistenceFormat.Read(stream, StructureId.TopK, out _, budget);
+
+            // The hash this header names is the sketch's, and the sketch's own is checked
+            // again as it is read. It is checked here as well, so that a top-k written
+            // with a hash it is not read with is refused before the read is priced rather
+            // than once its budget has been raised to read it.
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.TopK, out _, budget, Price, hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var k = reader.ReadUInt32();
@@ -302,35 +308,14 @@ namespace ProbabilisticDataStructures
             // The count of items added. Read past and not kept: the sketch inside has the
             // real one, in 64 bits, and this field only ever held it saturated.
             _ = reader.ReadUInt32();
-
-            if (k == 0)
-            {
-                throw new InvalidDataException(
-                    "Structure has room for no elements, and indexes its empty heap on " +
-                    "the first add.");
-            }
-
-            // The constructor's own limit, so that every structure it builds reads back.
-            if (k > ElementHeap.MaxCapacity)
-            {
-                throw new InvalidDataException(
-                    $"Structure claims room for {k} elements, beyond anything this " +
-                    $"library builds: it tracks at most {ElementHeap.MaxCapacity}.");
-            }
+            CheckRoom(k);
 
             var sketch = PersistenceFormat.ReadNested<CountMinSketch>(ref reader, hash);
 
-            var elementCount = reader.ReadUInt32();
-            if (elementCount > k)
-            {
-                throw new InvalidDataException(
-                    $"Structure holds {elementCount} elements with room for {k}.");
-            }
-
             // Sized by what is held, not by k: the heap grows as elements arrive, so a
             // structure read back behaves as it did, and a large k costs nothing until
-            // it is used. Each element is its length, at least, and its frequency.
-            reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
+            // it is used.
+            var elementCount = ReadElementCount(ref reader, k);
             budget.Charge(ElementHeap.RestoreCost(elementCount));
             var heap = new ElementHeap((int)elementCount);
             for (uint i = 0; i < elementCount; i++)
@@ -353,6 +338,65 @@ namespace ProbabilisticDataStructures
                 K = k,
                 elements = heap,
             };
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the whole of the
+        /// nested sketch's read, priced from its envelope where it lies in this payload,
+        /// the heap, and the copy of each element's data. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var k = reader.ReadUInt32();
+            // The count of items added, which the reader reads past too.
+            _ = reader.ReadUInt32();
+            CheckRoom(k);
+
+            PersistenceFormat.PriceNested(ref reader, StructureId.CountMinSketch, CountMinSketch.Price);
+
+            var elementCount = ReadElementCount(ref reader, k);
+            reader.Budget.Price(ElementHeap.RestoreCost(elementCount));
+            for (uint i = 0; i < elementCount; i++)
+            {
+                reader.SkipBytes();
+                reader.ReadUInt64();
+            }
+        }
+
+        /// <summary>
+        /// Reads how many elements are held, checked against the room for them and the
+        /// bytes behind them, as both the read and its price do before the heap is sized.
+        /// Each element is its length, at least, and its frequency.
+        /// </summary>
+        private static uint ReadElementCount(ref PayloadReader reader, uint k)
+        {
+            var elementCount = reader.ReadUInt32();
+            if (elementCount > k)
+            {
+                throw new InvalidDataException(
+                    $"Structure holds {elementCount} elements with room for {k}.");
+            }
+
+            reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
+            return elementCount;
+        }
+
+        private static void CheckRoom(uint k)
+        {
+            if (k == 0)
+            {
+                throw new InvalidDataException(
+                    "Structure has room for no elements, and indexes its empty heap on " +
+                    "the first add.");
+            }
+
+            // The constructor's own limit, so that every structure it builds reads back.
+            if (k > ElementHeap.MaxCapacity)
+            {
+                throw new InvalidDataException(
+                    $"Structure claims room for {k} elements, beyond anything this " +
+                    $"library builds: it tracks at most {ElementHeap.MaxCapacity}.");
+            }
         }
 
         /// <summary>

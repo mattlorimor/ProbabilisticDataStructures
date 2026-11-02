@@ -32,7 +32,9 @@ charged what it allocates: the payload, the copies made of runs within it, and t
 structure it builds. That is two or three times the structure, so the default reads a
 structure of up to roughly half a gigabyte. A larger one reads back with
 `ReadFrom(stream, new ReadOptions(bytes))` or `ReadOptions.Unlimited`, which is why the
-two numbers differ. `any` means every size the constructor builds reads back by default.
+two numbers differ. The default's refusal of a larger one names the bytes to pass: the
+whole of what the read is charged, worked out before anything is allocated, and a budget
+of that reads it. `any` means every size the constructor builds reads back by default.
 
 **Saves up to** is the largest that `WriteTo` can write, and for most structures it is
 the same as what they build, which the table says as `as built`. A structure is written

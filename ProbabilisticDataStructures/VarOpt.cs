@@ -783,23 +783,9 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.VarOpt);
-            var payload = PersistenceFormat.Read(stream, StructureId.VarOpt, out var hashId, budget);
-
-            if (hash is not null)
-            {
-                throw new InvalidDataException(
-                    "A VarOpt sample does not hash anything -- it keeps the items " +
-                    "themselves -- so it cannot be read with a supplied hash " +
-                    "function. Read it with the overload that takes none.");
-            }
-
-            if (hashId != HashId.None)
-            {
-                throw new InvalidDataException(
-                    $"Payload names hash function {(ushort)hashId}, and a VarOpt " +
-                    "sample does not hash anything. It was not written by this " +
-                    "structure.");
-            }
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.VarOpt, out _, budget, Price,
+                hash, CheckHash);
 
             var reader = new PayloadReader(payload, budget);
 
@@ -809,7 +795,112 @@ namespace ProbabilisticDataStructures
             var heavyCount = reader.ReadUInt32();
             var lightCount = reader.ReadUInt32();
             var lightWeight = reader.ReadDouble();
+            CheckCounts(k, n, heavyCount, lightCount, lightWeight);
 
+            // Its five regions, k + 1 slots each, whatever the payload holds: the
+            // sample's arithmetic assumes their size.
+            budget.Charge(RegionsCost(k));
+            var restored = new VarOpt(k, randomState)
+            {
+                N = n,
+                LightWeight = lightWeight,
+            };
+
+            for (uint i = 0; i < heavyCount; i++)
+            {
+                var item = reader.ReadBytes();
+                var weight = reader.ReadDouble();
+                if (double.IsNaN(weight) || double.IsInfinity(weight) || weight <= 0.0)
+                {
+                    throw new InvalidDataException(
+                        $"Structure holds an item at weight {weight}, which " +
+                        "insertion refuses, so nothing this library wrote holds one.");
+                }
+                restored.HeavyItems[restored.HeavyCount] = item;
+                restored.HeavyWeights[restored.HeavyCount] = weight;
+                restored.HeavyCount++;
+            }
+            if (lightCount > 0)
+            {
+                // A sampling heap is ordered here rather than trusted from the
+                // payload; one this library wrote is a heap already, and comes
+                // through unchanged. An exact sample is not a heap but its arrival
+                // order, which any order can be and which the transition to
+                // sampling heaps from, so it is kept as written: re-heaping it
+                // changes which of two tied items is contested first.
+                restored.Heapify();
+            }
+
+            for (uint i = 0; i < lightCount; i++)
+            {
+                restored.LightItems[restored.LightCount] = reader.ReadBytes();
+                restored.LightCount++;
+            }
+
+            reader.ExpectEnd();
+
+            return restored;
+        }
+
+        /// <summary>
+        /// Refuses a supplied hash, and a payload naming any hash but none: this
+        /// structure hashes nothing. See <see cref="HashCheck"/>.
+        /// </summary>
+        private static void CheckHash(HashId recorded, Func<ReadOnlySpan<byte>, ulong>? supplied)
+        {
+            if (supplied is not null)
+            {
+                throw new InvalidDataException(
+                    "A VarOpt sample does not hash anything -- it keeps the items " +
+                    "themselves -- so it cannot be read with a supplied hash " +
+                    "function. Read it with the overload that takes none.");
+            }
+
+            if (recorded != HashId.None)
+            {
+                throw new InvalidDataException(
+                    $"Payload names hash function {(ushort)recorded}, and a VarOpt " +
+                    "sample does not hash anything. It was not written by this " +
+                    "structure.");
+            }
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the five regions,
+        /// and the copy of each item. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var k = reader.ReadUInt32();
+            reader.ReadUInt64();
+            var n = reader.ReadUInt64();
+            var heavyCount = reader.ReadUInt32();
+            var lightCount = reader.ReadUInt32();
+            var lightWeight = reader.ReadDouble();
+            CheckCounts(k, n, heavyCount, lightCount, lightWeight);
+
+            reader.Budget.Price(RegionsCost(k));
+            for (uint i = 0; i < heavyCount; i++)
+            {
+                reader.SkipBytes();
+                reader.ReadDouble();
+            }
+            for (uint i = 0; i < lightCount; i++)
+            {
+                reader.SkipBytes();
+            }
+        }
+
+        /// <summary>The five regions of a sample of <paramref name="k"/>, k + 1 slots each.</summary>
+        private static long RegionsCost(uint k) =>
+            ReadBudget.Times(5, ReadBudget.ArrayOf((ulong)k + 1, sizeof(long)));
+
+        /// <summary>
+        /// Checks the counts a payload claims, as both the read and its price do before
+        /// the regions are allocated.
+        /// </summary>
+        private static void CheckCounts(uint k, ulong n, uint heavyCount, uint lightCount, double lightWeight)
+        {
             if (k == 0)
             {
                 throw new InvalidDataException(
@@ -889,50 +980,6 @@ namespace ProbabilisticDataStructures
                         $"{lightWeight}, which no positive weights can sum to.");
                 }
             }
-
-            // Its five regions, k + 1 slots each, whatever the payload holds: the
-            // sample's arithmetic assumes their size.
-            budget.Charge(ReadBudget.Times(5, ReadBudget.ArrayOf((ulong)k + 1, sizeof(long))));
-            var restored = new VarOpt(k, randomState)
-            {
-                N = n,
-                LightWeight = lightWeight,
-            };
-
-            for (uint i = 0; i < heavyCount; i++)
-            {
-                var item = reader.ReadBytes();
-                var weight = reader.ReadDouble();
-                if (double.IsNaN(weight) || double.IsInfinity(weight) || weight <= 0.0)
-                {
-                    throw new InvalidDataException(
-                        $"Structure holds an item at weight {weight}, which " +
-                        "insertion refuses, so nothing this library wrote holds one.");
-                }
-                restored.HeavyItems[restored.HeavyCount] = item;
-                restored.HeavyWeights[restored.HeavyCount] = weight;
-                restored.HeavyCount++;
-            }
-            if (lightCount > 0)
-            {
-                // A sampling heap is ordered here rather than trusted from the
-                // payload; one this library wrote is a heap already, and comes
-                // through unchanged. An exact sample is not a heap but its arrival
-                // order, which any order can be and which the transition to
-                // sampling heaps from, so it is kept as written: re-heaping it
-                // changes which of two tied items is contested first.
-                restored.Heapify();
-            }
-
-            for (uint i = 0; i < lightCount; i++)
-            {
-                restored.LightItems[restored.LightCount] = reader.ReadBytes();
-                restored.LightCount++;
-            }
-
-            reader.ExpectEnd();
-
-            return restored;
         }
     }
 }

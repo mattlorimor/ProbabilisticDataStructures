@@ -68,6 +68,7 @@ namespace TestProbabilisticDataStructures
             byte[] Bytes,
             Func<byte[], ReadOptions, object> Read,
             Func<byte[], ReadOptions, object> ReadWithHash,
+            Func<Stream, ReadOptions, object> ReadStream,
             Func<object, byte[]> Write,
             string RefusesAHashBecause = null,
             string SmallBecause = null);
@@ -79,9 +80,36 @@ namespace TestProbabilisticDataStructures
                 structure.ToByteArray(),
                 (bytes, options) => Persistence.FromByteArray<T>(bytes, options),
                 (bytes, options) => Persistence.FromByteArray<T>(bytes, DefaultHash, options),
+                (stream, options) => T.ReadFrom(stream, options),
                 restored => ((T)restored).ToByteArray(),
                 refusesAHashBecause,
                 smallBecause);
+
+        /// <summary>
+        /// A stream that can only be read forward, as a network stream or a pipe is: a
+        /// payload too large to hold is priced from one by reading past its runs rather
+        /// than seeking past them.
+        /// </summary>
+        private sealed class OneWay(byte[] bytes) : Stream
+        {
+            private readonly MemoryStream inner = new(bytes, writable: false);
+
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => throw new NotSupportedException();
+            public override long Position
+            {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+
+            public override int Read(byte[] buffer, int offset, int count) => this.inner.Read(buffer, offset, count);
+            public override void Flush() { }
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        }
 
         private static T Filled<T>(T structure, Action<T, byte[]> add, int count)
         {
@@ -395,6 +423,257 @@ namespace TestProbabilisticDataStructures
             StructureRoster.AssertCoversEveryStructure("read budget", Samples.Value.Keys);
         }
 
+        // ---- A refusal names one total, and that total loads -------------------------
+
+        /// <summary>
+        /// Every structure, under any budget too small for it, is refused naming the same
+        /// number, and a budget of exactly that number loads it the first time. The
+        /// number covers what the read allocates, and is what the read is charged when
+        /// nothing limits it.
+        /// </summary>
+        /// <remarks>
+        /// The refusal used to name the running total at the charge that failed, so its
+        /// own advice failed: a 1.89 GB <see cref="BloomFilter64"/> payload was refused
+        /// needing 1,893,049,288 bytes, refused again under exactly that at 1,893,049,496,
+        /// then at 3,786,098,576, and loaded at about 3.8 GB. The budgets tried here span
+        /// that ladder: nothing, less than the payload, the payload, half the total, and a
+        /// byte short of it. The refused reads below the payload's length are also shown
+        /// to have allocated less than that budget, so the total was worked out without
+        /// holding the payload it describes.
+        /// </remarks>
+        [TestMethod]
+        [DynamicData(nameof(Structures))]
+        public void TestEveryStructureIsRefusedNamingOneTotalThatLoads(string structure)
+        {
+            var id = Enum.Parse<StructureId>(structure);
+            Assert.IsTrue(Samples.Value.TryGetValue(id, out var sample),
+                $"{id} has no sample to read under a budget. Add one.");
+
+            AssertOneTotal(id, sample);
+            if (Further.Value.TryGetValue(id, out var further))
+            {
+                foreach (var (_, more) in further)
+                {
+                    AssertOneTotal(id, more);
+                }
+            }
+        }
+
+        private static void AssertOneTotal(StructureId id, Sample sample)
+        {
+            var bytes = sample.Bytes;
+            var payload = (long)bytes.Length - 18;
+            sample.Read(bytes, ReadOptions.Unlimited);
+
+            Assert.IsTrue(RefusedForBudget(() => sample.Read(bytes, new ReadOptions(0)), out var first),
+                $"{sample.Name} loaded under a budget of nothing");
+            var total = first!.RequiredBytes;
+
+            foreach (var budget in new[] { 1, payload / 2, payload, total / 2, total - 1 }.Distinct())
+            {
+                if (budget < 0 || budget >= total)
+                {
+                    continue;
+                }
+
+                Assert.IsTrue(RefusedForBudget(() => sample.Read(bytes, new ReadOptions(budget)), out var why),
+                    $"{sample.Name} loaded under {budget} bytes, below the {total} it was refused for needing");
+                Assert.AreEqual(total, why!.RequiredBytes,
+                    $"{sample.Name} refused under {budget} bytes named {why.RequiredBytes} needed, " +
+                    $"and {total} under none");
+                Assert.AreEqual(budget, why.MemoryBudget);
+            }
+
+            // From a stream that cannot seek, the runs are read past rather than skipped,
+            // and the total is the same.
+            Assert.IsTrue(RefusedForBudget(() => sample.ReadStream(new OneWay(bytes), new ReadOptions(0)), out var oneWay),
+                $"{sample.Name} loaded from a stream that cannot seek under a budget of nothing");
+            Assert.AreEqual(total, oneWay!.RequiredBytes,
+                $"{sample.Name} named {oneWay.RequiredBytes} bytes read from a stream that cannot seek, " +
+                $"and {total} from one that can");
+
+            Assert.IsFalse(RefusedForBudget(() => sample.Read(bytes, new ReadOptions(total)), out var again),
+                $"{sample.Name} was refused needing {total} bytes, and refused again under exactly that, " +
+                $"needing {again?.RequiredBytes}");
+            CollectionAssert.AreEqual(bytes, sample.Write(sample.Read(bytes, new ReadOptions(total))),
+                $"{sample.Name} read under the total it named does not write the bytes it was read from");
+
+            // What the read is charged with nothing to stop it, through the budget a nested
+            // read is handed, since that is the one whose charges can be read back.
+            var unlimited = new ReadBudget(long.MaxValue, id);
+            sample.Read(bytes, new ReadOptions(unlimited));
+            Assert.AreEqual(total, unlimited.Charged,
+                $"{sample.Name} named {total} bytes when refused and was charged {unlimited.Charged} " +
+                "when nothing limited it");
+
+            // And the reader, charging as it allocates, spends exactly that: the price and
+            // the charges are the same sums, so neither has drifted from the other.
+            Assert.AreEqual(unlimited.Charged, unlimited.Spent,
+                $"{sample.Name} was priced at {unlimited.Charged} bytes and its reader charged " +
+                $"{unlimited.Spent}");
+
+            var allocated = Allocated(() => sample.Read(bytes, new ReadOptions(total)));
+            Console.WriteLine(
+                $"[ONE-TOTAL] {sample.Name}: payload {payload}, total {total}, allocated {allocated}");
+            Assert.IsLessThanOrEqualTo(total + Slack, allocated,
+                $"{sample.Name}'s read allocated {allocated} bytes and named {total}");
+
+            // Refused below the payload's own length, the read cannot have held the payload
+            // to work out the total it named.
+            if (sample.SmallBecause is null)
+            {
+                var under = payload / 2;
+                var refused = Allocated(() =>
+                {
+                    RefusedForBudget(() => sample.Read(bytes, new ReadOptions(under)), out _);
+                    return new object();
+                });
+                Assert.IsLessThan(under, refused,
+                    $"{sample.Name} refused under {under} bytes, half its payload, had allocated {refused}");
+            }
+        }
+
+        /// <summary>
+        /// The defect's own shape, small: a 64-bit Bloom filter read under a budget too
+        /// small for it, and then under whatever each refusal says it needs. It loads on
+        /// the second attempt, as the refusal promises; it took four.
+        /// </summary>
+        [TestMethod]
+        public void TestFollowingTheRefusalLoadsOnTheNextAttempt()
+        {
+            var bytes = Filled(new BloomFilter64(200_000, 0.01), (f, k) => f.Add(k), 1000).ToByteArray();
+
+            var budget = 1024L;
+            var named = new List<long>();
+            while (RefusedForBudget(() => Persistence.FromByteArray<BloomFilter64>(bytes, new ReadOptions(budget)), out var why))
+            {
+                Assert.IsGreaterThan(budget, why.RequiredBytes, "a refusal named no more than it was given");
+                named.Add(why.RequiredBytes);
+                budget = why.RequiredBytes;
+                Assert.IsLessThan(10, named.Count, "a read kept being refused");
+            }
+
+            Assert.HasCount(1, named,
+                $"a {bytes.Length}-byte filter was refused {named.Count} times following each refusal's " +
+                $"advice, naming {string.Join(", then ", named)}");
+        }
+
+        /// <summary>
+        /// A structure that holds others is priced with them: the total its refusal names
+        /// is at least what each structure it holds would name read on its own, together,
+        /// and the payload holding them.
+        /// </summary>
+        /// <remarks>
+        /// The nested structures are read from runs inside the outer payload, each its own
+        /// envelope, and nothing about them is known until those runs are looked into. A
+        /// price taken from the outer header alone, or one that stopped at the first
+        /// nested envelope, falls short of this by every structure held.
+        /// </remarks>
+        [TestMethod]
+        public void TestANestedStructureIsPricedWithEverythingItHolds()
+        {
+            var scalable = Filled(new ScalableBloomFilter(500, 0.01, 0.8), (f, k) => f.Add(k), 10_000);
+            Assert.IsGreaterThan(3, scalable.Filters.Count, "the scalable filter never grew");
+            AssertPricedWithWhatItHolds<ScalableBloomFilter>(
+                scalable.ToByteArray(),
+                scalable.Filters.Select(filter => Total<PartitionedBloomFilter>(filter.ToByteArray())));
+
+            // TopK holds one count-min sketch, the first run after k and n.
+            var topK = Filled(new TopK(0.0005, 0.01, 50), (t, k) => t.Add(k), 2000);
+            var topKBytes = topK.ToByteArray();
+            var run = (int)BinaryPrimitives.ReadUInt32LittleEndian(topKBytes.AsSpan(PayloadStart + 8));
+            var sketch = topKBytes.AsSpan(PayloadStart + 12, run).ToArray();
+            AssertPricedWithWhatItHolds<TopK>(topKBytes, new[] { Total<CountMinSketch>(sketch) });
+        }
+
+        /// <summary>
+        /// A windowed sketch is priced with the plan its checkpoints lay out, and the price
+        /// cannot build the checkpoints to count them: the list they are built from is the
+        /// substream size long, which is what is being priced. The count it works out
+        /// instead is the length of the array the read builds, at every size up to a few
+        /// thousand and at factors from coarse to fine, and at sizes far past those.
+        /// </summary>
+        [TestMethod]
+        public void TestTheCheckpointCountAPriceUsesIsTheOneTheReadBuilds()
+        {
+            var alphas = new[] { 0.001, 0.01, 0.05, 0.1, 0.25, 1.0 / 3, 0.5, 0.75, 0.9, 0.999 };
+            var compared = 0;
+            foreach (var alpha in alphas)
+            {
+                for (var size = 1; size <= 3000; size += size < 64 ? 1 : 37)
+                {
+                    Assert.AreEqual(DpswSketch.Checkpoints(size, alpha).Length,
+                        DpswSketch.CheckpointCount(size, alpha), $"substream {size}, alpha {alpha}");
+                    compared++;
+                }
+            }
+
+            foreach (var (size, alpha) in new[] { (200_000, 0.5), (65_536, 0.01), (100_003, 0.3) })
+            {
+                Assert.AreEqual(DpswSketch.Checkpoints(size, alpha).Length,
+                    DpswSketch.CheckpointCount(size, alpha), $"substream {size}, alpha {alpha}");
+                compared++;
+            }
+
+            Assert.IsGreaterThan(1000, compared);
+        }
+
+        /// <summary>
+        /// A read whose reader charges past its price -- a price that missed something --
+        /// still goes no further than its budget: the charges past the price are held to
+        /// the limit, as every charge was before reads were priced, and the refusal then
+        /// names what had been charged. No structure's read gets here, since the sweep
+        /// holds every price to its reader's charges; this is what keeps a mistake in a
+        /// future price from being a way past the budget.
+        /// </summary>
+        [TestMethod]
+        public void TestAChargePastThePriceIsStillHeldToTheLimit()
+        {
+            var budget = new ReadBudget(150, StructureId.BloomFilter);
+            budget.Price(100);
+            budget.Settle();
+            Assert.IsTrue(budget.IsSettled);
+
+            budget.Charge(100);
+            Assert.AreEqual(100L, budget.Charged);
+            budget.Charge(20);
+            Assert.AreEqual(120L, budget.Spent);
+            Assert.AreEqual(120L, budget.Charged, "a charge past the price was not counted");
+            budget.Charge(30);
+
+            var refusal = Assert.ThrowsExactly<InvalidDataException>(() => budget.Charge(1));
+            var why = Assert.IsInstanceOfType<ReadBudgetExceededException>(refusal.InnerException);
+            Assert.AreEqual(151L, why.RequiredBytes);
+            Assert.AreEqual(150L, why.MemoryBudget);
+
+            var priced = new ReadBudget(150, StructureId.BloomFilter);
+            priced.Price(151);
+            Assert.ThrowsExactly<InvalidDataException>(priced.Settle);
+            Assert.IsFalse(priced.IsSettled);
+        }
+
+        private static long Total<T>(byte[] bytes) where T : IBinaryPersistable<T>
+        {
+            Assert.IsTrue(RefusedForBudget(() => Persistence.FromByteArray<T>(bytes, new ReadOptions(0)), out var why),
+                $"a {typeof(T).Name} loaded under a budget of nothing");
+            return why!.RequiredBytes;
+        }
+
+        private static void AssertPricedWithWhatItHolds<T>(byte[] bytes, IEnumerable<long> held)
+            where T : IBinaryPersistable<T>
+        {
+            var parts = held.ToArray();
+            var floor = parts.Sum() + bytes.Length;
+            var total = Total<T>(bytes);
+            Console.WriteLine(
+                $"[NESTED] {typeof(T).Name}: payload {bytes.Length}, {parts.Length} held at {parts.Sum()}, total {total}");
+            Assert.IsGreaterThanOrEqualTo(floor, total,
+                $"a {typeof(T).Name} holding {parts.Length} structures named {total} bytes, and they " +
+                $"name {parts.Sum()} read alone, besides its own {bytes.Length}-byte payload");
+            Assert.IsFalse(RefusedForBudget(() => Persistence.FromByteArray<T>(bytes, new ReadOptions(total)), out _),
+                $"a {typeof(T).Name} was refused under the {total} bytes it named");
+        }
+
         // ---- A header claiming more than the budget is refused, before allocating --
 
         /// <summary>
@@ -407,7 +686,12 @@ namespace TestProbabilisticDataStructures
         {
             var bytes = (byte[])original.Clone();
             BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(PayloadStart + payloadOffset), value);
+            return Reseal(bytes);
+        }
 
+        /// <summary>Rewrites the envelope's checksum over a payload edited in place.</summary>
+        private static byte[] Reseal(byte[] bytes)
+        {
             var crc = new Crc32();
             crc.Append(bytes.AsSpan(4, bytes.Length - 8));
             BinaryPrimitives.WriteUInt32LittleEndian(
@@ -572,6 +856,233 @@ namespace TestProbabilisticDataStructures
             AssertRefusedBeforeAllocating<BloomFilter64>(Poke(bytes, 29, 1_000_000), 8L * 1_000_000);
         }
 
+        // ---- A payload wrong in its shape is refused for that, whatever the budget -----
+
+        /// <summary>
+        /// A payload malformed in one field its price reads is refused for that field
+        /// under a budget it would also fail, not for the budget: the price runs the
+        /// reader's shape checks, in the reader's order, before it prices what follows.
+        /// Without them a price walks on past the field and names a total, and the
+        /// payload is refused for its shape only once the caller has raised the budget
+        /// to that total.
+        /// </summary>
+        /// <remarks>
+        /// The budget is one byte short of what the unedited payload names. A price that
+        /// skipped the check would walk the rest of the payload as it would the
+        /// unedited one, and so price at least that much.
+        /// </remarks>
+        private static void AssertRefusedForItsShape<T>(byte[] unedited, byte[] edited, string because)
+            where T : IBinaryPersistable<T>
+        {
+            Assert.IsTrue(
+                RefusedForBudget(() => Persistence.FromByteArray<T>(unedited, new ReadOptions(1)), out var whole),
+                $"an unedited {typeof(T).Name} was not refused under a budget of one byte");
+            var budget = whole.RequiredBytes - 1;
+
+            var e = Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<T>(edited, new ReadOptions(budget)));
+            Assert.IsNotInstanceOfType<ReadBudgetExceededException>(e.InnerException,
+                $"an edited {typeof(T).Name} was refused for its budget, not its shape: {e.Message}");
+            StringAssert.Contains(e.Message, because);
+        }
+
+        private static byte[] PokeByte(byte[] original, int payloadOffset, byte value)
+        {
+            var bytes = (byte[])original.Clone();
+            bytes[PayloadStart + payloadOffset] = value;
+            return Reseal(bytes);
+        }
+
+        private static byte[] Poke64(byte[] original, int payloadOffset, ulong value)
+        {
+            var bytes = (byte[])original.Clone();
+            BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(PayloadStart + payloadOffset), value);
+            return Reseal(bytes);
+        }
+
+        /// <summary>A top-k claiming more elements than it tracks.</summary>
+        [TestMethod]
+        public void TestATopKHoldingMoreThanItTracksIsRefusedForThat()
+        {
+            var bytes = Filled(new TopK(0.001, 0.01, 50), (s, k) => s.Add(k), 2000).ToByteArray();
+
+            // u32 k, u32 n, then the nested sketch's u32 length and its bytes, then the
+            // element count.
+            var nested = (int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + 8));
+            AssertRefusedForItsShape<TopK>(bytes, Poke(bytes, 12 + nested, 1_000_000), "with room for 50");
+        }
+
+        /// <summary>A Grafite claiming a universe past the largest it can reduce to.</summary>
+        [TestMethod]
+        public void TestAGrafiteUniverseTooLargeIsRefusedForThat()
+        {
+            var bytes = Grafite.Build(
+                Enumerable.Range(0, 20_000).Select(i => (ulong)i * 1009), 0.01, 64, seed: 7).ToByteArray();
+
+            // The u64 reduced universe comes first.
+            AssertRefusedForItsShape<Grafite>(bytes, Poke64(bytes, 0, ulong.MaxValue), "beyond anything");
+        }
+
+        /// <summary>A DPSW window with a substream holding nothing.</summary>
+        [TestMethod]
+        public void TestADpswSubstreamHoldingNothingIsRefusedForThat()
+        {
+            var bytes = Filled(
+                new DpswSketch(2000, 1.0, width: 1024, depth: 3, seed: 1), (s, k) => s.Add(k), 5000).ToByteArray();
+
+            // u64 window, f64 budget, f64 checkpoint factor, u32 substream size, u32
+            // width, u32 depth, u64 items seen, u32 substream count, then the first
+            // substream's u64 position and, at 56, its u32 item count.
+            AssertRefusedForItsShape<DpswSketch>(bytes, Poke(bytes, 56, 0), "holds 0 of a possible");
+        }
+
+        /// <summary>A partition whose bucket width disagrees with its data's length.</summary>
+        [TestMethod]
+        public void TestAPartitionWhoseDataDisagreesWithItsWidthIsRefusedForThat()
+        {
+            var bytes = Filled(new PartitionedBloomFilter(100_000, 0.01), (s, k) => s.Add(k), 5000).ToByteArray();
+
+            // u32 m, u32 k, u32 s, u8 placement, u64 count, u32 partition count, then the
+            // first partition's u32 bucket count and, at 29, its u8 bucket width.
+            AssertRefusedForItsShape<PartitionedBloomFilter>(bytes, PokeByte(bytes, 29, 2), "were stored");
+        }
+
+        /// <summary>
+        /// A cuckoo entry placed in a bucket the table does not have, in a version 2
+        /// payload: before version 3 each fingerprint is a run of its own, which the
+        /// price walks the entries to price. A packed payload is priced at its table,
+        /// which the reader charges before it reads an entry, so a budget refusal comes
+        /// first in both.
+        /// </summary>
+        [TestMethod]
+        public void TestACuckooEntryOutsideItsTableIsRefusedForThat()
+        {
+            using var resource = typeof(TestReadBudget).Assembly.GetManifestResourceStream(
+                "TestProbabilisticDataStructures.fixtures.cuckoobloomfilter-v2.bin")
+                ?? throw new InvalidOperationException("the version 2 cuckoo fixture is not embedded");
+            using var buffer = new MemoryStream();
+            resource.CopyTo(buffer);
+            var bytes = buffer.ToArray();
+
+            // u32 m, u32 b, u32 f, u32 count, u32 n, u32 occupied entry count, then the
+            // first entry's u32 bucket index.
+            AssertRefusedForItsShape<CuckooBloomFilter>(bytes, Poke(bytes, 24, uint.MaxValue), "outside its");
+        }
+
+        /// <summary>
+        /// A quotient filter claiming a remainder wider than its hash, a table that would
+        /// be priced well past the budget. Not a quotient too wide: the slot count is a
+        /// 32-bit shift, which wraps a quotient past 32 to a small table.
+        /// </summary>
+        [TestMethod]
+        public void TestAQuotientFilterSplitWiderThanItsHashIsRefusedForThat()
+        {
+            var bytes = Filled(new QuotientFilter(50_000, 0.001), (f, k) => f.Add(k), 5000).ToByteArray();
+
+            // u32 quotient bits, then the u32 remainder bits.
+            AssertRefusedForItsShape<QuotientFilter>(bytes, Poke(bytes, 4, 1_000_000), "not a split of a");
+        }
+
+        /// <summary>An infini filter table claiming an address narrower than any it builds.</summary>
+        [TestMethod]
+        public void TestAnInfiniTableTooNarrowIsRefusedForThat()
+        {
+            var bytes = Filled(new InfiniFilter(10_000), (f, k) => f.Add(k), 20_000).ToByteArray();
+
+            // u64 items, u32 doublings, u32 table count, then the first table's u32
+            // address bits.
+            AssertRefusedForItsShape<InfiniFilter>(bytes, Poke(bytes, 16, 1), "bits of address");
+        }
+
+        /// <summary>A theta sketch claiming to retain no values, a size none is built at.</summary>
+        [TestMethod]
+        public void TestAThetaSketchRetainingNothingIsRefusedForThat()
+        {
+            var bytes = Filled(new ThetaSketch(4096), (s, k) => s.Add(k), 100_000).ToByteArray();
+
+            // The u32 retained size comes first.
+            AssertRefusedForItsShape<ThetaSketch>(bytes, Poke(bytes, 0, 0), "not a size this");
+        }
+
+        // ---- A hash its reader refuses is refused for that, whatever the budget --------
+
+        /// <summary>Where the envelope's header names the hash a payload was written with.</summary>
+        private const int HashIdOffset = 8;
+
+        /// <summary>
+        /// A payload whose header names a hash its reader will not read it with is
+        /// refused for that under any budget, with the refusal it gets under none: under
+        /// a budget too small to hold the payload, and under one byte short of the whole
+        /// read, where it is held and checksummed. Which hash a payload names is in its
+        /// header, and which one it is read with is the caller's to say, so nothing past
+        /// the header bears on it. Refused only once the budget had been raised to the
+        /// total, the payload would have been priced, and held, for a read that cannot
+        /// happen.
+        /// </summary>
+        /// <remarks>
+        /// Two hash ids, both read without a hash supplied, which every reader refuses:
+        /// one no version defines, and the one a function set through <c>SetHash</c> is
+        /// recorded as. A structure that hashes nothing also refuses a hash supplied to
+        /// it, which says nothing about the payload at all.
+        /// </remarks>
+        [TestMethod]
+        [DynamicData(nameof(Structures))]
+        public void TestEveryStructureRefusesAHashItCannotUseWhateverTheBudget(string structure)
+        {
+            var id = Enum.Parse<StructureId>(structure);
+            Assert.IsTrue(Samples.Value.TryGetValue(id, out var sample),
+                $"{id} has no sample to read under a budget. Add one.");
+
+            Assert.IsTrue(RefusedForBudget(() => sample.Read(sample.Bytes, new ReadOptions(1)), out var whole),
+                $"{sample.Name} was not refused under a budget of one byte");
+            var budgets = new[] { 1L, whole.RequiredBytes - 1 };
+
+            foreach (var hash in new[] { (ushort)0xBEEF, (ushort)HashId.Custom })
+            {
+                var bytes = (byte[])sample.Bytes.Clone();
+                BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(HashIdOffset), hash);
+                Reseal(bytes);
+                AssertRefusedAsUnderNoBudget(
+                    $"{sample.Name} naming hash {hash}", options => sample.Read(bytes, options), budgets);
+            }
+
+            if (sample.RefusesAHashBecause is not null)
+            {
+                AssertRefusedAsUnderNoBudget(
+                    $"{sample.Name} read with a hash", options => sample.ReadWithHash(sample.Bytes, options), budgets);
+            }
+        }
+
+        /// <summary>
+        /// A payload damaged in the hash id its header names is refused as damaged when it
+        /// is held, and not for the hash: the hash is checked once the checksum has vouched
+        /// for the header that names it.
+        /// </summary>
+        [TestMethod]
+        public void TestAHeldPayloadDamagedInItsHashIdIsRefusedAsDamaged()
+        {
+            var bytes = (byte[])Samples.Value[StructureId.BloomFilter].Bytes.Clone();
+            bytes[HashIdOffset] ^= 0x40;
+
+            var e = Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<BloomFilter>(bytes, ReadOptions.Unlimited));
+            StringAssert.Contains(e.Message, "checksum does not match");
+        }
+
+        private static void AssertRefusedAsUnderNoBudget(string what, Func<ReadOptions, object> read, long[] budgets)
+        {
+            var unlimited = Assert.ThrowsExactly<InvalidDataException>(
+                () => read(ReadOptions.Unlimited), $"{what} was read");
+
+            foreach (var budget in budgets)
+            {
+                var e = Assert.ThrowsExactly<InvalidDataException>(() => read(new ReadOptions(budget)));
+                Assert.IsNotInstanceOfType<ReadBudgetExceededException>(e.InnerException,
+                    $"{what} under {budget:N0} bytes was refused for its budget, where under none: {unlimited.Message}");
+                Assert.AreEqual(unlimited.Message, e.Message, $"{what} under {budget:N0} bytes");
+            }
+        }
+
         // ---- The default, the options, and the refusal --------------------------------
 
         /// <summary>
@@ -596,7 +1107,8 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// The refusal is an <see cref="InvalidDataException"/>, which existing callers
         /// already catch, distinguishable from corruption by its inner exception, and it
-        /// says what was needed, what was allowed, and how to allow more.
+        /// says what was needed, what was allowed, and how to allow more -- each once, so
+        /// that there is one number to act on and it is the one that works.
         /// </summary>
         [TestMethod]
         public void TestTheRefusalNamesItsNeedTheBudgetAndTheOverload()
@@ -609,10 +1121,32 @@ namespace TestProbabilisticDataStructures
 
             Assert.AreEqual(1000, why.MemoryBudget);
             Assert.IsGreaterThan(1000L, why.RequiredBytes);
-            StringAssert.Contains(refusal.Message, why.RequiredBytes.ToString("N0", System.Globalization.CultureInfo.InvariantCulture));
-            StringAssert.Contains(refusal.Message, "1,000");
-            StringAssert.Contains(refusal.Message, "ReadOptions");
-            StringAssert.Contains(refusal.Message, "BloomFilter");
+            Assert.AreEqual(refusal.Message, why.Message);
+
+            // The total as a C# literal, digits grouped, inside the call that reads it.
+            var invariant = System.Globalization.CultureInfo.InvariantCulture;
+            var literal = why.RequiredBytes.ToString("N0", invariant).Replace(',', '_');
+            Assert.AreEqual(1, Occurrences(refusal.Message, $"BloomFilter.ReadFrom(stream, new ReadOptions({literal}))"),
+                refusal.Message);
+            Assert.AreEqual(1, Occurrences(refusal.Message, literal), refusal.Message);
+            Assert.AreEqual(0, Occurrences(refusal.Message, why.RequiredBytes.ToString("N0", invariant)),
+                $"the total is named twice: {refusal.Message}");
+            Assert.AreEqual(0, Occurrences(refusal.Message, why.RequiredBytes.ToString(invariant)),
+                $"the total is named twice: {refusal.Message}");
+            Assert.AreEqual(1, Occurrences(refusal.Message, "1,000"), refusal.Message);
+            Assert.AreEqual(1, Occurrences(refusal.Message, "ReadFrom("), refusal.Message);
+            Assert.DoesNotContain("at least", refusal.Message);
+        }
+
+        private static int Occurrences(string text, string part)
+        {
+            var count = 0;
+            for (var at = text.IndexOf(part, StringComparison.Ordinal); at >= 0;
+                 at = text.IndexOf(part, at + part.Length, StringComparison.Ordinal))
+            {
+                count++;
+            }
+            return count;
         }
 
         /// <summary>

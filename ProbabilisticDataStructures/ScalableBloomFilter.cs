@@ -486,33 +486,101 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.ScalableBloomFilter);
+
+            // The hash this header names is the contained filters', written from the
+            // first of them, and each of theirs is checked again as it is read. It is
+            // checked here as well, so that a filter written with a hash it is not read
+            // with is refused before the read is priced rather than once its budget has
+            // been raised to read it.
             var payload = PersistenceFormat.Read(
-                stream, StructureId.ScalableBloomFilter, out _, out var version, budget);
+                stream, StructureId.ScalableBloomFilter, out _, out var version, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var r = reader.ReadDouble();
             var fp = reader.ReadDouble();
             var p = reader.ReadDouble();
             var hint = reader.ReadUInt32();
+            var growth = ReadGrowth(ref reader, version);
+            var filterCount = ReadFilterCount(ref reader);
 
-            // A payload from before version 7 carries no growth factor because the filter
-            // that wrote it had none: every filter then built each of its filters for the
-            // hint, so that is how this one goes on. One, and not the default a new
-            // filter is given, which would size its next filter as that filter never did.
-            var growth = 1u;
-            if (version >= PersistenceFormat.ScalableGrowthVersion)
+            budget.Charge(FiltersCost(filterCount));
+            var filters = new List<PartitionedBloomFilter>((int)filterCount);
+            for (uint i = 0; i < filterCount; i++)
             {
-                growth = reader.ReadUInt32();
-                if (growth < 2)
-                {
-                    throw new InvalidDataException(
-                        $"Filter claims a growth factor of {growth}. A payload at version " +
-                        $"{version} carries one only because its filter grows: zero would " +
-                        "size every filter after the first for no items, and a filter " +
-                        "growing by one writes version 1.");
-                }
+                filters.Add(PersistenceFormat.ReadNested<PartitionedBloomFilter>(ref reader, hash));
             }
 
+            reader.ExpectEnd();
+
+            return new ScalableBloomFilter
+            {
+                Filters = filters,
+                R = r,
+                FP = fp,
+                P = p,
+                Hint = hint,
+                Growth = growth,
+            };
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the list of
+        /// contained filters and the whole of each one's nested read, priced from its
+        /// envelope where it lies in this payload. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            reader.ReadDouble();
+            reader.ReadDouble();
+            reader.ReadDouble();
+            reader.ReadUInt32();
+            ReadGrowth(ref reader, version);
+            var filterCount = ReadFilterCount(ref reader);
+
+            reader.Budget.Price(FiltersCost(filterCount));
+            for (uint i = 0; i < filterCount; i++)
+            {
+                PersistenceFormat.PriceNested(
+                    ref reader, StructureId.PartitionedBloomFilter, PartitionedBloomFilter.Price);
+            }
+        }
+
+        /// <summary>
+        /// Reads the growth factor, from the version that carries one, as both the read
+        /// and its price do.
+        /// </summary>
+        /// <remarks>
+        /// A payload from before version 7 carries no growth factor because the filter
+        /// that wrote it had none: every filter then built each of its filters for the
+        /// hint, so that is how this one goes on. One, and not the default a new filter
+        /// is given, which would size its next filter as that filter never did.
+        /// </remarks>
+        private static uint ReadGrowth(ref PayloadReader reader, ushort version)
+        {
+            if (version < PersistenceFormat.ScalableGrowthVersion)
+            {
+                return 1u;
+            }
+
+            var growth = reader.ReadUInt32();
+            if (growth < 2)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims a growth factor of {growth}. A payload at version " +
+                    $"{version} carries one only because its filter grows: zero would " +
+                    "size every filter after the first for no items, and a filter " +
+                    "growing by one writes version 1.");
+            }
+            return growth;
+        }
+
+        /// <summary>
+        /// Reads the count of contained filters, checked as both the read and its price
+        /// check it before the list is sized by it.
+        /// </summary>
+        private static uint ReadFilterCount(ref PayloadReader reader)
+        {
             var filterCount = reader.ReadUInt32();
             if (filterCount == 0)
             {
@@ -532,27 +600,12 @@ namespace ProbabilisticDataStructures
             }
             reader.RequireHolds(
                 filterCount, PersistenceFormat.MinNestedLength, "contained filters");
-
-            budget.Charge(ReadBudget.Sum(
-                ReadBudget.ArrayOf(filterCount, sizeof(long)), ReadBudget.SmallObject));
-            var filters = new List<PartitionedBloomFilter>((int)filterCount);
-            for (uint i = 0; i < filterCount; i++)
-            {
-                filters.Add(PersistenceFormat.ReadNested<PartitionedBloomFilter>(ref reader, hash));
-            }
-
-            reader.ExpectEnd();
-
-            return new ScalableBloomFilter
-            {
-                Filters = filters,
-                R = r,
-                FP = fp,
-                P = p,
-                Hint = hint,
-                Growth = growth,
-            };
+            return filterCount;
         }
+
+        /// <summary>The list holding <paramref name="filterCount"/> contained filters.</summary>
+        private static long FiltersCost(uint filterCount) => ReadBudget.Sum(
+            ReadBudget.ArrayOf(filterCount, sizeof(long)), ReadBudget.SmallObject);
 
         /// <summary>
         /// Used only by <see cref="Read"/>, which sets every field itself.

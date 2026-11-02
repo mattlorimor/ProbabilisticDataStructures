@@ -801,32 +801,80 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.SetSketch);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.SetSketch, out var hashId, out var version, budget);
+                stream, StructureId.SetSketch, out var hashId, out var version, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var b = reader.ReadDouble();
             var a = reader.ReadDouble();
             var m = reader.ReadUInt32();
             var q = reader.ReadUInt32();
+            var variant = ReadVariant(ref reader, version);
+            CheckShape(b, a, m, q);
 
-            // Payloads written before the second variant existed carry no variant byte
-            // and are the first variant by definition, which is what keeps them
-            // readable rather than merely tolerated.
-            var variant = SetSketchVariant.SetSketch1;
-            if (version >= PersistenceFormat.SetSketchVariantVersion)
+            // Every register is written, so they are checked against the bytes behind
+            // them before the arrays are allocated.
+            reader.RequireHolds(m, sizeof(ushort), "registers");
+
+            // The registers, and the two arrays that order their updates.
+            budget.Charge(RegistersCost(m));
+            var sketch = new SetSketch(
+                (int)m, b, a, (int)q,
+                PersistenceFormat.ResolveOrThrow(hashId, hash),
+                variant);
+
+            for (var i = 0; i < m; i++)
             {
-                var stored = reader.ReadByte();
-                if (stored != (byte)SetSketchVariant.SetSketch2)
+                var register = reader.ReadUInt16();
+                if (register > q + 1)
                 {
                     throw new InvalidDataException(
-                        $"Sketch names construction {stored}. A payload at version " +
-                        $"{version} carries a variant byte, and the only one it is " +
-                        "written with is the second construction -- the first writes " +
-                        "no byte at all.");
+                        $"Register {i} holds {register}, above the {q + 1} this " +
+                        "sketch's ceiling allows. It was not written by a sketch with " +
+                        "these parameters.");
                 }
-                variant = SetSketchVariant.SetSketch2;
+                sketch.registers[i] = register;
             }
 
+            reader.ExpectEnd();
+
+            sketch.RescanLowerBound();
+            return sketch;
+        }
+
+        /// <summary>
+        /// Reads the variant byte a payload carries from the version that has one.
+        /// </summary>
+        /// <remarks>
+        /// Payloads written before the second variant existed carry no variant byte and
+        /// are the first variant by definition, which is what keeps them readable rather
+        /// than merely tolerated.
+        /// </remarks>
+        private static SetSketchVariant ReadVariant(ref PayloadReader reader, ushort version)
+        {
+            if (version < PersistenceFormat.SetSketchVariantVersion)
+            {
+                return SetSketchVariant.SetSketch1;
+            }
+
+            var stored = reader.ReadByte();
+            if (stored != (byte)SetSketchVariant.SetSketch2)
+            {
+                throw new InvalidDataException(
+                    $"Sketch names construction {stored}. A payload at version " +
+                    $"{version} carries a variant byte, and the only one it is " +
+                    "written with is the second construction -- the first writes " +
+                    "no byte at all.");
+            }
+            return SetSketchVariant.SetSketch2;
+        }
+
+        /// <summary>
+        /// Checks the shape a payload claims, as both the read and its price do before
+        /// the registers are allocated.
+        /// </summary>
+        private static void CheckShape(double b, double a, uint m, uint q)
+        {
             if (double.IsNaN(b) || b <= 1 || b > 2)
             {
                 throw new InvalidDataException(
@@ -853,38 +901,31 @@ namespace ProbabilisticDataStructures
                     $"Sketch claims a ceiling of {q}, and a register holds two bytes " +
                     "and has to hold one more than the ceiling.");
             }
-
-            // Every register is written, so they are checked against the bytes behind
-            // them before the arrays are allocated.
-            reader.RequireHolds(m, sizeof(ushort), "registers");
-
-            // The registers, and the two arrays that order their updates.
-            budget.Charge(ReadBudget.Sum(
-                ReadBudget.ArrayOf(m, sizeof(ushort)),
-                ReadBudget.Times(2, ReadBudget.ArrayOf(m, sizeof(uint)))));
-            var sketch = new SetSketch(
-                (int)m, b, a, (int)q,
-                PersistenceFormat.ResolveOrThrow(hashId, hash),
-                variant);
-
-            for (var i = 0; i < m; i++)
-            {
-                var register = reader.ReadUInt16();
-                if (register > q + 1)
-                {
-                    throw new InvalidDataException(
-                        $"Register {i} holds {register}, above the {q + 1} this " +
-                        "sketch's ceiling allows. It was not written by a sketch with " +
-                        "these parameters.");
-                }
-                sketch.registers[i] = register;
-            }
-
-            reader.ExpectEnd();
-
-            sketch.RescanLowerBound();
-            return sketch;
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the registers and
+        /// the two arrays that order their updates. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var b = reader.ReadDouble();
+            var a = reader.ReadDouble();
+            var m = reader.ReadUInt32();
+            var q = reader.ReadUInt32();
+            ReadVariant(ref reader, version);
+            CheckShape(b, a, m, q);
+
+            reader.RequireHolds(m, sizeof(ushort), "registers");
+            reader.Budget.Price(RegistersCost(m));
+        }
+
+        /// <summary>
+        /// <paramref name="m"/> registers, and the two arrays that order their updates.
+        /// </summary>
+        private static long RegistersCost(uint m) => ReadBudget.Sum(
+            ReadBudget.ArrayOf(m, sizeof(ushort)),
+            ReadBudget.Times(2, ReadBudget.ArrayOf(m, sizeof(uint))));
 
         /// <summary>
         /// Sets the hashing function used in the sketch.

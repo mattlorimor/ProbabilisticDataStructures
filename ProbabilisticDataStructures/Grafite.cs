@@ -906,21 +906,9 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.Grafite);
-            var payload = PersistenceFormat.Read(stream, StructureId.Grafite, out var hashId, budget);
-
-            if (hash is not null)
-            {
-                throw new InvalidDataException(
-                    "A Grafite filter holds numbers rather than bytes -- a range is a " +
-                    "question about order -- so it cannot be read with a supplied " +
-                    "hash function. Read it with the overload that takes none.");
-            }
-            if (hashId != HashId.None)
-            {
-                throw new InvalidDataException(
-                    $"Payload names hash function {(ushort)hashId}, and a Grafite " +
-                    "filter does not hash bytes. It was not written by this structure.");
-            }
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.Grafite, out _, budget, Price,
+                hash, CheckHash);
 
             var reader = new PayloadReader(payload, budget);
             var filter = new Grafite
@@ -936,85 +924,24 @@ namespace ProbabilisticDataStructures
                 FirstCode = reader.ReadUInt64(),
                 LastCode = reader.ReadUInt64(),
             };
-
-            if (filter.R < 1)
-            {
-                throw new InvalidDataException(
-                    "Filter claims a reduced universe of nothing, which every key " +
-                    "would hash into and no range could be tested against.");
-            }
-            // The builder's own limit, so that nothing it refuses reads. Every release has
-            // capped the universe here, so a payload written for a request that is now
-            // refused carries exactly this, and reads.
-            if (filter.R > MaxUniverse)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims a reduced universe of {filter.R}, beyond anything this " +
-                    $"library builds: the hash works modulo 2^61 - 1, so it is at most " +
-                    $"{MaxUniverse}.");
-            }
-            if (filter.C1 == 0 || filter.C1 >= Prime || filter.C2 >= Prime)
-            {
-                throw new InvalidDataException(
-                    "Filter carries hash parameters this library never draws: the " +
-                    "multiplier must be non-zero and both must fall below the modulus.");
-            }
-            if (filter.LowBits > 64)
-            {
-                throw new InvalidDataException(
-                    $"Filter splits its codes at {filter.LowBits} low bits, and a " +
-                    "code is sixty-four bits wide.");
-            }
-            if (filter.CodeCount < 0 || (ulong)filter.CodeCount > filter.KeyCount)
-            {
-                throw new InvalidDataException(
-                    $"Filter holds {filter.CodeCount} hash codes for " +
-                    $"{filter.KeyCount} keys, and hashing never produces more codes " +
-                    "than the keys it was given.");
-            }
-            if (filter.CodeCount > 0 && filter.FirstCode > filter.LastCode)
-            {
-                throw new InvalidDataException(
-                    $"Filter's smallest code {filter.FirstCode} exceeds its largest " +
-                    $"{filter.LastCode}.");
-            }
-            if (filter.CodeCount > 0 && filter.LastCode >= filter.R)
-            {
-                throw new InvalidDataException(
-                    $"Filter holds the code {filter.LastCode}, outside its own " +
-                    $"reduced universe of {filter.R}.");
-            }
+            CheckFields(
+                filter.R, filter.C1, filter.C2, filter.KeyCount, filter.LowBits,
+                filter.CodeCount, filter.FirstCode, filter.LastCode);
 
             // The builder's own limits, so that every filter it builds reads back. Both
             // arrays are written whole, so each is checked against the bytes behind it
             // before it is allocated.
-            var lowWords = reader.ReadUInt32();
-            if (lowWords > MaxLowWords)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims {lowWords} words of low bits, beyond anything " +
-                    $"this library builds: they are one array, of at most {MaxLowWords}.");
-            }
-            reader.RequireHolds(lowWords, sizeof(ulong), "words of low bits");
-            budget.Charge(ReadBudget.ArrayOf(lowWords, sizeof(ulong)));
+            var lowWords = ReadLowWords(ref reader);
+            budget.Charge(LowsCost(lowWords));
             filter.Lows = new ulong[lowWords];
             for (var i = 0; i < lowWords; i++)
             {
                 filter.Lows[i] = reader.ReadUInt64();
             }
 
-            var highWords = reader.ReadUInt32();
-            if (highWords > MaxHighWords)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims {highWords} words of high bits, beyond anything " +
-                    $"this library builds: its high parts fit in {MaxHighWords}.");
-            }
-            reader.RequireHolds(highWords, sizeof(ulong), "words of high bits");
+            var highWords = ReadHighWords(ref reader);
             // And the select index built over them below, a count per word.
-            budget.Charge(ReadBudget.Sum(
-                ReadBudget.ArrayOf(highWords, sizeof(ulong)),
-                ReadBudget.ArrayOf((ulong)highWords + 1, sizeof(int))));
+            budget.Charge(HighsCost(highWords));
             filter.Highs = new ulong[highWords];
             for (var i = 0; i < highWords; i++)
             {
@@ -1033,5 +960,143 @@ namespace ProbabilisticDataStructures
             filter.BuildSelectIndex();
             return filter;
         }
+
+        /// <summary>
+        /// Refuses a supplied hash, and a payload naming any hash but none: this
+        /// structure hashes nothing. See <see cref="HashCheck"/>.
+        /// </summary>
+        private static void CheckHash(HashId recorded, Func<ReadOnlySpan<byte>, ulong>? supplied)
+        {
+            if (supplied is not null)
+            {
+                throw new InvalidDataException(
+                    "A Grafite filter holds numbers rather than bytes -- a range is a " +
+                    "question about order -- so it cannot be read with a supplied " +
+                    "hash function. Read it with the overload that takes none.");
+            }
+            if (recorded != HashId.None)
+            {
+                throw new InvalidDataException(
+                    $"Payload names hash function {(ushort)recorded}, and a Grafite " +
+                    "filter does not hash bytes. It was not written by this structure.");
+            }
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the words of low
+        /// bits, the words of high bits, and the select index over them. See
+        /// <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var r = reader.ReadUInt64();
+            var c1 = reader.ReadUInt64();
+            var c2 = reader.ReadUInt64();
+            var keyCount = reader.ReadUInt64();
+            _ = reader.ReadUInt64();
+            var lowBits = (int)reader.ReadUInt32();
+            var codeCount = (int)reader.ReadUInt32();
+            _ = reader.ReadUInt32();
+            var firstCode = reader.ReadUInt64();
+            var lastCode = reader.ReadUInt64();
+            CheckFields(r, c1, c2, keyCount, lowBits, codeCount, firstCode, lastCode);
+
+            var lowWords = ReadLowWords(ref reader);
+            reader.Budget.Price(LowsCost(lowWords));
+            reader.Skip(lowWords * sizeof(ulong));
+
+            reader.Budget.Price(HighsCost(ReadHighWords(ref reader)));
+        }
+
+        /// <summary>
+        /// Checks the fields a payload leads with, as both the read and its price do,
+        /// in the same order, before anything is allocated for the words that follow.
+        /// </summary>
+        private static void CheckFields(
+            ulong r, ulong c1, ulong c2, ulong keyCount, int lowBits, int codeCount,
+            ulong firstCode, ulong lastCode)
+        {
+            if (r < 1)
+            {
+                throw new InvalidDataException(
+                    "Filter claims a reduced universe of nothing, which every key " +
+                    "would hash into and no range could be tested against.");
+            }
+            // The builder's own limit, so that nothing it refuses reads. Every release has
+            // capped the universe here, so a payload written for a request that is now
+            // refused carries exactly this, and reads.
+            if (r > MaxUniverse)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims a reduced universe of {r}, beyond anything this " +
+                    $"library builds: the hash works modulo 2^61 - 1, so it is at most " +
+                    $"{MaxUniverse}.");
+            }
+            if (c1 == 0 || c1 >= Prime || c2 >= Prime)
+            {
+                throw new InvalidDataException(
+                    "Filter carries hash parameters this library never draws: the " +
+                    "multiplier must be non-zero and both must fall below the modulus.");
+            }
+            if (lowBits > 64)
+            {
+                throw new InvalidDataException(
+                    $"Filter splits its codes at {lowBits} low bits, and a " +
+                    "code is sixty-four bits wide.");
+            }
+            if (codeCount < 0 || (ulong)codeCount > keyCount)
+            {
+                throw new InvalidDataException(
+                    $"Filter holds {codeCount} hash codes for " +
+                    $"{keyCount} keys, and hashing never produces more codes " +
+                    "than the keys it was given.");
+            }
+            if (codeCount > 0 && firstCode > lastCode)
+            {
+                throw new InvalidDataException(
+                    $"Filter's smallest code {firstCode} exceeds its largest " +
+                    $"{lastCode}.");
+            }
+            if (codeCount > 0 && lastCode >= r)
+            {
+                throw new InvalidDataException(
+                    $"Filter holds the code {lastCode}, outside its own " +
+                    $"reduced universe of {r}.");
+            }
+        }
+
+        private static uint ReadLowWords(ref PayloadReader reader)
+        {
+            var lowWords = reader.ReadUInt32();
+            if (lowWords > MaxLowWords)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {lowWords} words of low bits, beyond anything " +
+                    $"this library builds: they are one array, of at most {MaxLowWords}.");
+            }
+            reader.RequireHolds(lowWords, sizeof(ulong), "words of low bits");
+            return lowWords;
+        }
+
+        private static uint ReadHighWords(ref PayloadReader reader)
+        {
+            var highWords = reader.ReadUInt32();
+            if (highWords > MaxHighWords)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {highWords} words of high bits, beyond anything " +
+                    $"this library builds: its high parts fit in {MaxHighWords}.");
+            }
+            reader.RequireHolds(highWords, sizeof(ulong), "words of high bits");
+            return highWords;
+        }
+
+        /// <summary>The words of low bits.</summary>
+        private static long LowsCost(uint lowWords) => ReadBudget.ArrayOf(lowWords, sizeof(ulong));
+
+        /// <summary>The words of high bits, and the select index's count per word.</summary>
+        private static long HighsCost(uint highWords) => ReadBudget.Sum(
+            ReadBudget.ArrayOf(highWords, sizeof(ulong)),
+            ReadBudget.ArrayOf((ulong)highWords + 1, sizeof(int)));
     }
 }

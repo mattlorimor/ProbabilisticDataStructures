@@ -680,7 +680,8 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.InvertibleBloomLookupTable);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.InvertibleBloomLookupTable, out var hashId, budget);
+                stream, StructureId.InvertibleBloomLookupTable, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var cells = reader.ReadUInt32();
@@ -689,32 +690,11 @@ namespace ProbabilisticDataStructures
             var keySums = reader.ReadBytes();
             var hashes = reader.ReadBytes();
             reader.ExpectEnd();
-
-            if (cells < HashCount)
-            {
-                throw new InvalidDataException(
-                    $"Table has {cells} cells, and a key occupies {HashCount} of them.");
-            }
-
-            if (keySize <= 0)
-            {
-                throw new InvalidDataException(
-                    $"Table has a key size of {keySize} bytes, and a key is at least one " +
-                    "byte wide.");
-            }
-
-            if (counts.LongLength != (long)cells * sizeof(long)
-                || hashes.LongLength != (long)cells * sizeof(ulong)
-                || keySums.LongLength != (long)cells * keySize)
-            {
-                throw new InvalidDataException(
-                    $"Table has {cells} cells of {keySize}-byte keys, and its counts, " +
-                    "keys and hashes do not come to the byte counts that implies.");
-            }
+            CheckShape(cells, keySize, counts.LongLength, keySums.LongLength, hashes.LongLength);
 
             // Counts and hash sums are unpacked into arrays of their own; the key sums
             // are the run already copied.
-            budget.Charge(ReadBudget.Times(2, ReadBudget.ArrayOf(cells, sizeof(long))));
+            budget.Charge(UnpackedCost(cells));
             var table = new InvertibleBloomLookupTable(
                 keySize, PersistenceFormat.ResolveOrThrow(hashId, hash), cells, keySums);
 
@@ -728,6 +708,52 @@ namespace ProbabilisticDataStructures
 
             return table;
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the copies of the
+        /// three runs, and the counts and hash sums unpacked from theirs. See
+        /// <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var cells = reader.ReadUInt32();
+            var keySize = (int)reader.ReadUInt32();
+            var counts = reader.SkipBytes();
+            var keySums = reader.SkipBytes();
+            var hashes = reader.SkipBytes();
+            reader.ExpectEnd();
+            CheckShape(cells, keySize, counts, keySums, hashes);
+            reader.Budget.Price(UnpackedCost(cells));
+        }
+
+        private static void CheckShape(uint cells, int keySize, long counts, long keySums, long hashes)
+        {
+            if (cells < HashCount)
+            {
+                throw new InvalidDataException(
+                    $"Table has {cells} cells, and a key occupies {HashCount} of them.");
+            }
+
+            if (keySize <= 0)
+            {
+                throw new InvalidDataException(
+                    $"Table has a key size of {keySize} bytes, and a key is at least one " +
+                    "byte wide.");
+            }
+
+            if (counts != (long)cells * sizeof(long)
+                || hashes != (long)cells * sizeof(ulong)
+                || keySums != (long)cells * keySize)
+            {
+                throw new InvalidDataException(
+                    $"Table has {cells} cells of {keySize}-byte keys, and its counts, " +
+                    "keys and hashes do not come to the byte counts that implies.");
+            }
+        }
+
+        /// <summary>The counts and hash sums of <paramref name="cells"/> cells, unpacked.</summary>
+        private static long UnpackedCost(uint cells) =>
+            ReadBudget.Times(2, ReadBudget.ArrayOf(cells, sizeof(long)));
 
         /// <summary>The number of cells the table holds.</summary>
         public uint Cells() => this.cells;

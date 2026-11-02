@@ -125,21 +125,37 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.SimHashSignature);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.SimHashSignature, out var hashId, budget);
-
-            if (hashId != HashId.XxHash3_64)
-            {
-                throw new InvalidDataException(
-                    $"Signature was built with hash function {(ushort)hashId}, and this " +
-                    "version builds them with XxHash3. Comparing fingerprints built with " +
-                    "different hash functions gives a number that means nothing.");
-            }
+                stream, StructureId.SimHashSignature, out _, budget, Price, null, CheckHash);
 
             var reader = new PayloadReader(payload, budget);
             var value = reader.ReadUInt64();
             reader.ExpectEnd();
 
             return new SimHashSignature(value);
+        }
+
+        /// <summary>
+        /// Refuses a payload naming any hash but XxHash3, the one this structure
+        /// builds with, whatever hash was supplied. See <see cref="HashCheck"/>.
+        /// </summary>
+        private static void CheckHash(HashId recorded, Func<ReadOnlySpan<byte>, ulong>? _)
+        {
+            if (recorded != HashId.XxHash3_64)
+            {
+                throw new InvalidDataException(
+                    $"Signature was built with hash function {(ushort)recorded}, and this " +
+                    "version builds them with XxHash3. Comparing fingerprints built with " +
+                    "different hash functions gives a number that means nothing.");
+            }
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope, which is nothing
+        /// a payload's claims can size: the fingerprint is one fixed field. See
+        /// <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
         }
     }
 }

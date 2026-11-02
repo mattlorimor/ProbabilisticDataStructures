@@ -460,27 +460,15 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.HyperLogLog);
-            var payload = PersistenceFormat.Read(stream, StructureId.HyperLogLog, out var hashId, budget);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.HyperLogLog, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var m = reader.ReadUInt32();
             var registers = reader.ReadBytes();
             reader.ExpectEnd();
-
-            if (m == 0 || (m & (m - 1)) != 0)
-            {
-                throw new InvalidDataException(
-                    $"Estimator has {m} registers, which is not a power of two. The " +
-                    "register index is taken from the top bits of a hash, so a count " +
-                    "that is not a power of two cannot be indexed.");
-            }
-
-            if (registers.Length != m)
-            {
-                throw new InvalidDataException(
-                    $"Estimator has {m} registers by its own account and {registers.Length} " +
-                    "stored.");
-            }
+            CheckRegisters(m, registers.Length);
 
             // Built through the constructor, so that b and alpha are derived exactly the
             // way a fresh estimator derives them, rather than trusted from the payload.
@@ -493,6 +481,37 @@ namespace ProbabilisticDataStructures
 
             registers.CopyTo(hyperLogLog.Registers, 0);
             return hyperLogLog;
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the copy of the
+        /// registers, and the estimator's own. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var m = reader.ReadUInt32();
+            var stored = reader.SkipBytes();
+            reader.ExpectEnd();
+            CheckRegisters(m, stored);
+            reader.Budget.Price(ReadBudget.ArrayOf(m, 1));
+        }
+
+        private static void CheckRegisters(uint m, int stored)
+        {
+            if (m == 0 || (m & (m - 1)) != 0)
+            {
+                throw new InvalidDataException(
+                    $"Estimator has {m} registers, which is not a power of two. The " +
+                    "register index is taken from the top bits of a hash, so a count " +
+                    "that is not a power of two cannot be indexed.");
+            }
+
+            if (stored != m)
+            {
+                throw new InvalidDataException(
+                    $"Estimator has {m} registers by its own account and {stored} " +
+                    "stored.");
+            }
         }
 
         /// <summary>

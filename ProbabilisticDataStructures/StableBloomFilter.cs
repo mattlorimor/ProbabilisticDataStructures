@@ -507,7 +507,8 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.StableBloomFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.StableBloomFilter, out var hashId, out var version, budget);
+                stream, StructureId.StableBloomFilter, out var hashId, out var version, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var m = reader.ReadUInt32();
@@ -535,22 +536,10 @@ namespace ProbabilisticDataStructures
                 : random.State;
 
             reader.ExpectEnd();
-
-            if (m == 0 || cells.count != m)
-            {
-                throw new InvalidDataException(
-                    $"Filter has {m} cells by its own account and {cells.count} to hold " +
-                    "them, which do not describe the same filter.");
-            }
-
-            if (k == 0)
-            {
-                throw new InvalidDataException(
-                    "Filter has no hash functions, so it would set no cells and test none.");
-            }
+            CheckShape(m, k, cells.count);
 
             // The scratch buffer below is sized by the hash count the payload claims.
-            budget.Charge(ReadBudget.ArrayOf(k, sizeof(uint)));
+            budget.Charge(ScratchCost(k));
 
             return new StableBloomFilter
             {
@@ -569,6 +558,50 @@ namespace ProbabilisticDataStructures
                 Placement = placement,
             };
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the cells and the
+        /// scratch buffer. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var m = reader.ReadUInt32();
+            var k = reader.ReadUInt32();
+            reader.ReadUInt32();
+            BitPlacement.Read(ref reader, version);
+            var cells = PersistenceFormat.PriceBuckets(ref reader);
+            if (version >= PersistenceFormat.RandomStateVersion)
+            {
+                reader.ReadUInt64();
+            }
+            if (version >= PersistenceFormat.StableOriginalStateVersion)
+            {
+                reader.ReadUInt64();
+            }
+
+            reader.ExpectEnd();
+            CheckShape(m, k, cells);
+            reader.Budget.Price(ScratchCost(k));
+        }
+
+        private static void CheckShape(uint m, uint k, uint cells)
+        {
+            if (m == 0 || cells != m)
+            {
+                throw new InvalidDataException(
+                    $"Filter has {m} cells by its own account and {cells} to hold " +
+                    "them, which do not describe the same filter.");
+            }
+
+            if (k == 0)
+            {
+                throw new InvalidDataException(
+                    "Filter has no hash functions, so it would set no cells and test none.");
+            }
+        }
+
+        /// <summary>The scratch buffer of a filter of <paramref name="k"/> hash functions.</summary>
+        private static long ScratchCost(uint k) => ReadBudget.ArrayOf(k, sizeof(uint));
 
         /// <summary>
         /// Sets the hashing function used in the filter.

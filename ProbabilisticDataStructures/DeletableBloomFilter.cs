@@ -424,7 +424,8 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.DeletableBloomFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.DeletableBloomFilter, out var hashId, out var version, budget);
+                stream, StructureId.DeletableBloomFilter, out var hashId, out var version, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var m = reader.ReadUInt32();
@@ -436,23 +437,10 @@ namespace ProbabilisticDataStructures
             var buckets = PersistenceFormat.ReadBuckets(ref reader);
             var collisions = PersistenceFormat.ReadBuckets(ref reader);
             reader.ExpectEnd();
-
-            if (m == 0 || buckets.count != m)
-            {
-                throw new InvalidDataException(
-                    $"Filter has a data region of {m} bits and {buckets.count} buckets " +
-                    "to hold them, which do not describe the same filter.");
-            }
-
-            if (collisions.count == 0)
-            {
-                throw new InvalidDataException(
-                    "Filter has no collision regions, which is what makes its deletions " +
-                    "safe; it divides by that count on first use.");
-            }
+            CheckRegions(m, buckets.count, collisions.count);
 
             // The scratch buffer below is sized by the hash count the payload claims.
-            budget.Charge(ReadBudget.ArrayOf(k, sizeof(uint)));
+            budget.Charge(ScratchCost(k));
 
             return new DeletableBloomFilter
             {
@@ -471,6 +459,43 @@ namespace ProbabilisticDataStructures
                 Placement = placement,
             };
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the two bucket
+        /// regions and the scratch buffer. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var m = reader.ReadUInt32();
+            var k = reader.ReadUInt32();
+            BitPlacement.Read(ref reader, version);
+            BitPlacement.ReadCount(ref reader, version);
+            var buckets = PersistenceFormat.PriceBuckets(ref reader);
+            var collisions = PersistenceFormat.PriceBuckets(ref reader);
+            reader.ExpectEnd();
+            CheckRegions(m, buckets, collisions);
+            reader.Budget.Price(ScratchCost(k));
+        }
+
+        private static void CheckRegions(uint m, uint buckets, uint collisions)
+        {
+            if (m == 0 || buckets != m)
+            {
+                throw new InvalidDataException(
+                    $"Filter has a data region of {m} bits and {buckets} buckets " +
+                    "to hold them, which do not describe the same filter.");
+            }
+
+            if (collisions == 0)
+            {
+                throw new InvalidDataException(
+                    "Filter has no collision regions, which is what makes its deletions " +
+                    "safe; it divides by that count on first use.");
+            }
+        }
+
+        /// <summary>The scratch buffer of a filter of <paramref name="k"/> hash functions.</summary>
+        private static long ScratchCost(uint k) => ReadBudget.ArrayOf(k, sizeof(uint));
 
         /// <summary>
         /// Used only by <see cref="Read"/>, which sets every field itself.

@@ -650,47 +650,15 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.MementoFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.MementoFilter, out var hashId, budget);
-
-            if (hash is not null)
-            {
-                throw new InvalidDataException(
-                    "A Memento filter holds numbers rather than bytes -- a range is a " +
-                    "question about order -- so it cannot be read with a supplied " +
-                    "hash function. Read it with the overload that takes none.");
-            }
-            if (hashId != HashId.None)
-            {
-                throw new InvalidDataException(
-                    $"Payload names hash function {(ushort)hashId}, and a Memento " +
-                    "filter mixes numbers rather than hashing bytes. It was not " +
-                    "written by this structure.");
-            }
+                stream, StructureId.MementoFilter, out _, budget, Price,
+                hash, CheckHash);
 
             var reader = new PayloadReader(payload, budget);
             var added = reader.ReadUInt64();
             var expansions = reader.ReadUInt32();
             var mementoBits = (int)reader.ReadUInt32();
             var segmentCount = reader.ReadUInt32();
-
-            if (mementoBits < 1 || mementoBits > 32)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims {mementoBits} memento bits, and this library " +
-                    "builds between 1 and 32.");
-            }
-            if (segmentCount == 0)
-            {
-                throw new InvalidDataException(
-                    "Filter carries no tables at all, and every query begins by " +
-                    "asking the first one.");
-            }
-            if (segmentCount > 64)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims a chain of {segmentCount} tables, longer than a " +
-                    "64-bit hash could ever justify.");
-            }
+            CheckChain(mementoBits, segmentCount);
 
             var filter = new MementoFilter(true)
             {
@@ -706,62 +674,10 @@ namespace ProbabilisticDataStructures
                 var fingerprintBits = (int)reader.ReadUInt32();
                 var count = reader.ReadUInt32();
                 var words = reader.ReadUInt32();
-
-                if (quotientBits < 2 || quotientBits > MaxQuotientBits)
-                {
-                    throw new InvalidDataException(
-                        $"Table {i} claims {quotientBits} bits of address, and this " +
-                        $"library builds tables between 2 and {MaxQuotientBits}: a table's " +
-                        "slot count is a 32-bit number holding 2^q, and 2^32 is not one.");
-                }
-                if (fingerprintBits < 2 || fingerprintBits > 32)
-                {
-                    throw new InvalidDataException(
-                        $"Table {i} claims {fingerprintBits}-bit fingerprints, and " +
-                        "this library builds between 2 and 32.");
-                }
-                if (quotientBits + fingerprintBits > 64)
-                {
-                    throw new InvalidDataException(
-                        $"Table {i} would need {quotientBits + fingerprintBits} bits " +
-                        "of hash to address and fingerprint a block, and a hash has " +
-                        "sixty-four.");
-                }
-
-                // Before the shape is worked out from them, since a slot wider than a
-                // word is a shape no table has.
-                var slotBits = MementoSegment.SlotBits(fingerprintBits, mementoBits);
-                if (slotBits > MementoSegment.MaxSlotBits)
-                {
-                    throw new InvalidDataException(
-                        $"Table {i} has slots of {slotBits} bits -- a {fingerprintBits}-bit " +
-                        $"fingerprint, a {mementoBits}-bit memento and what holds them -- and " +
-                        $"a slot is held in a 64-bit word, so none is wider than " +
-                        $"{MementoSegment.MaxSlotBits}. No version of this library built a " +
-                        "table of slots this wide that could hold a key.");
-                }
-
-                var slots = 1u << quotientBits;
-                if (count > slots)
-                {
-                    throw new InvalidDataException(
-                        $"Table {i} holds {count} entries in {slots} slots, and it " +
-                        "stores one entry per slot.");
-                }
-
-                var expected =
-                    (((long)slots * (fingerprintBits + 1 + mementoBits + 3)) >> 6) + 2;
-                if (words != expected)
-                {
-                    throw new InvalidDataException(
-                        $"Table {i} carries {words} words where its shape needs " +
-                        $"{expected}.");
-                }
+                var slotBits = CheckSegment(i, quotientBits, fingerprintBits, mementoBits, count, words);
 
                 // Read into one array, then copied into the table the segment builds.
-                budget.Charge(ReadBudget.Sum(
-                    ReadBudget.Times(2, ReadBudget.ArrayOf(words, sizeof(ulong))),
-                    ReadBudget.SmallObject));
+                budget.Charge(SegmentCost(words));
                 var data = new ulong[words];
                 var anyBitSet = false;
                 for (var w = 0; w < words; w++)
@@ -791,6 +707,142 @@ namespace ProbabilisticDataStructures
 
             reader.ExpectEnd();
             return filter;
+        }
+
+        /// <summary>
+        /// Refuses a supplied hash, and a payload naming any hash but none: this
+        /// structure hashes nothing. See <see cref="HashCheck"/>.
+        /// </summary>
+        private static void CheckHash(HashId recorded, Func<ReadOnlySpan<byte>, ulong>? supplied)
+        {
+            if (supplied is not null)
+            {
+                throw new InvalidDataException(
+                    "A Memento filter holds numbers rather than bytes -- a range is a " +
+                    "question about order -- so it cannot be read with a supplied " +
+                    "hash function. Read it with the overload that takes none.");
+            }
+            if (recorded != HashId.None)
+            {
+                throw new InvalidDataException(
+                    $"Payload names hash function {(ushort)recorded}, and a Memento " +
+                    "filter mixes numbers rather than hashing bytes. It was not " +
+                    "written by this structure.");
+            }
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: each table's
+        /// words, read into one array and copied into the table. See
+        /// <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            reader.ReadUInt64();
+            reader.ReadUInt32();
+            var mementoBits = (int)reader.ReadUInt32();
+            var segmentCount = reader.ReadUInt32();
+            CheckChain(mementoBits, segmentCount);
+
+            for (var i = 0; i < segmentCount; i++)
+            {
+                var quotientBits = (int)reader.ReadUInt32();
+                var fingerprintBits = (int)reader.ReadUInt32();
+                var count = reader.ReadUInt32();
+                var words = reader.ReadUInt32();
+                CheckSegment(i, quotientBits, fingerprintBits, mementoBits, count, words);
+
+                reader.Budget.Price(SegmentCost(words));
+                reader.Skip((long)words * sizeof(ulong));
+            }
+        }
+
+        /// <summary>One table's words, read into one array and copied into the table.</summary>
+        private static long SegmentCost(uint words) => ReadBudget.Sum(
+            ReadBudget.Times(2, ReadBudget.ArrayOf(words, sizeof(ulong))),
+            ReadBudget.SmallObject);
+
+        private static void CheckChain(int mementoBits, uint segmentCount)
+        {
+            if (mementoBits < 1 || mementoBits > 32)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {mementoBits} memento bits, and this library " +
+                    "builds between 1 and 32.");
+            }
+            if (segmentCount == 0)
+            {
+                throw new InvalidDataException(
+                    "Filter carries no tables at all, and every query begins by " +
+                    "asking the first one.");
+            }
+            if (segmentCount > 64)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims a chain of {segmentCount} tables, longer than a " +
+                    "64-bit hash could ever justify.");
+            }
+        }
+
+        /// <summary>
+        /// Checks the shape a table claims, as both the read and its price do before its
+        /// words are allocated, and returns the width of its slots.
+        /// </summary>
+        private static int CheckSegment(
+            int i, int quotientBits, int fingerprintBits, int mementoBits, uint count, uint words)
+        {
+            if (quotientBits < 2 || quotientBits > MaxQuotientBits)
+            {
+                throw new InvalidDataException(
+                    $"Table {i} claims {quotientBits} bits of address, and this " +
+                    $"library builds tables between 2 and {MaxQuotientBits}: a table's " +
+                    "slot count is a 32-bit number holding 2^q, and 2^32 is not one.");
+            }
+            if (fingerprintBits < 2 || fingerprintBits > 32)
+            {
+                throw new InvalidDataException(
+                    $"Table {i} claims {fingerprintBits}-bit fingerprints, and " +
+                    "this library builds between 2 and 32.");
+            }
+            if (quotientBits + fingerprintBits > 64)
+            {
+                throw new InvalidDataException(
+                    $"Table {i} would need {quotientBits + fingerprintBits} bits " +
+                    "of hash to address and fingerprint a block, and a hash has " +
+                    "sixty-four.");
+            }
+
+            // Before the shape is worked out from them, since a slot wider than a
+            // word is a shape no table has.
+            var slotBits = MementoSegment.SlotBits(fingerprintBits, mementoBits);
+            if (slotBits > MementoSegment.MaxSlotBits)
+            {
+                throw new InvalidDataException(
+                    $"Table {i} has slots of {slotBits} bits -- a {fingerprintBits}-bit " +
+                    $"fingerprint, a {mementoBits}-bit memento and what holds them -- and " +
+                    $"a slot is held in a 64-bit word, so none is wider than " +
+                    $"{MementoSegment.MaxSlotBits}. No version of this library built a " +
+                    "table of slots this wide that could hold a key.");
+            }
+
+            var slots = 1u << quotientBits;
+            if (count > slots)
+            {
+                throw new InvalidDataException(
+                    $"Table {i} holds {count} entries in {slots} slots, and it " +
+                    "stores one entry per slot.");
+            }
+
+            var expected =
+                (((long)slots * (fingerprintBits + 1 + mementoBits + 3)) >> 6) + 2;
+            if (words != expected)
+            {
+                throw new InvalidDataException(
+                    $"Table {i} carries {words} words where its shape needs " +
+                    $"{expected}.");
+            }
+
+            return slotBits;
         }
     }
 }

@@ -741,6 +741,18 @@ rest of a message survives, as it should, and one that deletes the guard does no
   mid-read can add a retired allocation context's worth, so the measurement is the least
   of five; and the first undercharge found was in the accounting itself, a `params`
   array allocated by every call that summed the charges.
+- **A refusal's number is held to loading.** Honest charges were not enough: a refusal
+  named the running total at the charge that failed, so a read refused needing a number
+  was refused again, needing more, under exactly that number. Every read is now priced
+  whole before it allocates, by a walk of its payload that its reader's charges are then
+  drawn against. `TestReadBudget` refuses each structure under budgets from nothing to a
+  byte short and asks for the same total every time, loads it under that total the first
+  time, asks the price and the reader's charges to come to the same sum, and asks a read
+  refused under less than its own payload to have allocated less than that, which is the
+  difference between pricing a payload and holding it to price it. A price is a second
+  walk of a layout its reader already walks, so the checks that stop a reader allocating
+  are shared code, called by both; the exact sum is what catches a walk that has drifted
+  from its reader.
 - **An exemption names the test that checks its reason.** The same sweep exempts the
   structures whose readers cap nothing their constructors can reach, and each exemption
   points at a test asserting why -- the cap is unreachable, or the reader caps nothing.

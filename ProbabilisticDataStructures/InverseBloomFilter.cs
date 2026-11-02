@@ -379,10 +379,68 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.InverseBloomFilter);
-            var payload = PersistenceFormat.Read(stream, StructureId.InverseBloomFilter, out var hashId, budget);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.InverseBloomFilter, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var capacity = reader.ReadUInt32();
+            var occupied = ReadOccupied(ref reader, capacity);
+
+            // Every slot is allocated, occupied or not; the occupied ones' data are
+            // runs, charged as they are copied.
+            budget.Charge(SlotsCost(capacity));
+            var slots = new byte[capacity][];
+            for (uint n = 0; n < occupied; n++)
+            {
+                var index = reader.ReadUInt32();
+                CheckSlot(index, capacity);
+                slots[index] = reader.ReadBytes();
+            }
+
+            reader.ExpectEnd();
+
+            return new InverseBloomFilter
+            {
+                Array = slots,
+                capacity = capacity,
+                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+            };
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: every slot, and
+        /// the copy of each occupied one's data. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var capacity = reader.ReadUInt32();
+            var occupied = ReadOccupied(ref reader, capacity);
+
+            reader.Budget.Price(SlotsCost(capacity));
+            for (uint n = 0; n < occupied; n++)
+            {
+                CheckSlot(reader.ReadUInt32(), capacity);
+                reader.SkipBytes();
+            }
+        }
+
+        private static void CheckSlot(uint index, uint capacity)
+        {
+            if (index >= capacity)
+            {
+                throw new InvalidDataException(
+                    $"Filter holds an entry at slot {index}, beyond its capacity of " +
+                    $"{capacity}.");
+            }
+        }
+
+        /// <summary>
+        /// Reads the occupied count, after checking the capacity before it, as both the
+        /// read and its price do before the slots are allocated.
+        /// </summary>
+        private static uint ReadOccupied(ref PayloadReader reader, uint capacity)
+        {
             if (capacity == 0)
             {
                 throw new InvalidDataException(
@@ -405,33 +463,11 @@ namespace ProbabilisticDataStructures
                 throw new InvalidDataException(
                     $"Filter claims {occupied} occupied slots in a capacity of {capacity}.");
             }
-
-            // Every slot is allocated, occupied or not; the occupied ones' data are
-            // runs, charged as they are copied.
-            budget.Charge(ReadBudget.ArrayOf(capacity, sizeof(long)));
-            var slots = new byte[capacity][];
-            for (uint n = 0; n < occupied; n++)
-            {
-                var index = reader.ReadUInt32();
-                if (index >= capacity)
-                {
-                    throw new InvalidDataException(
-                        $"Filter holds an entry at slot {index}, beyond its capacity of " +
-                        $"{capacity}.");
-                }
-
-                slots[index] = reader.ReadBytes();
-            }
-
-            reader.ExpectEnd();
-
-            return new InverseBloomFilter
-            {
-                Array = slots,
-                capacity = capacity,
-                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
-            };
+            return occupied;
         }
+
+        /// <summary>The array of <paramref name="capacity"/> slots.</summary>
+        private static long SlotsCost(uint capacity) => ReadBudget.ArrayOf(capacity, sizeof(long));
 
         /// <summary>
         /// Used only by <see cref="Read"/>, which sets every field itself.

@@ -704,7 +704,8 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.DpswSketch);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.DpswSketch, out var hashId, budget);
+                stream, StructureId.DpswSketch, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var window = (long)reader.ReadUInt64();
@@ -714,7 +715,168 @@ namespace ProbabilisticDataStructures
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
             var position = (long)reader.ReadUInt64();
+            var substreamSize = CheckShape(window, rho, alpha, claimedSubstream, width, depth, position);
 
+            var resolved = PersistenceFormat.ResolveOrThrow(hashId, hash);
+
+            // Restoring rebuilds the checkpoints from the substream size the payload names.
+            budget.Charge(CheckpointsCost(substreamSize));
+            var sketch = new DpswSketch(
+                window, rho, alpha, substreamSize, width, depth, resolved)
+            {
+                position = position,
+            };
+            CheckLeanest(sketch.checkpoints.Length, window, rho, alpha, depth);
+
+            // One segment for the whole substream and two for every checkpoint past
+            // the first, as PlanFor lays them out.
+            var segmentsPlanned = SegmentsPlanned(sketch.checkpoints.Length);
+            budget.Charge(PlanCost(segmentsPlanned));
+            var plan = sketch.PlanFor(0);
+
+            // Each substream is at least its start and its count, so the list of them is
+            // checked against the bytes behind it before it is charged for.
+            var substreamCount = reader.ReadUInt32();
+            reader.RequireHolds(substreamCount, sizeof(ulong) + sizeof(uint), "substreams");
+            budget.Charge(ReadBudget.ListOf(substreamCount, sizeof(long)));
+            var previousStart = 0L;
+
+            for (var s = 0u; s < substreamCount; s++)
+            {
+                var start = (long)reader.ReadUInt64();
+                var held = (int)reader.ReadUInt32();
+                CheckSubstream(s, start, held, previousStart, substreamSize, position);
+                previousStart = start;
+
+                // The substream, and a segment list as long as the plan; each segment's
+                // sketch charges itself as it is read.
+                budget.Charge(SubstreamCost((ulong)plan.Count));
+                var substream = new Substream(start) { Held = held };
+                foreach (var planned in plan)
+                {
+                    var heldSketch = PrivateCountMinSketch.ReadBody(ref reader, resolved);
+                    CheckSegment(s, heldSketch.Width, heldSketch.Depth, width, depth);
+
+                    substream.Segments.Add(new Segment(
+                        planned.From, planned.To, heldSketch, planned.Budget));
+                }
+
+                sketch.substreams.Add(substream);
+            }
+
+            reader.ExpectEnd();
+            return sketch;
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the checkpoints
+        /// rebuilt from the substream size, the plan laid out over them, the list of
+        /// substreams, and for each substream its segment list and every segment's
+        /// sketch. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var window = (long)reader.ReadUInt64();
+            var rho = reader.ReadDouble();
+            var alpha = reader.ReadDouble();
+            var claimedSubstream = reader.ReadUInt32();
+            var width = reader.ReadUInt32();
+            var depth = reader.ReadUInt32();
+            var position = (long)reader.ReadUInt64();
+            var substreamSize = CheckShape(window, rho, alpha, claimedSubstream, width, depth, position);
+
+            reader.Budget.Price(CheckpointsCost(substreamSize));
+            var checkpoints = CheckpointCount(substreamSize, alpha);
+            CheckLeanest(checkpoints, window, rho, alpha, depth);
+
+            var segments = SegmentsPlanned(checkpoints);
+            reader.Budget.Price(PlanCost(segments));
+
+            var substreamCount = reader.ReadUInt32();
+            reader.RequireHolds(substreamCount, sizeof(ulong) + sizeof(uint), "substreams");
+            reader.Budget.Price(ReadBudget.ListOf(substreamCount, sizeof(long)));
+
+            var previousStart = 0L;
+            for (var s = 0u; s < substreamCount; s++)
+            {
+                var start = (long)reader.ReadUInt64();
+                var held = (int)reader.ReadUInt32();
+                CheckSubstream(s, start, held, previousStart, substreamSize, position);
+                previousStart = start;
+
+                reader.Budget.Price(SubstreamCost(segments));
+                for (var i = 0UL; i < segments; i++)
+                {
+                    var (heldWidth, heldDepth) = PrivateCountMinSketch.PriceBody(ref reader);
+                    CheckSegment(s, heldWidth, heldDepth, width, depth);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Checks where a substream claims to start and how much it holds, as both the
+        /// read and its price do before anything is allocated for it.
+        /// </summary>
+        private static void CheckSubstream(
+            uint s, long start, int held, long previousStart, int substreamSize, long position)
+        {
+            if (start <= previousStart)
+            {
+                throw new InvalidDataException(
+                    $"Substream {s} starts at {start}, which does not follow the " +
+                    $"one before it at {previousStart}. Substreams divide the " +
+                    "stream in order and cannot overlap or repeat.");
+            }
+            if (held < 1 || held > substreamSize)
+            {
+                throw new InvalidDataException(
+                    $"Substream {s} holds {held} of a possible {substreamSize} " +
+                    "items. A substream exists because something was added to it, " +
+                    "and never holds more than its size.");
+            }
+            if (start + held - 1 > position)
+            {
+                throw new InvalidDataException(
+                    $"Substream {s} ends at item {start + held - 1}, past the " +
+                    $"{position} items the window says it has seen.");
+            }
+        }
+
+        /// <summary>
+        /// Checks a segment's sketch is the shape the window says every sketch is, as both
+        /// the read and its price do before the next sketch is allocated.
+        /// </summary>
+        private static void CheckSegment(uint s, uint heldWidth, uint heldDepth, uint width, uint depth)
+        {
+            if (heldWidth != width || heldDepth != depth)
+            {
+                throw new InvalidDataException(
+                    $"Substream {s} holds a {heldDepth} by " +
+                    $"{heldWidth} sketch where the window says every " +
+                    $"sketch is {depth} by {width}.");
+            }
+        }
+
+        /// <summary>
+        /// The segments <see cref="PlanFor"/> lays out over <paramref name="checkpoints"/>
+        /// checkpoints: one for the whole substream, and two for every checkpoint past the
+        /// first.
+        /// </summary>
+        private static ulong SegmentsPlanned(int checkpoints) => 2UL * (ulong)checkpoints - 1;
+
+        /// <summary>A substream, and a segment list as long as the plan.</summary>
+        private static long SubstreamCost(ulong segments) =>
+            ReadBudget.Sum(ReadBudget.SmallObject, PlanCost(segments));
+
+        /// <summary>
+        /// Checks the shape a payload claims, as both the read and its price do before the
+        /// checkpoints are rebuilt.
+        /// </summary>
+        /// <returns>The substream size, as the int it is held in.</returns>
+        private static int CheckShape(
+            long window, double rho, double alpha, uint claimedSubstream, uint width, uint depth,
+            long position)
+        {
             // The constructor's own limit. The size is a u32 in the payload and an int
             // here, so one past the int would otherwise read as negative and be refused
             // for being less than one; and one in between would build a list no array
@@ -784,20 +946,17 @@ namespace ProbabilisticDataStructures
                     $"Window claims {position} items seen, which cannot be negative.");
             }
 
-            var resolved = PersistenceFormat.ResolveOrThrow(hashId, hash);
+            return substreamSize;
+        }
 
-            // Restoring rebuilds the checkpoints from the substream size the payload names.
-            budget.Charge(CheckpointsCost(substreamSize));
-            var sketch = new DpswSketch(
-                window, rho, alpha, substreamSize, width, depth, resolved)
-            {
-                position = position,
-            };
-
-            // The same refusal the constructor makes, so a payload is not a way around
-            // it: a configuration whose leanest sketch is drowned in its own noise
-            // answers with thousands of counts of nothing.
-            var leanest = BudgetAt(sketch.checkpoints.Length, rho, alpha);
+        /// <summary>
+        /// The same refusal the constructor makes, so a payload is not a way around it:
+        /// a configuration whose leanest sketch is drowned in its own noise answers with
+        /// thousands of counts of nothing. Made by the read and by its price.
+        /// </summary>
+        private static void CheckLeanest(int checkpoints, long window, double rho, double alpha, uint depth)
+        {
+            var leanest = BudgetAt(checkpoints, rho, alpha);
             var worstDeviation = Math.Sqrt(depth / leanest);
             if (worstDeviation > window)
             {
@@ -808,74 +967,6 @@ namespace ProbabilisticDataStructures
                     "constructor refuses this shape, and a payload is not a way " +
                     "around it.");
             }
-
-            // One segment for the whole substream and two for every checkpoint past
-            // the first, as PlanFor lays them out.
-            var segmentsPlanned = 2UL * (ulong)sketch.checkpoints.Length - 1;
-            budget.Charge(PlanCost(segmentsPlanned));
-            var plan = sketch.PlanFor(0);
-
-            // Each substream is at least its start and its count, so the list of them is
-            // checked against the bytes behind it before it is charged for.
-            var substreamCount = reader.ReadUInt32();
-            reader.RequireHolds(substreamCount, sizeof(ulong) + sizeof(uint), "substreams");
-            budget.Charge(ReadBudget.ListOf(substreamCount, sizeof(long)));
-            var previousStart = 0L;
-
-            for (var s = 0u; s < substreamCount; s++)
-            {
-                var start = (long)reader.ReadUInt64();
-                var held = (int)reader.ReadUInt32();
-
-                if (start <= previousStart)
-                {
-                    throw new InvalidDataException(
-                        $"Substream {s} starts at {start}, which does not follow the " +
-                        $"one before it at {previousStart}. Substreams divide the " +
-                        "stream in order and cannot overlap or repeat.");
-                }
-                if (held < 1 || held > substreamSize)
-                {
-                    throw new InvalidDataException(
-                        $"Substream {s} holds {held} of a possible {substreamSize} " +
-                        "items. A substream exists because something was added to it, " +
-                        "and never holds more than its size.");
-                }
-                if (start + held - 1 > position)
-                {
-                    throw new InvalidDataException(
-                        $"Substream {s} ends at item {start + held - 1}, past the " +
-                        $"{position} items the window says it has seen.");
-                }
-
-                previousStart = start;
-
-                // The substream, and a segment list as long as the plan; each segment's
-                // sketch charges itself as it is read.
-                budget.Charge(ReadBudget.Sum(
-                    ReadBudget.SmallObject, PlanCost((ulong)plan.Count)));
-                var substream = new Substream(start) { Held = held };
-                foreach (var planned in plan)
-                {
-                    var heldSketch = PrivateCountMinSketch.ReadBody(ref reader, resolved);
-
-                    if (heldSketch.Width != width || heldSketch.Depth != depth)
-                    {
-                        throw new InvalidDataException(
-                            $"Substream {s} holds a {heldSketch.Depth} by " +
-                            $"{heldSketch.Width} sketch where the window says every " +
-                            $"sketch is {depth} by {width}.");
-                    }
-
-                    substream.Segments.Add(new Segment(
-                        planned.From, planned.To, heldSketch, planned.Budget));
-                }
-
-                sketch.substreams.Add(substream);
-            }
-
-            reader.ExpectEnd();
-            return sketch;
         }
 
         /// <summary>
@@ -981,7 +1072,48 @@ namespace ProbabilisticDataStructures
             ReadBudget.ListOf(segments, sizeof(long)),
             ReadBudget.Times(segments, ReadBudget.SmallObject));
 
-        private static int[] Checkpoints(int substreamSize, double alpha)
+        /// <summary>
+        /// How many checkpoints <see cref="Checkpoints"/> keeps for a substream of
+        /// <paramref name="substreamSize"/> items, worked out without the list of every
+        /// offset it builds them from, so that a price can know the plan's size without
+        /// paying for what it prices.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="Checkpoints"/> starts from every offset, largest first, and at each
+        /// one it keeps drops the run after it down to the last offset still at least
+        /// <c>1 - alpha</c> times it. What follows a kept offset is then always every
+        /// smaller offset, so the walk needs only the offset it is at and how many remain:
+        /// the last offset it keeps after <c>v</c> is the smallest whole number at or above
+        /// <c>(1 - alpha) * v</c>, the comparison <see cref="Checkpoints"/> makes, worked
+        /// out in the same doubles, or <c>v - 1</c> if none below <c>v</c> is that large.
+        /// <c>TestReadBudget</c> holds the two to the same count across sizes and factors.
+        /// </remarks>
+        internal static int CheckpointCount(int substreamSize, double alpha)
+        {
+            var count = (long)substreamSize;
+            var at = 0L;
+            var value = (long)substreamSize;
+
+            while (at < count - 2)
+            {
+                var smallest = Math.Max(1L, (long)Math.Ceiling((1 - alpha) * (int)value));
+                if (smallest <= value - 1)
+                {
+                    count -= value - smallest - 1;
+                    value = smallest;
+                }
+                else
+                {
+                    value--;
+                }
+
+                at++;
+            }
+
+            return (int)count;
+        }
+
+        internal static int[] Checkpoints(int substreamSize, double alpha)
         {
             // CheckpointsCost bounds what this allocates; keep the two together.
             var indices = new List<int>();

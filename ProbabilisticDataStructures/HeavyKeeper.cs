@@ -512,7 +512,9 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.HeavyKeeper);
-            var payload = PersistenceFormat.Read(stream, StructureId.HeavyKeeper, out var hashId, budget);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.HeavyKeeper, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var k = reader.ReadUInt32();
@@ -521,7 +523,110 @@ namespace ProbabilisticDataStructures
             var decay = reader.ReadDouble();
             var randomState = reader.ReadUInt64();
             var n = reader.ReadUInt64();
+            CheckShape(ref reader, k, width, depth, decay);
 
+            budget.Charge(ArraysCost(width, depth));
+            var restored = new HeavyKeeper(PersistenceFormat.ResolveOrThrow(hashId, hash),
+                k, width, depth, decay, randomState)
+            {
+                N = n,
+            };
+
+            for (var j = 0; j < depth; j++)
+            {
+                for (var i = 0; i < width; i++)
+                {
+                    restored.Fingerprints[j][i] = reader.ReadUInt16();
+                }
+            }
+            for (var j = 0; j < depth; j++)
+            {
+                for (var i = 0; i < width; i++)
+                {
+                    restored.Counters[j][i] = reader.ReadUInt64();
+                }
+            }
+
+            // Sized by what is held, not by k: the heap grows as elements arrive.
+            var elementCount = ReadElementCount(ref reader, k);
+            budget.Charge(ElementHeap.RestoreCost(elementCount));
+            restored.elements = new ElementHeap((int)elementCount);
+            for (uint i = 0; i < elementCount; i++)
+            {
+                var data = reader.ReadBytes();
+                var freq = reader.ReadUInt64();
+
+                // Pushed rather than assigned into place, so the heap ordering is
+                // rebuilt here rather than trusted from the payload.
+                restored.elements.Push(new Element { Data = data, Freq = freq });
+            }
+
+            reader.ExpectEnd();
+
+            return restored;
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the fingerprint
+        /// and counter arrays, the heap, and the copy of each element's data. See
+        /// <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var k = reader.ReadUInt32();
+            var width = reader.ReadUInt32();
+            var depth = reader.ReadUInt32();
+            var decay = reader.ReadDouble();
+            reader.ReadUInt64();
+            reader.ReadUInt64();
+            CheckShape(ref reader, k, width, depth, decay);
+
+            reader.Budget.Price(ArraysCost(width, depth));
+            reader.Skip((long)width * depth * (sizeof(ushort) + sizeof(ulong)));
+
+            var elementCount = ReadElementCount(ref reader, k);
+            reader.Budget.Price(ElementHeap.RestoreCost(elementCount));
+            for (uint i = 0; i < elementCount; i++)
+            {
+                reader.SkipBytes();
+                reader.ReadUInt64();
+            }
+        }
+
+        /// <summary>
+        /// Reads how many elements are held, checked against the room for them and the
+        /// bytes behind them, as both the read and its price do before the heap is sized.
+        /// Each element is its length, at least, and its frequency.
+        /// </summary>
+        private static uint ReadElementCount(ref PayloadReader reader, uint k)
+        {
+            var elementCount = reader.ReadUInt32();
+            if (elementCount > k)
+            {
+                throw new InvalidDataException(
+                    $"Structure holds {elementCount} elements with room for {k}.");
+            }
+
+            reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
+            return elementCount;
+        }
+
+        /// <summary>
+        /// The arrays of <paramref name="depth"/> rows of <paramref name="width"/>
+        /// fingerprints and counters.
+        /// </summary>
+        private static long ArraysCost(uint width, uint depth) => ReadBudget.Sum(
+            ReadBudget.Times(2, ReadBudget.ArrayOf(depth, sizeof(long))),
+            ReadBudget.Times(depth, ReadBudget.Sum(
+                ReadBudget.ArrayOf(width, sizeof(ushort)),
+                ReadBudget.ArrayOf(width, sizeof(ulong)))));
+
+        /// <summary>
+        /// Checks the shape a payload claims, as both the read and its price do before
+        /// the arrays are allocated.
+        /// </summary>
+        private static void CheckShape(ref PayloadReader reader, uint k, uint width, uint depth, double decay)
+        {
             if (k == 0)
             {
                 throw new InvalidDataException(
@@ -560,58 +665,6 @@ namespace ProbabilisticDataStructures
             // checked against the bytes behind them before they are allocated.
             reader.RequireHolds(
                 (ulong)width * depth, sizeof(ushort) + sizeof(ulong), "buckets");
-
-            budget.Charge(ReadBudget.Sum(
-                ReadBudget.Times(2, ReadBudget.ArrayOf(depth, sizeof(long))),
-                ReadBudget.Times(depth, ReadBudget.Sum(
-                    ReadBudget.ArrayOf(width, sizeof(ushort)),
-                    ReadBudget.ArrayOf(width, sizeof(ulong))))));
-            var restored = new HeavyKeeper(PersistenceFormat.ResolveOrThrow(hashId, hash),
-                k, width, depth, decay, randomState)
-            {
-                N = n,
-            };
-
-            for (var j = 0; j < depth; j++)
-            {
-                for (var i = 0; i < width; i++)
-                {
-                    restored.Fingerprints[j][i] = reader.ReadUInt16();
-                }
-            }
-            for (var j = 0; j < depth; j++)
-            {
-                for (var i = 0; i < width; i++)
-                {
-                    restored.Counters[j][i] = reader.ReadUInt64();
-                }
-            }
-
-            var elementCount = reader.ReadUInt32();
-            if (elementCount > k)
-            {
-                throw new InvalidDataException(
-                    $"Structure holds {elementCount} elements with room for {k}.");
-            }
-
-            // Sized by what is held, not by k: the heap grows as elements arrive. Each
-            // element is its length, at least, and its frequency.
-            reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
-            budget.Charge(ElementHeap.RestoreCost(elementCount));
-            restored.elements = new ElementHeap((int)elementCount);
-            for (uint i = 0; i < elementCount; i++)
-            {
-                var data = reader.ReadBytes();
-                var freq = reader.ReadUInt64();
-
-                // Pushed rather than assigned into place, so the heap ordering is
-                // rebuilt here rather than trusted from the payload.
-                restored.elements.Push(new Element { Data = data, Freq = freq });
-            }
-
-            reader.ExpectEnd();
-
-            return restored;
         }
     }
 }

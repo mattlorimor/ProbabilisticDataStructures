@@ -340,7 +340,8 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.BloomFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.BloomFilter, out var hashId, out var version, budget);
+                stream, StructureId.BloomFilter, out var hashId, out var version, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var m = reader.ReadUInt32();
@@ -377,6 +378,21 @@ namespace ProbabilisticDataStructures
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
                 Placement = placement,
             };
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the copy of the
+        /// bits, which the buckets keep. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            reader.ReadUInt32();
+            reader.ReadUInt32();
+            BitPlacement.Read(ref reader, version);
+            BitPlacement.ReadCount(ref reader, version);
+            reader.ReadUInt32();
+            reader.ReadByte();
+            reader.SkipBytes();
         }
 
         /// <summary>

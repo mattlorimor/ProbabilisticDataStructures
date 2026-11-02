@@ -779,7 +779,8 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.BinaryFuseFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.BinaryFuseFilter, out var hashId, budget);
+                stream, StructureId.BinaryFuseFilter, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var size = reader.ReadUInt32();
@@ -836,6 +837,20 @@ namespace ProbabilisticDataStructures
                 fingerprints = fingerprints,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
             };
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the copy of the
+        /// fingerprints, which the filter keeps. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            reader.ReadUInt32();
+            reader.ReadUInt32();
+            reader.ReadUInt32();
+            reader.ReadUInt64();
+            reader.ReadByte();
+            reader.SkipBytes();
         }
 
         /// <summary>

@@ -449,29 +449,15 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.ThetaSketch);
-            var payload = PersistenceFormat.Read(stream, StructureId.ThetaSketch, out var hashId, budget);
+            var payload = PersistenceFormat.Read(
+                stream, StructureId.ThetaSketch, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var nominalEntries = reader.ReadUInt32();
             var theta = reader.ReadUInt64();
             var held = reader.ReadUInt32();
-
-            // The constructor's own limit, so that every sketch it builds reads back.
-            if (nominalEntries == 0 || nominalEntries > MaxNominalEntries)
-            {
-                throw new InvalidDataException(
-                    $"Sketch retains {nominalEntries} values, which is not a size this " +
-                    $"library builds: it builds them retaining 1 to {MaxNominalEntries}.");
-            }
-
-            // A sketch trims once it reaches twice its retained size, so it never holds
-            // more than that.
-            if (held > 2 * nominalEntries)
-            {
-                throw new InvalidDataException(
-                    $"Sketch holds {held} values and retains {nominalEntries}, and one " +
-                    "never holds more than twice what it retains.");
-            }
+            CheckHeld(nominalEntries, held);
 
             // The buffer is sized by what is held, so a large k costs nothing here; what
             // is held is checked against the bytes behind it first, so a claim cannot
@@ -483,7 +469,7 @@ namespace ProbabilisticDataStructures
                 theta = theta,
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
             };
-            budget.Charge(ReadBudget.ArrayOf((ulong)Math.Max(16L, held), sizeof(ulong)));
+            budget.Charge(ValuesCost(held));
             sketch.values = new ulong[sketch.Capacity((int)held)];
 
             var previous = 0UL;
@@ -526,6 +512,44 @@ namespace ProbabilisticDataStructures
             reader.ExpectEnd();
             return sketch;
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the buffer of
+        /// values held. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var nominalEntries = reader.ReadUInt32();
+            reader.ReadUInt64();
+            var held = reader.ReadUInt32();
+            CheckHeld(nominalEntries, held);
+            reader.RequireHolds(held, sizeof(ulong), "values");
+            reader.Budget.Price(ValuesCost(held));
+        }
+
+        private static void CheckHeld(uint nominalEntries, uint held)
+        {
+            // The constructor's own limit, so that every sketch it builds reads back.
+            if (nominalEntries == 0 || nominalEntries > MaxNominalEntries)
+            {
+                throw new InvalidDataException(
+                    $"Sketch retains {nominalEntries} values, which is not a size this " +
+                    $"library builds: it builds them retaining 1 to {MaxNominalEntries}.");
+            }
+
+            // A sketch trims once it reaches twice its retained size, so it never holds
+            // more than that.
+            if (held > 2 * nominalEntries)
+            {
+                throw new InvalidDataException(
+                    $"Sketch holds {held} values and retains {nominalEntries}, and one " +
+                    "never holds more than twice what it retains.");
+            }
+        }
+
+        /// <summary>The buffer a sketch read back holding <paramref name="held"/> values starts with.</summary>
+        private static long ValuesCost(uint held) =>
+            ReadBudget.ArrayOf((ulong)Math.Max(16L, held), sizeof(ulong));
 
         /// <summary>
         /// Theta as a fraction of the hash range, which is the probability that any

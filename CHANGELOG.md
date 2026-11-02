@@ -982,6 +982,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reader took before is refused, the payload holds counts rather than their packing, and
   the format is as it was.
 
+- **A read refused for its budget named a number that did not load it.**
+  `ReadBudgetExceededException.RequiredBytes` was the running total at the allocation
+  that failed, so a payload was refused at its first allocation the budget did not cover,
+  and refused again, for more, under exactly the budget it had named. A 1.89 GB
+  `BloomFilter64` was refused needing 1,893,049,288 bytes, then under that at
+  1,893,049,496, then at 3,786,098,576, and loaded at about 3.8 GB. Every read is now
+  priced whole before it allocates anything a payload claims: each structure works out,
+  from the payload's header and the fields that size it, everything its reader will
+  allocate — the payload, every array, every copy of a run, and every structure nested
+  inside it, read from the nested envelopes where they lie in the outer payload — and the
+  budget is compared with that once. `RequiredBytes` is that total whatever the budget
+  was, a budget of it loads the payload the first time, and the message names it once,
+  digits grouped, in the call that reads it: `BloomFilter64.ReadFrom(stream, new
+  ReadOptions(…))`. A payload too large for its budget to be held is priced from the
+  stream without being held, its runs skipped. What each structure is charged is
+  unchanged, so every figure in the README's table and in CAPACITY.md stands. The total
+  comes from the payload's shape, so it loads a payload that is well formed; one damaged
+  past the fields that size it, or wrong in what it holds, is refused for that once the
+  budget covers it.
+
+- **A payload naming a hash its reader would refuse was priced, and held, first.** Under
+  a budget the read did not fit, it was refused for the budget, and for its hash only
+  once that budget had been raised; and many structures, resolving their hash as they
+  built themselves, refused it only after allocating what they hold, under any budget. A filter written while using a hash set through `SetHash` and read without it,
+  or a `DDSketch` read with a hash, is now refused for that under any budget, before
+  anything is priced, with the message it always had. `ScalableBloomFilter` and `TopK`
+  check the hash their own header names, as every other reader does; they had checked
+  only the structures inside them, and their header always names the first of those.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added

@@ -13,11 +13,12 @@ namespace ProbabilisticDataStructures
     /// that structure before it can fill it in. A structure is often far larger than its
     /// payload -- a cuckoo filter writes only its occupied entries, a quotient filter's
     /// header names a table of any size -- so a few hundred bytes from a file nobody
-    /// checked could ask for gigabytes. The budget bounds that. A reader works out what
-    /// it will allocate, from what the header and the payload claim, before allocating
-    /// it, and refuses a payload that would take more than the budget: an
-    /// <see cref="InvalidDataException"/> whose inner exception is a
-    /// <see cref="ReadBudgetExceededException"/>.
+    /// checked could ask for gigabytes. The budget bounds that. A reader works out the
+    /// whole of what it will allocate, from what the header and the payload claim, before
+    /// allocating any of it, and refuses a payload that would take more than the budget:
+    /// an <see cref="InvalidDataException"/> whose inner exception is a
+    /// <see cref="ReadBudgetExceededException"/> naming that whole, which a budget of the
+    /// same reads.
     /// <para>
     /// The budget covers the whole read, under one allowance: the payload's own bytes,
     /// the copies made of runs within it, the structure, and any structure nested inside
@@ -142,37 +143,68 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// How many bytes the read had been asked for when it was refused. The read needs
-        /// at least this many, and may need more: it stops at the first allocation the
-        /// budget does not cover.
+        /// How many bytes the whole read takes: the payload, everything its sizes say the
+        /// structure is built from, and any structure nested inside it. A budget of this
+        /// many reads the payload, if it is well formed.
         /// </summary>
+        /// <remarks>
+        /// Worked out from the payload's header and its size fields before anything they
+        /// claim is allocated, so it is the same whatever budget the read was refused
+        /// under. A payload that ends early, or is malformed before its sizes have all
+        /// been read, is priced as far as it can be, and under a budget that covers that
+        /// it is refused for what is wrong with it.
+        /// </remarks>
         public long RequiredBytes { get; }
 
         /// <summary>The budget the read was given, in bytes.</summary>
         public long MemoryBudget { get; }
 
+        /// <summary>
+        /// The message. It names the total once, as the literal in the call that reads the
+        /// payload, its digits grouped the way C# allows, so that the number a person reads
+        /// is the one they paste.
+        /// </summary>
         private static string Describe(string structure, long required, long budget)
         {
-            var needs = required.ToString("N0", CultureInfo.InvariantCulture);
             var allows = budget.ToString("N0", CultureInfo.InvariantCulture);
-            return $"Reading this {structure} needs at least {needs} bytes, and the read " +
-                $"budget is {allows}. The budget stops a small payload from asking for a " +
+            var literal = required.ToString("N0", CultureInfo.InvariantCulture).Replace(',', '_');
+            return $"Reading this {structure} takes more memory than the read budget of " +
+                $"{allows} bytes allows. The budget stops a small payload from asking for a " +
                 "large allocation. To read a payload you trust that is this large, pass a " +
-                $"larger budget: {structure}.ReadFrom(stream, new ReadOptions({required})), " +
+                "budget that covers the whole read, worked out from the payload before " +
+                $"anything was allocated: {structure}.ReadFrom(stream, new ReadOptions({literal})), " +
                 "or ReadOptions.Unlimited.";
         }
     }
 
     /// <summary>
-    /// The allowance one read draws on, charged before each allocation a payload's claims
-    /// drive.
+    /// The allowance one read draws on: priced whole before the read allocates anything a
+    /// payload claims, then charged before each of those allocations.
     /// </summary>
     /// <remarks>
-    /// The charges are upper bounds on what the read allocates, in bytes as the runtime
-    /// counts them: an array's elements and its header, and a small fixed amount for
-    /// each object that is not an array. They are what the read-budget tests hold the
-    /// measured allocation to, so a charge that is too small fails a test rather than
+    /// A read happens in two passes over the same payload. The first prices it: each
+    /// structure's <c>Price</c> walks the payload's fields in the order its reader reads
+    /// them, adding up what the reader is going to allocate, through
+    /// <see cref="Price(long)"/>, and allocating nothing itself. <see cref="Settle"/>
+    /// then compares the whole with the limit, once, so that a refusal names one total
+    /// and a budget of that total loads the payload. The second pass is the reader, which
+    /// charges each allocation before making it, through <see cref="Charge(long)"/>,
+    /// against that price.
+    /// <para>
+    /// The price and the charges are the same sums, made by the same helpers, so a read
+    /// spends exactly what it was priced at; the read-budget tests hold the two equal. A
+    /// charge past the price is a price that missed something. The read still goes no
+    /// further than the limit allows: the charge is then held to the limit as charges
+    /// were before there was a price, so a defect in a price can make a refusal name too
+    /// little, but never let a read past its budget.
+    /// </para>
+    /// <para>
+    /// Both are upper bounds on what the read allocates, in bytes as the runtime counts
+    /// them: an array's elements and its header, and a small fixed amount for each
+    /// object that is not an array. They are what the read-budget tests hold the
+    /// measured allocation to, so a price that is too small fails a test rather than
     /// letting a read past its budget.
+    /// </para>
     /// </remarks>
     internal sealed class ReadBudget
     {
@@ -206,27 +238,77 @@ namespace ProbabilisticDataStructures
         /// <summary>The most this read may allocate.</summary>
         internal long Limit { get; }
 
-        /// <summary>What this read has been charged so far.</summary>
+        /// <summary>
+        /// What the whole read is priced at, once it has been settled; while it is being
+        /// priced, the price so far.
+        /// </summary>
         internal long Charged { get; private set; }
 
+        /// <summary>What the read has charged against its price since it was settled.</summary>
+        internal long Spent { get; private set; }
+
         /// <summary>
-        /// Takes <paramref name="bytes"/> from the allowance, or refuses the payload if
-        /// that would pass the limit. Called before the allocation it pays for.
+        /// Whether the read has been priced and admitted, so that what it reads next --
+        /// a structure nested in it included -- draws on that price rather than adding to
+        /// it.
+        /// </summary>
+        internal bool IsSettled { get; private set; }
+
+        /// <summary>
+        /// Adds <paramref name="bytes"/> to the price of the read, while it is worked out.
+        /// Never refuses: the whole is compared with the limit once it is known.
+        /// </summary>
+        internal void Price(long bytes)
+        {
+            this.Charged = Sum(this.Charged, bytes);
+        }
+
+        /// <summary>
+        /// Admits the read at its price, or refuses it, naming the whole of it, if that
+        /// is more than the limit.
         /// </summary>
         /// <exception cref="InvalidDataException">
-        /// The allowance is spent; the inner exception is a
-        /// <see cref="ReadBudgetExceededException"/> saying by how much.
+        /// The price is more than the limit; the inner exception is a
+        /// <see cref="ReadBudgetExceededException"/> naming both.
+        /// </exception>
+        internal void Settle()
+        {
+            if (this.Charged > this.Limit)
+            {
+                throw this.Refusal(this.Charged);
+            }
+
+            this.IsSettled = true;
+        }
+
+        /// <summary>
+        /// Draws <paramref name="bytes"/> on the read's price, before the allocation it
+        /// pays for.
+        /// </summary>
+        /// <exception cref="InvalidDataException">
+        /// The read has been charged past its price, and past the limit; the inner
+        /// exception is a <see cref="ReadBudgetExceededException"/>. Only a price that
+        /// missed something gets here.
         /// </exception>
         internal void Charge(long bytes)
         {
-            var total = bytes > long.MaxValue - this.Charged ? long.MaxValue : this.Charged + bytes;
-            if (total > this.Limit)
+            this.Spent = Sum(this.Spent, bytes);
+            if (this.Spent > this.Charged)
             {
-                var why = new ReadBudgetExceededException(this.structure, total, this.Limit);
-                throw new InvalidDataException(why.Message, why);
-            }
+                if (this.Spent > this.Limit)
+                {
+                    throw this.Refusal(this.Spent);
+                }
 
-            this.Charged = total;
+                this.Charged = this.Spent;
+            }
+        }
+
+        /// <summary>The refusal of a read that takes <paramref name="required"/> bytes.</summary>
+        internal InvalidDataException Refusal(long required)
+        {
+            var why = new ReadBudgetExceededException(this.structure, required, this.Limit);
+            return new InvalidDataException(why.Message, why);
         }
 
         /// <summary>

@@ -617,7 +617,8 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.SublimeCountMinSketch);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.SublimeCountMinSketch, out var hashId, budget);
+                stream, StructureId.SublimeCountMinSketch, out var hashId, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var delta = reader.ReadDouble();
@@ -625,7 +626,145 @@ namespace ProbabilisticDataStructures
             var sizeFactor = reader.ReadDouble();
             var depth = reader.ReadUInt32();
             var width = reader.ReadUInt32();
+            CheckShape(delta, growthExponent, sizeFactor, depth, width);
 
+            var sketch = new SublimeCountMinSketch
+            {
+                delta = delta,
+                growthExponent = growthExponent,
+                sizeFactor = sizeFactor,
+                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
+            };
+
+            sketch.count = reader.ReadUInt64();
+            sketch.expansionLimit = reader.ReadUInt64();
+            sketch.contractionLimit = reader.ReadUInt64();
+
+            var recordCount = reader.ReadUInt32();
+            var expected = FirstRecordWidth(recordCount, width);
+
+            for (var i = 0; i < recordCount; i++)
+            {
+                var recordWidth = reader.ReadUInt32();
+                CheckRecord(i, recordWidth, expected);
+
+                sketch.width = (int)recordWidth;
+                sketch.records.Add(ReadCounters(ref reader, (int)depth, (int)recordWidth));
+                expected *= 2;
+            }
+
+            sketch.width = (int)width;
+            sketch.rows = ReadCounters(ref reader, (int)depth, (int)width);
+            reader.ExpectEnd();
+
+            return sketch;
+        }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: for the rows and
+        /// for each record of an earlier state, the plain counts read and the packed
+        /// counters they are tuned for and moved into. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var delta = reader.ReadDouble();
+            var growthExponent = reader.ReadDouble();
+            var sizeFactor = reader.ReadDouble();
+            var depth = reader.ReadUInt32();
+            var width = reader.ReadUInt32();
+            CheckShape(delta, growthExponent, sizeFactor, depth, width);
+
+            reader.ReadUInt64();
+            reader.ReadUInt64();
+            reader.ReadUInt64();
+
+            var recordCount = reader.ReadUInt32();
+            var expected = FirstRecordWidth(recordCount, width);
+
+            for (var i = 0; i < recordCount; i++)
+            {
+                var recordWidth = reader.ReadUInt32();
+                CheckRecord(i, recordWidth, expected);
+                PriceCounters(ref reader, (int)depth, (int)recordWidth);
+                expected *= 2;
+            }
+
+            PriceCounters(ref reader, (int)depth, (int)width);
+        }
+
+        /// <summary>
+        /// Prices what <see cref="ReadCounters"/> allocates, reading the counts it reads
+        /// for what tuning them chooses, and moves past them.
+        /// </summary>
+        private static void PriceCounters(ref PayloadReader reader, int depth, int forWidth)
+        {
+            reader.Budget.Price(CountsCost(depth, forWidth));
+
+            Span<long> lengths = stackalloc long[CounterLengthCount];
+            for (var i = 0L; i < (long)depth * forWidth; i++)
+            {
+                Tally(lengths, reader.ReadUInt64());
+            }
+
+            reader.Budget.Price(PackedCost(depth, forWidth, Tune(lengths).CountersPerChunk));
+        }
+
+        /// <summary>The rows of plain counts one state is read into.</summary>
+        private static long CountsCost(int depth, int forWidth) => ReadBudget.Sum(
+            ReadBudget.ArrayOf((ulong)depth, sizeof(long)),
+            ReadBudget.Times((ulong)depth, ReadBudget.ArrayOf((ulong)forWidth, sizeof(ulong))));
+
+        /// <summary>The rows of packed counters one state is moved into, at a tuning.</summary>
+        private static long PackedCost(int depth, int forWidth, int chunkCounters) => ReadBudget.Sum(
+            ReadBudget.ArrayOf((ulong)depth, sizeof(long)),
+            ReadBudget.Times((ulong)depth, ValeCounterArray.RestoreCost(forWidth, chunkCounters)));
+
+        /// <summary>
+        /// The width the first record of <paramref name="recordCount"/> must have, after
+        /// checking a sketch <paramref name="width"/> wide can have doubled that often.
+        /// </summary>
+        private static uint FirstRecordWidth(uint recordCount, uint width)
+        {
+            if (recordCount > 30)
+            {
+                throw new InvalidDataException(
+                    $"Sketch carries {recordCount} records of earlier states. Each " +
+                    "stands for a doubling, and thirty doublings is more counters " +
+                    "than a row may hold.");
+            }
+
+            var expected = width;
+            for (var i = 0; i < recordCount; i++)
+            {
+                expected /= 2;
+            }
+            if (expected == 0)
+            {
+                throw new InvalidDataException(
+                    $"Sketch carries {recordCount} records but is only {width} " +
+                    "counters wide, so it cannot have doubled that many times.");
+            }
+
+            return expected;
+        }
+
+        private static void CheckRecord(int i, uint recordWidth, uint expected)
+        {
+            if (recordWidth != expected)
+            {
+                throw new InvalidDataException(
+                    $"Record {i} claims {recordWidth} counters where the " +
+                    $"doublings that follow it require {expected}.");
+            }
+        }
+
+        /// <summary>
+        /// Checks the shape a payload claims, as both the read and its price do before
+        /// any counters are allocated.
+        /// </summary>
+        private static void CheckShape(
+            double delta, double growthExponent, double sizeFactor, uint depth, uint width)
+        {
             if (double.IsNaN(delta) || delta <= 0 || delta >= 1)
             {
                 throw new InvalidDataException(
@@ -659,60 +798,6 @@ namespace ProbabilisticDataStructures
                     "-- the low bits of a hash pick the counter -- no larger than " +
                     $"{MaxWidth:N0}, the largest an int holds, and this is not one.");
             }
-
-            var sketch = new SublimeCountMinSketch
-            {
-                delta = delta,
-                growthExponent = growthExponent,
-                sizeFactor = sizeFactor,
-                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
-            };
-
-            sketch.count = reader.ReadUInt64();
-            sketch.expansionLimit = reader.ReadUInt64();
-            sketch.contractionLimit = reader.ReadUInt64();
-
-            var recordCount = reader.ReadUInt32();
-            if (recordCount > 30)
-            {
-                throw new InvalidDataException(
-                    $"Sketch carries {recordCount} records of earlier states. Each " +
-                    "stands for a doubling, and thirty doublings is more counters " +
-                    "than a row may hold.");
-            }
-
-            var expected = width;
-            for (var i = 0; i < recordCount; i++)
-            {
-                expected /= 2;
-            }
-            if (expected == 0)
-            {
-                throw new InvalidDataException(
-                    $"Sketch carries {recordCount} records but is only {width} " +
-                    "counters wide, so it cannot have doubled that many times.");
-            }
-
-            for (var i = 0; i < recordCount; i++)
-            {
-                var recordWidth = reader.ReadUInt32();
-                if (recordWidth != expected)
-                {
-                    throw new InvalidDataException(
-                        $"Record {i} claims {recordWidth} counters where the " +
-                        $"doublings that follow it require {expected}.");
-                }
-
-                sketch.width = (int)recordWidth;
-                sketch.records.Add(ReadCounters(ref reader, (int)depth, (int)recordWidth));
-                expected *= 2;
-            }
-
-            sketch.width = (int)width;
-            sketch.rows = ReadCounters(ref reader, (int)depth, (int)width);
-            reader.ExpectEnd();
-
-            return sketch;
         }
 
         /// <summary>
@@ -727,9 +812,7 @@ namespace ProbabilisticDataStructures
             ref PayloadReader reader, int depth, int forWidth)
         {
             // Each row of plain counts is allocated before it is read.
-            reader.Budget.Charge(ReadBudget.Sum(
-                ReadBudget.ArrayOf((ulong)depth, sizeof(long)),
-                ReadBudget.Times((ulong)depth, ReadBudget.ArrayOf((ulong)forWidth, sizeof(ulong)))));
+            reader.Budget.Charge(CountsCost(depth, forWidth));
             var values = new ulong[depth][];
             for (var i = 0; i < depth; i++)
             {
@@ -743,9 +826,7 @@ namespace ProbabilisticDataStructures
             var (chunkCounters, stub) = Tune(values);
 
             // And then packed, at the tuning just chosen.
-            reader.Budget.Charge(ReadBudget.Sum(
-                ReadBudget.ArrayOf((ulong)depth, sizeof(long)),
-                ReadBudget.Times((ulong)depth, ValeCounterArray.RestoreCost(forWidth, chunkCounters))));
+            reader.Budget.Charge(PackedCost(depth, forWidth, chunkCounters));
             var rows = new ValeCounterArray[depth];
             for (var i = 0; i < depth; i++)
             {
@@ -956,10 +1037,16 @@ namespace ProbabilisticDataStructures
         /// in a hundred are passed over.
         /// </para>
         /// </remarks>
-        private static (int CountersPerChunk, int StubBits) Tune(ulong[][] values)
-        {
-            var lengths = CounterLengths(values);
+        private static (int CountersPerChunk, int StubBits) Tune(ulong[][] values) =>
+            Tune(CounterLengths(values));
 
+        /// <summary>
+        /// <see cref="Tune(ulong[][])"/>, from how many counters hold a value of each bit
+        /// length, which is all it looks at: so that a price can tune counters it has only
+        /// read past.
+        /// </summary>
+        private static (int CountersPerChunk, int StubBits) Tune(ReadOnlySpan<long> lengths)
+        {
             var counters = 0L;
             foreach (var atLength in lengths)
             {
@@ -1057,17 +1144,29 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         internal static long[] CounterLengths(ulong[][] values)
         {
-            var lengths = new long[CounterBits + 1];
+            var lengths = new long[CounterLengthCount];
 
             foreach (var row in values)
             {
                 foreach (var value in row)
                 {
-                    lengths[CounterBits - BitOperations.LeadingZeroCount(value)]++;
+                    Tally(lengths, value);
                 }
             }
 
             return lengths;
+        }
+
+        /// <summary>
+        /// How many lengths <see cref="CounterLengths"/> tallies counters by: every one
+        /// from nought to <see cref="CounterBits"/>.
+        /// </summary>
+        private const int CounterLengthCount = CounterBits + 1;
+
+        /// <summary>Counts <paramref name="value"/> at its bit length.</summary>
+        private static void Tally(Span<long> lengths, ulong value)
+        {
+            lengths[CounterBits - BitOperations.LeadingZeroCount(value)]++;
         }
     }
 }

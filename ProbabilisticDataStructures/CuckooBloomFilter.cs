@@ -522,7 +522,8 @@ namespace ProbabilisticDataStructures
 
             var budget = ReadBudget.For(options, StructureId.CuckooBloomFilter);
             var payload = PersistenceFormat.Read(
-                stream, StructureId.CuckooBloomFilter, out var hashId, out var version, budget);
+                stream, StructureId.CuckooBloomFilter, out var hashId, out var version, budget, Price,
+                hash, PersistenceFormat.CheckResolvable);
             var reader = new PayloadReader(payload, budget);
 
             var m = reader.ReadUInt32();
@@ -530,57 +531,17 @@ namespace ProbabilisticDataStructures
             var f = reader.ReadUInt32();
             var count = reader.ReadUInt32();
             var n = reader.ReadUInt32();
-
-            if (m == 0 || b == 0)
-            {
-                throw new InvalidDataException(
-                    $"Filter has {m} buckets of {b} entries, leaving nowhere to put " +
-                    "anything.");
-            }
-
-            // Version 2 and earlier recorded a width in bytes; version 3 records it in
-            // bits. A filter written before packing restores at eight bits per stored
-            // byte, which reproduces exactly the fingerprints it held: the value is
-            // the same low bits of the same digest, and hashing it to find its partner
-            // bucket sees the same bytes it always did.
-            var bits = version >= PersistenceFormat.CuckooPackedVersion ? f : f * 8;
-
-            if (bits == 0 || bits > 64)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims a fingerprint width of {bits} bits, and one is " +
-                    "between 1 and 64 -- the bits a hash supplies.");
-            }
-
-            // The same limit the constructor applies, so that every filter it builds
-            // reads back. The table has to be allocated whole even when the payload
-            // holds no entries -- only occupied entries are written -- so a payload
-            // can ask for as large a table as the constructor would build, and no
-            // larger.
-            if (GeometryProblem(m, b, bits) is { } problem)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims {m} buckets of {b} entries at {bits} bits, beyond " +
-                    $"anything this library builds: {problem}");
-            }
+            var bits = CheckShape(m, b, f, version);
 
             var entries = (ulong)m * b;
 
             // The whole table, and the map of which entries hold something: what a
             // filter of this shape is, however few entries the payload carries.
-            budget.Charge(ReadBudget.Sum(
-                ReadBudget.ArrayOf(WordsFor(entries, bits), sizeof(ulong)),
-                ReadBudget.ArrayOf((entries + 7) / 8, 1),
-                ReadBudget.SmallObject));
+            budget.Charge(TableCost(entries, bits));
             var fingerprints = new ulong[WordsFor(entries, bits)];
             var occupancy = new Buckets((uint)entries, 1);
 
-            var occupied = reader.ReadUInt32();
-            if (occupied > m * (ulong)b)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims {occupied} occupied entries in {m} buckets of {b}.");
-            }
+            var occupied = ReadOccupied(ref reader, m, b);
 
             // One buffer for the whole loop: widening a stored fingerprint needs eight
             // bytes of scratch, and allocating them per entry grows the stack by the
@@ -591,13 +552,7 @@ namespace ProbabilisticDataStructures
             {
                 var bucket = reader.ReadUInt32();
                 var entry = reader.ReadUInt32();
-
-                if (bucket >= m || entry >= b)
-                {
-                    throw new InvalidDataException(
-                        $"Filter holds an entry at bucket {bucket} slot {entry}, outside " +
-                        $"its {m} buckets of {b}.");
-                }
+                CheckEntry(bucket, entry, m, b);
 
                 ulong fingerprint;
                 if (version >= PersistenceFormat.CuckooPackedVersion)
@@ -618,12 +573,7 @@ namespace ProbabilisticDataStructures
                 else
                 {
                     var stored = reader.ReadBytes();
-                    if (stored.Length != f)
-                    {
-                        throw new InvalidDataException(
-                            $"Filter holds a {stored.Length}-byte fingerprint where its " +
-                            $"own fingerprint size is {f}.");
-                    }
+                    CheckStored(stored.Length, f);
 
                     widened.Clear();
                     stored.CopyTo(widened);
@@ -676,6 +626,121 @@ namespace ProbabilisticDataStructures
                 originalRandomState = originalRandomState,
             };
         }
+
+        /// <summary>
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the whole table
+        /// and its occupancy map, and, before fingerprints were packed, the copy of each
+        /// stored one. See <see cref="PayloadPrice"/>.
+        /// </summary>
+        internal static void Price(ref PayloadReader reader, ushort version)
+        {
+            var m = reader.ReadUInt32();
+            var b = reader.ReadUInt32();
+            var f = reader.ReadUInt32();
+            reader.ReadUInt32();
+            reader.ReadUInt32();
+            var bits = CheckShape(m, b, f, version);
+
+            reader.Budget.Price(TableCost((ulong)m * b, bits));
+            if (version >= PersistenceFormat.CuckooPackedVersion)
+            {
+                // Packed entries are fixed fields; nothing past the table is allocated.
+                return;
+            }
+
+            var occupied = ReadOccupied(ref reader, m, b);
+            for (uint e = 0; e < occupied; e++)
+            {
+                CheckEntry(reader.ReadUInt32(), reader.ReadUInt32(), m, b);
+                CheckStored(reader.SkipBytes(), f);
+            }
+        }
+
+        private static uint ReadOccupied(ref PayloadReader reader, uint m, uint b)
+        {
+            var occupied = reader.ReadUInt32();
+            if (occupied > m * (ulong)b)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {occupied} occupied entries in {m} buckets of {b}.");
+            }
+            return occupied;
+        }
+
+        private static void CheckEntry(uint bucket, uint entry, uint m, uint b)
+        {
+            if (bucket >= m || entry >= b)
+            {
+                throw new InvalidDataException(
+                    $"Filter holds an entry at bucket {bucket} slot {entry}, outside " +
+                    $"its {m} buckets of {b}.");
+            }
+        }
+
+        /// <summary>
+        /// Checks a fingerprint stored before packing is the width the filter names, as
+        /// the read does before the next is copied.
+        /// </summary>
+        private static void CheckStored(int length, uint f)
+        {
+            if (length != f)
+            {
+                throw new InvalidDataException(
+                    $"Filter holds a {length}-byte fingerprint where its " +
+                    $"own fingerprint size is {f}.");
+            }
+        }
+
+        /// <summary>
+        /// Checks the shape a payload claims, as both the read and its price do before
+        /// the table is allocated, and returns its fingerprint width in bits.
+        /// </summary>
+        private static uint CheckShape(uint m, uint b, uint f, ushort version)
+        {
+            if (m == 0 || b == 0)
+            {
+                throw new InvalidDataException(
+                    $"Filter has {m} buckets of {b} entries, leaving nowhere to put " +
+                    "anything.");
+            }
+
+            // Version 2 and earlier recorded a width in bytes; version 3 records it in
+            // bits. A filter written before packing restores at eight bits per stored
+            // byte, which reproduces exactly the fingerprints it held: the value is
+            // the same low bits of the same digest, and hashing it to find its partner
+            // bucket sees the same bytes it always did.
+            var bits = version >= PersistenceFormat.CuckooPackedVersion ? f : f * 8;
+
+            if (bits == 0 || bits > 64)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims a fingerprint width of {bits} bits, and one is " +
+                    "between 1 and 64 -- the bits a hash supplies.");
+            }
+
+            // The same limit the constructor applies, so that every filter it builds
+            // reads back. The table has to be allocated whole even when the payload
+            // holds no entries -- only occupied entries are written -- so a payload
+            // can ask for as large a table as the constructor would build, and no
+            // larger.
+            if (GeometryProblem(m, b, bits) is { } problem)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {m} buckets of {b} entries at {bits} bits, beyond " +
+                    $"anything this library builds: {problem}");
+            }
+
+            return bits;
+        }
+
+        /// <summary>
+        /// The table of <paramref name="entries"/> fingerprints of <paramref name="bits"/>
+        /// bits, the map of which hold something, and the map's object.
+        /// </summary>
+        private static long TableCost(ulong entries, uint bits) => ReadBudget.Sum(
+            ReadBudget.ArrayOf(WordsFor(entries, bits), sizeof(ulong)),
+            ReadBudget.ArrayOf((entries + 7) / 8, 1),
+            ReadBudget.SmallObject);
 
         /// <summary>
         /// Used only by <see cref="Read"/>, which sets every field itself.
