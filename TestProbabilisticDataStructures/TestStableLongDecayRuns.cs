@@ -281,6 +281,49 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// An add, through <c>Add</c> or <c>TestAndAdd</c>, makes min(p, m) cell updates:
+        /// p for an ordinary filter, as the loop always made, and m for one whose run is
+        /// longer than the filter.
+        /// </summary>
+        /// <remarks>
+        /// The counts are exact, since the work is. A decay that visited every cell on
+        /// every add would give every answer right, because a cell outside the run is
+        /// updated by nothing, and would cost a filter of a million cells a million
+        /// updates an add. Only a count can tell.
+        /// </remarks>
+        [TestMethod]
+        public void TestAnAddMakesMinOfPAndMCellUpdates()
+        {
+            foreach (var (f, expected) in new (StableBloomFilter, uint)[]
+            {
+                (new StableBloomFilter(1000, 2, 0.01, seed: 1), 0),
+                (new StableBloomFilter(3, 1, 0.01), 3),
+                (new StableBloomFilter(10, 2, 1e-6), 10),
+            })
+            {
+                var perAdd = expected == 0 ? f.P() : expected;
+                if (expected == 0)
+                {
+                    Assert.IsLessThan(f.Cells(), f.P(), "the ordinary filter's run is not shorter than it");
+                    Assert.IsGreaterThan(0u, f.P(), "the ordinary filter decays nothing");
+                }
+                else
+                {
+                    Assert.IsGreaterThan(f.Cells(), f.P(), $"{f.Cells()} cells: the run is not longer than the filter");
+                }
+
+                for (var i = 0; i < 60; i++)
+                {
+                    f.Add(Key($"add-{i}"));
+                    f.TestAndAdd(Key($"test-and-add-{i}"));
+                }
+
+                Assert.AreEqual(120L * perAdd, f.DecayUpdates,
+                    $"{f.Cells()} cells, p = {f.P():N0}: cell updates over 120 adds");
+            }
+        }
+
+        /// <summary>
         /// Runs far too long for the loop to run beside them take every cell down far more
         /// than its maximum, which is to zero -- including a single cell taken down
         /// 4,294,967,295 times, a count no int holds.

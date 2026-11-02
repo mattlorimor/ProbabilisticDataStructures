@@ -629,8 +629,16 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         private void Decrement()
         {
-            DecayRun(this.cells, this.M, this.p, DecayStart(this.random.Next(), this.M));
+            this.DecayUpdates += DecayRun(this.cells, this.M, this.p, DecayStart(this.random.Next(), this.M));
         }
+
+        /// <summary>
+        /// The cell updates this filter's decay has made, so a test can hold an add to
+        /// min(p, m) of them: p for an ordinary filter, as the loop always made, and m for
+        /// one whose run is longer than the filter. Not stored with the filter, and not
+        /// returned to zero by <see cref="Reset"/>.
+        /// </summary>
+        internal long DecayUpdates { get; private set; }
 
         /// <summary>
         /// Decrements the <paramref name="p"/> consecutive cells of a run that starts at
@@ -656,18 +664,23 @@ namespace ProbabilisticDataStructures
         /// any length and cell width, against the plain loop.
         /// </para>
         /// </remarks>
-        internal static void DecayRun(Buckets cells, uint m, uint p, uint start)
+        /// <returns>The cell updates it made, counted as it makes them.</returns>
+        internal static uint DecayRun(Buckets cells, uint m, uint p, uint start)
         {
             var laps = p / m;
             var rest = p % m;
             var max = (uint)cells.MaxBucketValue();
             var updates = Math.Min(p, m);
+            uint made = 0;
             for (uint i = 0; i < updates; i++)
             {
                 // laps is at most p / 2 whenever rest is not zero, so this cannot wrap.
                 var steps = laps + (i < rest ? 1u : 0u);
                 cells.Increment(DecayCell(start, i, m), -(int)Math.Min(steps, max));
+                made++;
             }
+
+            return made;
         }
 
         /// <summary>
