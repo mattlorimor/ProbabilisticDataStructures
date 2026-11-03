@@ -406,8 +406,10 @@ namespace ProbabilisticDataStructures
                     this.LightItems[i] = items[other.HeavyCount + i];
                 }
                 this.LightCount = other.LightCount;
-                // The region's total, not the threshold times its size: the total
-                // is the number kept exact.
+                // The region's total, not the threshold times its size. The total is
+                // what a sample holds and the threshold is its quotient, so copying the
+                // total carries the other sample's over unchanged, where the product
+                // would round.
                 this.LightWeight = other.LightWeight;
             }
             else
@@ -599,8 +601,9 @@ namespace ProbabilisticDataStructures
             }
             this.candidateCount = 0;
 
-            // The survivors inherit the dropped item's weight: this is what keeps
-            // the total exact and every survivor's adjusted weight at the threshold.
+            // The survivors inherit the dropped item's weight: this is what keeps the
+            // drop from losing any of it, and every survivor's adjusted weight at the
+            // threshold.
             this.LightWeight = candidateWeight;
         }
 

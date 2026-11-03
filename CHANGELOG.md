@@ -925,7 +925,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hundredth of that error up to a `k` of ten million, one standard error from about 87
   million, six at 175 million and hundreds past a billion. These figures come from the two
   rates and a model of the stream, which a scaled-down simulation of the draw reproduced.
-  The total weight was exact throughout. `VarOpt` shipped in 6.2.0, so 6.2.0 is affected.
+  The total weight was not affected: no weight is lost when an item is evicted, because the
+  survivors inherit it, whichever item goes. `VarOpt` shipped in 6.2.0, so 6.2.0 is
+  affected.
   <br><br>
   The slot is now the high half of the 128-bit product of the generator's next 64 bits and
   `L`, so every light item is within 2^-32 of an equal chance of going, at every size.
