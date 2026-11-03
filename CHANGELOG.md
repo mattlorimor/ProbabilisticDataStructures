@@ -1040,6 +1040,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dimensions. FORMAT.md's table of sizes has the four new rows. No size that built before
   stops building.
 
+- **A `PrivateCountMinSketch` payload claiming counters it did not hold had its rows
+  allocated before it was refused, or was refused for a budget that would not have loaded
+  it.** The reader allocated each row before reading it, and neither the reader nor the
+  price that comes before it checked that the counters the shape claims are in the
+  payload. A sketch of 1,067 bytes with its width edited to ten million allocated 80 MB,
+  under the default budget or under none, before failing at the first missing counter;
+  edited to 2^27 it was refused for its budget, naming 2,147,485,016 bytes, under which it
+  would have allocated a gigabyte row and failed the same way. The price also skipped the
+  counters as width × depth × 8 in a `long`, which wraps for a width and depth both past
+  a billion, so a pair chosen to wrap into the bytes left let the price walk on as if they
+  were there. Both now check the counters against the bytes remaining before pricing or
+  allocating a row, as `HeavyKeeper`'s reader does, and refuse a payload that lacks them
+  for that, under any budget. The same holds for the sketches a `DpswSketch` holds, which
+  are read the same way. It needs a payload edited on purpose with its checksum repaired;
+  every payload this library wrote holds its counters and reads as before, and the format
+  is unchanged.
+
 - **`InverseBloomFilter`, `HyperLogLog` and `DpswSketch` failed inside an allocation, or
   saturated, instead of refusing a size they could not build.** `InverseBloomFilter`'s
   slots are one array of references, which holds 2,147,483,591: a capacity past that was
