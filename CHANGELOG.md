@@ -237,6 +237,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `InfiniFilter` doubles its table by walking the old table's entries in place. It listed
   them first, 16 bytes an entry beside both tables, which at the doubling into 2^31 slots
   was 12.9 GB more than the 4.8 GB of the two 8-bit tables.
+  <br><br>
+  `BloomierFilter.Build` refuses a set with more distinct keys than a map holds at the first
+  key past the most, without reading the rest of the pairs. It collected every pair first,
+  into a dictionary and then a list, and compared the count afterwards, so a set too large
+  was held whole before it was refused: more than 42 GB for any set past 954,204,160 keys,
+  the most at 8-bit values. **One refusal changes:** a set that has too many keys and also
+  gives a key two different values is now refused for whichever the pairs reach first. It
+  was refused for the two values, an `ArgumentException`, wherever they came; now, if the
+  limit is passed first, it is the `ArgumentOutOfRangeException` naming `pairs`. A set that
+  builds is built as before.
 
 ### Fixed
 

@@ -100,7 +100,9 @@ namespace ProbabilisticDataStructures
         /// <exception cref="ArgumentOutOfRangeException">
         /// A value is wider than <paramref name="valueBits"/>, or the map would have more
         /// distinct keys than one array of cells holds: 954 million at values of 8 bits or
-        /// fewer, 636 million to 16 bits and 318 million to 40.
+        /// fewer, 636 million to 16 bits and 318 million to 40. That is refused at the
+        /// first key past the most, without reading the rest of the pairs, so a set that
+        /// also gives a key two values is refused for whichever of the two comes first.
         /// </exception>
         public static BloomierFilter Build(
             IEnumerable<KeyValuePair<byte[], ulong>> pairs,
@@ -147,12 +149,7 @@ namespace ProbabilisticDataStructures
                 valueMask = valueBits == 64 ? ulong.MaxValue : (1UL << valueBits) - 1,
             };
 
-            var entries = Collect(pairs, hashFunction, filter.valueMask, valueBits);
-            if (entries.Count > keyLimit)
-            {
-                throw TooManyKeys(keyLimit, valueBits);
-            }
-
+            var entries = Collect(pairs, hashFunction, filter.valueMask, valueBits, keyLimit);
             filter.Shape((uint)entries.Count);
             filter.Populate(entries);
 
@@ -161,13 +158,15 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Hashes each key and checks the values fit, refusing a key that appears twice
-        /// with different values.
+        /// with different values, and a set of more than <paramref name="keyLimit"/>
+        /// distinct keys as soon as it passes it.
         /// </summary>
         private static List<(ulong Key, ulong Value)> Collect(
             IEnumerable<KeyValuePair<byte[], ulong>> pairs,
             Func<ReadOnlySpan<byte>, ulong> hash,
             ulong valueMask,
-            int valueBits)
+            int valueBits,
+            uint keyLimit)
         {
             var seen = new Dictionary<ulong, ulong>();
 
@@ -184,8 +183,9 @@ namespace ProbabilisticDataStructures
                 }
 
                 var key = hash(pair.Key);
+                var known = seen.TryGetValue(key, out var existing);
 
-                if (seen.TryGetValue(key, out var existing) && existing != pair.Value)
+                if (known && existing != pair.Value)
                 {
                     // Two entries are one key to this filter, which knows a key by its
                     // 64-bit hash alone and keeps no keys. That is a repeated key, or two
@@ -203,6 +203,17 @@ namespace ProbabilisticDataStructures
                         "most 8-bit values build, and 39% at 2^32. Build again with a " +
                         "different hash function, which moves the collision elsewhere.",
                         nameof(pairs));
+                }
+
+                // Refused at the first key past the limit, so that what is held to say so
+                // is the limit's worth of keys and the pairs are read no further. Collecting
+                // them all first held a set too large whole, in this and in the list below,
+                // before the count was compared: past the most a map of 8-bit values holds,
+                // more than 42 GB. A set with too many keys and a conflict is refused for
+                // whichever comes first.
+                if (!known && seen.Count == keyLimit)
+                {
+                    throw TooManyKeys(keyLimit, valueBits);
                 }
 
                 seen[key] = pair.Value;
@@ -225,7 +236,7 @@ namespace ProbabilisticDataStructures
             return new ArgumentOutOfRangeException("pairs", keyLimit + 1L,
                 $"The pairs hold more than {keyLimit:N0} distinct keys, the most a map of " +
                 $"{valueBits}-bit values is built for: the cells of more are more than one " +
-                $"array holds, {Array.MaxLength:N0} bytes. " +
+                $"array holds, {Array.MaxLength:N0} bytes. The pairs were read no further. " +
                 "Build several maps over parts of the set instead.");
         }
 

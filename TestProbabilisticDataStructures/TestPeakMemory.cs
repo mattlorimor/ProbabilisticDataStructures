@@ -259,9 +259,10 @@ namespace TestProbabilisticDataStructures
         /// A Bloomier build refuses a set with more distinct keys than it is built for as soon
         /// as the pairs pass the limit, so what it holds to say so is the limit's worth of
         /// keys and no more. It used to collect every pair into a dictionary and then a list,
-        /// about 44 bytes a key, before comparing the count with the limit: 42 GB at the most
-        /// a map of 8-bit values holds. The limit is lowered through the build the public one
-        /// calls, and the pairs, a hundred times the limit, count how many were read.
+        /// about 44 bytes a key, before comparing the count with the limit: more than 42 GB
+        /// for a set past the most a map of 8-bit values holds. The limit is lowered through
+        /// the build the public one calls, and the pairs, a hundred times the limit, count
+        /// how many were read.
         /// </summary>
         [TestMethod]
         public void TestABloomierBuildStopsReadingAtTheFirstKeyPastItsLimit()
@@ -279,7 +280,11 @@ namespace TestProbabilisticDataStructures
             Assert.IsLessThanOrEqualTo(limit + 1, (uint)pairs.Read,
                 $"the build read {pairs.Read:N0} pairs, and allocated {allocated:N0} bytes, to " +
                 $"refuse more than {limit:N0} keys");
-            Assert.IsLessThan(128L * limit, allocated,
+            // A dictionary of the limit's keys is 28 bytes an entry, in tables that double as
+            // they fill, so under 128 bytes a key of the limit with the refusal; measured, 104.
+            // The bound is twice that. Collecting all the pairs first allocated 10 MB, about
+            // forty times the bound.
+            Assert.IsLessThan(256L * limit, allocated,
                 $"refusing more than {limit:N0} keys allocated {allocated:N0} bytes: every pair " +
                 "was collected before the count was compared with the limit");
         }
