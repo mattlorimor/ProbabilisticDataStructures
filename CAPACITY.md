@@ -451,7 +451,7 @@ either is refused as beyond anything built.
 The same, with width `⌈1/ε²⌉`, so a rate ten times finer costs a hundred times the
 width, and counters of 8 bytes that are signed. A read charges 24 bytes a counter. The
 widest row is the same 2,147,483,591, an `ε` of about 2.16e-5, and the depth is limited
-the same way.
+the same way. A payload that claims more of either is refused as beyond anything built.
 
 ### `PrivateCountMinSketch`
 
