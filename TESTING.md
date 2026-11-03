@@ -467,9 +467,11 @@ exemption is a claim, and is checked like one.
   step, properties over generated sequences, and a breadth-first exploration beside a
   literal-seeded churn. A shared engine would be the lowest common denominator or a
   framework larger than the files it served. What they share is the rules above.
-- **A Stryker rerun here.** The `Buckets.cs` sweep in the next section predates these
-  files, and its survivor list will look different with them in. Rerunning it on the
-  current tree is [#173](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/173).
+- **A sequence for a Stryker survivor.** The `Buckets.cs` sweep in the next section was
+  rerun with these files in, for
+  [#173](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/173), and
+  nothing it left needed one: its one real survivor was an internal guard that no path
+  reaches, now held by a direct test.
 
 ## Mutation testing
 
@@ -542,34 +544,143 @@ adding to them. The gain is real and well short of the number of copies, and a c
 above the machine's CPUs is lowered to it. Measure on your own machine before settling
 on a number; a few copies is where to start.
 
-Whole-file sweeps use Stryker.NET, 5.0.0 or later (below). The config carries the
-settings; the scope belongs on the command line, per run:
+Whole-file sweeps use Stryker.NET, 5.0.0 or later (below), one library file at a time,
+through `scripts/stryker-file.sh`:
 
 ```
-dotnet tool restore
-cd TestProbabilisticDataStructures
-dotnet stryker --mutate "**/QuotientFilter.cs" --mutate "**/Buckets.cs"
+scripts/stryker-file.sh ProbabilisticDataStructures/Buckets.cs --concurrency 28
+scripts/stryker-file.sh --out ~/sweeps --concurrency 28 \
+    ProbabilisticDataStructures/SlidingWindow.cs ProbabilisticDataStructures/SetComparison.cs
 ```
 
-Scope every run. Stryker is not part of any build, the full library would generate five
-thousand mutants, and the output needs human adjudication anyway. It is a periodic
-audit for files whose tests have not been through the loop above, not a gate.
+It works in copies of HEAD that it removes when it ends, so the tree you are in is never
+built in or edited, and like `mutate.sh` it refuses to start on uncommitted changes,
+since the commit is what it measures. Name several files and they run side by side,
+sharing `--concurrency`, after one pass that finds the tests for all of them. For each
+file `--out` gets Stryker's JSON and HTML reports, its log, the tests it ran, and
+`summary.txt`: the mutants by verdict, then every Survived, Timeout and NoCoverage one
+with its line and mutation. `--jobs` sets how many tests run at once while it finds
+them, and options after `--` go to Stryker. The settings are `stryker-config.json`'s;
+the script adds the scope and the test filter.
 
-Scoping trims the mutants, not the coverage pass that comes first. That pass runs the
-whole suite serially under Stryker's instrumentation, and code outside the scope slows
-with it, so its cost is set by the heaviest tests anywhere. On the frozen tree below, a
-Buckets.cs sweep took twelve minutes end to end. That figure is the frozen tree's, and
-it is not what a sweep costs now.
+Scope every run. Stryker is not part of any build, the whole library generates more
+than twelve thousand mutants (12,512 at master 7e339df), and the output needs human
+adjudication anyway. It is a periodic audit for files whose tests have not been through
+the loop above, not a gate. A whole-library run in one process is not a way round
+that: it is slow for the reason below, and per-file runs are the supported way.
 
-Measured on the current tree (the tree of
-[#143](https://github.com/mattlorimor/ProbabilisticDataStructures/pull/143), then 930
-tests; one 32-thread machine, Stryker 5.0.0, the config in the repository), the same
-one-file sweep did not finish. The initial serialized run of the suite took 8 min 18 s.
-The coverage pass after it was stopped at 2 h 39 min with 373 of those tests done, and
-no mutant had been tried. The Memento tests dominate the pass, though the Memento
-filter never touches `Buckets`: one that takes 15.7 s in an ordinary parallel run took
-74 min 35 s under it, and another that takes 8.2 s took 16 min 20 s. So on today's suite
-a one-file sweep at the default settings is a matter of hours, not minutes.
+**Stryker instruments every file, whatever the scope.** It mutates every file of the
+project and drops the mutants outside `--mutate` only after building them in, so every
+file's code runs under mutant switches and coverage capture, and a test pays for every
+file it passes through, in scope or not. Its coverage pass runs the suite one test at a
+time that way. So `dotnet stryker --mutate "**/Buckets.cs"` alone costs what the heaviest
+tests anywhere cost: on the tree of
+[#143](https://github.com/mattlorimor/ProbabilisticDataStructures/pull/143), with 930
+tests, its coverage pass was stopped at 2 h 39 min with 373 of them done, and a Memento
+test that takes 15.7 s in an ordinary run had taken 74 min 35 s in it, though the Memento
+filter never touches `Buckets`. Measured again for
+[#173](https://github.com/mattlorimor/ProbabilisticDataStructures/issues/173) on master
+7e339df: a HyperLogLog++ test that takes 17.4 s in Stryker's initial run took 492.7 s in
+the coverage pass, and 17.4 s again once every other library file began with
+`// Stryker disable all`. That comment keeps a file's mutants out of the build: Stryker
+reports them ignored by comment and none fails to compile, where some three hundred did,
+and the scoped file's mutants are the same, by location and by id, either way. The
+script writes it into its copy of every library file but the target. Nothing committed
+carries it.
+
+**Only the tests that reach the file run.** A test that executes no line of a file cannot
+see its mutants, so the script leaves it out with Stryker's `test-case-filter`, which its
+VSTest runner writes into the runsettings, and which this suite honours: the initial run
+counts exactly the tests the filter names. Which tests those are is measured on every
+run, not listed. Each test method runs alone under the code coverage collector, and the
+ones that execute a line of the file make the filter. Alone, because a method can reach
+a file only through shared state built by whichever test asks for it first, and run
+together only that first test shows it. `CapacityRows` and the read-budget samples reach
+`Buckets` that way: a probe in every `Buckets` member, recording the test running when
+it was called, missed five methods that running alone found, and otherwise agreed with
+it exactly. A method that fails alone, or leaves no report, is kept, because a filter
+that leaves out a test that does reach the file makes its mutants survive falsely.
+
+Each change, measured on its own for #173 (one 32-thread machine, Stryker 5.0.0 and its
+defaults otherwise, Debug and per-test coverage; master 7e339df, with other runs sharing
+the machine):
+
+| A `Buckets.cs` sweep | Tests | Initial run | Coverage pass |
+|---|---|---|---|
+| neither, on #143's tree | 930 | 8 min 18 s | stopped at 2 h 39 min |
+| the filter alone (the probe's) | 494 | 53 s | 38 min 42 s |
+| the other files disabled alone | 1,894 | 11 min 15 s | 19 min 41 s |
+| both, as the script does | 499 | 49 s | 5 min 44 s |
+
+What is left of the pass is the capture inside `Buckets` itself, on the hottest paths in
+the library. A Release build halves the initial run and leaves the pass as it was
+(6 min 16 s), so the script keeps Stryker's default.
+
+The script on `Buckets.cs`, on the tree with this change and alone on the machine, with
+`--jobs 24 --concurrency 28`, took 15 min 28 s. The suite once took 45 s, and running
+each of its 1,281 test methods alone 2 min 5 s; 322 of them, 502 tests, reach the file.
+Then Stryker: 49 s for its initial run, 5 min 39 s for the coverage pass and 6 min 4 s
+for the 166 mutants it tested, 27 a minute. Two small files named together,
+`SlidingWindow.cs` and `SetComparison.cs`, took 3 min 26 s in all: the same suite and
+pass, which found 7 and 13 methods that reach them, and then 13 s and 29 s of Stryker
+side by side.
+
+**One Stryker process can use the machine.** Each session runs its tests one at a
+time (below), so `--concurrency` is about the cores the mutants keep busy, and the
+suite's own parallelism does not fight it. At 28 the machine was 80 to 95% busy through
+the middle of the mutants and 59% over all of them, the rest being the two minutes
+Stryker takes to bring all its runners up and the last mutants finishing; at 8, on
+master and sharing the machine, they took 12 min 36 s. The coverage pass is one session
+at any concurrency and is now the largest single part, so shards, copies running Stryker
+on line ranges of the file, would each repeat it to save less than it costs. More
+concurrency is not free, though: at 28, four mutants that survive at 8 came back as
+Timeouts. Each sits on a path that hundreds of tests run through, and with every core
+busy their sessions outran the budget; applied by hand, each passes the whole suite at
+normal speed. A Timeout is a lead, below, and a busier machine makes more of them.
+
+**Per-test coverage is the cheapest mode.** The four, run side by side at concurrency 7
+each with the script's filter, so that four Stryker processes shared the machine for
+the first quarter of an hour and two after it:
+
+| `coverage-analysis` | Coverage pass | Mutants | In all |
+|---|---|---|---|
+| `perTest`, the default | 6 min 20 s | all 166 in 16 min 56 s | 24 min 13 s |
+| `perTestInIsolation` | 6 min 0 s, a session for each test | all 166 in 17 min 26 s | 24 min 23 s |
+| `all` | 6 min 22 s | 21 in 8 min 44 s, then stopped | |
+| `off` | none | 44 in 15 min 6 s, then stopped | |
+
+The two per-test modes cost the same here, and agree but for two mutants one kills and
+the other times out. `all` and `off` run every filtered test against a mutant until one
+fails, which for a survivor is every one of them, and when they were stopped they were
+going at a third of the per-test modes' rate. The script keeps the default.
+
+**The sweep, adjudicated.** Of the file's 200 mutants, 3 do not compile (Stryker takes
+the `Max` property for LINQ's `Max()`), and 31 are block removals Stryker skips because
+the statements inside them are mutated one by one. It tested 166: 121 killed, 34
+survived, 11 timed out. Every Survived and Timeout verdict was applied by hand through
+`mutate.sh` and run against the whole suite:
+
+| Stryker's verdict | Mutants | Against the whole suite |
+|---|---|---|
+| Survived | 28 | Survive: an exception's message, its text, the `??` that names what the caller asked for, the conditional that appends a remedy. |
+| Survived | 6 | Survive, equivalent: `>`→`>=` where both arms give the same value (the `Increment` clamps, `Union`'s larger value, `Add`'s clamp), `>>`→`>>>` on an unsigned operand, and the `return` after a straddling write. |
+| Timeout | 4 | Survive at normal speed: three more of the equivalents above (the `Max` setter, `Set`'s clamp, `>>`→`>>>` in `GetBits`) and one message conditional. |
+| Timeout | 7 | Crash the test host: the recursion in `GetBits` and `SetBits`, which with these mutants never ends, overflows the stack. Detections. |
+
+An earlier run, before the test it led to, had one more: the byte count's own check of
+the width, removed, passed all 1,894 tests. No path in the library reaches it, since
+every caller asks `MaxCount` first; `TestTheByteCountRefusesAWidthNoBucketHas` now holds
+it, and kills it in the run above. Nothing else survived that a test should catch.
+The four survivors of
+[#179](https://github.com/mattlorimor/ProbabilisticDataStructures/pull/179)'s own
+mutation are not among these: three narrow 64-bit arithmetic to 32 bits, which no
+Stryker mutator does, so they stay as #179 records them, held by probes at scale outside
+the suite; the fourth, `Allocate` without its size check, Stryker does make, and the test
+#179 added for it kills it.
+
+`mutate.sh` reports a run whose test host crashed as SURVIVED with no count after it,
+where a real survivor reads "SURVIVED (all N passed)". Read that as the crash it is,
+which is a detection, and confirm it by running the suite with the mutant in.
 
 **Before 5.0.0, Stryker and this suite's parallelism did not mix.** The test assembly
 declares `[assembly: Parallelize(Scope = ExecutionScope.MethodLevel)]`, and Stryker
@@ -650,10 +761,12 @@ does not.
 the suite before believing either. The residue that survives adjudication here is
 real and accepted: exception-message wording (below), internal guards reachable by no
 public path (closed with direct internal tests in `TestBuckets.cs`: the length check
-on restore, the zero-width constructor, the geometry guards on `Union` and `Add`, and
-the wide-bucket union beside them), and equivalent mutants (`>`→`>=` where both arms
-write the same value, `>>`→`>>>` on an unsigned operand). Document these rather than
-contorting a test to kill them.
+on restore, the zero-width constructor, the geometry guards on `Union` and `Add`, the
+wide-bucket union beside them, and the byte count's own check of the width), and
+equivalent mutants (`>`→`>=` where both arms write the same value, `>>`→`>>>` on an
+operand that cannot be negative, and a `return` after both halves of a write that
+straddles a byte, whose fall-through writes the first byte again with the bits it
+already holds). Document these rather than contorting a test to kill them.
 
 **What is asserted about an exception.** In general its type, and not its wording: a
 test that pins a sentence breaks when someone improves the sentence and proves nothing
