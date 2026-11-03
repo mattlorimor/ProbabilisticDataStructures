@@ -418,6 +418,39 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// An error smaller than the largest sketch delivers was met with the largest
+        /// sketch, whose error is larger than the one asked for, where
+        /// HyperLogLog.NewDefaultHyperLogLog refuses such an error naming it (#220). It is
+        /// refused the same way, with the smallest error that is honoured in the message.
+        /// <para>
+        /// That smallest error is the largest sketch's own, as
+        /// <see cref="UltraLogLog.RelativeError"/> states it at the largest precision, not
+        /// a typed figure. The boundary is straddled by a part in a billion: just above it
+        /// builds the largest sketch, so the boundary found is the one the sizing steps at,
+        /// and just below it is refused, as are an error whose register count passes what
+        /// a <c>uint</c> holds and one whose square is no longer a positive number.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestAnErrorBelowWhatTheLargestSketchHonoursIsRefusedNamingIt()
+        {
+            var smallest = new UltraLogLog(UltraLogLog.MaxPrecision).RelativeError();
+
+            Assert.AreEqual(UltraLogLog.MaxPrecision, UltraLogLog.NewDefault(smallest * (1 + 1e-9)).Precision(),
+                "the smallest error the largest sketch honours should build the largest sketch");
+
+            foreach (var e in new[] { smallest * (1 - 1e-9), 1e-5, 1e-300 })
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => UltraLogLog.NewDefault(e),
+                    $"an error of {e} is below the {smallest} the largest sketch delivers");
+                Assert.AreEqual("errorRate", ex.ParamName);
+                Assert.AreEqual(e, ex.ActualValue);
+                StringAssert.Contains(ex.Message, smallest.ToString("G3"),
+                    "the refusal should give the smallest error that is honoured");
+            }
+        }
+
+        /// <summary>
         /// The hash cannot be replaced once anything has been added, because
         /// everything already counted sits where the old hash put it.
         /// </summary>

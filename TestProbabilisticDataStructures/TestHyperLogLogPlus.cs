@@ -701,6 +701,41 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// An error smaller than the largest estimator delivers was met with the largest
+        /// estimator, whose error is larger than the one asked for: NewDefault(0.001) wants
+        /// precision 21 and built 18, about 0.2%, twice what was asked (#220). It is refused
+        /// naming the error, as HyperLogLog.NewDefaultHyperLogLog refuses one, with the
+        /// smallest error that is honoured in the message.
+        /// <para>
+        /// That smallest error is the largest estimator's, 1.04 / sqrt(m) at the largest
+        /// precision, worked out here from an estimator of that precision rather than
+        /// typed. The boundary is straddled by a part in a billion: just above it builds the
+        /// largest estimator, so the boundary found is the one the sizing steps at, and just
+        /// below it is refused. The other errors are the issue's example and two whose
+        /// register counts pass what a <c>uint</c> holds, an infinity among them.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestAnErrorBelowWhatTheLargestEstimatorHonoursIsRefusedNamingIt()
+        {
+            var largest = new HyperLogLogPlus(HyperLogLogPlus.MaxPrecision);
+            var smallest = 1.04 / Math.Sqrt(largest.M());
+
+            Assert.AreEqual(HyperLogLogPlus.MaxPrecision, HyperLogLogPlus.NewDefault(smallest * (1 + 1e-9)).Precision(),
+                "the smallest error the largest estimator honours should build the largest estimator");
+
+            foreach (var e in new[] { smallest * (1 - 1e-9), 0.001, 1e-300, double.Epsilon })
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => HyperLogLogPlus.NewDefault(e),
+                    $"an error of {e} is below the {smallest} the largest estimator delivers");
+                Assert.AreEqual("errorRate", ex.ParamName);
+                Assert.AreEqual(e, ex.ActualValue);
+                StringAssert.Contains(ex.Message, smallest.ToString("G3"),
+                    "the refusal should give the smallest error that is honoured");
+            }
+        }
+
         [TestMethod]
         public void TestAddRejectsNull()
         {
