@@ -392,7 +392,18 @@ namespace ProbabilisticDataStructures
             reader.Budget.Price(RowsCost(width, depth));
         }
 
-        private static void CheckCells(uint width, uint depth, long stored)
+        /// <summary>
+        /// The most counters a row can hold, which is the most an array holds.
+        /// </summary>
+        internal static uint MaxWidth => Guard.MaxSketchWidth;
+
+        /// <summary>
+        /// The most rows a sketch can have: ceil(ln(1 / delta)) at the smallest delta whose
+        /// reciprocal is a finite double.
+        /// </summary>
+        internal static uint MaxDepth => Guard.MaxSketchRows;
+
+        internal static void CheckCells(uint width, uint depth, long stored)
         {
             if (width == 0 || depth == 0)
             {

@@ -709,6 +709,51 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The same two limits as the count-min sketch's: a row is one array, and the depth
+        /// is the rows the smallest delta with a reciprocal gives. The constructor refuses
+        /// past them through <see cref="Guard"/> and the reader through its cell check,
+        /// which until this was written took any width and depth whose cells came to the
+        /// bytes the payload carried. The deepest sketch is small, so it is built and read
+        /// back, with the narrowest row there is.
+        /// </summary>
+        [TestMethod]
+        public void TestCountSketchLimitsAreShared()
+        {
+            Assert.AreEqual((uint)Array.MaxLength, CountSketch.MaxWidth);
+            Assert.AreEqual((uint)SublimeCountMinSketch.MaxDepth, CountSketch.MaxDepth);
+
+            Assert.AreEqual("epsilon", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new CountSketch(1 / Math.Sqrt(Array.MaxLength + 0.5), 0.5)).ParamName);
+            Assert.AreEqual("delta", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new CountSketch(0.5, double.Epsilon)).ParamName);
+
+            // An epsilon of 1 is one column.
+            var deepest = new CountSketch(1.0, 1e-308);
+            Assert.AreEqual(1u, deepest.Width());
+            Assert.AreEqual(CountSketch.MaxDepth, deepest.Depth());
+            for (var i = 0; i < 100; i++) deepest.Add(Key(i), i - 50);
+            AssertRoundTrips(deepest);
+
+            // u32 width, u32 depth.
+            var bytes = new CountSketch(0.5, 0.5).ToByteArray();
+            AssertRefused<CountSketch>(PokeUInt32(bytes, 0, CountSketch.MaxWidth + 1), PastTheLimit);
+            AssertRefused<CountSketch>(PokeUInt32(bytes, 4, CountSketch.MaxDepth + 1), PastTheLimit);
+
+            // At the limit, the size is accepted and the cells it claims are not there: the
+            // payload is refused for carrying too few bytes, and not for its size. The
+            // widest row is seventeen gigabytes of cells, which no payload carries.
+            foreach (var offset in new[] { 0, 4 })
+            {
+                var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() =>
+                    Persistence.FromByteArray<CountSketch>(PokeUInt32(
+                        bytes, offset, offset == 0 ? CountSketch.MaxWidth : CountSketch.MaxDepth)));
+                StringAssert.Contains(atTheLimit.Message, "bytes of cells");
+                Assert.DoesNotContain(PastTheLimit, atTheLimit.Message,
+                    "a payload at the limit should be refused for its cells, not its size");
+            }
+        }
+
+        /// <summary>
         /// The rows and the counters in each are arrays. Structural at the limit, where a
         /// sketch is gigabytes of noise: the constructor's refusal one past, the reader's
         /// the same, and the cost a payload at the limit is refused for.
@@ -1393,7 +1438,6 @@ namespace TestProbabilisticDataStructures
                 (StructureId.BloomFilter, NoCap, nameof(TestBloomFilterReadsPastTheOldCeiling)),
                 (StructureId.DeletableBloomFilter, NoCap,
                     nameof(TestDeletableBloomFilterReadsPastTheOldCeiling)),
-                (StructureId.CountSketch, NoCap, nameof(TestCountSketchReadsPastTheOldCeiling)),
                 (StructureId.BinaryFuseFilter, NoCap,
                     nameof(TestBinaryFuseFilterReadsPastTheOldCeiling)),
                 (StructureId.DDSketch, NoCap, nameof(TestDDSketchReadsPastTheOldCeiling)),
@@ -1477,6 +1521,9 @@ namespace TestProbabilisticDataStructures
                 (StructureId.CountMinSketch,
                     new[] { nameof(TestCountMinSketchReadsPastTheOldCeiling) },
                     nameof(TestCountMinSketchLimitsAreShared)),
+                (StructureId.CountSketch,
+                    new[] { nameof(TestCountSketchReadsPastTheOldCeiling) },
+                    nameof(TestCountSketchLimitsAreShared)),
                 (StructureId.PrivateCountMinSketch,
                     new[] { nameof(TestPrivateCountMinSketchReadsPastTheOldCeiling) },
                     nameof(TestPrivateCountMinSketchLimitsAreShared)),
@@ -1532,6 +1579,8 @@ namespace TestProbabilisticDataStructures
                 [("HeavyKeeper", "depth")] = HeavyKeeper.MaxDepth,
                 [("CountMinSketch", "width")] = CountMinSketch.MaxWidth,
                 [("CountMinSketch", "depth")] = CountMinSketch.MaxDepth,
+                [("CountSketch", "width")] = CountSketch.MaxWidth,
+                [("CountSketch", "depth")] = CountSketch.MaxDepth,
                 [("PrivateCountMinSketch", "width")] = PrivateCountMinSketch.MaxWidth,
                 [("PrivateCountMinSketch", "depth")] = PrivateCountMinSketch.MaxDepth,
                 [("InverseBloomFilter", "capacity")] = InverseBloomFilter.MaxCapacity,
