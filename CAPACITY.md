@@ -23,8 +23,8 @@ one of four things: a 32-bit parameter (`uint`), the longest array .NET allows
 (`Array.MaxLength`, 2,147,483,591 elements), a field of the persisted format, or the
 arithmetic that turns your settings into a size. Almost all of them are far past what fits
 in memory: a structure at its limit is gigabytes, and building one is a matter of having
-the machine for it. `memory` means the constructor checks nothing before an allocation
-fails.
+the machine for it. `memory` means an allocation fails before anything the constructor
+checks.
 
 **Loads by default up to** is the largest that `ReadFrom(stream)` reads back. Every read
 has a budget, `ReadOptions.DefaultMemoryBudget`, 1,073,741,824 bytes, and a read is
@@ -121,11 +121,18 @@ and the inverse filter overwrites what its first slots hold sooner.
 From the release after 6.2.0 a new one 2^27 columns, buckets or slots wide or wider places
 with 64-bit values, as the 32-bit filters do from there, and a narrower one is placed as
 before. A count-min sketch is that wide from an `ε` of about 2.03e-8, and a row of it is a
-gigabyte, twice that to read, so it reads back only with a budget raised to match. Every
-save of these is written at format version 9, which records the placement in a byte of
-its own. One read from a payload written before keeps the 32-bit placement whatever its
-width, and records it when saved again; a count-min sketch read so does not merge with a
-new one of the same width.
+gigabyte, twice that to read, so it reads back only with a budget raised to match. Two rows
+of it cannot be saved at all: they are a payload of 2,147,483,681 bytes, past the most a
+payload can be. Two rows of a `PrivateCountMinSketch` that wide are 2,147,483,673 bytes,
+and two of a `HeavyKeeper`, its default depth, 2,684,354,601. A `TopK` writes its count-min
+sketch inside its own payload, and two of the private sketches a `DpswSketch` holds are
+2,147,483,698 bytes at that width before anything else it writes. So a sketch placed with
+64-bit values saves with one row or not at all, and a `DpswSketch` only while it holds one
+sketch. Every save of these is written at format version 9, which records the placement in
+a byte of its own, and in a sketch's payload that byte is 1 only beside a single row. One
+read from a payload written before keeps the 32-bit placement whatever its width, and
+records it when saved again; a count-min sketch read so does not merge with a new one of
+the same width.
 
 ## Sized for n items
 
@@ -148,7 +155,9 @@ last few percent of its limit needs `ReadOptions`.
 ### `BloomFilter64`
 
 The same filter sized in 64 bits: `n` is a `ulong`, and the bits are held as arrays of
-2^30 bytes, so nothing in the constructor stops it short of memory. The false positive
+2^30 bytes, so what stops the constructor is memory, or 2.3e18 bits. The arrays are held
+in one array, so it refuses a filter of more than 2,305,842,948,010,409,983 bits, about
+288 petabytes, naming `n`; an allocation fails long before that. The false positive
 rate costs the same bits per item as `BloomFilter`: about 1.2 bytes an item at 1%.
 
 A filter can be built larger than it can be saved. The payload of a saved structure is
@@ -185,7 +194,11 @@ bits: 10 at 1% and 13 at 0.1%. A bucket therefore costs 5.5 bytes at 1% (four 10
 fingerprints and a bit apiece to say which are in use).
 
 Entries are numbered in 32 bits, so a table has at most 2^31 entries, 2^29 buckets, and
-the table gives the `n` that fills it. A read allocates the whole table whatever it
+the table gives the `n` that fills it. That holds up to fingerprints of 63 bits, whose 2^31
+entries are 2,113,929,217 words, which one array holds. A rate below about 8.7e-19 has
+fingerprints of 64 bits, all the hash supplies, and then 2^31 entries are 2,147,483,649
+words, more than one array holds, so the table stops at 2^30 entries and `n` at
+1,020,054,732, half the table's figure. A read allocates the whole table whatever it
 holds, so the empty row is the table at 2^27 buckets, the largest that fits a gibibyte;
 and each entry the filter holds is written and read at 10 bytes at 1%, so a filter holding
 as many items as it was sized for loads up to a smaller `n`. That number does not rise
@@ -276,6 +289,13 @@ one sorted set and their codes in another, 48 bytes a key each, about 96 between
 before the high parts are counted. At the 838 million keys of the worst case that is 80 GB,
 and a set past it is refused only after.
 
+The table's `as built` is for its rows' rates and ranges, not for every filter. The low
+parts are `⌊log2(L/fp)⌋` bits a key and are saved beside the high ones, eight bytes a word,
+so a finer rate or a wider range passes what a payload holds before the high parts reach
+their limit. 800 million keys over ranges up to 1,024 at a rate of 1e-5 are 26 low bits a
+key, 325,000,002 words and 2.6 GB of them, while their high parts, about 2.02e9 bits, are
+within what an `int` addresses.
+
 ### `InvertibleBloomLookupTable`
 
 `n` is `expectedDifferences`: the number of keys by which the two sets it reconciles may
@@ -297,7 +317,9 @@ little under what it is sized for, so the filter holds about as many items as it
 filter is sized for, and a growth factor of 2 doubles that with every filter. Each new
 filter is also sized for a rate `r` times the last one's, so that the compound rate stays
 bounded: a filter is larger for the tighter rate, and there are more of them the closer
-`r` is to 1.
+`r` is to 1. The first filter is a 32-bit filter like the rest, so a `hint` of more items
+than one can be sized for at the rate, 448,089,842 at 1%, is refused by the constructor
+with an `ArgumentOutOfRangeException` naming `hint` and the largest that builds.
 
 What ends the filter, and so what the growth factor does to the first number, depends on
 that factor. With a growth factor of 2 or more the filters double until the next filter
@@ -438,12 +460,15 @@ estimate.
 ### `HyperLogLogPlus`
 
 Registers 2^p with `p` at most 18, in a sparse form while small. Counts are 64-bit. The
-largest is about half a megabyte, so every one reads back by default.
+largest is about half a megabyte, so every one reads back by default. Its error is
+`1.04 / √m`, about 0.00203 at the largest, and `NewDefault` refuses a smaller error with an
+`ArgumentOutOfRangeException` naming it, where it used to build the largest.
 
 ### `UltraLogLog`
 
 Registers 2^p with `p` at most 26, one byte each, and a 64-bit hash. Every precision reads
-back by default: a read is charged three times the registers.
+back by default: a read is charged three times the registers. The largest has an error of
+about 9.55e-5, and `NewDefault` refuses a smaller one, naming it, as `HyperLogLogPlus` does.
 
 ### `SetSketch`
 
@@ -501,6 +526,12 @@ for the growth exponent `g` and size factor `s`, so a larger `g` grows faster. A
 width of 2^22 at 10,568,984 items. The width is a signed 32-bit integer, so it cannot pass
 2^30, and an `Add` that would double it past that throws, with the sketch as it was.
 
+So the sketch stops when its count reaches `(2^30 · s)^(1/g)`, which a larger `g` brings
+much sooner. At the defaults that is 2^60 keys, and at `g` of 0.9 about ten billion. At a
+size factor of one it is below 2^32 keys, 4,294,967,296, once `g` passes 0.9375: about 3.2
+billion at 0.95 and 1.3 billion at 0.99, so a growth exponent near one stops at a few
+billion keys.
+
 What a counter costs to read depends on how the counters pack, which depends on the counts
 they hold; that makes the width the read reaches a measurement, which was made at `g` of
 0.9 and 0.99, and is 2^21.
@@ -531,7 +562,10 @@ counts. The constructor refuses an accuracy below about 5.6e-17, where
 
 Takes any number of items, and what it holds is a window of the most recent `window`
 of them, as a set of sketches whose number grows slowly with the window. The table gives the
-window it reads back at with the default width and depth, which is a measurement.
+window it reads back at, and saves at, for the default α of 0.5 and β of 0.7 at a ρ of 1,
+with the default width and depth, which are measurements. A smaller α keeps more
+checkpoints in each substream, so more sketches and a larger payload for the same window,
+and both numbers fall with it.
 
 A substream holds `window^β` items (β of 0.7 unless you say otherwise), and at most
 2,147,483,591, the longest array: the limit was set when the checkpoints of a substream were

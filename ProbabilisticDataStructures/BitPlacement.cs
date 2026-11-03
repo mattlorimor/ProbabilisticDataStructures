@@ -262,14 +262,17 @@ namespace ProbabilisticDataStructures
         /// does. The 64-bit one takes the hash and the hash of its eight little-endian
         /// bytes, as
         /// <see cref="Utils.HashKernel128(ReadOnlySpan{byte}, Func{ReadOnlySpan{byte}, ulong})"/>
-        /// does.
+        /// does, and holds those bytes as it does, in an inline array rather than a
+        /// <c>stackalloc</c>: a method with a <c>stackalloc</c> cannot be inlined and
+        /// carries a zeroed frame with a stack check, and every add and test of a structure
+        /// placed with 64-bit values comes through here. The bytes hashed are the same.
         /// </remarks>
         internal static Positions OfHash(
             ulong hash, Func<ReadOnlySpan<byte>, ulong> function, Placement placement, uint m)
         {
             if (placement == Placement.Wide)
             {
-                Span<byte> bytes = stackalloc byte[sizeof(ulong)];
+                EightBytes bytes = default;
                 System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes, hash);
                 return new Positions(hash, function(bytes), m, wide: true);
             }

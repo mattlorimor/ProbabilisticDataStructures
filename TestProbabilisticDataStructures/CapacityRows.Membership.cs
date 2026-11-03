@@ -370,7 +370,7 @@ namespace TestProbabilisticDataStructures
         internal static uint CuckooBits(double fp) =>
             (uint)CuckooFingerprintBits.Invoke(null, new object[] { 4u, fp })!;
 
-        private static ulong CuckooLargest(double fp)
+        internal static ulong CuckooLargest(double fp)
         {
             // Up to 2^31 items, past which the sizing wraps (see the note in the notes).
             var most = Largest(1, 1UL << 31, n =>

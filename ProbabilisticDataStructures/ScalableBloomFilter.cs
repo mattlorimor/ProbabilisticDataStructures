@@ -156,6 +156,11 @@ namespace ProbabilisticDataStructures
         /// only way to have one hash cover everything the structure will ever hold:
         /// once anything has been added, the hash can no longer be replaced.
         /// </param>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// As the overload taking a growth factor throws it: an argument out of its range,
+        /// or a <paramref name="hint"/> of more items than the first contained filter can
+        /// be built for at <paramref name="fpRate"/>.
+        /// </exception>
         public ScalableBloomFilter(uint hint, double fpRate, double r,
             Func<ReadOnlySpan<byte>, ulong>? hash = null)
             : this(hint, fpRate, r, DefaultGrowth, hash)
@@ -194,7 +199,11 @@ namespace ProbabilisticDataStructures
         /// <exception cref="ArgumentOutOfRangeException">
         /// <paramref name="hint"/> or <paramref name="growth"/> is zero,
         /// <paramref name="fpRate"/> is not between 0 and 1, or <paramref name="r"/> is
-        /// not between 0 and 1.
+        /// not between 0 and 1. Or <paramref name="hint"/> is more items than the first
+        /// contained filter can be built for at <paramref name="fpRate"/>: a contained
+        /// filter addresses at most 4,294,967,295 bits, which is 448,089,842 items at 1%,
+        /// and the exception names <paramref name="hint"/> and gives the largest at the
+        /// rate asked for.
         /// </exception>
         public ScalableBloomFilter(uint hint, double fpRate, double r, uint growth,
             Func<ReadOnlySpan<byte>, ulong>? hash = null)
@@ -228,7 +237,67 @@ namespace ProbabilisticDataStructures
             this.Growth = growth;
             this.Hash = hash;
 
-            this.AddFilter();
+            // The first contained filter is built for the hint, and its constructor refuses
+            // a hint whose bits pass what it addresses, naming its own parameter and
+            // recommending this structure. It is the hint that is too large, so the refusal
+            // is passed on as one of the hint, with the largest that builds. Every other
+            // argument of the first filter has been checked above.
+            try
+            {
+                this.AddFilter();
+            }
+            catch (ArgumentOutOfRangeException e) when (e.ParamName == "n")
+            {
+                throw new ArgumentOutOfRangeException(nameof(hint), hint,
+                    $"The first contained filter is built for the hint, and {hint:N0} items at " +
+                    $"a false positive rate of {fpRate} need more bits than the " +
+                    $"{uint.MaxValue:N0} a contained filter addresses. The largest hint at that " +
+                    $"rate is {LargestHint(fpRate):N0}. Use a smaller hint, which the filter " +
+                    "grows from by adding filters, or a BloomFilter64 sized for the most you " +
+                    "expect to hold, which sizes one filter in 64 bits.");
+            }
+        }
+
+        /// <summary>
+        /// The most items a first contained filter can be built for at
+        /// <paramref name="fpRate"/>.
+        /// </summary>
+        /// <remarks>
+        /// A bisection over <see cref="Utils.OptimalM"/>, the sizing the contained filter's
+        /// constructor calls, asked rather than restated so that the figure a refusal gives
+        /// is the one that builds. It runs only on the way to that refusal. One item fits
+        /// at every rate the constructor accepts, since even the smallest costs under 1,500
+        /// bits an item.
+        /// </remarks>
+        private static uint LargestHint(double fpRate)
+        {
+            uint low = 1;
+            uint high = uint.MaxValue;
+            while (low < high)
+            {
+                var mid = low + ((high - low + 1) / 2);
+                bool fits;
+                try
+                {
+                    _ = Utils.OptimalM(mid, fpRate);
+                    fits = true;
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    fits = false;
+                }
+
+                if (fits)
+                {
+                    low = mid;
+                }
+                else
+                {
+                    high = mid - 1;
+                }
+            }
+
+            return low;
         }
 
         /// <summary>
@@ -699,7 +768,7 @@ namespace ProbabilisticDataStructures
             var index = this.Filters.Count;
 
             // The first filter is the constructor's arguments, checked there, and a
-            // first filter too large to build is refused by name as an argument.
+            // first filter too large to build is refused there, naming the hint.
             if (index == 0)
             {
                 return this.Hint;

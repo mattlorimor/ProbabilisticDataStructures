@@ -464,6 +464,45 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A hint whose first filter needs more bits than a contained filter addresses was
+        /// refused by that filter's constructor, naming its own parameter, <c>n</c>, and
+        /// recommending ScalableBloomFilter, which is what the caller was using (#220). It
+        /// is the hint that is too large, so it is the hint that is named, with the
+        /// largest that builds at that rate.
+        /// <para>
+        /// The largest is worked out here by bisection over <see cref="Utils.OptimalM"/>,
+        /// the sizing the contained filter's constructor calls, and the refused hint is
+        /// the one past it. Building at the largest itself is half a gigabyte of bits, so
+        /// that it is sized is asked of the sizing rather than built. The rates differ so
+        /// that a figure fixed at one rate's largest, 448,089,842 at 1%, fails the others.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        [DataRow(0.01)]
+        [DataRow(0.001)]
+        [DataRow(1e-100)]
+        public void TestAHintTooLargeForTheFirstFilterIsRefusedNamingTheHint(double fpRate)
+        {
+            var largest = (uint)CapacityRows.LargestSized(fpRate);
+            Assert.IsLessThan(uint.MaxValue, largest, "at this rate every hint fits, so nothing is refused");
+            _ = Utils.OptimalM(largest, fpRate);
+
+            foreach (var hint in new[] { largest + 1, uint.MaxValue })
+            {
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => new ScalableBloomFilter(hint, fpRate, 0.8));
+                Assert.AreEqual("hint", ex.ParamName, $"a hint of {hint:N0} at {fpRate} was refused as another argument");
+                Assert.AreEqual(hint, ex.ActualValue);
+                StringAssert.Contains(ex.Message, largest.ToString("N0"),
+                    "the refusal should give the largest hint that builds at this rate");
+                StringAssert.Contains(ex.Message, "BloomFilter64",
+                    "the refusal should name the filter that sizes in 64 bits");
+                Assert.IsFalse(ex.Message.Contains("ScalableBloomFilter", StringComparison.Ordinal),
+                    $"the refusal recommends the structure that refused: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// A first rate whose reciprocal is not a number cannot build even one filter, and
         /// said so with an OverflowException from the sizing. That is a mistake in the
         /// rate, and it is reported against it.

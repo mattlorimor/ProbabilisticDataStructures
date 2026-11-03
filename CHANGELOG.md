@@ -119,6 +119,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or a cast. The method is not on `IFilter`, and no other structure's `Capacity()`
   changes type: each of those is one filter, which its own type already holds. (#171)
 
+- **A `ScalableBloomFilter` hint too large for its first filter is refused naming `hint`.**
+  The first contained filter is built for the hint, and a hint whose filter needs more than
+  the 4,294,967,295 bits a contained filter addresses, more than 448,089,842 items at 1%,
+  was refused by that filter's constructor: an `ArgumentOutOfRangeException` naming its own
+  parameter, `n`, and recommending `ScalableBloomFilter`, the structure that refused. The
+  constructor now throws its own, naming `hint`, with the largest hint at that rate and a
+  pointer to a smaller hint or `BloomFilter64`. Only the exception's `ParamName` and message
+  change, so a caller that reads `ParamName` sees `hint` where it saw `n`. 6.2.0 is
+  affected. (#220)
+
+- **`HyperLogLogPlus.NewDefault` and `UltraLogLog.NewDefault` refuse an error they cannot
+  deliver, and that is a breaking change.** Each works out the registers an error needs and
+  built at most its largest, 2^18 and 2^26 registers, whatever was asked:
+  `HyperLogLogPlus.NewDefault(0.001)` wants 2^21 and returned an estimator of 2^18, whose
+  error is about 0.2%, twice the one asked for, and nothing said so. Each now throws an
+  `ArgumentOutOfRangeException` naming `errorRate` for an error below what its largest
+  delivers, 1.04 / 512 (about 0.00203) and about 9.55e-5, with that figure in the message,
+  as `HyperLogLog.NewDefaultHyperLogLog` already refused an error it could not deliver. An
+  error too large for the smallest estimator still builds the smallest. 6.2.0 is
+  affected. (#220)
+
 - **The 32-bit Bloom filters count in 64 bits, and save at format version 8.**
   `Count()` on `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter` and
   `PartitionedBloomFilter` returns a `ulong` where it returned a `uint`. This is a
@@ -138,31 +159,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds. A `ScalableBloomFilter` keeps its own version, 1 or 7, and its contained filters,
   each in its own envelope, are version 8.
 
-- **`BloomFilter64`, and the filters placed with 64-bit values, are faster, and every bit
-  is where it was.** `Utils.HashKernel128`, which each of them goes through on every `Add`,
-  `Test` and `TestAndAdd`, wrote the first hash into a `stackalloc`ed eight bytes and
-  hashed those for the second value. A method that does that cannot be inlined and carries
-  a zeroed frame with a stack check, and the call cost several times what the second hash
-  does. The eight bytes are now an inline array in an ordinary local. The bytes hashed are
-  the same, so the second value, the positions and every payload are the same, and
-  FORMAT.md's description of the derivation stands. The `byte[]` overload now calls the
-  `ReadOnlySpan<byte>` one, which cost it nothing.
+- **`BloomFilter64` is faster, the structures placed with 64-bit values test faster, and
+  every bit is where it was.** The 64-bit placement hashes the first value's eight little-endian
+  bytes for the second value, and both places that do it wrote those bytes into a
+  `stackalloc`: `Utils.HashKernel128`, which `BloomFilter64` goes through on every `Add`,
+  `Test` and `TestAndAdd`, and the placement step the structures placed with 64-bit values
+  go through on every add and query: `BloomFilter`, `CountingBloomFilter`,
+  `DeletableBloomFilter`, `PartitionedBloomFilter` and `StableBloomFilter` from 2^27
+  positions, and `CountMinSketch`, `PrivateCountMinSketch` and `HeavyKeeper` from 2^27
+  columns. A method that does that cannot be inlined and carries a zeroed frame with a
+  stack check, and the call cost several times what the second hash does. The eight bytes
+  are now an inline array in an ordinary local in both. The bytes hashed are the same, so
+  the second value, the positions and every payload are the same, and FORMAT.md's
+  description of the derivation stands. The `byte[]` overload of `HashKernel128` now calls
+  the `ReadOnlySpan<byte>` one, which cost it nothing. `InverseBloomFilter` takes one
+  position an item and so no second value, and is unchanged. (#220)
   <br><br>
   Measured on an AMD Ryzen 9 7950X3D under .NET 10 with the default hash, on filters of 2^27
   positions sized for 1%, so k is 7, in nanoseconds per operation, with the filter held in
   cache. `Benchmarks/` gains the suites that took these, and one that takes the placement
-  kernel apart:
+  kernel apart. The sketches go through the same step and are not timed by them.
+
+  The `BloomFilter` rows are the mean of two alternating runs of master (before) and this
+  change (after) on an idle machine, pinned to the cache die with the large L3. The
+  `BloomFilter64` rows are the earlier measurement of the `HashKernel128` change; the same
+  runs timed `BloomFilter64` at 49.5, 27.1 and 12.1 against their after column, before and
+  after alike, since it runs the same code on both.
 
   | | Add | Test, member | Test, not a member |
   | --- | --- | --- | --- |
-  | `BloomFilter` placed with 64-bit values, 16-byte items | 45.5 → 31.8 | 42.5 → 23.4 | 28.7 → 11.6 |
+  | `BloomFilter` placed with 64-bit values, 16-byte items | 31.1 → 31.6 | 24.3 → 22.8 | 12.3 → 11.4 |
   | `BloomFilter64`, 16-byte items | 77 → 50.1 | 44.6 → 27.8 | 29.9 → 12.4 |
-  | `BloomFilter` placed with 64-bit values, 1,024-byte items | 72 → 64.2 | 66.5 → 56.3 | 61.2 → 46.9 |
+  | `BloomFilter` placed with 64-bit values, 1,024-byte items | 66.0 → 64.7 | 58.8 → 55.3 | 50.2 → 47.5 |
   | `BloomFilter64`, 1,024-byte items | 106 → 92.4 | 72.5 → 61 | 61.4 → 49.9 |
 
-  A `BloomFilter` just below 2^27 positions, which places with 32-bit values, takes 27, 19.6
-  and 7.5 with 16-byte items, so what 64-bit placement adds is now about 4 to 5 nanoseconds
-  with short items and 5 to 8 with long ones, the second hash and the wider arithmetic.
+  So for `BloomFilter` the gain is in tests, 6 to 8%, and an add is unchanged with short
+  items and 2% faster with long ones. A `BloomFilter` just below 2^27 positions, which
+  places with 32-bit values, takes 25.9, 19.1 and 7.6 with 16-byte items, so what 64-bit
+  placement adds is now about 4 to 6 nanoseconds with short items and 6 to 9 with long
+  ones, the second hash and the wider arithmetic.
 
 - **`CuckooBloomFilter` is faster, and every fingerprint, bucket and payload is where it
   was.** `GetComponents`, which every `Add`, `Test`, `TestAndAdd` and `TestAndRemove` goes

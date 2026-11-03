@@ -202,10 +202,10 @@ namespace TestProbabilisticDataStructures
                 ("CountingBloomFilter", () => new CountingBloomFilter(1_000_000_000, 4, 0.01)),
                 ("PartitionedBloomFilter", () => new PartitionedBloomFilter(1_000_000_000, 0.01)),
                 ("DeletableBloomFilter", () => new DeletableBloomFilter(1_000_000_000, 10, 0.01)),
-                // The scalable filter's first filter is its constructor's arguments, so a
-                // hint too large to build is refused as one, and not as the ceiling an
-                // add reaches later.
-                ("ScalableBloomFilter", () => new ScalableBloomFilter(1_000_000_000, 0.01, 0.8)),
+                // The scalable filter refuses a hint too large for its first filter too,
+                // but naming the hint, and pointing to a smaller hint rather than to
+                // itself: TestScalableBloomFilter's
+                // TestAHintTooLargeForTheFirstFilterIsRefusedNamingTheHint holds that.
             })
             {
                 var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(

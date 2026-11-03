@@ -31,7 +31,10 @@ namespace TestProbabilisticDataStructures
             StructureId id, string counts, Func<string> builds, Func<string> loads) =>
             new(id, counts, builds, loads);
 
-        /// <summary>The cell for a structure that is bounded by memory and by nothing in the code.</summary>
+        /// <summary>
+        /// The cell for a structure that is bounded by memory before anything in the code:
+        /// whatever its constructor checks is far past what a machine holds.
+        /// </summary>
         internal const string Memory = "memory";
 
         /// <summary>
@@ -115,8 +118,11 @@ namespace TestProbabilisticDataStructures
             StructureId.BloomFilter64, $"n, fp {label}",
             () =>
             {
-                // The sizing arithmetic reaches far past any memory.
+                // The sizing arithmetic reaches far past any memory, and so does the most
+                // the bit arrays hold, which the constructor refuses past: 2^60 bits is
+                // 128 PiB.
                 Assert.IsGreaterThan(0UL, Utils.OptimalM64(1UL << 50, fp));
+                Assert.IsGreaterThan(1UL << 60, Buckets64.MaxCount);
                 return Memory;
             },
             () =>

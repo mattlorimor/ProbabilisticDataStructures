@@ -173,7 +173,7 @@ Each row has three numbers. **Builds up to** is the largest the constructor buil
 works, and what stops it is in [CAPACITY.md](CAPACITY.md): a 32-bit parameter, the longest
 array .NET allows, a field of the [persisted format](FORMAT.md#sizes), or the arithmetic
 that turns your settings into a size. Almost all of these are gigabytes of memory, and
-`memory` means the constructor checks nothing before an allocation fails. **Loads by
+`memory` means an allocation fails before anything the constructor checks. **Loads by
 default up to** is the largest that reads back under the default budget of 1,073,741,824
 bytes (see [loading files you didn't write](#loading-files-you-didnt-write)); a larger one
 reads back with `ReadFrom(stream, new ReadOptions(bytes))` or `ReadOptions.Unlimited`, and
@@ -263,7 +263,7 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `TopK` | width w of the count-min sketch inside, δ 1% (5 rows) | 2,147,483,591 | ≈ 6.71 million | 53,687,082 |
 | `HeavyKeeper` | width w per row, depth 2 | 2,147,483,591 | ≈ 26.84 million | 107,374,175 |
 | `DDSketch` | bucket span, values of one sign | 2,147,483,591 | ≈ 44.74 million | ≈ 268.44 million |
-| `DpswSketch` | window (items), width 512, depth 5 | 21,445,114,182,289 | 1,500,000,000 † | 100,000,000,000 † |
+| `DpswSketch` | window (items), α 0.5, β 0.7, ρ 1, width 512, depth 5 | 21,445,114,182,289 | 1,500,000,000 † | 100,000,000,000 † |
 
 ---
 
@@ -636,11 +636,17 @@ every filter it adds is itself a 32-bit filter, so at its default growth it stop
 items in [the table](#how-much-each-one-holds), a few hundred million. Past that, size a
 `BloomFilter64` for the most you expect.
 
-Only the Bloom family has this ceiling. `CuckooBloomFilter` and `BinaryFuseFilter` hold
-around 2.1 billion entries before they run into .NET's 2 GB array limit, and the sketches —
-`HyperLogLogPlus`, `ThetaSketch`, `CountMinSketch`, `TopK`, `DDSketch` — are a few hundred
-kilobytes at their largest sensible settings however much data passes through them. Their
-counters are already 64-bit.
+The ceiling of 4.29 billion bits is the 32-bit Bloom filters' own, and the other filters
+have limits of their own, nearer 2^31. `CuckooBloomFilter` numbers its entries with a
+`uint`, so a table holds at most 2^31 of them, and half that at a rate fine enough for
+64-bit fingerprints, where the fingerprints pass what one .NET array holds.
+`QuotientFilter`, `InfiniFilter` and `MementoFilter` count their slots with a `uint` and
+stop at 2^31. `BinaryFuseFilter` keeps its fingerprints in one array, which holds
+2,147,483,591 bytes: that is 1,908,641,337 keys at 8-bit fingerprints and 954,204,160 at
+16. How many items each of these is built for is in [the table](#how-much-each-one-holds).
+The sketches — `HyperLogLogPlus`, `ThetaSketch`, `CountMinSketch`, `TopK`, `DDSketch` —
+are a few hundred kilobytes at their largest sensible settings however much data passes
+through them. Their counters are already 64-bit.
 
 ### `PartitionedBloomFilter`
 
@@ -855,6 +861,12 @@ addresses. An `Add` past the ceiling throws an `InvalidOperationException` that 
 which, before changing anything, and the filter goes on answering. `BloomFilter64` has no
 ceiling of this kind.
 
+The first filter is built for the hint, and is a 32-bit filter like the rest, so a hint of
+more items than one can be sized for at the rate — 448,089,842 at 1% — is refused by the
+constructor with an `ArgumentOutOfRangeException` naming `hint` and giving the largest that
+builds. A smaller hint grows into the same items; for one filter of that size, use
+`BloomFilter64`.
+
 Described by Almeida, Baquero, Preguiça and Hutchison in
 [Scalable Bloom Filters](https://haslab.uminho.pt/cbm/files/dbloom.pdf).
 
@@ -1027,6 +1039,9 @@ var sized = UltraLogLog.NewDefault(errorRate: 0.01);
 counter.Merge(other);          // same precision, or finer folded down
 ```
 
+`NewDefault` picks the precision for an error, up to 26, whose error is about 9.55e-5; a
+smaller error is refused with an `ArgumentOutOfRangeException` naming it.
+
 Merging is exact in a way worth knowing about: a sketch built at a fine precision and
 merged into a coarser one is **byte for byte** the sketch that coarser precision would
 have built from the same stream. So sketches collected at different precisions can be
@@ -1059,6 +1074,11 @@ var estimator = new HyperLogLogPlus(precision: 14);   // 2^14 registers, ~0.81% 
 foreach (var item in stream) estimator.Add(item);
 ulong distinct = estimator.Count();
 ```
+
+`HyperLogLogPlus.NewDefault(errorRate)` picks the precision for an error. The largest, 18,
+has an error of 1.04 / 512, about 0.2%, and a smaller error is refused with an
+`ArgumentOutOfRangeException` naming it rather than met with that one: for less error, use
+`UltraLogLog`.
 
 Three things differ from `HyperLogLog`:
 
@@ -1357,11 +1377,14 @@ sketch.Remove(bytes);                // deletions, which CountMinSketch does not
 int counters = sketch.Width;         // grows with the stream, and shrinks again
 ```
 
-A row holds at most 2^30 counters. At the default growth that is 2^60 keys, which nothing
-reaches, and at a growth exponent of 0.9 it is about ten billion; an `Add` that would
-widen a row past it throws an `InvalidOperationException` before it changes anything,
-and the sketch goes on answering queries. A size factor that would start a row wider than
-that is refused by the constructor.
+A row holds at most 2^30 counters, which the rows reach when the count is
+`(2^30 · s)^(1/g)` for the growth exponent `g` and size factor `s`. At the defaults that is
+2^60 keys, which nothing reaches, and at a growth exponent of 0.9 it is about ten billion.
+A larger exponent stops much sooner: at a size factor of one, below 2^32 keys once it
+passes 0.9375, about 3.2 billion at 0.95 and 1.3 billion at 0.99. An `Add` that would widen
+a row past it throws an `InvalidOperationException` before it changes anything, and the
+sketch goes on answering queries. A size factor that would start a row wider than that is
+refused by the constructor.
 
 Described by Eslami, Bercea, Pagh and Dayan in
 [Sublime: Sublinear Error & Space for Unbounded Skewed Streams](https://doi.org/10.1145/3802116),
