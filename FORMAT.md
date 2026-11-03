@@ -297,9 +297,11 @@ address.
 | `HeavyKeeper` | depth | 2,147,483,591 | the arrays are held in one |
 | `CountMinSketch` | width | 2,147,483,591 | each row is one array |
 | `CountMinSketch` | depth | 710 | `ceil(ln(1 / delta))` at the smallest delta whose reciprocal is a finite double |
+| `CountSketch` | width | 2,147,483,591 | each row is one array |
+| `CountSketch` | depth | 710 | `ceil(ln(1 / delta))` at the smallest delta whose reciprocal is a finite double |
 | `PrivateCountMinSketch` | width | 2,147,483,591 | each row is one array |
 | `PrivateCountMinSketch` | depth | 2,147,483,591 | the rows are held in one array |
-| `DpswSketch` | items in a substream | 2,147,483,591 | the checkpoints of a substream are a list with a slot for each item, and a list holds no more than an array |
+| `DpswSketch` | items in a substream | 2,147,483,591 | the longest array: set when the checkpoints of a substream were a list with a slot for each item, and kept now that they are found without one |
 | `DpswSketch` | width | 2,147,483,591 | the sketches it holds are `PrivateCountMinSketch`es, whose rows are each one array |
 | `DpswSketch` | depth | 2,147,483,591 | as `width`: the rows of one of those sketches are held in one array |
 | `InverseBloomFilter` | capacity | 2,147,483,591 | the slots are one array of references |
@@ -313,6 +315,12 @@ address.
 | `ScalableBloomFilter` | filter count | 2,147,483,591 | the filters are a list; a filter stops growing sooner, when its next filter would have no finite rate to be sized from, or would be built for more items or bits than a contained filter addresses, which is a limit on growing and not on reading |
 | `CountingBloomFilter` | bytes of counters, `m` × `b` bits, rounded up | 2,147,483,591 | the counters are one array; from four-bit counters up that is fewer counters than a `u32` counts |
 | `StableBloomFilter` | bytes of cells, `m` × `d` bits, rounded up | 2,147,483,591 | the cells are one array, as the counters are |
+| `BloomFilter` | hash functions, `k` | 1,024 | `ceil(log2(1 / rate))` at the smallest false positive rate whose reciprocal is a finite double; the constructor refuses a smaller rate. A reader also refuses none, which sets no bit and tests none |
+| `BloomFilter64` | hash functions, `k` | 1,024 | as `BloomFilter` |
+| `CountingBloomFilter` | hash functions, `k` | 1,024 | as `BloomFilter`; a scratch buffer of four bytes per hash function is allocated for it |
+| `DeletableBloomFilter` | hash functions, `k` | 1,024 | as `CountingBloomFilter` |
+| `PartitionedBloomFilter` | hash functions, `k` | 1,024 | as `BloomFilter`; it is also the number of partitions, and the reader checks it first |
+| `StableBloomFilter` | hash functions, `k` | 1,024 | as `CountingBloomFilter`; the constructor halves the count, and the factory that builds a plain Bloom filter of cells does not, so the reader accepts the whole of it |
 | `InfiniFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; a filter stops expanding there |
 | `MementoFilter` | quotient bits | 31 | as `InfiniFilter` |
 | `MementoFilter` | bits of a slot | 64 | a slot is held in a 64-bit word: three bits of metadata, and a field of the fingerprint, one bit for its age counter and the memento |
@@ -324,6 +332,12 @@ The other filters built on `Buckets` hold one-bit buckets, so the most they hold
 a `u32` counts, 4,294,967,295, which is 536,870,912 bytes, and their sizing refuses
 anything beyond it. The same arithmetic limits the counting and stable filters from four
 bits up: at 4 bits it is 4,294,967,182 buckets, and at 8 bits 2,147,483,591.
+
+A `DeletableBloomFilter` keeps its data region and its collision regions out of one `m`
+that sizing holds to that same 4,294,967,295, so the two come to no more than that
+between them, and a reader refuses a payload whose regions do. Without the refusal the
+region size, worked out in 32 bits, wraps to zero past 2^32, and the first add that finds
+a bit already set divides by it.
 
 A bucket array of 2^32 bits or more, 512 MiB, was written by 6.2.0 and every release before
 it with a byte count that had wrapped in 32 bits: a Bloom filter of 4,294,967,294 buckets
@@ -605,6 +619,12 @@ refused, as is a payload claiming more occupied entries than `m` buckets of `b` 
 reader still allocates the whole table, so it cannot size by what the payload holds; it
 refuses a table past the constructor's limit instead (see [Sizes](#sizes)).
 
+`m` must be a power of two, as the constructor always makes it: an item's other bucket
+is found by reducing a hash by `m`, and finds the first again from the other end only
+for a power of two. `count` must equal the number of entries the table holds, since
+each item is one entry, and a bucket and entry listed twice is refused, so the count is
+compared with the places filled and not with the length of the list.
+
 How a fingerprint is written, and what `f` counts, depends on the version:
 
 | Version | `f` counts | One fingerprint |
@@ -619,7 +639,8 @@ version 3 the filter holds each fingerprint at exactly `f` bits, so a width that
 multiple of eight leaves the high bits of the last byte zero, and a fingerprint with a
 bit set at or above `f` is refused, since the writer cannot have produced it. A payload
 whose width, in bits, is not between 1 and 64 is refused, as is one with no buckets, no
-entries per bucket, or a bucket count beyond what the reader will allocate for.
+entries per bucket, a bucket count that is not a power of two, or a bucket count beyond
+what the reader will allocate for.
 
 The generator's state follows the entries, and version 1 payloads simply end before it.
 The state it began in is the last field, and payloads before version 6 simply end before
@@ -857,8 +878,9 @@ subtracts at each cell rather than only adding. A payload read as unsigned would
 with every negative cell as an enormous positive one, so they are written as `i64` rather
 than reinterpreted.
 
-A payload with no rows or no columns is refused, as is one whose cells do not come to
-`width * depth * 8` bytes.
+A payload with no rows or no columns is refused, as is one with a width or a depth past
+the limits in [Sizes](#sizes), and one whose cells do not come to `width * depth * 8`
+bytes. The limits are checked first, so that the product cannot wrap.
 
 ### `InvertibleBloomLookupTable` (id 21)
 

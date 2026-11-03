@@ -761,6 +761,39 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Refuses a hash count no filter this library builds has: none, or more than
+        /// <see cref="Utils.MaxHashCount"/>. The shape check of every Bloom-family reader,
+        /// run before anything is allocated or priced from the count.
+        /// </summary>
+        /// <param name="k">The count the payload names.</param>
+        /// <exception cref="InvalidDataException">There are none, or too many.</exception>
+        /// <remarks>
+        /// A filter of none sets no bit and tests none, so it answers present to every
+        /// item. A filter of more than any constructor gives runs that many position
+        /// computations on every add and, for a member, every test, and a payload that
+        /// names 4,294,967,295 of them is a stalled filter that holds a few bytes. Those
+        /// that keep a scratch array of the count would allocate it first.
+        /// </remarks>
+        internal static void CheckHashCount(uint k)
+        {
+            if (k == 0)
+            {
+                throw new InvalidDataException(
+                    "Filter has no hash functions, so it would set nothing and test " +
+                    "nothing, and report every item present.");
+            }
+
+            var most = Utils.MaxHashCount;
+            if (k > most)
+            {
+                throw new InvalidDataException(
+                    $"Filter has {k:N0} hash functions, more than the {most:N0} any filter " +
+                    "this library builds has. Every add and test would run that many " +
+                    "position computations.");
+            }
+        }
+
+        /// <summary>
         /// Writes a <see cref="Buckets64"/> into a payload.
         /// </summary>
         internal static void WriteBuckets64(PayloadWriter payload, Buckets64 buckets)

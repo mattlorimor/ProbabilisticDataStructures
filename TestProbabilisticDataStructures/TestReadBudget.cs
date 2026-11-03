@@ -339,12 +339,6 @@ namespace TestProbabilisticDataStructures
                             Grafite.Build(Enumerable.Range(0, 200_000).Select(i => (ulong)i * 1009), 0.01, 64, seed: 7),
                             refusesAHashBecause: "it holds numbers rather than bytes, and hashes nothing")),
                 },
-                [StructureId.DpswSketch] = new[]
-                {
-                    ("the checkpoints, rebuilt from a substream of twenty thousand items",
-                        Of("DpswSketch over a wide window",
-                            Filled(new DpswSketch(200_000, 1.0, width: 64, depth: 1, seed: 1), (s, k) => s.Add(k), 1000))),
-                },
             });
 
         private static void AssertHonest(StructureId id, Sample sample)
@@ -588,10 +582,12 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// A windowed sketch is priced with the plan its checkpoints lay out, and the price
-        /// cannot build the checkpoints to count them: the list they are built from is the
-        /// substream size long, which is what is being priced. The count it works out
-        /// instead is the length of the array the read builds, at every size up to a few
-        /// thousand and at factors from coarse to fine, and at sizes far past those.
+        /// counts the checkpoints without building them. The count it works out is the
+        /// length of the array the read builds, at every size up to a few thousand and at
+        /// factors from coarse to fine, and at sizes far past those. Both come from one walk
+        /// since the checkpoints stopped being thinned from a list of every offset (#219),
+        /// so this holds them together against a change that gives either its own;
+        /// <c>TestDpswSketch</c> holds the walk to the rule.
         /// </summary>
         [TestMethod]
         public void TestTheCheckpointCountAPriceUsesIsTheOneTheReadBuilds()
@@ -727,6 +723,34 @@ namespace TestProbabilisticDataStructures
                 $"a {typeof(T).Name} refused for its budget had already allocated {allocated} bytes");
         }
 
+        /// <summary>
+        /// A small payload whose header names a hash count no filter has is refused for the
+        /// count and not for the budget, and before the scratch array of that many is priced
+        /// or allocated: the refusal carries no budget exception, and the refused read
+        /// allocated less than the budget. The count is held to what a constructor gives,
+        /// so the array is never more than a few kilobytes and no count can ask a budget for
+        /// much; what a read is charged for it is held to what it allocates, for the count a
+        /// payload may carry, by <c>TestEveryStructureReadsWithinAnHonestBudget</c>.
+        /// </summary>
+        private static void AssertRefusedForItsHashCountBeforeAllocating<T>(byte[] poked)
+            where T : IBinaryPersistable<T>
+        {
+            var options = new ReadOptions(SmallBudget);
+            InvalidDataException refused = null;
+            var allocated = Allocated(() =>
+            {
+                refused = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<T>(poked, options));
+                return new object();
+            });
+
+            StringAssert.Contains(refused.Message, "hash functions, more than");
+            Assert.IsNull(refused.InnerException,
+                $"a {typeof(T).Name} naming too many hash functions was refused for its budget");
+            Assert.IsLessThan(SmallBudget, allocated,
+                $"a {typeof(T).Name} refused for its hash count had already allocated {allocated} bytes");
+        }
+
         /// <summary>A cuckoo filter's table is allocated whole, whatever it holds.</summary>
         [TestMethod]
         public void TestACuckooTableLargerThanTheBudgetIsRefused()
@@ -757,13 +781,16 @@ namespace TestProbabilisticDataStructures
             AssertRefusedBeforeAllocating<QuotientFilter>(Poke(bytes, 0, 24), (1L << 24) * 10 / 8);
         }
 
-        /// <summary>The counting filter's scratch buffer is sized by its hash count.</summary>
+        /// <summary>
+        /// The counting filter's scratch buffer is sized by its hash count, which was once
+        /// the way a few bytes asked a budget for 64 MiB and is now refused first.
+        /// </summary>
         [TestMethod]
         public void TestACountingFilterHashCountLargerThanTheBudgetIsRefused()
         {
             // u32 m, then u32 k at 4: 2^24 four-byte indexes, 64 MiB.
             var bytes = new CountingBloomFilter(1000, 4, 0.01).ToByteArray();
-            AssertRefusedBeforeAllocating<CountingBloomFilter>(Poke(bytes, 4, 1u << 24), 4L << 24);
+            AssertRefusedForItsHashCountBeforeAllocating<CountingBloomFilter>(Poke(bytes, 4, 1u << 24));
         }
 
         /// <summary>The deletable filter's scratch buffer, likewise.</summary>
@@ -771,7 +798,7 @@ namespace TestProbabilisticDataStructures
         public void TestADeletableFilterHashCountLargerThanTheBudgetIsRefused()
         {
             var bytes = new DeletableBloomFilter(1000, 100, 0.01).ToByteArray();
-            AssertRefusedBeforeAllocating<DeletableBloomFilter>(Poke(bytes, 4, 1u << 24), 4L << 24);
+            AssertRefusedForItsHashCountBeforeAllocating<DeletableBloomFilter>(Poke(bytes, 4, 1u << 24));
         }
 
         /// <summary>The stable filter's scratch buffer, likewise.</summary>
@@ -779,7 +806,7 @@ namespace TestProbabilisticDataStructures
         public void TestAStableFilterHashCountLargerThanTheBudgetIsRefused()
         {
             var bytes = new StableBloomFilter(1000, 3, 0.01, seed: 1).ToByteArray();
-            AssertRefusedBeforeAllocating<StableBloomFilter>(Poke(bytes, 4, 1u << 24), 4L << 24);
+            AssertRefusedForItsHashCountBeforeAllocating<StableBloomFilter>(Poke(bytes, 4, 1u << 24));
         }
 
         /// <summary>An inverse filter's slots are allocated whole, occupied or not.</summary>
@@ -1011,6 +1038,20 @@ namespace TestProbabilisticDataStructures
             // u32 m, u32 b, u32 f, u32 count, u32 n, u32 occupied entry count, then the
             // first entry's u32 bucket index.
             AssertRefusedForItsShape<CuckooBloomFilter>(bytes, Poke(bytes, 24, uint.MaxValue), "outside its");
+        }
+
+        /// <summary>
+        /// A cuckoo bucket count that is not a power of two, on a table larger than the
+        /// payload's own: the price refuses it for that, before it prices a table, which is
+        /// what keeps a read from allocating one.
+        /// </summary>
+        [TestMethod]
+        public void TestACuckooBucketCountThatIsNotAPowerOfTwoIsRefusedForThat()
+        {
+            var bytes = Filled(new CuckooBloomFilter(1000, 0.01, seed: 1), (f, k) => f.Add(k), 10).ToByteArray();
+
+            // u32 m at 0, which is 512 unedited; 1,000 buckets is the larger table.
+            AssertRefusedForItsShape<CuckooBloomFilter>(bytes, Poke(bytes, 0, 1000), "is not a power of two");
         }
 
         /// <summary>

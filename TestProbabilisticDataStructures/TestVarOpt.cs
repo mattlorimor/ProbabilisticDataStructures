@@ -1260,5 +1260,66 @@ namespace TestProbabilisticDataStructures
                 implicitly_.ToByteArray(), explicitly.ToByteArray());
             Assert.AreEqual(200.0, implicitly_.TotalWeight, 1e-12);
         }
+
+        /// <summary>
+        /// A heap slot from 2^30 up has no child in any heap a sample holds, and the heap
+        /// says so rather than finding one at a negative index. The left child is
+        /// 2 * slot + 1, which in 32 bits wraps negative from slot 2^30 and is then below
+        /// every count, so a sift that reached slot 2^30 read before the start of the
+        /// arrays, and an add of unequal weights threw.
+        /// </summary>
+        /// <remarks>
+        /// The heap holds at most k + 1 items, the exact region at the moment sampling
+        /// begins, so a sift reaches slot 2^30 only once k is 2^30 or more, and the five
+        /// regions of such a sample come to 40 GiB before anything is added. This asks
+        /// <see cref="VarOpt.TryLeftChild"/>, which is what the sift asks, about the heaps
+        /// that matter. One is 2^30 + 1 entries, the smallest with a slot 2^30: there slot
+        /// 2^29 - 1, the first a heapify sifts, has slot 2^30 as its right child, and a
+        /// stream of decreasing weights swaps it down into that slot. The other is the
+        /// largest heap, k + 1 at the largest k.
+        /// <para>
+        /// Slot 2^30 - 1 is the lower side of the step: its child would be 2^31 - 1, the
+        /// largest int, so it never wrapped, and it has none because every heap is shorter
+        /// than that. The slots that do have a child are there so that an answer of "none"
+        /// to everything fails.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestAHeapSlotFrom2To30UpHasNoChild()
+        {
+            var largest = (int)VarOpt.MaxK + 1;
+            Assert.AreEqual(2_147_483_591, largest, "the largest heap is not Array.MaxLength entries");
+            const int smallest = (1 << 30) + 1;
+
+            var cases = new (int Count, int Slot, int? Child, string What)[]
+            {
+                (smallest, (1 << 29) - 1, (1 << 30) - 1,
+                    "the last parent of the smallest heap with a slot 2^30, whose right child is that slot"),
+                (smallest, 1 << 30, null, "slot 2^30, the last entry of the smallest heap that has one"),
+                (largest, 1_073_741_794, 2_147_483_589, "the last parent of the largest heap"),
+                (largest, 1_073_741_795, null, "the first leaf of the largest heap, whose child would be its count"),
+                (largest, (1 << 30) - 1, null, "slot 2^30 - 1, whose child would be the largest int"),
+                (largest, 1 << 30, null, "slot 2^30, the first whose child is past the largest int"),
+                (largest, int.MaxValue - 1, null, "the slot before the largest int"),
+            };
+
+            var wrong = new List<string>();
+            foreach (var (count, slot, expected, what) in cases)
+            {
+                var found = VarOpt.TryLeftChild(slot, count, out var child);
+                if (expected is null && found)
+                {
+                    wrong.Add($"{what}: slot {slot:N0} of {count:N0} has a child at {child:N0}");
+                }
+                else if (expected is not null && (!found || child != expected))
+                {
+                    wrong.Add($"{what}: slot {slot:N0} of {count:N0} has " +
+                        (found ? $"a child at {child:N0}" : "no child") + $", not one at {expected:N0}");
+                }
+            }
+
+            Assert.IsEmpty(wrong, $"{wrong.Count} of {cases.Length} heap slots have the wrong child:\n" +
+                string.Join("\n", wrong));
+        }
     }
 }
