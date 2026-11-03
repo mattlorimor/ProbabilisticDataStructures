@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 
@@ -26,6 +28,9 @@ namespace TestProbabilisticDataStructures
             var codec = new KeepsakeCodec(fingerprintBits, mementoBits);
             var fields = codec.Encode(boxes);
             var back = codec.Decode(fields);
+
+            // The check the reader runs on every run passes every run the codec writes.
+            codec.Check(fields);
 
             Assert.AreEqual(boxes.Count, back.Count,
                 $"A run of {boxes.Count} boxes came back as {back.Count}. The " +
@@ -246,6 +251,149 @@ namespace TestProbabilisticDataStructures
                 "with both keys, because a fingerprint is all that identifies a box.");
             CollectionAssert.AreEqual(new List<ulong> { 1, 4 }, back[0].Mementos,
                 "Merging them must not lose a key: both positions still answer.");
+        }
+
+        /// <summary>
+        /// The slots of one box of more than two keys, laid out by hand from the layout the
+        /// codec documents: the fingerprint beside the smallest key, a zero fingerprint beside
+        /// the largest, then the given values packed end to end across fields of
+        /// <c>fingerprint + 1 + memento</c> bits, from the low bit of the first up. The values
+        /// are the count, in memento-sized pieces, and the keys between.
+        /// </summary>
+        private static List<ulong> LongBox(
+            int fingerprintBits, int mementoBits, ulong fingerprint, ulong smallest, ulong largest,
+            params (ulong Value, int Bits)[] packed)
+        {
+            var fieldBits = fingerprintBits + 1 + mementoBits;
+            var words = new List<ulong>();
+            var position = 0L;
+            foreach (var (value, bits) in packed)
+            {
+                for (var i = 0; i < bits; i++, position++)
+                {
+                    var word = (int)(position / fieldBits);
+                    while (words.Count <= word)
+                    {
+                        words.Add(0);
+                    }
+                    words[word] |= ((value >> i) & 1) << (int)(position % fieldBits);
+                }
+            }
+
+            var fields = new List<ulong> { (fingerprint << mementoBits) | smallest, largest };
+            fields.AddRange(words);
+            return fields;
+        }
+
+        /// <summary>
+        /// Asserts that a run is refused, by both the decoder and the check the reader runs,
+        /// for the reason named; and if the decoder does not refuse it, says what it decoded.
+        /// </summary>
+        private static void AssertRefused(KeepsakeCodec codec, List<ulong> fields, string because)
+        {
+            List<KeepsakeBox> boxes;
+            try
+            {
+                boxes = codec.Decode(fields);
+            }
+            catch (InvalidDataException e)
+            {
+                StringAssert.Contains(e.Message, because);
+                var check = Assert.ThrowsExactly<InvalidDataException>(() => codec.Check(fields),
+                    "the decoder refuses this run and the reader's check lets it through");
+                Assert.AreEqual(e.Message, check.Message, "the check refuses this run for another reason");
+                return;
+            }
+
+            Assert.Fail($"A run of {fields.Count} slots that should be refused ({because}) decoded as " +
+                $"{boxes.Count} box(es) holding {string.Join(", ", boxes.Select(b => b.Mementos.Count))} " +
+                $"keys, {boxes.Sum(b => b.Mementos.Count(m => m == 0))} of them zero.");
+        }
+
+        /// <summary>
+        /// The hand layout is the codec's: a box of four keys written by hand and by the codec
+        /// are the same slots, at two memento widths. Without this the refusals below could be
+        /// of runs the codec would never write for some other reason than the one named.
+        /// </summary>
+        [TestMethod]
+        public void TestALongBoxLaidOutByHandIsTheOneTheCodecWrites()
+        {
+            var codec = new KeepsakeCodec(8, 6);
+            CollectionAssert.AreEqual(
+                codec.Encode(new List<KeepsakeBox> { Box(5, 1, 3, 4, 9) }),
+                LongBox(8, 6, 5, 1, 9, (2, 6), (3, 6), (4, 6)));
+
+            var wide = new KeepsakeCodec(8, 32);
+            CollectionAssert.AreEqual(
+                wide.Encode(new List<KeepsakeBox> { Box(5, 7, 8, 9) }),
+                LongBox(8, 32, 5, 7, 9, (1, 32), (8, 32)));
+            Assert.AreEqual(3, wide.Decode(LongBox(8, 32, 5, 7, 9, (1, 32), (8, 32)))[0].Mementos.Count);
+        }
+
+        /// <summary>
+        /// A count past what an int holds is refused. With 32-bit mementos one piece of the
+        /// count reaches 2^32 - 1, which is the escape, so 2^32 - 1 is written as that piece
+        /// and a zero one, and a run holding it claims 2^32 - 1 keys between the smallest and
+        /// the largest with nothing after the count. The count was cast to an int, which made
+        /// it -1, so the box decoded as two keys and the slots after the count were read as the
+        /// next box: answers silently wrong, and no exception.
+        /// </summary>
+        [TestMethod]
+        public void TestACountPastWhatAnIntHoldsIsRefused()
+        {
+            AssertRefused(new KeepsakeCodec(8, 32),
+                LongBox(8, 32, 5, 7, 9, (uint.MaxValue, 32), (0, 32)),
+                "more keys than its run holds");
+        }
+
+        /// <summary>
+        /// A count claiming more keys than its run has bits for is refused. Here three thousand,
+        /// in one 12-bit piece, in a run of four slots of 21 bits, with room after the count for
+        /// two. Reads past the end of the run gave zeros, so it decoded as a box of 3,002 keys,
+        /// nearly all of them zero, a pass over the memento for each; the same claim near 2^31
+        /// is a list of sixteen gibibytes, at query time.
+        /// </summary>
+        [TestMethod]
+        public void TestACountLongerThanItsRunIsRefusedRatherThanPaddedWithZeros()
+        {
+            AssertRefused(new KeepsakeCodec(8, 12),
+                LongBox(8, 12, 5, 7, 4000, (3000, 12), (100, 12)),
+                "more keys than its run holds");
+
+            // One more than the run holds, and exactly what it holds, which reads.
+            var codec = new KeepsakeCodec(8, 6);
+            AssertRefused(codec, LongBox(8, 6, 5, 1, 9, (2, 6), (3, 6)), "more keys than its run holds");
+            Assert.AreEqual(3, codec.Decode(LongBox(8, 6, 5, 1, 9, (1, 6), (3, 6)))[0].Mementos.Count);
+        }
+
+        /// <summary>
+        /// A box marked as holding more than two keys whose run ends at the marker is refused:
+        /// its count would be read from past the end of the run, which gave zeros, so it
+        /// decoded silently as a box of two. The codec always writes a count after the marker.
+        /// </summary>
+        [TestMethod]
+        public void TestACountPastTheEndOfItsRunIsRefused()
+        {
+            var codec = new KeepsakeCodec(8, 6);
+            AssertRefused(codec, new List<ulong> { (5UL << 6) | 1, 9 }, "past the end of its run");
+            AssertRefused(codec, new List<ulong> { (3UL << 6) | 2, (3UL << 6) | 4, (5UL << 6) | 1, 9 },
+                "past the end of its run");
+        }
+
+        /// <summary>
+        /// The bit position in a packed run is a long. A run's bits are its slots times the
+        /// width of a field, and a run as long as a table of 2^31 slots passes an int's worth;
+        /// the bound on the count above keeps every read inside the run, so a position that
+        /// wrapped could not be reached at a size a test builds.
+        /// </summary>
+        [TestMethod]
+        public void TestThePositionInAPackedRunIsALong()
+        {
+            var run = typeof(KeepsakeCodec).GetNestedType("BitRun", BindingFlags.NonPublic);
+            Assert.IsNotNull(run, "the codec's bit cursor has been renamed; point this test at it");
+            var position = run.GetField("position", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.IsNotNull(position, "the bit cursor's position has been renamed; point this test at it");
+            Assert.AreEqual(typeof(long), position.FieldType);
         }
     }
 }

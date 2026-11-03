@@ -1153,7 +1153,10 @@ read another", so a small count costs as much as one memento and a large one sti
 A reader rejects an impossible memento width, a chain of no tables or absurdly many, a
 table with more than 31 bits of address (as `InfiniFilter`'s), a table whose slots are wider
 than 64 bits, a table with more entries than slots, and a word count disagreeing with the
-shape claimed.
+shape claimed. It then decodes every occupied run once and rejects a box whose count claims
+more keys than the rest of its run has bits for, or whose run ends inside its count; no
+writer produces either, and refusing them at read is what keeps every query on a filter it
+read from meeting one.
 
 A slot of exactly 64 bits — the fingerprint plus the memento width come to 60 — was written
 by releases up to and including 6.2.0 with a mask of zero, which dropped every write: the

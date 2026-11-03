@@ -333,6 +333,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record this way cannot get it back: the fix prevents further loss and nothing more.
   (#145)
 
+- **A `MementoFilter` payload whose keepsake boxes did not fit their runs was read, and
+  went wrong at query time.** A box of more than two keys stores a count of the keys between
+  its smallest and largest, and then those keys, packed across the slots after it. The
+  reader checked a table's shape and never decoded a run, and the codec trusted the count:
+  it cast it to an `int`, so a count of 2^31 or more went negative and the box lost its middle
+  keys, and it read zeros past the end of the run, so a count larger than the run padded the
+  box with zero keys, up to some two billion of them, at query time and outside the read
+  budget. In a checksum-valid payload with one count edited from 1 to 62, the box read back
+  as 64 keys, the first removal threw "A table of 16 slots is full" part way through
+  rewriting the table, and the next `Add` did not return. No release writes such a box:
+  the codec is unchanged since 6.2.0, and every run it encodes decodes within itself.
+  <br><br>
+  The reader now decodes every occupied run once and refuses, with an
+  `InvalidDataException` naming the table and slot, a box whose count claims more keys than
+  the rest of its run has bits for or whose run ends inside its count, so queries on a filter
+  it read never meet one. Reading a filter costs that pass over its table. The codec holds
+  the count and its bit position as `long`, refuses the same boxes itself as a backstop, and
+  no longer reads past the end of a run. The stored format does not change, and every
+  payload a release wrote reads as before.
+
 - **A `ThetaSketch` or `TupleSketch` read back from storage, or built by `Union`,
   `Intersect` or `Difference`, now goes on exactly as the sketch it stands for would.**
   Below a nominal size of 8 it did not. A sketch may hold twice its nominal size before

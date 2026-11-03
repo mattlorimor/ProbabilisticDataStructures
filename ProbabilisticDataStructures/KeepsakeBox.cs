@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 
 namespace ProbabilisticDataStructures
 {
@@ -106,7 +107,7 @@ namespace ProbabilisticDataStructures
                 fields.Add(Pack(0, mementos[^1]));
 
                 var writer = new BitRun(this.fieldBits);
-                WriteCount(writer, (ulong)(mementos.Count - 2));
+                WriteCount(ref writer, (ulong)(mementos.Count - 2));
                 for (var i = 1; i < mementos.Count - 1; i++)
                 {
                     writer.Write(mementos[i], this.mementoBits);
@@ -120,16 +121,40 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Reads back the boxes a run holds.
         /// </summary>
+        /// <exception cref="InvalidDataException">
+        /// A box's count claims more keys than the rest of the run has bits for, or the run
+        /// ends inside it. No run this codec writes does, and the reader refuses a payload
+        /// holding one (<see cref="Check"/>), so this is a backstop that a filter the reader
+        /// admitted cannot reach.
+        /// </exception>
         internal List<KeepsakeBox> Decode(IReadOnlyList<ulong> fields)
         {
             var boxes = new List<KeepsakeBox>();
+            Walk(fields, boxes);
+            return boxes;
+        }
+
+        /// <summary>
+        /// Refuses a run that <see cref="Decode"/> would refuse, for the same reason, without
+        /// building its boxes. The reader runs it on every run of a table it reads, and the
+        /// keys of a box cost far more held one to a list entry than packed in the run, so
+        /// this walks the boxes' boundaries and skips the keys between.
+        /// </summary>
+        internal void Check(IReadOnlyList<ulong> fields) => Walk(fields, null);
+
+        /// <summary>
+        /// The one walk over a run's boxes, which <see cref="Decode"/> collects into
+        /// <paramref name="boxes"/> and <see cref="Check"/> does not.
+        /// </summary>
+        private void Walk(IReadOnlyList<ulong> fields, List<KeepsakeBox>? boxes)
+        {
             var at = 0;
 
             while (at < fields.Count)
             {
                 var fingerprint = fields[at] >> this.mementoBits;
-                var box = new KeepsakeBox { Fingerprint = fingerprint };
-                box.Mementos.Add(fields[at] & this.mementoMask);
+                var box = boxes is null ? null : new KeepsakeBox { Fingerprint = fingerprint };
+                box?.Mementos.Add(fields[at] & this.mementoMask);
                 at++;
 
                 if (at < fields.Count)
@@ -143,25 +168,35 @@ namespace ProbabilisticDataStructures
                         at++;
 
                         var reader = new BitRun(this.fieldBits, fields, at);
-                        var middle = (int)ReadCount(reader);
-                        for (var i = 0; i < middle; i++)
+                        var middle = ReadCount(ref reader);
+                        if (box is null)
                         {
-                            box.Mementos.Add(reader.Read(this.mementoBits));
+                            reader.Skip(middle * this.mementoBits);
                         }
-                        box.Mementos.Add(largest);
-                        at += reader.FieldsConsumed();
+                        else
+                        {
+                            for (var i = 0L; i < middle; i++)
+                            {
+                                box.Mementos.Add(reader.Read(this.mementoBits));
+                            }
+                            box.Mementos.Add(largest);
+                        }
+
+                        // No more than the run's remaining slots: the count was held to them.
+                        at += (int)reader.FieldsConsumed();
                     }
                     else if (nextFingerprint == fingerprint)
                     {
-                        box.Mementos.Add(fields[at] & this.mementoMask);
+                        box?.Mementos.Add(fields[at] & this.mementoMask);
                         at++;
                     }
                 }
 
-                boxes.Add(box);
+                if (box is not null)
+                {
+                    boxes!.Add(box);
+                }
             }
-
-            return boxes;
         }
 
         /// <summary>
@@ -176,7 +211,7 @@ namespace ProbabilisticDataStructures
         /// Writes a count in memento-sized pieces, so that the usual small count costs
         /// as much as one memento and a rare large one still fits.
         /// </summary>
-        private void WriteCount(BitRun writer, ulong count)
+        private void WriteCount(ref BitRun writer, ulong count)
         {
             var escape = this.mementoMask;
             while (count >= escape)
@@ -187,7 +222,20 @@ namespace ProbabilisticDataStructures
             writer.Write(count, this.mementoBits);
         }
 
-        private ulong ReadCount(BitRun reader)
+        /// <summary>
+        /// Reads a count written by <see cref="WriteCount"/>, refusing one that claims more
+        /// keys than the rest of the run has bits for.
+        /// </summary>
+        /// <remarks>
+        /// Every key the count claims is a memento still to be read, so a count is at most
+        /// the bits left over the memento width. It is held to that after every piece: the
+        /// total only grows and the bits left only shrink, so a count over the bound part
+        /// way through is over it at the end, and stopping there keeps a run of escape pieces
+        /// from adding up past what a ulong holds. A run that ends inside the count is
+        /// refused by the read. A count that passes is no more than the run's bits, so it is
+        /// a long, where it was cast to an int that a count of 2^31 or more made negative.
+        /// </remarks>
+        private long ReadCount(ref BitRun reader)
         {
             var escape = this.mementoMask;
             var total = 0UL;
@@ -195,9 +243,20 @@ namespace ProbabilisticDataStructures
             {
                 var piece = reader.Read(this.mementoBits);
                 total += piece;
+
+                var room = reader.BitsLeft / this.mementoBits;
+                if (total > (ulong)room)
+                {
+                    throw new InvalidDataException(
+                        $"A box claims {(piece == escape ? "at least " : "")}{total:N0} keys between " +
+                        $"its smallest and its largest, more keys than its run holds: the " +
+                        $"{reader.BitsLeft:N0} bits left in the run have room for {room:N0} of " +
+                        $"{this.mementoBits} bits. This library writes no such box.");
+                }
+
                 if (piece != escape)
                 {
-                    return total;
+                    return (long)total;
                 }
             }
         }
@@ -205,37 +264,50 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// A cursor over a run of slots treated as one stream of bits, so that values
         /// can straddle a slot boundary rather than wasting the space at the end of
-        /// each one.
+        /// each one. A struct, so that a read of a run allocates nothing for it.
         /// </summary>
-        private sealed class BitRun
+        private struct BitRun
         {
             private readonly int width;
-            private readonly List<ulong> words = new List<ulong>();
+            private readonly List<ulong>? words;
             private readonly IReadOnlyList<ulong>? source;
             private readonly int origin;
-            private int position;
+
+            // A long: a run's bits are its slots times the field width, and a run as long
+            // as a table of 2^31 slots passes an int's worth.
+            private long position;
 
             internal BitRun(int width)
             {
                 this.width = width;
+                this.words = new List<ulong>();
+                this.source = null;
+                this.origin = 0;
+                this.position = 0;
             }
 
             internal BitRun(int width, IReadOnlyList<ulong> source, int origin)
             {
                 this.width = width;
+                this.words = null;
                 this.source = source;
                 this.origin = origin;
+                this.position = 0;
             }
+
+            /// <summary>The bits of the run after the cursor.</summary>
+            internal readonly long BitsLeft =>
+                ((long)(this.source!.Count - this.origin) * this.width) - this.position;
 
             internal void Write(ulong value, int bits)
             {
                 for (var i = 0; i < bits; i++)
                 {
                     var bit = (value >> i) & 1;
-                    var word = this.position / this.width;
-                    var offset = this.position % this.width;
+                    var word = (int)(this.position / this.width);
+                    var offset = (int)(this.position % this.width);
 
-                    while (this.words.Count <= word)
+                    while (this.words!.Count <= word)
                     {
                         this.words.Add(0);
                     }
@@ -245,27 +317,38 @@ namespace ProbabilisticDataStructures
                 }
             }
 
+            /// <summary>
+            /// Reads the next value, refusing one that runs past the end of the run rather
+            /// than reading zeros there.
+            /// </summary>
             internal ulong Read(int bits)
             {
+                if (bits > this.BitsLeft)
+                {
+                    throw new InvalidDataException(
+                        "A box holding more than two keys has a count that runs past the end of " +
+                        "its run, so where its keys end cannot be known. This library writes no " +
+                        "such box.");
+                }
+
                 var value = 0UL;
                 for (var i = 0; i < bits; i++)
                 {
-                    var word = this.origin + (this.position / this.width);
-                    var offset = this.position % this.width;
+                    var word = this.origin + (int)(this.position / this.width);
+                    var offset = (int)(this.position % this.width);
 
-                    var bit = word < this.source!.Count
-                        ? (this.source[word] >> offset) & 1
-                        : 0;
-
-                    value |= bit << i;
+                    value |= ((this.source![word] >> offset) & 1) << i;
                     this.position++;
                 }
                 return value;
             }
 
-            internal List<ulong> Fields() => this.words;
+            /// <summary>Moves past bits the caller has held to <see cref="BitsLeft"/>.</summary>
+            internal void Skip(long bits) => this.position += bits;
 
-            internal int FieldsConsumed() =>
+            internal readonly List<ulong> Fields() => this.words!;
+
+            internal readonly long FieldsConsumed() =>
                 (this.position + this.width - 1) / this.width;
         }
     }
