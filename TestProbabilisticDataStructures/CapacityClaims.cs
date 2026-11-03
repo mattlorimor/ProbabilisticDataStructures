@@ -65,6 +65,32 @@ namespace TestProbabilisticDataStructures
         private static byte[] Key(long i) => BitConverter.GetBytes(i);
 
         /// <summary>
+        /// What <paramref name="build"/> allocates on this thread for each unit of its
+        /// argument, from the difference between a small and a large one, each the least of
+        /// three: a collection landing mid-build only ever adds, as <c>TestReadBudget</c>
+        /// measures a read.
+        /// </summary>
+        private static double AllocatedPer(Func<int, object> build, int small, int large)
+        {
+            long Least(int size)
+            {
+                var least = long.MaxValue;
+                for (var i = 0; i < 3; i++)
+                {
+                    var before = GC.GetAllocatedBytesForCurrentThread();
+                    var built = build(size);
+                    var after = GC.GetAllocatedBytesForCurrentThread();
+                    GC.KeepAlive(built);
+                    least = Math.Min(least, after - before);
+                }
+
+                return least;
+            }
+
+            return (double)(Least(large) - Least(small)) / (large - small);
+        }
+
+        /// <summary>
         /// Whether a scalable filter that has <paramref name="filters"/> filters cannot build
         /// the next, and for the reason of this kind: the exception its sizing has inside.
         /// </summary>
@@ -118,17 +144,6 @@ namespace TestProbabilisticDataStructures
         /// <summary>The 64-bit words a cuckoo filter packs this many entries of this width in: its own sizing.</summary>
         private static ulong WordsFor(ulong entries, uint bits) =>
             (ulong)CuckooWords.Invoke(null, new object[] { entries, bits })!;
-
-        /// <summary>
-        /// What a step of a build allocates for each of <paramref name="items"/>, counted on
-        /// this thread, which is where the step runs.
-        /// </summary>
-        private static double AllocatedEach(int items, Action step)
-        {
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            step();
-            return (GC.GetAllocatedBytesForCurrentThread() - before) / (double)items;
-        }
 
         /// <summary>
         /// The bits from which a new 32-bit filter places with 64-bit values, written out
@@ -759,41 +774,25 @@ namespace TestProbabilisticDataStructures
             new Claim("about 2.25 bytes a key for 8-bit fingerprints", () =>
                 Rounds(2.0 * CapacityRows.FuseCells(100_000_000) / 100_000_000, 2.25, 2)),
             new Claim("2 bytes at `v = 8`, and 6 at `v = 40`", () => (8 + 8 + 7) / 8 == 2 && (8 + 40 + 7) / 8 == 6),
-            // What the step that hashes the items allocates, measured on distinct items and on
-            // one item repeated: a duplicate costs what a distinct item does.
-            new Claim("each hash is kept in a list and then copied to an array to find the duplicates, at least 16 bytes an item", () =>
+            new Claim("puts the hash of every item it is given into one list, duplicates and all, and holds " +
+                "that list and a sorted copy of it, at least 16 bytes an item, before it can refuse", () =>
             {
-                var hashDistinctly = typeof(BinaryFuseFilter).GetMethod("HashDistinctly", BindingFlags.NonPublic | BindingFlags.Static)!;
-                var hash = Defaults.GetDefaultHashFunction();
-                const int Items = 200_000;
-                var distinct = Enumerable.Range(0, Items).Select(i => Key(i)).ToArray();
-                var repeated = Enumerable.Repeat(Key(1), Items).ToArray();
-                var distinctEach = AllocatedEach(Items, () => hashDistinctly.Invoke(null, new object[] { distinct, hash }));
-                var repeatedEach = AllocatedEach(Items, () => hashDistinctly.Invoke(null, new object[] { repeated, hash }));
-                return distinctEach >= 16 && repeatedEach >= 16;
+                // One item given many times is one key, and the build's memory follows the items.
+                var item = new byte[] { 2, 1, 9 };
+                return BinaryFuseFilter.Build(Enumerable.Repeat(item, 1000), BinaryFuseWidth.Eight, null).Count() == 1
+                    && AllocatedPer(n => BinaryFuseFilter.Build(Enumerable.Repeat(item, n), BinaryFuseWidth.Eight, null),
+                        100_000, 1_100_000) >= 16;
             }),
-            new Claim("so a set past 1,908,641,337 keys is refused after 30.5 GB or more", () =>
-                CapacityRows.FuseCells(1_908_641_337) <= (ulong)Array.MaxLength
-                && CapacityRows.FuseCells(1_908_641_338) > (ulong)Array.MaxLength
-                && Rounds(16.0 * 1_908_641_338 / 1e9, 30.5, 1)),
-            new Claim("the build stops at 2,147,483,591 items, the most a list holds, where adding the next throws `OutOfMemoryException`", () =>
+            new Claim("That is 30.5 GB at the 1,908,641,337 keys of the 8-bit limit", () =>
+                BinaryFuseFilter.MaxKeys(BinaryFuseWidth.Eight) == 1_908_641_337
+                && Rounds(16.0 * BinaryFuseFilter.MaxKeys(BinaryFuseWidth.Eight) / 1e9, 30.5, 1)),
+            new Claim("a list holds at most 2,147,483,591 hashes, so a build given more items than that fails " +
+                "with an `OutOfMemoryException`, however few of them are distinct", () =>
+                // The list's growth asks for an array one longer than the longest there can be,
+                // which is refused before anything is allocated. Not run at the scale itself,
+                // which is 17 GB of hashes.
                 Array.MaxLength == 2_147_483_591
-                && Assert.Throws<OutOfMemoryException>(() => new List<ulong>(Array.MaxLength + 1)) is not null),
-            new Claim("after every pair is hashed and collected, in a dictionary and then a list, at least 28 bytes a key", () =>
-            {
-                var collect = typeof(BloomierFilter).GetMethod("Collect", BindingFlags.NonPublic | BindingFlags.Static)!;
-                var hash = Defaults.GetDefaultHashFunction();
-                const int Pairs = 200_000;
-                var pairs = Enumerable.Range(0, Pairs).Select(i => new KeyValuePair<byte[], ulong>(Key(i), (ulong)i % 200)).ToArray();
-                var each = AllocatedEach(Pairs, () => collect.Invoke(null, new object[] { pairs, hash, 255UL, 8 }));
-                // A dictionary of these keys alone is 28 bytes an entry: its entries and its buckets.
-                var dictionaryEach = AllocatedEach(Pairs, () => GC.KeepAlive(new Dictionary<ulong, ulong>(Pairs)));
-                return each >= 28 && dictionaryEach >= 28;
-            }),
-            new Claim("so a set past 954,204,160 keys is refused after 26.7 GB or more", () =>
-                CapacityRows.FuseCells(954_204_160) * 2 <= (ulong)Array.MaxLength
-                && CapacityRows.FuseCells(954_204_161) * 2 > (ulong)Array.MaxLength
-                && Rounds(28.0 * 954_204_161 / 1e9, 26.7, 1)),
+                && Assert.Throws<OutOfMemoryException>(() => new ulong[Array.MaxLength + 1L]) is not null),
 
             // ---- Grafite ------------------------------------------------------------------
             new Claim("and between 2 and 3 for the high parts", () =>
@@ -803,6 +802,26 @@ namespace TestProbabilisticDataStructures
                     return perKey >= 2 && perKey < 3;
                 })),
             new Claim("at most 2,147,483,647 bits of them", () => Grafite.MaxHighBits == 2_147_483_647),
+            new Claim("the distinct keys in one sorted set and their codes in another, 48 bytes a key each, " +
+                "about 96 between them, before the high parts are counted", () =>
+            {
+                // A node of a sorted set is 48 bytes, and the build allocates at least two a key.
+                var keys = Enumerable.Range(0, 1_100_000).Select(i => (ulong)i * 1009).ToArray();
+                var node = AllocatedPer(n =>
+                {
+                    var set = new SortedSet<ulong>();
+                    for (var i = 0; i < n; i++) set.Add(keys[i]);
+                    return set;
+                }, 100_000, 1_100_000);
+                var build = AllocatedPer(n => Grafite.Build(keys.Take(n), 0.01, 64, seed: 7), 100_000, 1_100_000);
+                return Near(node, 48, 0.01) && build >= 2 * node;
+            }),
+            new Claim("At the 838 million keys of the worst case that is 80 GB", () =>
+            {
+                var most = Largest(1, 1UL << 40, n =>
+                    CapacityRows.GrafiteMostHighBits(n, 0.01, 64, out _) <= Grafite.MaxHighBits);
+                return Rounds(most / 1e6, 838, 0) && Rounds(96.0 * most / 1e9, 80, 0);
+            }),
             // Built at two settings, the second the finer of the sentence after this one.
             new Claim("The low parts are `⌊log2(L/fp)⌋` bits a key and are saved beside the high ones, eight bytes a word", () =>
                 new[] { (0.01, 64UL), (1e-5, 1024UL) }.All(s =>
@@ -892,6 +911,10 @@ namespace TestProbabilisticDataStructures
             new Claim("A read is charged 16 bytes a value", () => Near(Slope("MinHashSignature"), 16, 0.01)),
             new Claim("depth `⌈ln(1/δ)⌉`", () => new CountMinSketch(0.01, 0.01).Depth == 5),
             new Claim("Its five regions are `k + 1` slots each", () => Near(Slope("VarOpt empty"), 40, 0.01)),
+            new Claim("allocated whole when the sample is made, before it holds anything, at 40 bytes for each " +
+                "unit of `k`", () => Near(AllocatedPer(k => new VarOpt((uint)k, 1), 100_000, 1_100_000), 40, 0.01)),
+            new Claim("80 GiB at the largest `k`, 2,147,483,590", () =>
+                VarOpt.MaxK == 2_147_483_590 && Rounds(40.0 * (VarOpt.MaxK + 1L) / (1L << 30), 80, 0)),
 
             // ---- HyperLogLog and the estimators ---------------------------------------------
             new Claim("so a register records a run of at most 32 − log2 m zeros", () =>

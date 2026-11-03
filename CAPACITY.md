@@ -220,13 +220,15 @@ Built once from the whole set, so there is no `n` to guess. The table has about 
 per key, rounded up to a whole segment, each cell 1 byte (a false positive rate of 0.39%)
 or 2 bytes (0.0015%). The fingerprints are one array, which holds 2,147,483,591 bytes, so
 the most distinct keys are 1,908,641,337 at 8 bits and 954,204,160 at 16; a set with more
-is refused, naming `items`, before the fingerprints are allocated. That is after every item
-is hashed, though: each hash is kept in a list and then copied to an array to find the
-duplicates, at least 16 bytes an item, so a set past 1,908,641,337 keys is refused after
-30.5 GB or more. And the list holds every item given, duplicates included, so however few
-of them are distinct, the build stops at 2,147,483,591 items, the most a list holds, where
-adding the next throws `OutOfMemoryException`. A read is charged twice the table, which is
-about 2.25 bytes a key for 8-bit fingerprints.
+is refused, naming `items`, before the fingerprints are allocated. A read is charged
+twice the table, which is about 2.25 bytes a key for 8-bit fingerprints.
+
+It is not refused before the items are hashed, though. The build puts the hash of every item
+it is given into one list, duplicates and all, and holds that list and a sorted copy of it,
+at least 16 bytes an item, before it can refuse: the distinct keys are counted only then.
+That is 30.5 GB at the 1,908,641,337 keys of the 8-bit limit, and more for a set past it.
+And a list holds at most 2,147,483,591 hashes, so a build given more items than that fails
+with an `OutOfMemoryException`, however few of them are distinct.
 
 ### `BloomierFilter`
 
@@ -234,9 +236,7 @@ Built once from the whole set of keys and their values, at about the same cells 
 cell holds an 8-bit fingerprint and a value of `v` bits, rounded up to whole bytes: 2
 bytes at `v = 8`, and 6 at `v = 40`, the widest. The cells are one array, so the most
 distinct keys are 954,204,160 at `v` up to 8, 636,136,107 up to 16 and 318,068,053 up to
-40; a set with more is refused, naming `pairs`, before the cells are allocated. That is
-after every pair is hashed and collected, in a dictionary and then a list, at least 28
-bytes a key, so a set past 954,204,160 keys is refused after 26.7 GB or more. A read is
+40; a set with more is refused, naming `pairs`, before the cells are allocated. A read is
 charged twice the table.
 
 A key is known to the map by its 64-bit hash alone, and the keys are not kept, so two
@@ -281,6 +281,11 @@ The high parts are addressed with an `int`, so a filter has at most 2,147,483,64
 them. How many depends on where the keys' largest code falls in the universe, which
 depends on the keys, so the table gives the worst case: filters of those sizes always
 build and read, and many key sets do better.
+
+The build holds the keys twice over before it knows whether they fit: the distinct keys in
+one sorted set and their codes in another, 48 bytes a key each, about 96 between them,
+before the high parts are counted. At the 838 million keys of the worst case that is 80 GB,
+and a set past it is refused only after.
 
 The table's `as built` is for its rows' rates and ranges, not for every filter. The low
 parts are `⌊log2(L/fp)⌋` bits a key and are saved beside the high ones, eight bytes a word,
@@ -400,6 +405,9 @@ A sample of `k` items out of any number. Its five regions are `k + 1` slots each
 start, so an empty sample is charged for all of them and a full one also for the items it
 keeps, the second row.
 
+The regions are allocated whole when the sample is made, before it holds anything, at 40
+bytes for each unit of `k`: 80 GiB at the largest `k`, 2,147,483,590.
+
 ## Takes unlimited items
 
 ### `StableBloomFilter`
@@ -483,7 +491,7 @@ either is refused as beyond anything built.
 The same, with width `⌈1/ε²⌉`, so a rate ten times finer costs a hundred times the
 width, and counters of 8 bytes that are signed. A read charges 24 bytes a counter. The
 widest row is the same 2,147,483,591, an `ε` of about 2.16e-5, and the depth is limited
-the same way.
+the same way. A payload that claims more of either is refused as beyond anything built.
 
 ### `PrivateCountMinSketch`
 
@@ -542,11 +550,12 @@ with the default width and depth, which are measurements. A smaller α keeps mor
 checkpoints in each substream, so more sketches and a larger payload for the same window,
 and both numbers fall with it.
 
-A substream holds `window^β` items (β of 0.7 unless you say otherwise) and the checkpoints of
-one are a list with a slot for each, so `window^β` is at most 2,147,483,591, the longest
-list. The constructor refuses a window and β that make more, naming `window`. At the
-default β that is a window of 21,445,114,182,289, which is the table's figure for what is
-built; memory is what stops a real one long before.
+A substream holds `window^β` items (β of 0.7 unless you say otherwise), and at most
+2,147,483,591, the longest array: the limit was set when the checkpoints of a substream were
+a list with a slot for each item, and has stayed now that they are found without one. The
+constructor refuses a window and β that make more, naming `window`. At the default β that
+is a window of 21,445,114,182,289, which is the table's figure for what is built; memory is
+what stops a real one long before.
 
 The sketches of a window are at most as wide and as deep as a `PrivateCountMinSketch` is, 2,147,483,591
 each: the constructor refuses a width or a depth past that, naming it, before anything is built, and

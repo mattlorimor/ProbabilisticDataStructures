@@ -1431,6 +1431,11 @@ something different here**: it bounds error against the stream's L2 norm rather 
 L1, so the two sketches size differently for the same number and cannot be compared at
 equal epsilon.
 
+Counts are `long`s and a cell **stops at the end of the range** (`long.MaxValue` or
+`long.MinValue`) rather than wrapping, in a weighted `Add` and in `Merge`. A cell at an end
+no longer records how far past it the count went, so subtracting from it later is off by
+that much.
+
 From Charikar, Chen and Farach-Colton,
 [Finding Frequent Items in Data Streams](https://www.cs.princeton.edu/courses/archive/spring04/cos598B/bib/CharikarCF.pdf).
 

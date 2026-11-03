@@ -21,15 +21,15 @@ namespace TestProbabilisticDataStructures
     public class TestDpswSketch
     {
         /// <summary>
-        /// A substream is the window raised to the substream factor, and the checkpoints
-        /// of one are a list with a slot for every item in it, so it holds at most what an
-        /// array does. A window and factor that make it more are refused, naming the
-        /// window: the size was cast to an int, which saturates, so the substream became
-        /// 2^31 - 1 items whatever it was meant to be. The hook is called directly, since
-        /// building the checkpoints of a substream this long is the failure.
+        /// A substream is the window raised to the substream factor, and it holds at most
+        /// what an array does (<see cref="DpswSketch.MaxSubstreamSize"/> says why). A window
+        /// and factor that make it more are refused, naming the window: the size was cast to
+        /// an int, which saturates, so the substream became 2^31 - 1 items whatever it was
+        /// meant to be. The hook is called directly, since the windows that reach the limit
+        /// are trillions of items.
         /// </summary>
         [TestMethod]
-        public void TestASubstreamNoListCouldHoldIsRefusedNotSaturated()
+        public void TestASubstreamPastTheLongestArrayIsRefusedNotSaturated()
         {
             // 2^40 to the 0.9 is 2^36 items.
             var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
@@ -133,12 +133,14 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The refusal comes before anything is built. A window of a billion at the
-        /// default factor has substreams of about two million items, and the checkpoints
-        /// of one are a list of that many offsets, so a constructor that checked the shape
-        /// after sizing them would allocate megabytes to say no. The allocation is the
-        /// least of three runs, as <see cref="TestReadBudget"/> measures a read: the
-        /// first throw of an exception costs more than the ones after it.
+        /// The refusal costs nothing to speak of. A window of a billion at the default
+        /// factor has substreams of about two million items, and while their checkpoints
+        /// were thinned from a list of that many offsets, a constructor that checked the
+        /// shape after building them allocated megabytes to say no. Since #219 the
+        /// checkpoints are a walk's few dozen offsets, so this no longer tells whether the
+        /// shape is checked first; what it holds is that a refusal allocates little. The
+        /// allocation is the least of three runs, as <see cref="TestReadBudget"/> measures a
+        /// read: the first throw of an exception costs more than the ones after it.
         /// </summary>
         [TestMethod]
         public void TestARefusedShapeBuildsNothing()
@@ -158,10 +160,8 @@ namespace TestProbabilisticDataStructures
                     least = Math.Min(least, GC.GetAllocatedBytesForCurrentThread() - before);
                 }
 
-                // Checkpoints alone for this window is about eight megabytes.
                 Assert.IsLessThan(64 * 1024, least,
-                    $"a refused {depth} by {width} shape allocated {least:N0} bytes, " +
-                    "which is the checkpoints of a substream: it was built before it was refused");
+                    $"a refused {depth} by {width} shape allocated {least:N0} bytes to be refused");
             }
         }
 
@@ -725,6 +725,86 @@ namespace TestProbabilisticDataStructures
                 "two reads of the same payload produced identical noise for the " +
                 "substreams built after them, which means the reader is installing " +
                 "a predictable generator rather than an unpredictable one.");
+        }
+
+        /// <summary>
+        /// The checkpoints of a substream are exactly the ones the smooth histogram's
+        /// thinning rule keeps, as the construction this library used until #219 applied it:
+        /// a list of every offset from the substream's length down to one, from which
+        /// everything between an offset and the last one still at least (1 - alpha) times it
+        /// is dropped. That construction is kept here, and only here, as the oracle.
+        /// </summary>
+        /// <remarks>
+        /// Every size to 64 and then every 37th to 3,000, at factors from coarse to fine,
+        /// where a checkpoint's bound <c>(1 - alpha) * v</c> is sometimes a whole number and
+        /// sometimes not, so the comparison's rounding is straddled; and sizes far past
+        /// those, the substream of a window of a billion among them. A checkpoint moved by
+        /// one changes which items a query covers and the budget each sketch gets, and no
+        /// estimate would show it.
+        /// </remarks>
+        [TestMethod]
+        public void TestTheCheckpointsAreTheOnesTheThinningRuleKeeps()
+        {
+            var alphas = new[] { 0.001, 0.01, 0.05, 0.1, 0.25, 1.0 / 3, 0.5, 0.75, 0.9, 0.999 };
+            var compared = 0;
+            foreach (var alpha in alphas)
+            {
+                for (var size = 1; size <= 3000; size += size < 64 ? 1 : 37)
+                {
+                    CollectionAssert.AreEqual(Thinned(size, alpha), DpswSketch.Checkpoints(size, alpha),
+                        $"substream {size}, alpha {alpha}");
+                    compared++;
+                }
+            }
+
+            foreach (var (size, alpha) in new[]
+            {
+                (200_000, 0.5), (65_536, 0.01), (100_003, 0.3), (1_995_263, 0.5), (1 << 20, 0.25),
+            })
+            {
+                CollectionAssert.AreEqual(Thinned(size, alpha), DpswSketch.Checkpoints(size, alpha),
+                    $"substream {size}, alpha {alpha}");
+                compared++;
+            }
+
+            Assert.IsGreaterThan(1000, compared);
+
+            // Not vacuous: the rule thins, and coarsely at a coarse factor.
+            Assert.HasCount(22, DpswSketch.Checkpoints(2_000_000, 0.5));
+        }
+
+        /// <summary>
+        /// The checkpoints as they were built before #219, from a list of every offset.
+        /// </summary>
+        private static int[] Thinned(int substreamSize, double alpha)
+        {
+            var indices = new List<int>();
+            for (var i = substreamSize; i >= 1; i--)
+            {
+                indices.Add(i);
+            }
+
+            var j = 0;
+            while (j < indices.Count - 2)
+            {
+                var furthest = j;
+                for (var k = j + 1; k < indices.Count; k++)
+                {
+                    if (indices[k] >= (1 - alpha) * indices[j])
+                    {
+                        furthest = k;
+                    }
+                }
+
+                if (furthest > j + 1)
+                {
+                    indices.RemoveRange(j + 1, furthest - j - 1);
+                }
+
+                j++;
+            }
+
+            return indices.ToArray();
         }
     }
 }

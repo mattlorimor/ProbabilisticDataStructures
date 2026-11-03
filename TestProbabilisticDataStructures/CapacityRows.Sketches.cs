@@ -447,9 +447,9 @@ namespace TestProbabilisticDataStructures
             StructureId.DpswSketch, "window (items), α 0.5, β 0.7, ρ 1, width 512, depth 5",
             () =>
             {
-                // A substream is the window to the 0.7, and its checkpoints are a list of
-                // that many slots, so the window is held to the longest substream a list
-                // holds: found by search, against the same rule the constructor applies.
+                // A substream is the window to the 0.7 and holds at most what an array does,
+                // so the window is held to the longest substream: found by search, against
+                // the same rule the constructor applies.
                 var largest = Largest(1, long.MaxValue, w =>
                 {
                     try
