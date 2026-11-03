@@ -960,8 +960,11 @@ bytes     the item's data
 
 The threshold itself is **not** stored. It is the region's total weight divided by
 the region's size, and storing the quotient instead of the total would let rounding
-accumulate across a save-and-reload cycle — the one number this structure promises
-exactly is the sum of its adjusted weights.
+accumulate across a save-and-reload cycle. The total is stored as it is held, so a save
+and a load change none of it. What the structure promises of its total is that no weight
+is lost when an item is dropped, because the survivors inherit it. The total is still a
+sum of doubles, exact only while the weights are integers and every partial sum stays
+below 2^53; a weight with a fraction can round as soon as it is added.
 
 Which reading a payload gets is decided by the threshold-region size: zero means the
 sample is still exact and holds everything it has seen, so the reader requires the
