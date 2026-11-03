@@ -1,6 +1,7 @@
 ﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
 
 namespace TestProbabilisticDataStructures
@@ -329,5 +330,45 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(empty, f.SizeInBytes());
         }
 
+        /// <summary>
+        /// Sets the item count, which nothing public can, to a value below the entries the
+        /// filter holds: the state a payload with a count that disagrees with its entries
+        /// used to read as. Through reflection on the private property.
+        /// </summary>
+        private static void SetCount(CuckooBloomFilter filter, uint value)
+        {
+            typeof(CuckooBloomFilter)
+                .GetProperty("count", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .SetValue(filter, value);
+        }
+
+        /// <summary>
+        /// A removal takes the count down by one and never past zero. The count is a
+        /// uint, so a decrement from zero wraps to 4,294,967,295, which Count() then
+        /// reports. A filter this library builds cannot reach it, since its count is the
+        /// entries it holds; the reader refuses a payload whose count is not. This holds
+        /// the removal to the rule on its own, for any state that does.
+        /// </summary>
+        [TestMethod]
+        public void TestRemovingNeverTakesTheCountBelowZero()
+        {
+            var f = new CuckooBloomFilter(100, 0.1, seed: 1);
+            Assert.IsTrue(f.Add(A_BYTES));
+            Assert.IsTrue(f.Add(B_BYTES));
+
+            // Where the count agrees with the entries it falls by one a removal, and the
+            // last removal ends at zero, not before it.
+            Assert.IsTrue(f.TestAndRemove(A_BYTES));
+            Assert.AreEqual(1u, f.Count());
+            Assert.IsTrue(f.TestAndRemove(B_BYTES));
+            Assert.AreEqual(0u, f.Count());
+
+            // Where it does not, the entry still goes and the count stays at zero.
+            Assert.IsTrue(f.Add(A_BYTES));
+            SetCount(f, 0);
+            Assert.IsTrue(f.TestAndRemove(A_BYTES), "the entry was not removed");
+            Assert.IsFalse(f.Test(A_BYTES), "the entry was not removed");
+            Assert.AreEqual(0u, f.Count(), "the count wrapped below zero");
+        }
     }
 }

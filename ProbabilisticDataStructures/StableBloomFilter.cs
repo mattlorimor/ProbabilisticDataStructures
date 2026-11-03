@@ -593,11 +593,7 @@ namespace ProbabilisticDataStructures
                     "them, which do not describe the same filter.");
             }
 
-            if (k == 0)
-            {
-                throw new InvalidDataException(
-                    "Filter has no hash functions, so it would set no cells and test none.");
-            }
+            PersistenceFormat.CheckHashCount(k);
         }
 
         /// <summary>The scratch buffer of a filter of <paramref name="k"/> hash functions.</summary>

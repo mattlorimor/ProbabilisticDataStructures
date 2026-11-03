@@ -756,7 +756,8 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// The rows and the counters in each are arrays. Structural at the limit, where a
         /// sketch is gigabytes of noise: the constructor's refusal one past, the reader's
-        /// the same, and the cost a payload at the limit is refused for.
+        /// the same, and a payload at the limit refused only for the counters it does not
+        /// hold, which its reader checks are there before it prices or allocates a row.
         /// </summary>
         [TestMethod]
         public void TestPrivateCountMinSketchLimitsAreShared()
@@ -776,14 +777,10 @@ namespace TestProbabilisticDataStructures
             AssertRefused<PrivateCountMinSketch>(
                 PokeUInt32(bytes, 4, PrivateCountMinSketch.MaxDepth + 1), PastTheLimit);
 
-            foreach (var offset in new[] { 0, 4 })
-            {
-                var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() =>
-                    Persistence.FromByteArray<PrivateCountMinSketch>(
-                        PokeUInt32(bytes, offset, (uint)Array.MaxLength)));
-                Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
-                    "a payload at the limit should be refused for what it costs, not its size");
-            }
+            AssertRefusedOnlyForMissingBytes<PrivateCountMinSketch>(
+                PokeUInt32(bytes, 0, PrivateCountMinSketch.MaxWidth));
+            AssertRefusedOnlyForMissingBytes<PrivateCountMinSketch>(
+                PokeUInt32(bytes, 4, PrivateCountMinSketch.MaxDepth));
         }
 
         /// <summary>
@@ -1605,6 +1602,13 @@ namespace TestProbabilisticDataStructures
                 [("QuotientFilter", "remainder bits")] = QuotientFilter.MaxRemainderBits,
             };
 
+            // The hash count a reader accepts, which every filter that stores one shares:
+            // the most Utils.OptimalK can return.
+            foreach (var structure in TestHashCountLimit.StructuresThatStoreAHashCount())
+            {
+                expected[(structure, "hash functions, `k`")] = Utils.MaxHashCount;
+            }
+
             using var resource = typeof(TestLoadWhatItBuilds).Assembly
                 .GetManifestResourceStream("TestProbabilisticDataStructures.FORMAT.md");
             Assert.IsNotNull(resource, "FORMAT.md is not embedded in the test assembly");
@@ -1637,7 +1641,8 @@ namespace TestProbabilisticDataStructures
             }
 
             CollectionAssert.AreEquivalent(
-                Declared.Select(d => d.Id.ToString()).ToArray(),
+                Declared.Select(d => d.Id.ToString())
+                    .Union(TestHashCountLimit.StructuresThatStoreAHashCount()).ToArray(),
                 expected.Keys.Select(k => k.Structure).Distinct().ToArray(),
                 "the structures with a documented limit are not the ones that declare one");
         }

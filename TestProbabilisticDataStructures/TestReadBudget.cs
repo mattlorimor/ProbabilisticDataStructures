@@ -723,6 +723,34 @@ namespace TestProbabilisticDataStructures
                 $"a {typeof(T).Name} refused for its budget had already allocated {allocated} bytes");
         }
 
+        /// <summary>
+        /// A small payload whose header names a hash count no filter has is refused for the
+        /// count and not for the budget, and before the scratch array of that many is priced
+        /// or allocated: the refusal carries no budget exception, and the refused read
+        /// allocated less than the budget. The count is held to what a constructor gives,
+        /// so the array is never more than a few kilobytes and no count can ask a budget for
+        /// much; what a read is charged for it is held to what it allocates, for the count a
+        /// payload may carry, by <c>TestEveryStructureReadsWithinAnHonestBudget</c>.
+        /// </summary>
+        private static void AssertRefusedForItsHashCountBeforeAllocating<T>(byte[] poked)
+            where T : IBinaryPersistable<T>
+        {
+            var options = new ReadOptions(SmallBudget);
+            InvalidDataException refused = null;
+            var allocated = Allocated(() =>
+            {
+                refused = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<T>(poked, options));
+                return new object();
+            });
+
+            StringAssert.Contains(refused.Message, "hash functions, more than");
+            Assert.IsNull(refused.InnerException,
+                $"a {typeof(T).Name} naming too many hash functions was refused for its budget");
+            Assert.IsLessThan(SmallBudget, allocated,
+                $"a {typeof(T).Name} refused for its hash count had already allocated {allocated} bytes");
+        }
+
         /// <summary>A cuckoo filter's table is allocated whole, whatever it holds.</summary>
         [TestMethod]
         public void TestACuckooTableLargerThanTheBudgetIsRefused()
@@ -753,13 +781,16 @@ namespace TestProbabilisticDataStructures
             AssertRefusedBeforeAllocating<QuotientFilter>(Poke(bytes, 0, 24), (1L << 24) * 10 / 8);
         }
 
-        /// <summary>The counting filter's scratch buffer is sized by its hash count.</summary>
+        /// <summary>
+        /// The counting filter's scratch buffer is sized by its hash count, which was once
+        /// the way a few bytes asked a budget for 64 MiB and is now refused first.
+        /// </summary>
         [TestMethod]
         public void TestACountingFilterHashCountLargerThanTheBudgetIsRefused()
         {
             // u32 m, then u32 k at 4: 2^24 four-byte indexes, 64 MiB.
             var bytes = new CountingBloomFilter(1000, 4, 0.01).ToByteArray();
-            AssertRefusedBeforeAllocating<CountingBloomFilter>(Poke(bytes, 4, 1u << 24), 4L << 24);
+            AssertRefusedForItsHashCountBeforeAllocating<CountingBloomFilter>(Poke(bytes, 4, 1u << 24));
         }
 
         /// <summary>The deletable filter's scratch buffer, likewise.</summary>
@@ -767,7 +798,7 @@ namespace TestProbabilisticDataStructures
         public void TestADeletableFilterHashCountLargerThanTheBudgetIsRefused()
         {
             var bytes = new DeletableBloomFilter(1000, 100, 0.01).ToByteArray();
-            AssertRefusedBeforeAllocating<DeletableBloomFilter>(Poke(bytes, 4, 1u << 24), 4L << 24);
+            AssertRefusedForItsHashCountBeforeAllocating<DeletableBloomFilter>(Poke(bytes, 4, 1u << 24));
         }
 
         /// <summary>The stable filter's scratch buffer, likewise.</summary>
@@ -775,7 +806,7 @@ namespace TestProbabilisticDataStructures
         public void TestAStableFilterHashCountLargerThanTheBudgetIsRefused()
         {
             var bytes = new StableBloomFilter(1000, 3, 0.01, seed: 1).ToByteArray();
-            AssertRefusedBeforeAllocating<StableBloomFilter>(Poke(bytes, 4, 1u << 24), 4L << 24);
+            AssertRefusedForItsHashCountBeforeAllocating<StableBloomFilter>(Poke(bytes, 4, 1u << 24));
         }
 
         /// <summary>An inverse filter's slots are allocated whole, occupied or not.</summary>
@@ -799,30 +830,105 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// A size so large its cost does not fit a long -- every row of a matrix two
-        /// billion by two billion, the most a private sketch allows of each -- is refused
-        /// rather than wrapping to a small one. (A Count-Min Sketch cannot reach this
-        /// any more: its depth is at most 710, which its reader checks first.)
+        /// billion by two billion, the most a private sketch allows of each -- is priced as
+        /// the largest long and refused, rather than wrapping to a small one.
+        /// <para>
+        /// No payload reaches this now, so it is held on the arithmetic every price is made
+        /// of. A Count-Min Sketch stopped reaching it when its reader checked its depth,
+        /// at most 710, first; a private sketch, the last that did, when its reader checked
+        /// that the counters it claims are in the payload before pricing them, and a
+        /// payload of four quintillion counters is not one that can be written.
+        /// </para>
         /// </summary>
         [TestMethod]
         public void TestACostTooLargeToCountIsRefusedRatherThanWrapped()
         {
-            // u32 width at 0 and u32 depth at 4, both the most an array holds.
-            var bytes = new PrivateCountMinSketch(64, 2, 1.0, seed: 1).ToByteArray();
-            AssertRefusedBeforeAllocating<PrivateCountMinSketch>(
-                Poke(Poke(bytes, 0, (uint)Array.MaxLength), 4, (uint)Array.MaxLength),
-                long.MaxValue);
+            var most = (ulong)Array.MaxLength;
+
+            // Each of the three ways a price grows past a long: an array too long to
+            // count, a count of things each costing more than a long over that count, and
+            // a sum of costs past the largest long. Each wraps to a small or negative
+            // number if it is worked out plainly.
+            Assert.AreEqual(long.MaxValue, ReadBudget.ArrayOf(ulong.MaxValue, sizeof(double)));
+            Assert.AreEqual(long.MaxValue, ReadBudget.Times(most, ReadBudget.ArrayOf(most, sizeof(double))));
+            Assert.AreEqual(long.MaxValue, ReadBudget.Sum(long.MaxValue - 1, 2));
+
+            // The matrix such a sketch would claim, priced as its reader prices it.
+            var matrix = ReadBudget.Sum(
+                ReadBudget.ArrayOf(most, sizeof(long)),
+                ReadBudget.Times(most, ReadBudget.ArrayOf(most, sizeof(double))),
+                ReadBudget.SmallObject);
+            var budget = new ReadBudget(long.MaxValue - 1, StructureId.PrivateCountMinSketch);
+            budget.Price(matrix);
+
+            var refusal = Assert.ThrowsExactly<InvalidDataException>(budget.Settle);
+            var why = Assert.IsInstanceOfType<ReadBudgetExceededException>(refusal.InnerException);
+            Assert.AreEqual(long.MaxValue, why.RequiredBytes);
         }
 
-        /// <summary>A private sketch's rows, likewise.</summary>
+        /// <summary>
+        /// A private sketch's rows are allocated before they are read, so a payload that
+        /// claims counters it does not hold is refused for that before any row is
+        /// allocated, under the default budget and under none. Its price and its reader
+        /// share the check, so the price, which a payload malformed past what it has
+        /// priced does not stop, does not stand in for the reader's.
+        /// <para>
+        /// A row of ten million counters is 80 MB, less than the default budget, so the
+        /// budget alone does not stop it. The same claim is made of the first sketch a
+        /// DPSW window holds, read through the same body.
+        /// </para>
+        /// </summary>
         [TestMethod]
-        public void TestAPrivateSketchWiderThanTheBudgetIsRefused()
+        public void TestAPrivateSketchClaimingCountersItDoesNotHoldIsRefusedBeforeAllocating()
         {
-            // u32 width at 0.
-            var bytes = new PrivateCountMinSketch(64, 2, 1.0, seed: 1).ToByteArray();
-            AssertRefusedBeforeAllocating<PrivateCountMinSketch>(Poke(bytes, 0, 1u << 22), 2 * (8L << 22));
+            const uint Claimed = 10_000_000;
+
+            // u32 width at 0 and u32 depth at 4.
+            var priv = new PrivateCountMinSketch(64, 2, 1.0, seed: 1).ToByteArray();
+
+            // u64 window, f64 budget, f64 checkpoint factor, u32 substream size, u32
+            // width, u32 depth, u64 items seen, u32 substream count, then the first
+            // substream's u64 position and u32 item count, and its first sketch's body,
+            // whose u32 width is at 60.
+            var window = Filled(
+                new DpswSketch(64, 4.0, alpha: 0.6, width: 4, depth: 2, seed: 11), (s, k) => s.Add(k), 90).ToByteArray();
+
+            foreach (var options in new[] { ReadOptions.Default, ReadOptions.Unlimited })
+            {
+                AssertRefusedForMissingCounters<PrivateCountMinSketch>(Poke(priv, 0, Claimed), options, "width");
+                AssertRefusedForMissingCounters<PrivateCountMinSketch>(Poke(priv, 4, Claimed), options, "depth");
+                AssertRefusedForMissingCounters<DpswSketch>(Poke(window, 60, Claimed), options, "first sketch's width");
+            }
         }
 
-        /// <summary>A Sublime sketch's rows, likewise.</summary>
+        /// <summary>
+        /// The read is refused naming the counters as more than the payload holds, and
+        /// allocated less than <see cref="SmallBudget"/> before it was: no row of the ten
+        /// million counters claimed.
+        /// </summary>
+        private static void AssertRefusedForMissingCounters<T>(byte[] poked, ReadOptions options, string edited)
+            where T : IBinaryPersistable<T>
+        {
+            InvalidDataException refusal = null;
+            var allocated = Allocated(() =>
+            {
+                refusal = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<T>(poked, options),
+                    $"a {typeof(T).Name} with its {edited} edited was read");
+                return refusal;
+            });
+
+            var budget = options.IsUnlimited ? "no budget" : $"a budget of {options.MemoryBudget}";
+            Assert.IsLessThan(SmallBudget, allocated,
+                $"a {typeof(T).Name} with its {edited} edited, under {budget}, allocated {allocated} bytes " +
+                $"before it was refused: {refusal.Message}");
+            Assert.IsNotInstanceOfType<ReadBudgetExceededException>(refusal.InnerException,
+                $"a {typeof(T).Name} with its {edited} edited was refused for its budget under {budget}");
+            StringAssert.Contains(refusal.Message, "counters, beyond what it can hold",
+                $"a {typeof(T).Name} with its {edited} edited, under {budget}, was refused for something else");
+        }
+
+        /// <summary>A Sublime sketch's rows, as a count-min sketch's are.</summary>
         [TestMethod]
         public void TestASublimeSketchWiderThanTheBudgetIsRefused()
         {
@@ -933,6 +1039,26 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A private sketch claiming more counters than its payload holds, alone and as
+        /// the first sketch a DPSW window holds. Its price checks that the counters are
+        /// there before it prices the rows that hold them, so the claim is refused for
+        /// that, not priced and refused for a budget that would not have loaded it.
+        /// </summary>
+        [TestMethod]
+        public void TestAPrivateSketchClaimingCountersItDoesNotHoldIsRefusedForThat()
+        {
+            // u32 width at 0: rows of 2^22 counters, 32 MiB each.
+            var priv = Filled(new PrivateCountMinSketch(1024, 3, 1.0, seed: 1), (s, k) => s.Add(k), 100).ToByteArray();
+            AssertRefusedForItsShape<PrivateCountMinSketch>(priv, Poke(priv, 0, 1u << 22), "beyond what it can hold");
+
+            // The window's header and the first substream's position and item count, as
+            // above, then its first sketch's u32 width at 60.
+            var window = Filled(
+                new DpswSketch(2000, 1.0, width: 1024, depth: 3, seed: 1), (s, k) => s.Add(k), 5000).ToByteArray();
+            AssertRefusedForItsShape<DpswSketch>(window, Poke(window, 60, 1u << 22), "beyond what it can hold");
+        }
+
+        /// <summary>
         /// A placement byte naming no scheme, in each structure that records one from
         /// version 9, is refused for that under a budget it would also fail: its price
         /// reads the byte through the check its reader reads it through, and stops there.
@@ -1007,6 +1133,20 @@ namespace TestProbabilisticDataStructures
             // u32 m, u32 b, u32 f, u32 count, u32 n, u32 occupied entry count, then the
             // first entry's u32 bucket index.
             AssertRefusedForItsShape<CuckooBloomFilter>(bytes, Poke(bytes, 24, uint.MaxValue), "outside its");
+        }
+
+        /// <summary>
+        /// A cuckoo bucket count that is not a power of two, on a table larger than the
+        /// payload's own: the price refuses it for that, before it prices a table, which is
+        /// what keeps a read from allocating one.
+        /// </summary>
+        [TestMethod]
+        public void TestACuckooBucketCountThatIsNotAPowerOfTwoIsRefusedForThat()
+        {
+            var bytes = Filled(new CuckooBloomFilter(1000, 0.01, seed: 1), (f, k) => f.Add(k), 10).ToByteArray();
+
+            // u32 m at 0, which is 512 unedited; 1,000 buckets is the larger table.
+            AssertRefusedForItsShape<CuckooBloomFilter>(bytes, Poke(bytes, 0, 1000), "is not a power of two");
         }
 
         /// <summary>

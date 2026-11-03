@@ -158,6 +158,20 @@ namespace ProbabilisticDataStructures
         /// A 64-bit count, so that it crosses 2^32 rather than wrapping to zero, and comes
         /// back down across it as items are removed. Before the release after 6.2.0 it was
         /// a <c>uint</c>.
+        /// <para>
+        /// A removal takes one off the count only when it cleared a bit. One that is
+        /// refused, because every region of the item has collided, returns true and
+        /// leaves the item a member, and leaves the count alone: the item is still held.
+        /// </para>
+        /// <para>
+        /// The count also stops at zero. <see cref="TestAndRemove(byte[])"/> returns true
+        /// whenever every bit of the item is set, which an item that was never added can
+        /// meet by chance, and its removal clears bits that other items set. After
+        /// removing items that were never added the count can therefore be lower than the
+        /// number of items the filter holds: an undercount, where before it wrapped to
+        /// 2^64 - 1. A wrapped count saved by an earlier release is read back as it was
+        /// stored.
+        /// </para>
         /// </remarks>
         public ulong Count()
         {
@@ -302,15 +316,27 @@ namespace ProbabilisticDataStructures
 
             if (member)
             {
+                var cleared = false;
                 foreach (var idx in this.IndexBuffer)
                 {
                     if (this.Collisions.Get(idx / this.RegionSize) == 0)
                     {
                         // Clear only bits located in collision-free zones.
                         this.Buckets.Set(idx, 0);
+                        cleared = true;
                     }
                 }
-                this.count--;
+
+                // A deletion that cleared nothing, every one of the item's regions having
+                // collided, removed nothing: the item is still a member and is still
+                // counted. One that cleared a bit has taken the item out of the filter,
+                // as far as this filter can, and the answer above is only "every bit is
+                // set", which a false positive meets too, so the count stops at zero
+                // rather than taking a ulong to 2^64 - 1.
+                if (cleared && this.count > 0)
+                {
+                    this.count--;
+                }
             }
 
             return member;
@@ -438,6 +464,7 @@ namespace ProbabilisticDataStructures
             var collisions = PersistenceFormat.ReadBuckets(ref reader);
             reader.ExpectEnd();
             CheckRegions(m, buckets.count, collisions.count);
+            PersistenceFormat.CheckHashCount(k);
 
             // The scratch buffer below is sized by the hash count the payload claims.
             budget.Charge(ScratchCost(k));
@@ -474,10 +501,11 @@ namespace ProbabilisticDataStructures
             var collisions = PersistenceFormat.PriceBuckets(ref reader);
             reader.ExpectEnd();
             CheckRegions(m, buckets, collisions);
+            PersistenceFormat.CheckHashCount(k);
             reader.Budget.Price(ScratchCost(k));
         }
 
-        private static void CheckRegions(uint m, uint buckets, uint collisions)
+        internal static void CheckRegions(uint m, uint buckets, uint collisions)
         {
             if (m == 0 || buckets != m)
             {
@@ -491,6 +519,22 @@ namespace ProbabilisticDataStructures
                 throw new InvalidDataException(
                     "Filter has no collision regions, which is what makes its deletions " +
                     "safe; it divides by that count on first use.");
+            }
+
+            // The two regions are the halves of one filter of m bits, and sizing refuses an
+            // m past uint.MaxValue, so no filter built here has regions that come to more.
+            // The reader derives a region's size as (m + collisions - 1) / collisions in 32
+            // bits, so a sum past 2^32 wraps the numerator, makes the size zero, and the
+            // first Add that finds a bit set divides by it. Checked here, where Read and
+            // Price both pass, so the refusal comes before either region is allocated.
+            if ((ulong)m + collisions > uint.MaxValue)
+            {
+                throw new InvalidDataException(
+                    $"Filter has a data region of {m:N0} bits and {collisions:N0} collision " +
+                    $"regions, which together are {(ulong)m + collisions:N0} bits. A filter " +
+                    $"addresses at most {uint.MaxValue:N0}, so no filter this library builds " +
+                    "is this large; its region size would wrap to zero, and it divides by " +
+                    "that on first use.");
             }
         }
 

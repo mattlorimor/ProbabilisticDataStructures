@@ -9,6 +9,18 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request supersedes the run before it, so that run is
+# cancelled rather than left holding a runner. On master a run that has started is
+# left to finish, and a merge that lands while one is still waiting replaces the
+# waiting one: each pull request was already tested before it merged, and the newest
+# master commit is the one worth testing. macOS arm64 runners are the scarce kind.
+# During a burst of pull request updates and merges, jobs queued long enough for
+# GitHub to give up on them unrun ("not acquired by Runner of type hosted even after
+# multiple attempts").
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build-and-test:
     name: ${{ matrix.os }}

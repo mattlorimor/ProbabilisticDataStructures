@@ -229,6 +229,11 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// The cuckoo filter's bucket count sizes its whole fingerprint array.
         /// </summary>
+        /// <remarks>
+        /// A power of two, so that it is the size limit that refuses it. A count that is
+        /// not one is refused for that before its size is looked at, and this test would
+        /// pass on the wrong guard.
+        /// </remarks>
         [TestMethod]
         public void TestAbsurdCuckooBucketCountIsRefused()
         {
@@ -236,8 +241,128 @@ namespace TestProbabilisticDataStructures
 
             AssertRefused(
                 () => Persistence.FromByteArray<CuckooBloomFilter>(
-                    PokeUInt32(bytes, 0, 900_000_000)),
-                "buckets");
+                    PokeUInt32(bytes, 0, 1u << 30)),
+                "beyond anything this library builds");
+        }
+
+        /// <summary>
+        /// Where a cuckoo payload's header fields and first entry begin, within the
+        /// payload: the bucket count, entries per bucket, fingerprint width, item count and
+        /// capacity, then the number of occupied entries, then the entries.
+        /// </summary>
+        private const int CuckooItemCountOffset = 12;
+        private const int CuckooOccupiedOffset = 20;
+        private const int CuckooFirstEntryOffset = 24;
+
+        /// <summary>
+        /// A cuckoo filter of five items in distinct places, written, with the layout
+        /// the tests below edit checked against it so that an edit lands where it says.
+        /// </summary>
+        private static byte[] CuckooWithFiveItems()
+        {
+            var filter = new CuckooBloomFilter(1000, 0.01, seed: 1);
+            for (var i = 0; i < 5; i++)
+            {
+                Assert.IsTrue(filter.Add(Key($"c{i}")));
+            }
+            var bytes = filter.ToByteArray();
+
+            Assert.AreEqual(5u, BinaryPrimitives.ReadUInt32LittleEndian(
+                bytes.AsSpan(PayloadStart + CuckooItemCountOffset)), "the item count is not where this test expects it");
+            Assert.AreEqual(5u, BinaryPrimitives.ReadUInt32LittleEndian(
+                bytes.AsSpan(PayloadStart + CuckooOccupiedOffset)), "the occupied entries are not where this test expects them");
+            return bytes;
+        }
+
+        /// <summary>
+        /// The bytes one entry occupies in a cuckoo payload: its bucket and entry
+        /// indexes, then its fingerprint in the fewest whole bytes that hold the width.
+        /// </summary>
+        private static int CuckooEntryLength(byte[] bytes)
+        {
+            var bits = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + 8));
+            return 8 + (int)((bits + 7) / 8);
+        }
+
+        /// <summary>
+        /// A cuckoo filter finds an item's other bucket by combining the first with a hash
+        /// of its fingerprint and reducing the result by the bucket count. The two
+        /// agree about where an item lives only when that count is a power of two, which is
+        /// why the constructor rounds up to one. With any other, an insert that relocates
+        /// an entry can leave it where no lookup looks, and the filter then loses an item
+        /// it accepted. The writer never produces one, so the reader refuses it.
+        /// </summary>
+        /// <remarks>
+        /// The filter holds nothing, so what refuses the payload is the count and nothing
+        /// beside it. The counts straddle the powers of two they are nearest, and the
+        /// powers of two read, the smallest included, so the refusal is not a blanket one.
+        /// </remarks>
+        [TestMethod]
+        public void TestACuckooBucketCountThatIsNotAPowerOfTwoIsRefused()
+        {
+            var bytes = new CuckooBloomFilter(1000, 0.01).ToByteArray();
+            Assert.AreEqual(512u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart)),
+                "the bucket count is not where this test expects it");
+
+            foreach (var buckets in new uint[] { 3, 5, 6, 7, 100, 511, 513, 1000, 1023, 1025 })
+            {
+                AssertRefused(
+                    () => Persistence.FromByteArray<CuckooBloomFilter>(PokeUInt32(bytes, 0, buckets)),
+                    "is not a power of two");
+            }
+
+            foreach (var buckets in new uint[] { 1, 2, 4, 256, 512, 1024 })
+            {
+                Assert.AreEqual(buckets, Persistence.FromByteArray<CuckooBloomFilter>(
+                    PokeUInt32(bytes, 0, buckets)).BucketCount());
+            }
+        }
+
+        /// <summary>
+        /// A cuckoo filter holds one entry for each item, so the count a payload carries is
+        /// the number of entries it lists. A count below it lets a removal take the count
+        /// under zero, where it wraps to 4,294,967,295; a count of zero over entries lets
+        /// the hash be replaced under them, which an occupied filter refuses. A count above
+        /// it claims items the filter does not hold. The writer produces neither.
+        /// </summary>
+        [TestMethod]
+        public void TestACuckooItemCountThatDisagreesWithItsEntriesIsRefused()
+        {
+            var bytes = CuckooWithFiveItems();
+
+            foreach (var count in new uint[] { 0, 1, 4, 6, 7, uint.MaxValue })
+            {
+                AssertRefused(
+                    () => Persistence.FromByteArray<CuckooBloomFilter>(
+                        PokeUInt32(bytes, CuckooItemCountOffset, count)),
+                    $"item count is {count}");
+            }
+
+            Assert.AreEqual(5u, Persistence.FromByteArray<CuckooBloomFilter>(bytes).Count());
+        }
+
+        /// <summary>
+        /// A payload that lists the same bucket and entry twice is accepted today, and
+        /// the two fingerprints are OR-ed into one cell. The count is compared with the
+        /// entries filled rather than the entries listed, so the repeat cannot hide in
+        /// it, and the repeat is refused for itself. The second case is the one only that
+        /// refusal sees: a count that agrees with the cells filled, four, while five
+        /// entries are listed.
+        /// </summary>
+        [TestMethod]
+        public void TestACuckooPayloadThatListsAnEntryTwiceIsRefused()
+        {
+            var bytes = CuckooWithFiveItems();
+            var second = CuckooFirstEntryOffset + CuckooEntryLength(bytes);
+
+            var bucket = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + CuckooFirstEntryOffset));
+            var entry = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + CuckooFirstEntryOffset + 4));
+            var repeated = PokeUInt32(PokeUInt32(bytes, second, bucket), second + 4, entry);
+
+            AssertRefused(() => Persistence.FromByteArray<CuckooBloomFilter>(repeated), "named more than once");
+            AssertRefused(
+                () => Persistence.FromByteArray<CuckooBloomFilter>(PokeUInt32(repeated, CuckooItemCountOffset, 4)),
+                "named more than once");
         }
 
         /// <summary>
@@ -1080,6 +1205,41 @@ namespace TestProbabilisticDataStructures
             AssertRefused(
                 () => Persistence.FromByteArray<PrivateCountMinSketch>(bytes),
                 "exact integer");
+        }
+
+        /// <summary>
+        /// A private sketch's counters are checked against the bytes behind them at the
+        /// edges of the check. The unedited sketch, 64 by 2, holds exactly its 128
+        /// counters and reads; one column more claims 130, two more than it holds, and is
+        /// refused for that.
+        /// <para>
+        /// And where 32 bits run out: a sketch four rows deep with its width edited to
+        /// 2^30 + 1 claims 2^32 + 4 counters, which as a 32-bit product is 4, and four
+        /// counters fit. Counted in 64 bits it is refused for the counters it lacks. Counted
+        /// in 32 it is priced at 34 GB and refused for its budget instead, or under no
+        /// budget would allocate a row of eight gigabytes, which is why it is read only
+        /// under the default.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestAPrivateSketchClaimingMoreCountersThanItHoldsIsRefusedAtTheEdges()
+        {
+            // u32 width at 0.
+            var narrow = new PrivateCountMinSketch(64, 2, 1.0, seed: 3).ToByteArray();
+            Assert.AreEqual(64u, Persistence.FromByteArray<PrivateCountMinSketch>(narrow).Width,
+                "the unedited sketch does not read, so the edit below is not the only lie.");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<PrivateCountMinSketch>(PokeUInt32(narrow, 0, 65)),
+                "counters, beyond what it can hold");
+
+            // Four rows of 2^30 + 1: 2^32 + 4 counters, and 4 as a product of two u32.
+            const uint Wraps = (1u << 30) + 1;
+            var deep = new PrivateCountMinSketch(64, 4, 1.0, seed: 3).ToByteArray();
+
+            AssertRefused(
+                () => Persistence.FromByteArray<PrivateCountMinSketch>(PokeUInt32(deep, 0, Wraps)),
+                "counters, beyond what it can hold");
         }
 
         /// <summary>

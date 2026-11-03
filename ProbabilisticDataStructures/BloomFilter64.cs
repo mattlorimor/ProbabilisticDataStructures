@@ -339,6 +339,8 @@ namespace ProbabilisticDataStructures
                     "hold them, which do not describe the same filter.");
             }
 
+            PersistenceFormat.CheckHashCount(k);
+
             return new BloomFilter64
             {
                 Buckets = buckets,
