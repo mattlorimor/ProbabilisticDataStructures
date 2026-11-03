@@ -422,8 +422,9 @@ namespace TestProbabilisticDataStructures
         /// fixed, so field offsets are too: the reduced universe at 0, the hash
         /// multiplier at 8, its addend at 16, the key count at 24, the largest
         /// promised range at 32, the low-bit split at 40, the number of hash codes
-        /// at 44, the bits of high parts in use at 48, and the count of words of low
-        /// bits at 68, which the low words follow.
+        /// at 44, the bits of high parts in use at 48, the smallest and largest codes
+        /// at 52 and 60, and the count of words of low bits at 68, which the low words
+        /// follow.
         /// </summary>
         private static byte[] GrafitePayload()
         {
@@ -434,6 +435,8 @@ namespace TestProbabilisticDataStructures
         private const int GrafiteLowBitsOffset = 40;
         private const int GrafiteCodeCountOffset = 44;
         private const int GrafiteHighBitCountOffset = 48;
+        private const int GrafiteFirstCodeOffset = 52;
+        private const int GrafiteLastCodeOffset = 60;
         private const int GrafiteLowWordsOffset = 68;
 
         /// <summary>
@@ -585,11 +588,11 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(1, filter.LowBits, "the code above ends at a high part of 2^31 - 3");
             Assert.AreEqual(2, filter.Lows.Length, "the words the one code gives its low bits");
 
-            // The universe, which the code is below, and the smallest and largest codes at
-            // 52 and 60 (the same code).
+            // The universe, which the code is below, and the smallest and largest codes
+            // (the same code).
             var edge = PokeUInt64(original, 0, 1UL << 33);
-            edge = PokeUInt64(edge, 52, LastCode);
-            edge = PokeUInt64(edge, 60, LastCode);
+            edge = PokeUInt64(edge, GrafiteFirstCodeOffset, LastCode);
+            edge = PokeUInt64(edge, GrafiteLastCodeOffset, LastCode);
             edge = PokeUInt32(edge, GrafiteHighBitCountOffset, int.MaxValue);
             edge = PokeUInt32(edge, HighWordsOffset, Grafite.MaxHighWords);
 
@@ -654,6 +657,64 @@ namespace TestProbabilisticDataStructures
 
             var bytes = PokeUInt32(original, GrafiteCodeCountOffset, (uint)(codes - 1));
             AssertGrafiteEditRefused(original, bytes, "take exactly");
+        }
+
+        /// <summary>
+        /// The smallest code is recorded beside the encoding, and a query turns away
+        /// anything below it without looking at the encoding at all. A smallest code that
+        /// is not the encoding's first is a filter that answers false for the keys whose
+        /// codes lie between the two (one above and a hundred above lost one and three of
+        /// the sixty), or that records a code it does not hold (one below).
+        /// </summary>
+        [TestMethod]
+        [DataRow(-1L)]
+        [DataRow(1L)]
+        [DataRow(100L)]
+        public void TestGrafiteWhoseSmallestCodeIsNotTheEncodingsFirstIsRefused(long offBy)
+        {
+            var original = GrafitePayload();
+            var first = Persistence.FromByteArray<Grafite>(original).FirstCode;
+
+            var bytes = PokeUInt64(original, GrafiteFirstCodeOffset, (ulong)((long)first + offBy));
+            AssertGrafiteEditRefused(original, bytes, "records its smallest code as");
+        }
+
+        /// <summary>
+        /// The extreme of the same edit: the smallest code recorded as the largest, which
+        /// no longer exceeds it, so the order check passes, and which turns away every
+        /// code but one (59 of the sixty keys answered false).
+        /// </summary>
+        [TestMethod]
+        public void TestGrafiteWhoseSmallestCodeIsItsLargestIsRefused()
+        {
+            var original = GrafitePayload();
+            var last = Persistence.FromByteArray<Grafite>(original).LastCode;
+
+            var bytes = PokeUInt64(original, GrafiteFirstCodeOffset, last);
+            AssertGrafiteEditRefused(original, bytes, "records its smallest code as");
+        }
+
+        /// <summary>
+        /// And the largest code, which a query also checks first. One below the
+        /// encoding's last turns away the key whose code is the last (one of the sixty
+        /// answered false), and one above records a code the filter does not hold. The
+        /// edits stay within the high part the bit count is worked from, so it is the
+        /// recorded code that refuses them and not the count.
+        /// </summary>
+        [TestMethod]
+        [DataRow(-1L)]
+        [DataRow(1L)]
+        public void TestGrafiteWhoseLargestCodeIsNotTheEncodingsLastIsRefused(long offBy)
+        {
+            var original = GrafitePayload();
+            var filter = Persistence.FromByteArray<Grafite>(original);
+            var claimed = (ulong)((long)filter.LastCode + offBy);
+            Assert.AreEqual(
+                filter.LastCode >> filter.LowBits, claimed >> filter.LowBits,
+                "the edit should leave the high part, which the bit count follows, as it was");
+
+            var bytes = PokeUInt64(original, GrafiteLastCodeOffset, claimed);
+            AssertGrafiteEditRefused(original, bytes, "records its largest code as");
         }
 
         /// <summary>
