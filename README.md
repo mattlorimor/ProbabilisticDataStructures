@@ -644,10 +644,9 @@ have limits of their own, nearer 2^31. `CuckooBloomFilter` numbers its entries w
 stop at 2^31. `BinaryFuseFilter` keeps its fingerprints in one array, which holds
 2,147,483,591 bytes: that is 1,908,641,337 keys at 8-bit fingerprints and 954,204,160 at
 16. How many items each of these is built for is in [the table](#how-much-each-one-holds).
-The sketches —
-`HyperLogLogPlus`, `ThetaSketch`, `CountMinSketch`, `TopK`, `DDSketch` — are a few hundred
-kilobytes at their largest sensible settings however much data passes through them. Their
-counters are already 64-bit.
+The sketches — `HyperLogLogPlus`, `ThetaSketch`, `CountMinSketch`, `TopK`, `DDSketch` —
+are a few hundred kilobytes at their largest sensible settings however much data passes
+through them. Their counters are already 64-bit.
 
 ### `PartitionedBloomFilter`
 
