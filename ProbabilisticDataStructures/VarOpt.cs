@@ -683,8 +683,7 @@ namespace ProbabilisticDataStructures
         {
             while (true)
             {
-                var child = (2 * slot) + 1;
-                if (child >= this.HeavyCount)
+                if (!TryLeftChild(slot, this.HeavyCount, out var child))
                 {
                     break;
                 }
@@ -701,6 +700,21 @@ namespace ProbabilisticDataStructures
                 Swap(slot, child);
                 slot = child;
             }
+        }
+
+        /// <summary>
+        /// Whether <paramref name="slot"/> has a child in a heap of
+        /// <paramref name="count"/> entries, and if it has, where the left one is. The
+        /// right one, if there is one, is the slot after it.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="SiftDown"/> asks this, so that a test can ask it about slots that no
+        /// sample a test can build reaches.
+        /// </remarks>
+        internal static bool TryLeftChild(int slot, int count, out int child)
+        {
+            child = (2 * slot) + 1;
+            return child < count;
         }
 
         /// <summary>
