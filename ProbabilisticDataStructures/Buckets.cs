@@ -399,9 +399,17 @@ namespace ProbabilisticDataStructures
         /// chaining.
         /// </summary>
         /// <returns>The Buckets object the reset operation was performed on.</returns>
+        /// <remarks>
+        /// Cleared where it is. Assigning a new array instead kept the old one reachable
+        /// until the assignment, so a reset of N bytes needed 2N at once. The array is
+        /// always the length the count and bucket size imply -- the constructor allocates
+        /// it so and <see cref="Restore"/> refuses any other -- and nothing outside holds
+        /// it: <see cref="RawData"/> is a span, read and dropped by the writer that asks for
+        /// it, and the array a restore keeps is the copy its reader made.
+        /// </remarks>
         internal Buckets Reset()
         {
-            this.Data = new byte[DataLength(this.count, this.bucketSize)];
+            Array.Clear(this.Data);
             return this;
         }
 

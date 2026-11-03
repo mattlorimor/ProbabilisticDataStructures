@@ -169,7 +169,7 @@ namespace ProbabilisticDataStructures
             this.random = seed is null
                 ? SeededRandom.Unpredictable()
                 : new SeededRandom(seed.Value);
-            this.elements = new ElementHeap((int)k);
+            this.elements = new ElementHeap();
             (this.Fingerprints, this.Counters) = Buckets(width, depth);
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.Placement = placement ?? PlacementFor(width);
@@ -189,7 +189,7 @@ namespace ProbabilisticDataStructures
             this.Depth = depth;
             this.decay = decay;
             this.random = new SeededRandom(seed);
-            this.elements = new ElementHeap(0);
+            this.elements = new ElementHeap();
             (this.Fingerprints, this.Counters) = Buckets(width, depth);
             this.Hash = hash;
             this.Placement = placement;
@@ -402,7 +402,7 @@ namespace ProbabilisticDataStructures
                 Array.Clear(this.Fingerprints[j]);
                 Array.Clear(this.Counters[j]);
             }
-            this.elements = new ElementHeap((int)this.k);
+            this.elements = new ElementHeap();
             this.N = 0;
             return this;
         }
