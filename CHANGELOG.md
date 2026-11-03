@@ -972,6 +972,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stored generator state stays valid: it resumes the sequence it was partway through, and
   from there evicts the new way. The stored format does not change. (#203)
 
+- **A `VarOpt` sample keeping 2^30 items or more could throw from `Add` and be left
+  unusable.** It keeps the items held at their own weights in a heap, and worked out a
+  slot's child as `2 × slot + 1` in an `int`, which wraps negative from slot 2^30. The
+  sift then read before the start of its arrays and threw `IndexOutOfRangeException`. A
+  heap has a slot 2^30 only once `k` is 1,073,741,824 or more, and the sift reaches it only
+  when unequal weights move an item that far down: with decreasing weights at that `k`,
+  the add that began sampling, item `k + 1`, threw. That add had already been counted, and
+  the next one threw too. Items of equal weight never move in the heap, so a stream of
+  them, adds without a weight among them, was not affected. With unequal weights the
+  largest `k` safe from it was 1,073,741,823, about half the 2,147,483,590 the constructor
+  allows. The child is now worked out in 64 bits, so a slot whose child would be past the
+  largest `int` has none, as no heap is that long. Reading a payload orders its heap the
+  same way, but no payload is large enough to hold a sampling heap that big. `VarOpt`
+  shipped in 6.2.0, so 6.2.0 is affected. Smaller samples sample as they did, and the
+  stored format does not change. (#209)
+
 - **A `StableBloomFilter` with as many hash functions as cells never finished an add.**
   Examples are three cells at 1%, or ten at one in a million. The number of cells an add
   decrements, `p`, is worked out from `1/k - 1/m`, which is zero for such a filter, so `p`
