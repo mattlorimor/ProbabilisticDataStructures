@@ -61,6 +61,7 @@ ProbabilisticDataStructures/      the library
 TestProbabilisticDataStructures/  the suite; fixtures/ holds stored payloads
 Benchmarks/                       BenchmarkDotNet
 scripts/mutate.sh                 step 3 of the TESTING.md loop
+scripts/stryker-file.sh           a Stryker sweep of one library file (TESTING.md)
 ```
 
 Tests see `internal` members: `Defaults.cs` declares `InternalsVisibleTo`.

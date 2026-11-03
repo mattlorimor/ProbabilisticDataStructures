@@ -86,6 +86,29 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The byte count refuses a width no bucket can have, as it says it does.
+        /// </summary>
+        /// <remarks>
+        /// Reachable only from inside the library, and not from any path in it: every
+        /// caller of <c>DataLength</c> has asked <c>MaxCount</c> first, which refuses the
+        /// same widths, or holds a width already checked. So the Stryker sweep of this
+        /// file found its check removable with the whole suite passing. Without it, a
+        /// hundred zero-bit buckets would come to 0 bytes and a hundred nine-bit ones to
+        /// 113, for the next caller that did not ask first.
+        /// </remarks>
+        [TestMethod]
+        [DataRow((byte)0)]
+        [DataRow((byte)9)]
+        [DataRow((byte)255)]
+        public void TestTheByteCountRefusesAWidthNoBucketHas(byte bucketSize)
+        {
+            var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+                Buckets.DataLength(100, bucketSize),
+                $"{bucketSize}-bit buckets have no byte count to give.");
+            Assert.AreEqual("bucketSize", ex.ParamName);
+        }
+
+        /// <summary>
         /// Two bucket arrays that disagree about either how many buckets there are or
         /// how wide each is describe different positions, and combining them would
         /// pair up buckets that mean different things.
