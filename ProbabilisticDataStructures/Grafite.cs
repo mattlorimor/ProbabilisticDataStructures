@@ -991,7 +991,43 @@ namespace ProbabilisticDataStructures
             reader.ExpectEnd();
 
             filter.BuildSelectIndex();
+            filter.CheckEnds();
             return filter;
+        }
+
+        /// <summary>
+        /// Refuses a filter whose recorded smallest and largest codes are not the first and
+        /// last of the codes it encodes. A query turns away anything outside them before it
+        /// looks at the encoding, so an end that is not the encoding's loses the keys
+        /// between the two, or records a code the filter does not hold.
+        /// </summary>
+        /// <remarks>
+        /// Here and not in <see cref="Price"/>, which prices the words and skips them: the
+        /// two ends are found by selecting in the high bits, which needs the words held and
+        /// the index over them built, and a price that built them would be the read.
+        /// </remarks>
+        private void CheckEnds()
+        {
+            if (this.CodeCount == 0)
+            {
+                return;
+            }
+
+            var first = CodeAt(0);
+            if (first != this.FirstCode)
+            {
+                throw new InvalidDataException(
+                    $"Filter records its smallest code as {this.FirstCode}, but the encoding " +
+                    $"it holds begins with {first}.");
+            }
+
+            var last = CodeAt(this.CodeCount - 1);
+            if (last != this.LastCode)
+            {
+                throw new InvalidDataException(
+                    $"Filter records its largest code as {this.LastCode}, but the encoding " +
+                    $"it holds ends with {last}.");
+            }
         }
 
         /// <summary>

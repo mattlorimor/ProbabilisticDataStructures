@@ -1044,6 +1044,10 @@ The words of low bits are ⌊*c* × *b* / 64⌋ + 2, and the words of high bits 
 and no words of either kind. Both counts are read as unsigned, so a split or a number of
 bits from 2^31 up is too large rather than negative.
 
+The smallest and largest codes recorded in the payload are not free either. A query turns
+away anything outside them before it looks at the encoding, so a reader checks that they
+are the first and the last of the codes the encoding holds, and refuses the payload if not.
+
 ### `InfiniFilter` (id 27)
 
 ```

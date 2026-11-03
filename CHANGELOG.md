@@ -1037,7 +1037,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of high parts, and the words in each of the two arrays. Any disagreement is refused with
   an `InvalidDataException` that says which count was wrong and what the codes give. A
   filter of no keys is built with no split, no bits and no words, and a payload of no codes
-  that has any is refused too. It takes a valid checksum, so only a crafted file, or a
+  that has any is refused too. The smallest and largest codes the payload records are held
+  to the encoding as well: a query turns away anything outside them before it looks at the
+  encoding, so a smallest code a hundred too high lost 3 of the 60 keys, and one too high
+  lost 1; they are now refused unless they are the first and last of the codes the
+  encoding holds. It takes a valid checksum, so only a crafted file, or a
   damaged one that was resealed, reaches this; `Build` cannot write such a payload. Every
   filter `Build` writes reads back as before, and so does `grafite-v1.bin`, written by an
   earlier release. `Grafite` shipped in 6.2.0, so 6.2.0 is affected. The persistence format
