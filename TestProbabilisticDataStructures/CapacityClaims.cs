@@ -618,6 +618,17 @@ namespace TestProbabilisticDataStructures
                     && before.AsSpan().SequenceEqual(filter.ToByteArray())
                     && mementoBefore.AsSpan().SequenceEqual(memento.ToByteArray());
             }),
+            new Claim("or 2^30 for a Memento slot of 64 bits", () =>
+                MementoFilter.QuotientBitsLimitFor(MementoSegment.MaxSlotBits) == 30
+                && new MementoFilter(1UL << 32, 28, initialCapacity: 4).QuotientBitsLimit == 30
+                && new MementoFilter(1UL << 32, 27, initialCapacity: 4).QuotientBitsLimit == 31
+                && MementoFilter.InitialQuotientBits(uint.MaxValue, MementoSegment.MaxSlotBits) == 30),
+            new Claim("2^31 slots of 64 bits are more words than an array holds, so a table of them stops at 2^30 slots", () =>
+                MementoSegment.Words(1u << 31, 64) > Array.MaxLength
+                && MementoSegment.Words(1u << 31, 63) <= Array.MaxLength
+                && MementoSegment.Words(1u << 30, 64) <= Array.MaxLength
+                && Enumerable.Range(1, 63).All(bits => MementoFilter.QuotientBitsLimitFor(bits) == 31)
+                && MementoFilter.QuotientBitsLimitFor(64) == 30),
             new Claim("so it cannot pass 2^30, and an `Add` that would double it past that throws, with the sketch as it was", () =>
             {
                 var sketch = new SublimeCountMinSketch(0.5, 0.5, 1.0);

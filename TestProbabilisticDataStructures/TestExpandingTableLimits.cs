@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Numerics;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -258,11 +259,19 @@ namespace TestProbabilisticDataStructures
         /// wrapped for the largest, and read 31 out of the saturated value; the same 31
         /// is now a limit written down, and the widths below it are what they were. The
         /// sweep is the old expression restated, over every capacity that does not reach
-        /// the saturation, straddling each power of two and its three-quarter point.
+        /// the saturation, straddling each power of two and its three-quarter point. The
+        /// range filter's slots are the narrowest, the default and the widest whose table can
+        /// have 2^31 slots; a slot of 64 bits stops a doubling short, in
+        /// <see cref="TestASixtyFourBitSlotStartsAndStopsItsTableAtTheWidthItsWordsAllow"/>.
         /// </summary>
         [TestMethod]
         public void TestTheFirstTableStartsAtTheWidthsItAlwaysDid()
         {
+            var mementoSlots = new[]
+            {
+                MementoSegment.SlotBits(2, 1), MementoSegment.SlotBits(8, 8), MementoSegment.MaxSlotBits - 1,
+            };
+
             var capacities = new List<uint> { 1, 2, 3, 4, 5, 6 };
             for (var bit = 2; bit <= 30; bit++)
             {
@@ -279,7 +288,11 @@ namespace TestProbabilisticDataStructures
 
                 Assert.AreEqual(was, InfiniFilter.InitialQuotientBits(capacity),
                     $"an initial capacity of {capacity} no longer starts the table where it did");
-                Assert.AreEqual(was, MementoFilter.InitialQuotientBits(capacity));
+                foreach (var slotBits in mementoSlots)
+                {
+                    Assert.AreEqual(was, MementoFilter.InitialQuotientBits(capacity, slotBits),
+                        $"an initial capacity of {capacity} no longer starts a table of {slotBits}-bit slots where it did");
+                }
                 compared++;
             }
 
@@ -298,7 +311,150 @@ namespace TestProbabilisticDataStructures
         public void TestACapacityPastTheWidestTableStartsAtTheWidest(uint capacity)
         {
             Assert.AreEqual(InfiniFilter.MaxQuotientBits, InfiniFilter.InitialQuotientBits(capacity));
-            Assert.AreEqual(MementoFilter.MaxQuotientBits, MementoFilter.InitialQuotientBits(capacity));
+            Assert.AreEqual(MementoFilter.MaxQuotientBits,
+                MementoFilter.InitialQuotientBits(capacity, MementoSegment.SlotBits(8, 8)));
+        }
+
+        /// <summary>
+        /// A range filter's table is one array of words: its slots end to end and two words
+        /// more, worked out in 64 bits, at every slot width from one bit to 64 and every table
+        /// a slot count allows. The oracle is the same sum in arbitrary precision, so a product
+        /// taken in 32 bits, which 2^31 slots of more than one bit overflow, fails here. Every
+        /// segment is then built with that many words, at every width a segment can have, so
+        /// the count the widest table is worked out from below is the count the tables are
+        /// allocated by.
+        /// </summary>
+        [TestMethod]
+        public void TestATablesWordsAreItsSlotsEndToEndAndTwoMore()
+        {
+            for (var slotBits = 1; slotBits <= MementoSegment.MaxSlotBits; slotBits++)
+            {
+                for (var q = 0; q <= MementoFilter.MaxQuotientBits; q++)
+                {
+                    var oracle = ((BigInteger.One << q) * slotBits / 64) + 2;
+                    Assert.AreEqual(oracle, (BigInteger)MementoSegment.Words(1u << q, slotBits),
+                        $"2^{q} slots of {slotBits} bits");
+                }
+            }
+
+            var built = new HashSet<int>();
+            for (var fingerprintBits = 2; fingerprintBits <= 32; fingerprintBits++)
+            {
+                for (var mementoBits = 1; mementoBits <= 32; mementoBits++)
+                {
+                    var slotBits = MementoSegment.SlotBits(fingerprintBits, mementoBits);
+                    if (slotBits > MementoSegment.MaxSlotBits)
+                    {
+                        continue;
+                    }
+
+                    foreach (var q in new[] { 2, 7 })
+                    {
+                        var segment = new MementoSegment(q, fingerprintBits, mementoBits);
+                        Assert.AreEqual(MementoSegment.Words(segment.Slots, slotBits), (long)segment.Data.Length,
+                            $"a table of 2^{q} slots of {slotBits} bits ({fingerprintBits}-bit fingerprint, " +
+                            $"{mementoBits}-bit memento) is not allocated the words it is counted as");
+                    }
+                    built.Add(slotBits);
+                }
+            }
+
+            var narrowest = MementoSegment.SlotBits(2, 1);
+            CollectionAssert.AreEquivalent(
+                Enumerable.Range(narrowest, MementoSegment.MaxSlotBits - narrowest + 1).ToArray(),
+                built.ToArray(), "a slot width a segment can have was not built");
+        }
+
+        /// <summary>
+        /// The widest table a slot width allows is the widest whose words fit in one array,
+        /// and no wider than a slot count holds, at every width from one bit to 64. The oracle
+        /// scans down from 2^31 slots for the first whose words, in arbitrary precision, are
+        /// at most <see cref="Array.MaxLength"/>. A slot of 64 bits is the width that stops a
+        /// doubling short: 2^31 of them are 2^31 + 2 words, more than an array holds, where
+        /// 2^31 slots of 63 bits fit. The sweep has to see both answers, or it could not tell
+        /// the limit from a constant.
+        /// </summary>
+        [TestMethod]
+        public void TestTheWidestTableForASlotWidthIsTheWidestWhoseWordsFitInAnArray()
+        {
+            var answers = new HashSet<int>();
+            for (var slotBits = 1; slotBits <= MementoSegment.MaxSlotBits; slotBits++)
+            {
+                var oracle = MementoFilter.MaxQuotientBits;
+                while (((BigInteger.One << oracle) * slotBits / 64) + 2 > Array.MaxLength)
+                {
+                    oracle--;
+                }
+
+                Assert.AreEqual(oracle, MementoFilter.QuotientBitsLimitFor(slotBits),
+                    $"the widest table of {slotBits}-bit slots");
+                answers.Add(oracle);
+            }
+
+            Assert.Contains(MementoFilter.MaxQuotientBits, answers,
+                "no width reached the widest table a slot count holds");
+            Assert.IsGreaterThan(1, answers.Count,
+                "every width allowed the same table, so the sweep cannot tell the limit from a constant");
+        }
+
+        /// <summary>
+        /// A segment whose words are more than an array holds is refused by name, before
+        /// anything is allocated. 2^31 slots of 64 bits threw a bare OverflowException from
+        /// the allocation, one doubling before the refusal the filter documents. No filter
+        /// builds that segment now; this is what stops anything else doing so.
+        /// </summary>
+        [TestMethod]
+        public void TestASegmentTooLargeForAnArrayIsRefusedByName()
+        {
+            var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new MementoSegment(31, 28, 32));
+            Assert.AreEqual("quotientBits", ex.ParamName);
+            StringAssert.Contains(ex.Message, "array");
+        }
+
+        /// <summary>
+        /// A filter of 64-bit slots starts its first table at no more than 2^30 slots; one of
+        /// 63-bit slots can start at 2^31. A table of 2^30 such slots is eight gibibytes, so
+        /// this is the sizing the constructor calls rather than a filter built. The
+        /// capacities straddle the three-quarter point of 2^30 slots: 805,306,368 fills that
+        /// table to its threshold, and one more asks for 2^31.
+        /// </summary>
+        [TestMethod]
+        public void TestASixtyFourBitSlotStartsItsTableNoWiderThanItsWordsAllow()
+        {
+            const uint fillsTwoToTheThirty = 805_306_368;
+            Assert.AreEqual(30, MementoFilter.InitialQuotientBits(fillsTwoToTheThirty, 63));
+            Assert.AreEqual(30, MementoFilter.InitialQuotientBits(fillsTwoToTheThirty, 64));
+            Assert.AreEqual(31, MementoFilter.InitialQuotientBits(fillsTwoToTheThirty + 1, 63));
+            Assert.AreEqual(30, MementoFilter.InitialQuotientBits(fillsTwoToTheThirty + 1, 64),
+                "a capacity past three quarters of 2^30 starts a table of 64-bit slots at 2^31");
+            Assert.AreEqual(30, MementoFilter.InitialQuotientBits(uint.MaxValue, 64));
+        }
+
+        /// <summary>
+        /// A filter of 64-bit slots stops doubling at 2^30 slots, built or read; one of 63-bit
+        /// slots goes on to 2^31. The two pairs that make a 64-bit slot are a range of 2^32
+        /// with a 28-bit fingerprint and a range of 2^28 with a 32-bit one. The stop is the
+        /// limit the filter holds, which an expansion refuses to pass
+        /// (<see cref="TestAMementoFilterExpansionPastTheLimitIsRefusedBeforeAnythingChanges"/>),
+        /// since the table it stops at is eight gibibytes.
+        /// </summary>
+        [TestMethod]
+        public void TestASixtyFourBitSlotStopsDoublingWhereItsWordsAllow()
+        {
+            foreach (var (range, fingerprintBits, limit) in new[]
+            {
+                (1UL << 32, 28, 30), (1UL << 28, 32, 30), (1UL << 32, 27, 31), (1UL << 27, 32, 31),
+            })
+            {
+                var filter = new MementoFilter(range, fingerprintBits, initialCapacity: 4);
+                var slotBits = MementoSegment.SlotBits(fingerprintBits, filter.MementoBits);
+                Assert.AreEqual(limit, filter.QuotientBitsLimit,
+                    $"a filter of {slotBits}-bit slots lets its table double to the wrong width");
+
+                var read = Persistence.FromByteArray<MementoFilter>(filter.ToByteArray());
+                Assert.AreEqual(limit, read.QuotientBitsLimit,
+                    $"a filter of {slotBits}-bit slots, read back, lets its table double to the wrong width");
+            }
         }
 
         /// <summary>

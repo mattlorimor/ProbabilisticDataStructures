@@ -71,6 +71,14 @@ namespace ProbabilisticDataStructures
         internal static int SlotBits(int fingerprintBits, int mementoBits) =>
             fingerprintBits + 1 + mementoBits + MetadataBits;
 
+        /// <summary>
+        /// The words a table of this many slots of this width is held in: its slots end to
+        /// end, and two words more for the reads and writes that straddle the end. A table
+        /// is one array of them.
+        /// </summary>
+        internal static long Words(uint slots, int slotBits) =>
+            (((long)slots * slotBits) >> 6) + 2;
+
         private uint slotMaskIndex;
         private int bitsPerSlot;
         private ulong slotMask;
@@ -102,7 +110,17 @@ namespace ProbabilisticDataStructures
             // Not (1UL << bits) - 1: a ulong shifts by its count mod 64, so for a slot of
             // exactly 64 bits that was (1 << 0) - 1, zero, and every write was masked away.
             this.slotMask = ulong.MaxValue >> (64 - this.bitsPerSlot);
-            this.Data = new ulong[(((long)this.Slots * this.bitsPerSlot) >> 6) + 2];
+
+            // The filter stops its tables short of this (MementoFilter.QuotientBitsLimitFor);
+            // without the check, a table past it threw a bare OverflowException here.
+            var words = Words(this.Slots, this.bitsPerSlot);
+            if (words > Array.MaxLength)
+            {
+                throw new ArgumentOutOfRangeException(nameof(quotientBits), quotientBits,
+                    $"A table of {this.Slots:N0} slots of {this.bitsPerSlot} bits is {words:N0} " +
+                    $"words, and a table is one array, which holds at most {Array.MaxLength:N0}.");
+            }
+            this.Data = new ulong[words];
             this.Codec = new KeepsakeCodec(fingerprintBits, mementoBits);
         }
 

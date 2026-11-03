@@ -1997,8 +1997,9 @@ A slot is held in a 64-bit word, so the fingerprint and the range, in bits, have
 beside four bits of bookkeeping: `fingerprintBits` plus the bits of `maxRangeSize` is at
 most 60. A pair past that — a range of 2^32 with a 29-bit fingerprint, say — is refused by
 the constructor, which names the widest fingerprint for the range. The table doubles as it
-fills, up to 2^31 slots; an `Add` that would pass that throws before changing anything, and
-the filter goes on answering.
+fills, up to 2^31 slots, or 2^30 when the pair comes to exactly 60, since 2^31 slots of 64
+bits are more than one array holds; an `Add` that would pass that throws before changing
+anything, and the filter goes on answering.
 
 Described by Eslami and Dayan in
 [Memento Filter: A Fast, Dynamic, and Robust Range Filter](https://doi.org/10.1145/3698820).

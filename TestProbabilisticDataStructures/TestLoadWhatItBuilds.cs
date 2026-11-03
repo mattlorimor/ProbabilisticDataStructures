@@ -1199,7 +1199,8 @@ namespace TestProbabilisticDataStructures
             Assert.IsLessThanOrEqualTo((ulong)uint.MaxValue, 1UL << MementoFilter.MaxQuotientBits);
             Assert.IsGreaterThan((ulong)uint.MaxValue, 1UL << (MementoFilter.MaxQuotientBits + 1));
 
-            Assert.AreEqual(MementoFilter.MaxQuotientBits, MementoFilter.InitialQuotientBits(uint.MaxValue));
+            Assert.AreEqual(MementoFilter.MaxQuotientBits,
+                MementoFilter.InitialQuotientBits(uint.MaxValue, MementoSegment.SlotBits(8, 8)));
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new MementoFilter(256, 1));
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new MementoFilter(256, 33));
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new MementoFilter((1UL << 32) + 1));
