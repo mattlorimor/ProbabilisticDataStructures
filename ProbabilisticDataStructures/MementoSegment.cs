@@ -70,6 +70,14 @@ namespace ProbabilisticDataStructures
         internal static int SlotBits(int fingerprintBits, int mementoBits) =>
             fingerprintBits + 1 + mementoBits + MetadataBits;
 
+        /// <summary>
+        /// The words a table of this many slots of this width is held in: its slots end to
+        /// end, and two words more for the reads and writes that straddle the end. A table
+        /// is one array of them.
+        /// </summary>
+        internal static long Words(uint slots, int slotBits) =>
+            (((long)slots * slotBits) >> 6) + 2;
+
         private uint slotMaskIndex;
         private int bitsPerSlot;
         private ulong slotMask;
@@ -101,7 +109,7 @@ namespace ProbabilisticDataStructures
             // Not (1UL << bits) - 1: a ulong shifts by its count mod 64, so for a slot of
             // exactly 64 bits that was (1 << 0) - 1, zero, and every write was masked away.
             this.slotMask = ulong.MaxValue >> (64 - this.bitsPerSlot);
-            this.Data = new ulong[(((long)this.Slots * this.bitsPerSlot) >> 6) + 2];
+            this.Data = new ulong[Words(this.Slots, this.bitsPerSlot)];
             this.Codec = new KeepsakeCodec(fingerprintBits, mementoBits);
         }
 

@@ -133,7 +133,7 @@ namespace ProbabilisticDataStructures
             }
 
             this.Segments.Add(new MementoSegment(
-                InitialQuotientBits(initialCapacity), fingerprintBits, this.MementoBits));
+                InitialQuotientBits(initialCapacity, slotBits), fingerprintBits, this.MementoBits));
         }
 
         /// <summary>
@@ -150,11 +150,16 @@ namespace ProbabilisticDataStructures
         internal int QuotientBitsLimit { get; set; } = MaxQuotientBits;
 
         /// <summary>
+        /// The most address bits a table of slots this wide can have.
+        /// </summary>
+        internal static int QuotientBitsLimitFor(int slotBits) => MaxQuotientBits;
+
+        /// <summary>
         /// The address bits the first table gets for an initial capacity: enough slots
         /// that the capacity fills no more than the expansion threshold of them, a
         /// power of two, and at least four.
         /// </summary>
-        internal static int InitialQuotientBits(uint initialCapacity)
+        internal static int InitialQuotientBits(uint initialCapacity, int slotBits)
         {
             // Clamped at the widest table rather than left to a uint that saturates: the
             // capacity is where the filter starts and not a limit on it, so one that asks
@@ -833,8 +838,7 @@ namespace ProbabilisticDataStructures
                     "stores one entry per slot.");
             }
 
-            var expected =
-                (((long)slots * (fingerprintBits + 1 + mementoBits + 3)) >> 6) + 2;
+            var expected = MementoSegment.Words(slots, slotBits);
             if (words != expected)
             {
                 throw new InvalidDataException(
