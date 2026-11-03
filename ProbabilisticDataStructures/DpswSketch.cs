@@ -148,8 +148,7 @@ namespace ProbabilisticDataStructures
         /// <param name="hash">The hash function to use, or null for the default.</param>
         /// <exception cref="ArgumentOutOfRangeException">
         /// A parameter is out of range, or the window raised to the substream factor is
-        /// more than 2,147,483,591 items: the checkpoints of a substream are a list with a
-        /// slot for each, and a list holds no more than an array does. This was a cast to
+        /// more than 2,147,483,591 items, the most a substream holds. This was a cast to
         /// an <c>int</c> that saturated, so a larger substream was built as that long.
         /// Or the width or the depth is more than a <see cref="PrivateCountMinSketch"/>
         /// holds, 2,147,483,591 each, which the first <c>Add</c> would have refused when
@@ -274,18 +273,23 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The most items a substream holds: the checkpoints of one are a list with a slot
-        /// for each item, and a list holds at most what an array does. The constructor
+        /// The most items a substream holds, the most an array does. The constructor
         /// refuses a window and substream factor that make more, and the reader refuses a
         /// payload that claims more.
         /// </summary>
+        /// <remarks>
+        /// It was set here because a substream's checkpoints were thinned from a list with
+        /// a slot for each item, and a list holds no more than an array. They are found by
+        /// a walk since #219, which needs no such list, and the limit has stayed where it
+        /// was, so that the sketches built and the payloads read are the ones they were.
+        /// </remarks>
         internal static int MaxSubstreamSize => Array.MaxLength;
 
         /// <summary>
         /// How many items a substream holds for a window and a substream factor: the
         /// window raised to the factor, rounded up, and at least one. A function of its
-        /// own so that a test can reach the sizes where it matters, which would otherwise
-        /// build the checkpoints of a substream of billions.
+        /// own so that a test can reach the sizes where it matters without building a
+        /// sketch over a window of trillions.
         /// </summary>
         /// <exception cref="ArgumentOutOfRangeException">
         /// The substream would hold more than <see cref="MaxSubstreamSize"/>.
@@ -301,9 +305,9 @@ namespace ProbabilisticDataStructures
             {
                 throw new ArgumentOutOfRangeException(nameof(window), window,
                     $"A window of {window} at a substream factor of {beta} makes " +
-                    $"substreams of {size:E2} items, and the checkpoints of one are a " +
-                    $"list that holds at most {MaxSubstreamSize:N0}. Use a smaller window, " +
-                    "or a smaller substream factor to shorten the substreams.");
+                    $"substreams of {size:E2} items, and a substream holds at most " +
+                    $"{MaxSubstreamSize:N0}. Use a smaller window, or a smaller substream " +
+                    "factor to shorten the substreams.");
             }
 
             return (int)size;
@@ -791,7 +795,7 @@ namespace ProbabilisticDataStructures
             var resolved = PersistenceFormat.ResolveOrThrow(hashId, hash);
 
             // Restoring rebuilds the checkpoints from the substream size the payload names.
-            budget.Charge(CheckpointsCost(substreamSize));
+            budget.Charge(CheckpointsCost(substreamSize, alpha));
             var sketch = new DpswSketch(
                 window, rho, alpha, substreamSize, width, depth, resolved)
             {
@@ -858,7 +862,7 @@ namespace ProbabilisticDataStructures
             var position = (long)reader.ReadUInt64();
             var substreamSize = CheckShape(window, rho, alpha, claimedSubstream, width, depth, position);
 
-            reader.Budget.Price(CheckpointsCost(substreamSize));
+            reader.Budget.Price(CheckpointsCost(substreamSize, alpha));
             var checkpoints = CheckpointCount(substreamSize, alpha);
             CheckLeanest(checkpoints, window, rho, alpha, depth);
 
@@ -952,14 +956,12 @@ namespace ProbabilisticDataStructures
         {
             // The constructor's own limit. The size is a u32 in the payload and an int
             // here, so one past the int would otherwise read as negative and be refused
-            // for being less than one; and one in between would build a list no array
-            // could hold.
+            // for being less than one.
             if (claimedSubstream > MaxSubstreamSize)
             {
                 throw new InvalidDataException(
                     $"Window claims substreams of {claimedSubstream} items, beyond anything " +
-                    $"this library builds: their checkpoints are a list, of at most " +
-                    $"{MaxSubstreamSize}.");
+                    $"this library builds: a substream holds at most {MaxSubstreamSize}.");
             }
 
             var substreamSize = (int)claimedSubstream;
@@ -1116,26 +1118,13 @@ namespace ProbabilisticDataStructures
             rho * Math.Pow(alpha, j - 2) * Math.Pow(1 - alpha, 3) / 2;
 
         /// <summary>
-        /// The checkpoint offsets within a substream, chosen by the smooth histogram's
-        /// thinning rule.
-        /// </summary>
-        /// <remarks>
-        /// Start with every offset from the substream's length down to one, then repeatedly
-        /// drop everything between an offset and the last one still at least
-        /// (1 - alpha) times it. What survives is a list where consecutive offsets
-        /// differ by at most that factor, which is what bounds how badly the chosen
-        /// range can miss the window's true start.
-        /// </remarks>
-        /// <summary>
         /// What <see cref="Checkpoints"/> allocates for a substream of
-        /// <paramref name="substreamSize"/> items: a list of every offset, grown by
-        /// adding to it, and at most that many in the array it ends as. A payload names
-        /// the substream size, so a reader charges this before it rebuilds the
-        /// checkpoints.
+        /// <paramref name="substreamSize"/> items: the array of the checkpoints it keeps. A
+        /// payload names the substream size, so a reader charges this before it rebuilds
+        /// the checkpoints.
         /// </summary>
-        internal static long CheckpointsCost(int substreamSize) => ReadBudget.Sum(
-            ReadBudget.ListOf((ulong)substreamSize, sizeof(int)),
-            ReadBudget.ArrayOf((ulong)substreamSize, sizeof(int)));
+        internal static long CheckpointsCost(int substreamSize, double alpha) =>
+            ReadBudget.ArrayOf((ulong)CheckpointCount(substreamSize, alpha), sizeof(int));
 
         /// <summary>
         /// What a plan of <paramref name="segments"/> segments allocates: the list, grown
@@ -1147,21 +1136,56 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// How many checkpoints <see cref="Checkpoints"/> keeps for a substream of
-        /// <paramref name="substreamSize"/> items, worked out without the list of every
-        /// offset it builds them from, so that a price can know the plan's size without
-        /// paying for what it prices.
+        /// <paramref name="substreamSize"/> items, by the walk that finds them, without
+        /// building them, so that a price can know the plan's size without paying for what
+        /// it prices.
+        /// </summary>
+        internal static int CheckpointCount(int substreamSize, double alpha) =>
+            Thin(substreamSize, alpha, null);
+
+        /// <summary>
+        /// The checkpoint offsets within a substream, chosen by the smooth histogram's
+        /// thinning rule, largest first.
         /// </summary>
         /// <remarks>
-        /// <see cref="Checkpoints"/> starts from every offset, largest first, and at each
-        /// one it keeps drops the run after it down to the last offset still at least
-        /// <c>1 - alpha</c> times it. What follows a kept offset is then always every
-        /// smaller offset, so the walk needs only the offset it is at and how many remain:
-        /// the last offset it keeps after <c>v</c> is the smallest whole number at or above
-        /// <c>(1 - alpha) * v</c>, the comparison <see cref="Checkpoints"/> makes, worked
-        /// out in the same doubles, or <c>v - 1</c> if none below <c>v</c> is that large.
-        /// <c>TestReadBudget</c> holds the two to the same count across sizes and factors.
+        /// The rule starts with every offset from the substream's length down to one, then
+        /// repeatedly drops everything between an offset and the last one still at least
+        /// (1 - alpha) times it. What survives is a list where consecutive offsets differ by
+        /// at most that factor, which is what bounds how badly the chosen range can miss the
+        /// window's true start.
+        /// <para>
+        /// The list of every offset is never built: <see cref="Thin"/> finds the offsets the
+        /// rule keeps from the one it is at, once to count them and once to fill the array
+        /// they end as, which is all this allocates (<see cref="CheckpointsCost"/>). The list
+        /// was built until #219, and thinned in place, which at the largest window the
+        /// constructor takes was 8.6 GB for a few dozen checkpoints. <c>TestDpswSketch</c>
+        /// holds the walk to that construction across sizes and factors.
+        /// </para>
         /// </remarks>
-        internal static int CheckpointCount(int substreamSize, double alpha)
+        internal static int[] Checkpoints(int substreamSize, double alpha)
+        {
+            var checkpoints = new int[Thin(substreamSize, alpha, null)];
+            Thin(substreamSize, alpha, checkpoints);
+            return checkpoints;
+        }
+
+        /// <summary>
+        /// Walks the thinning rule over a substream of <paramref name="substreamSize"/>
+        /// items, writing each offset it keeps into <paramref name="kept"/> when there is
+        /// one, and returns how many it keeps.
+        /// </summary>
+        /// <remarks>
+        /// The rule goes from the largest offset down, and at each one it keeps drops the run
+        /// after it down to the last offset still at least <c>1 - alpha</c> times it. What
+        /// follows a kept offset is then always every smaller offset, so the walk needs only
+        /// the offset it is at and how many remain: the last offset kept after <c>v</c> is
+        /// the smallest whole number at or above <c>(1 - alpha) * v</c>, the comparison the
+        /// rule makes, worked out in the same doubles, or <c>v - 1</c> if none below
+        /// <c>v</c> is that large. The walk stops where fewer than three offsets remain from
+        /// the one it is at, which then go into the array as they are, every one of them
+        /// down to one.
+        /// </remarks>
+        private static int Thin(int substreamSize, double alpha, int[]? kept)
         {
             var count = (long)substreamSize;
             var at = 0L;
@@ -1169,6 +1193,11 @@ namespace ProbabilisticDataStructures
 
             while (at < count - 2)
             {
+                if (kept is not null)
+                {
+                    kept[at] = (int)value;
+                }
+
                 var smallest = Math.Max(1L, (long)Math.Ceiling((1 - alpha) * (int)value));
                 if (smallest <= value - 1)
                 {
@@ -1183,39 +1212,17 @@ namespace ProbabilisticDataStructures
                 at++;
             }
 
+            // What is left is the offset the walk is at and every one below it: the count is
+            // always where the walk is plus the offset it is at.
+            if (kept is not null)
+            {
+                for (var i = at; i < count; i++)
+                {
+                    kept[i] = (int)(value - (i - at));
+                }
+            }
+
             return (int)count;
-        }
-
-        internal static int[] Checkpoints(int substreamSize, double alpha)
-        {
-            // CheckpointsCost bounds what this allocates; keep the two together.
-            var indices = new List<int>();
-            for (var i = substreamSize; i >= 1; i--)
-            {
-                indices.Add(i);
-            }
-
-            var j = 0;
-            while (j < indices.Count - 2)
-            {
-                var furthest = j;
-                for (var k = j + 1; k < indices.Count; k++)
-                {
-                    if (indices[k] >= (1 - alpha) * indices[j])
-                    {
-                        furthest = k;
-                    }
-                }
-
-                if (furthest > j + 1)
-                {
-                    indices.RemoveRange(j + 1, furthest - j - 1);
-                }
-
-                j++;
-            }
-
-            return indices.ToArray();
         }
     }
 }

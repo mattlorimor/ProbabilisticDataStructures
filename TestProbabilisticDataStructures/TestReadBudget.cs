@@ -339,12 +339,6 @@ namespace TestProbabilisticDataStructures
                             Grafite.Build(Enumerable.Range(0, 200_000).Select(i => (ulong)i * 1009), 0.01, 64, seed: 7),
                             refusesAHashBecause: "it holds numbers rather than bytes, and hashes nothing")),
                 },
-                [StructureId.DpswSketch] = new[]
-                {
-                    ("the checkpoints, rebuilt from a substream of twenty thousand items",
-                        Of("DpswSketch over a wide window",
-                            Filled(new DpswSketch(200_000, 1.0, width: 64, depth: 1, seed: 1), (s, k) => s.Add(k), 1000))),
-                },
             });
 
         private static void AssertHonest(StructureId id, Sample sample)
@@ -588,10 +582,12 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// A windowed sketch is priced with the plan its checkpoints lay out, and the price
-        /// cannot build the checkpoints to count them: the list they are built from is the
-        /// substream size long, which is what is being priced. The count it works out
-        /// instead is the length of the array the read builds, at every size up to a few
-        /// thousand and at factors from coarse to fine, and at sizes far past those.
+        /// counts the checkpoints without building them. The count it works out is the
+        /// length of the array the read builds, at every size up to a few thousand and at
+        /// factors from coarse to fine, and at sizes far past those. Both come from one walk
+        /// since the checkpoints stopped being thinned from a list of every offset (#219),
+        /// so this holds them together against a change that gives either its own;
+        /// <c>TestDpswSketch</c> holds the walk to the rule.
         /// </summary>
         [TestMethod]
         public void TestTheCheckpointCountAPriceUsesIsTheOneTheReadBuilds()

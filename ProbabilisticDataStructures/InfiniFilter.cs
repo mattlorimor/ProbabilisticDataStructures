@@ -359,6 +359,9 @@ namespace ProbabilisticDataStructures
             var grown = new InfiniSegment(old.QuotientBits + 1, old.FingerprintBits);
             var voided = new List<uint>();
 
+            // The old table's entries are read in place as the walk reaches them, which
+            // holds because nothing here writes to it: the loop reads it and writes only to
+            // the grown table, and the old one is dropped once the walk is over.
             foreach (var (quotient, field) in old.Entries())
             {
                 var age = old.AgeOf(field);

@@ -37,11 +37,12 @@ namespace ProbabilisticDataStructures
         /// <see cref="TopK"/> and <see cref="HeavyKeeper"/> can track.
         /// </summary>
         /// <remarks>
-        /// The heap is a list and its index a dictionary, both pre-sized to k. A list
-        /// holds at most <see cref="Array.MaxLength"/>. A dictionary sizes its tables to
-        /// primes, and the largest it will use is the largest prime an array can hold,
-        /// which is this -- four short of the list's limit. Asked for more, either one
-        /// fails with an allocation error rather than an explanation.
+        /// The heap is a list and its index a dictionary, both grown as elements arrive
+        /// and never holding more than k. A list holds at most
+        /// <see cref="Array.MaxLength"/>. A dictionary sizes its tables to primes, and the
+        /// largest it will grow to is the largest prime an array can hold, which is this
+        /// -- four short of the list's limit. Asked for more, either one fails with an
+        /// allocation error rather than an explanation.
         /// <para>
         /// Both structures' constructors and both their readers refuse past this, so
         /// whatever either constructor builds, its reader loads. The readers used to
@@ -78,10 +79,30 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private const long ElementSize = 16 + 16 + sizeof(ulong);
 
-        internal ElementHeap(int k)
+        /// <summary>
+        /// An empty heap, which grows as elements are pushed: what a structure is built and
+        /// reset with.
+        /// </summary>
+        /// <remarks>
+        /// k bounds the heap through the comparisons <see cref="insert"/> and
+        /// <see cref="isTop"/> make, not through its capacity, so nothing is allocated for
+        /// k until elements arrive. Both used to be sized to k when a structure was built,
+        /// on every reset and for every merge, which at a large k was gigabytes before the
+        /// first add.
+        /// </remarks>
+        internal ElementHeap()
+            : this(0)
         {
-            this.Heap = new List<Element>(k);
-            this.positions = new Dictionary<ReadOnlyMemory<byte>, int>(k, ByteContentComparer.Instance);
+        }
+
+        /// <summary>
+        /// A heap with room for <paramref name="capacity"/> elements before it grows, for a
+        /// reader or a merge that knows how many it is about to push.
+        /// </summary>
+        internal ElementHeap(int capacity)
+        {
+            this.Heap = new List<Element>(capacity);
+            this.positions = new Dictionary<ReadOnlyMemory<byte>, int>(capacity, ByteContentComparer.Instance);
         }
 
         internal int Len()
