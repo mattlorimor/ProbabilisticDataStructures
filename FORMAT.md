@@ -1036,6 +1036,14 @@ indexes.
 A reader also rejects a code at or above the reduced universe, a split wider than a
 code, and more codes than keys — none of which hashing can produce.
 
+The counts that describe the encoding are not free: the writer sets each from the
+number of codes *c*, the split *b* and the largest code *L*, and a reader refuses a
+payload that gives any other. The bits of high parts in use are (*L* >> *b*) + *c* + 1.
+The words of low bits are ⌊*c* × *b* / 64⌋ + 2, and the words of high bits are
+⌊(bits in use) / 64⌋ + 1. A filter of no codes has no split, no bits of high parts in use
+and no words of either kind. Both counts are read as unsigned, so a split or a number of
+bits from 2^31 up is too large rather than negative.
+
 ### `InfiniFilter` (id 27)
 
 ```

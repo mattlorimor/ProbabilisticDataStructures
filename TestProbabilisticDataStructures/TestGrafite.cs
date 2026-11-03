@@ -907,6 +907,34 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The size the codes give their encoding, worked by hand from how it is laid out:
+        /// the bits of high parts are the largest high part plus a bit for each code plus
+        /// one, the low parts take n × b bits and two words beyond them, and the high bits
+        /// take a word for every 64 and one more. The rows straddle a word of high bits
+        /// (63 bits and 64) and of low bits (63 low bits of one code and 64); the split of
+        /// 64 is the one where a shift of the largest code by 64 would shift it by none; and
+        /// a filter of no codes has none of any, whatever the fields beside it say.
+        /// </summary>
+        [TestMethod]
+        [DataRow(60, 7, 6826UL, 114L, 8L, 2L)]
+        [DataRow(1, 0, 5UL, 7L, 2L, 1L)]
+        [DataRow(1, 0, 61UL, 63L, 2L, 1L)]
+        [DataRow(1, 0, 62UL, 64L, 2L, 2L)]
+        [DataRow(1, 63, 9UL, 2L, 2L, 1L)]
+        [DataRow(1, 64, 9UL, 2L, 3L, 1L)]
+        [DataRow(3, 64, 123_456UL, 4L, 5L, 1L)]
+        [DataRow(1, 60, (1UL << 61) - 3, 3L, 2L, 1L)]
+        [DataRow(0, 0, 0UL, 0L, 0L, 0L)]
+        [DataRow(0, 7, 100UL, 0L, 0L, 0L)]
+        public void TestTheLayoutOfCodesIsWhatTheEncodingNeeds(
+            int codes, int lowBits, ulong lastCode, long highBits, long lowWords, long highWords)
+        {
+            var layout = Grafite.LayoutOf(codes, lowBits, lastCode);
+
+            Assert.AreEqual((highBits, lowWords, highWords), layout);
+        }
+
+        /// <summary>
         /// A set of no keys wants no universe, whatever range it is asked about.
         /// </summary>
         [TestMethod]

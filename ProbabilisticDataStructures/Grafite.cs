@@ -524,19 +524,18 @@ namespace ProbabilisticDataStructures
             // In a long, and refused past an int: the high bits are addressed by int
             // positions and their count is an int. Summed in an int, this wrapped
             // negative once the keys numbered in the high hundreds of millions.
-            var wanted = (long)(this.LastCode >> this.LowBits) + n + 1;
-            if (wanted > MaxHighBits)
+            var layout = LayoutOf(n, this.LowBits, this.LastCode);
+            if (layout.HighBits > MaxHighBits)
             {
                 throw new ArgumentException(
-                    $"{n} keys over this range need {wanted} bits of high parts, past the " +
-                    $"{MaxHighBits} a filter can address. Build several filters over parts " +
-                    "of the key space instead.", "keys");
+                    $"{n} keys over this range need {layout.HighBits} bits of high parts, " +
+                    $"past the {MaxHighBits} a filter can address. Build several filters " +
+                    "over parts of the key space instead.", "keys");
             }
 
-            this.Lows = new ulong[((long)n * this.LowBits / 64) + 2];
-            var highBits = (int)wanted;
-            this.HighBitCount = highBits;
-            this.Highs = new ulong[(highBits / 64) + 1];
+            this.Lows = new ulong[layout.LowWords];
+            this.HighBitCount = (int)layout.HighBits;
+            this.Highs = new ulong[layout.HighWords];
 
             var i = 0;
             foreach (var code in codes)
@@ -548,6 +547,34 @@ namespace ProbabilisticDataStructures
             }
 
             BuildSelectIndex();
+        }
+
+        /// <summary>
+        /// What <see cref="Encode"/> makes of this many codes, the largest of them given,
+        /// split at this many low bits: the bits of high parts in use, and the words of low
+        /// bits and of high bits that hold them. The reader asks the same question of the
+        /// codes a payload says it holds, and refuses a payload that answers it differently,
+        /// so a count the codes do not give is refused rather than guessed at. A filter of
+        /// no codes is not encoded at all (<see cref="Build"/> leaves it as it is) and has
+        /// none of these.
+        /// </summary>
+        /// <remarks>
+        /// In 64 bits, so that none of it wraps: the largest code is below the universe,
+        /// which is below 2^61, so its high part and the sum of that with the codes are
+        /// well inside a long. Whether the bits fit an int is the caller's to ask.
+        /// </remarks>
+        internal static (long HighBits, long LowWords, long HighWords) LayoutOf(
+            int codeCount, int lowBits, ulong lastCode)
+        {
+            if (codeCount == 0)
+            {
+                return (0, 0, 0);
+            }
+
+            // A split of 64 leaves nothing above it, and a shift by 64 would shift by none.
+            var highPart = lowBits >= 64 ? 0UL : lastCode >> lowBits;
+            var highBits = (long)highPart + codeCount + 1;
+            return (highBits, ((long)codeCount * lowBits / 64) + 2, (highBits / 64) + 1);
         }
 
         /// <summary>
@@ -911,27 +938,40 @@ namespace ProbabilisticDataStructures
                 hash, CheckHash);
 
             var reader = new PayloadReader(payload, budget);
+            var r = reader.ReadUInt64();
+            var c1 = reader.ReadUInt64();
+            var c2 = reader.ReadUInt64();
+            var keyCount = reader.ReadUInt64();
+            var maxRange = reader.ReadUInt64();
+            // The split and the bit count stay unsigned until they are checked: from 2^31
+            // up they are negative as ints, and the limits on them are ones a negative
+            // number passes.
+            var lowBits = reader.ReadUInt32();
+            var codeCount = (int)reader.ReadUInt32();
+            var highBitCount = reader.ReadUInt32();
+            var firstCode = reader.ReadUInt64();
+            var lastCode = reader.ReadUInt64();
+            var layout = CheckFields(
+                r, c1, c2, keyCount, lowBits, codeCount, highBitCount, firstCode, lastCode);
+
             var filter = new Grafite
             {
-                R = reader.ReadUInt64(),
-                C1 = reader.ReadUInt64(),
-                C2 = reader.ReadUInt64(),
-                KeyCount = reader.ReadUInt64(),
-                MaxRange = reader.ReadUInt64(),
-                LowBits = (int)reader.ReadUInt32(),
-                CodeCount = (int)reader.ReadUInt32(),
-                HighBitCount = (int)reader.ReadUInt32(),
-                FirstCode = reader.ReadUInt64(),
-                LastCode = reader.ReadUInt64(),
+                R = r,
+                C1 = c1,
+                C2 = c2,
+                KeyCount = keyCount,
+                MaxRange = maxRange,
+                LowBits = (int)lowBits,
+                CodeCount = codeCount,
+                HighBitCount = (int)highBitCount,
+                FirstCode = firstCode,
+                LastCode = lastCode,
             };
-            CheckFields(
-                filter.R, filter.C1, filter.C2, filter.KeyCount, filter.LowBits,
-                filter.CodeCount, filter.FirstCode, filter.LastCode);
 
             // The builder's own limits, so that every filter it builds reads back. Both
             // arrays are written whole, so each is checked against the bytes behind it
-            // before it is allocated.
-            var lowWords = ReadLowWords(ref reader);
+            // before it is allocated, and against the size the codes give it.
+            var lowWords = ReadLowWords(ref reader, layout.LowWords);
             budget.Charge(LowsCost(lowWords));
             filter.Lows = new ulong[lowWords];
             for (var i = 0; i < lowWords; i++)
@@ -939,7 +979,7 @@ namespace ProbabilisticDataStructures
                 filter.Lows[i] = reader.ReadUInt64();
             }
 
-            var highWords = ReadHighWords(ref reader);
+            var highWords = ReadHighWords(ref reader, layout.HighWords);
             // And the select index built over them below, a count per word.
             budget.Charge(HighsCost(highWords));
             filter.Highs = new ulong[highWords];
@@ -949,13 +989,6 @@ namespace ProbabilisticDataStructures
             }
 
             reader.ExpectEnd();
-
-            if (filter.HighBitCount > highWords * 64L)
-            {
-                throw new InvalidDataException(
-                    $"Filter claims {filter.HighBitCount} bits of high parts in " +
-                    $"{highWords} words, which hold {highWords * 64L}.");
-            }
 
             filter.BuildSelectIndex();
             return filter;
@@ -994,27 +1027,34 @@ namespace ProbabilisticDataStructures
             var c2 = reader.ReadUInt64();
             var keyCount = reader.ReadUInt64();
             _ = reader.ReadUInt64();
-            var lowBits = (int)reader.ReadUInt32();
+            var lowBits = reader.ReadUInt32();
             var codeCount = (int)reader.ReadUInt32();
-            _ = reader.ReadUInt32();
+            var highBitCount = reader.ReadUInt32();
             var firstCode = reader.ReadUInt64();
             var lastCode = reader.ReadUInt64();
-            CheckFields(r, c1, c2, keyCount, lowBits, codeCount, firstCode, lastCode);
+            var layout = CheckFields(
+                r, c1, c2, keyCount, lowBits, codeCount, highBitCount, firstCode, lastCode);
 
-            var lowWords = ReadLowWords(ref reader);
+            var lowWords = ReadLowWords(ref reader, layout.LowWords);
             reader.Budget.Price(LowsCost(lowWords));
             reader.Skip(lowWords * sizeof(ulong));
 
-            reader.Budget.Price(HighsCost(ReadHighWords(ref reader)));
+            reader.Budget.Price(HighsCost(ReadHighWords(ref reader, layout.HighWords)));
         }
 
         /// <summary>
         /// Checks the fields a payload leads with, as both the read and its price do,
         /// in the same order, before anything is allocated for the words that follow.
+        /// Returns the words the codes give each array, which the counts that follow them
+        /// are held to.
         /// </summary>
-        private static void CheckFields(
-            ulong r, ulong c1, ulong c2, ulong keyCount, int lowBits, int codeCount,
-            ulong firstCode, ulong lastCode)
+        /// <remarks>
+        /// The split and the count of bits of high parts arrive as the unsigned numbers
+        /// they are stored as, since from 2^31 up they are negative once they are ints.
+        /// </remarks>
+        private static (long LowWords, long HighWords) CheckFields(
+            ulong r, ulong c1, ulong c2, ulong keyCount, uint lowBits, int codeCount,
+            uint highBitCount, ulong firstCode, ulong lastCode)
         {
             if (r < 1)
             {
@@ -1063,9 +1103,34 @@ namespace ProbabilisticDataStructures
                     $"Filter holds the code {lastCode}, outside its own " +
                     $"reduced universe of {r}.");
             }
+            if (highBitCount > MaxHighBits)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {highBitCount} bits of high parts, past the " +
+                    $"{MaxHighBits} a filter can address.");
+            }
+
+            // What the builder sets from the codes, as it sets it: a payload that says
+            // otherwise is not one it wrote, and what it answers is not the keys' answers.
+            if (codeCount == 0 && (lowBits != 0 || highBitCount != 0))
+            {
+                throw new InvalidDataException(
+                    $"Filter holds no hash codes, yet claims a split at {lowBits} low bits " +
+                    $"and {highBitCount} bits of high parts. A filter of no keys has neither.");
+            }
+            var layout = LayoutOf(codeCount, (int)lowBits, lastCode);
+            if (highBitCount != layout.HighBits)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {highBitCount} bits of high parts, but its {codeCount} " +
+                    $"hash codes, split at {lowBits} low bits and ending at {lastCode}, " +
+                    $"take exactly {layout.HighBits}.");
+            }
+
+            return (layout.LowWords, layout.HighWords);
         }
 
-        private static uint ReadLowWords(ref PayloadReader reader)
+        private static uint ReadLowWords(ref PayloadReader reader, long expected)
         {
             var lowWords = reader.ReadUInt32();
             if (lowWords > MaxLowWords)
@@ -1075,10 +1140,16 @@ namespace ProbabilisticDataStructures
                     $"this library builds: they are one array, of at most {MaxLowWords}.");
             }
             reader.RequireHolds(lowWords, sizeof(ulong), "words of low bits");
+            if (lowWords != expected)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {lowWords} words of low bits, but the hash codes it " +
+                    $"holds, at the split it claims, fill exactly {expected}.");
+            }
             return lowWords;
         }
 
-        private static uint ReadHighWords(ref PayloadReader reader)
+        private static uint ReadHighWords(ref PayloadReader reader, long expected)
         {
             var highWords = reader.ReadUInt32();
             if (highWords > MaxHighWords)
@@ -1088,6 +1159,12 @@ namespace ProbabilisticDataStructures
                     $"this library builds: its high parts fit in {MaxHighWords}.");
             }
             reader.RequireHolds(highWords, sizeof(ulong), "words of high bits");
+            if (highWords != expected)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {highWords} words of high bits, but the bits of high " +
+                    $"parts it claims fill exactly {expected}.");
+            }
             return highWords;
         }
 
