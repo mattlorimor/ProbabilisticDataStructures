@@ -1291,7 +1291,8 @@ no transcendental function, so a stored sketch answers identically everywhere â€
 does mean these payloads have no byte-exact write fixture, only a pinned layout.
 
 A reader rejects a sketch with no rows or no columns, a budget that is not a positive
-finite number, and any counter that is infinite or not a number.
+finite number, more counters than the rest of the payload could hold, which it checks
+before allocating a row, and any counter that is infinite or not a number.
 
 It also rejects a payload whose counters are **all exact integers**. A counter is a draw
 from a continuous distribution plus a whole number of hits, so it is non-integral with

@@ -1208,6 +1208,41 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A private sketch's counters are checked against the bytes behind them at the
+        /// edges of the check. The unedited sketch, 64 by 2, holds exactly its 128
+        /// counters and reads; one column more claims 130, two more than it holds, and is
+        /// refused for that.
+        /// <para>
+        /// And where 32 bits run out: a sketch four rows deep with its width edited to
+        /// 2^30 + 1 claims 2^32 + 4 counters, which as a 32-bit product is 4, and four
+        /// counters fit. Counted in 64 bits it is refused for the counters it lacks. Counted
+        /// in 32 it is priced at 34 GB and refused for its budget instead, or under no
+        /// budget would allocate a row of eight gigabytes, which is why it is read only
+        /// under the default.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestAPrivateSketchClaimingMoreCountersThanItHoldsIsRefusedAtTheEdges()
+        {
+            // u32 width at 0.
+            var narrow = new PrivateCountMinSketch(64, 2, 1.0, seed: 3).ToByteArray();
+            Assert.AreEqual(64u, Persistence.FromByteArray<PrivateCountMinSketch>(narrow).Width,
+                "the unedited sketch does not read, so the edit below is not the only lie.");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<PrivateCountMinSketch>(PokeUInt32(narrow, 0, 65)),
+                "counters, beyond what it can hold");
+
+            // Four rows of 2^30 + 1: 2^32 + 4 counters, and 4 as a product of two u32.
+            const uint Wraps = (1u << 30) + 1;
+            var deep = new PrivateCountMinSketch(64, 4, 1.0, seed: 3).ToByteArray();
+
+            AssertRefused(
+                () => Persistence.FromByteArray<PrivateCountMinSketch>(PokeUInt32(deep, 0, Wraps)),
+                "counters, beyond what it can hold");
+        }
+
+        /// <summary>
         /// The same guard reached through a DPSW payload, which holds its private
         /// sketches inline. Every counter in every nested sketch is floored, which is
         /// what a window built with the mechanism disabled would have written.

@@ -756,7 +756,8 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// The rows and the counters in each are arrays. Structural at the limit, where a
         /// sketch is gigabytes of noise: the constructor's refusal one past, the reader's
-        /// the same, and the cost a payload at the limit is refused for.
+        /// the same, and a payload at the limit refused only for the counters it does not
+        /// hold, which its reader checks are there before it prices or allocates a row.
         /// </summary>
         [TestMethod]
         public void TestPrivateCountMinSketchLimitsAreShared()
@@ -776,14 +777,10 @@ namespace TestProbabilisticDataStructures
             AssertRefused<PrivateCountMinSketch>(
                 PokeUInt32(bytes, 4, PrivateCountMinSketch.MaxDepth + 1), PastTheLimit);
 
-            foreach (var offset in new[] { 0, 4 })
-            {
-                var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() =>
-                    Persistence.FromByteArray<PrivateCountMinSketch>(
-                        PokeUInt32(bytes, offset, (uint)Array.MaxLength)));
-                Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
-                    "a payload at the limit should be refused for what it costs, not its size");
-            }
+            AssertRefusedOnlyForMissingBytes<PrivateCountMinSketch>(
+                PokeUInt32(bytes, 0, PrivateCountMinSketch.MaxWidth));
+            AssertRefusedOnlyForMissingBytes<PrivateCountMinSketch>(
+                PokeUInt32(bytes, 4, PrivateCountMinSketch.MaxDepth));
         }
 
         /// <summary>
