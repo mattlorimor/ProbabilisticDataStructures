@@ -269,6 +269,38 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The counters and the total reach the largest count by an add that takes them
+        /// from one short of it, and stay there after the next. A stop that came one count
+        /// early would leave them a count short of the largest for good, which no test that
+        /// starts at the largest sees. One short is 2 + 4 + ... + 2^63, the sketches a
+        /// single add becomes in 1 to 63 self-merges, summed by merging; the merges sum to
+        /// below the largest every time, so nothing here has stopped yet.
+        /// </summary>
+        [TestMethod]
+        public void TestAnAddTakesTheCountersAndTheTotalToTheLargestAndNoFurther()
+        {
+            var powers = new CountMinSketch(0.001, 0.01);
+            powers.Add(A_BYTES);
+            var sum = new CountMinSketch(0.001, 0.01);
+            for (var doublings = 1; doublings <= 63; doublings++)
+            {
+                powers.Merge(powers);
+                sum.Merge(powers);
+            }
+
+            Assert.AreEqual(ulong.MaxValue - 1, sum.Count(A_BYTES), "2 + 4 + ... + 2^63 in every counter of the key");
+            Assert.AreEqual(ulong.MaxValue - 1, sum.TotalCount(), "and in the total");
+
+            sum.Add(A_BYTES);
+            Assert.AreEqual(ulong.MaxValue, sum.Count(A_BYTES), "one add from one short");
+            Assert.AreEqual(ulong.MaxValue, sum.TotalCount(), "one add from one short, in the total");
+
+            sum.Add(A_BYTES);
+            Assert.AreEqual(ulong.MaxValue, sum.Count(A_BYTES), "an add at the largest");
+            Assert.AreEqual(ulong.MaxValue, sum.TotalCount(), "an add at the largest, in the total");
+        }
+
+        /// <summary>
         /// Merging a sketch whose counters are near the largest into one that adds more
         /// than is left stops them at the largest, and counters that the sum does not carry
         /// past it are the sum, exact. The second half is what stops a merge that saturates
