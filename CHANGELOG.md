@@ -219,6 +219,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SetSketch` shipped in 6.2.0, so 6.2.0 is affected. Nothing stored or computed
   changes. (#203)
 
+- **Large structures no longer allocate for what they might hold before they hold it.**
+  No answer and no stored byte changes. (#219)
+  <br><br>
+  `TopK` and `HeavyKeeper` start their heap of tracked elements empty and grow it as
+  elements arrive. The heap and its index were sized to `k` when the structure was built,
+  again on every `Reset`, and for the heap `TopK.Merge` rebuilds, which measured 49 MB at a
+  `k` of a million before the first `Add`. `k` still bounds what they hold, and the most it
+  can be is unchanged.
+  <br><br>
+  The filters that keep their bits or counters in a bucket array, `BloomFilter`,
+  `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter` and
+  `StableBloomFilter`, and `CuckooBloomFilter`'s occupancy bits, now clear it where it is on
+  `Reset`. A new array was allocated while the old one was still held, so a reset needed
+  twice the array at once: 4 GiB for an 8-bit counting or stable filter at its largest.
+  <br><br>
+  `InfiniFilter` doubles its table by walking the old table's entries in place. It listed
+  them first, 16 bytes an entry beside both tables, which at the doubling into 2^31 slots
+  was 12.9 GB more than the 4.8 GB of the two 8-bit tables.
+  <br><br>
+  `BloomierFilter.Build` refuses a set with more distinct keys than a map holds at the first
+  key past the most, without reading the rest of the pairs. It collected every pair first,
+  into a dictionary and then a list, and compared the count afterwards, so a set too large
+  was held whole before it was refused: more than 42 GB for any set past 954,204,160 keys,
+  the most at 8-bit values. **One refusal changes:** a set that has too many keys and also
+  gives a key two different values is now refused for whichever the pairs reach first. It
+  was refused for the two values, an `ArgumentException`, wherever they came; now, if the
+  limit is passed first, it is the `ArgumentOutOfRangeException` naming `pairs`. A set that
+  builds is built as before.
+  <br><br>
+  `DpswSketch` finds a substream's checkpoints by a walk that keeps only the offsets it
+  chooses, the walk that already counted them for a read's price. They were thinned from a
+  list of every offset in the substream: 8.6 GB at the largest window the constructor
+  takes, and 1 GB at a window of 10^12, for a few dozen checkpoints. They are the same
+  checkpoints. A read is charged for the array it builds, where it was charged for the list
+  as well, so a sketch over a wide window reads under a smaller budget: the default budget
+  refused any payload whose substreams were of more than 2^26 items for the list alone, and
+  now that is decided by the sketches it holds.
+  <br><br>
+  Three costs stay, and [CAPACITY.md](CAPACITY.md) now gives them beside each structure's
+  limits: a `VarOpt` allocates its five regions of `k + 1` slots when it is made, 40 bytes
+  for each unit of `k`; `BinaryFuseFilter.Build` hashes every item it is given, duplicates
+  included, into a list of at least 16 bytes an item before it can refuse a set too large,
+  and fails with an `OutOfMemoryException` when given more items than a list holds,
+  however few are distinct; and `Grafite.Build` holds the keys in two sorted sets, about
+  96 bytes a key, before it can refuse.
+
 ### Fixed
 
 - **`InvertibleBloomLookupTable.TryDecode` could report success with a wrong answer.** It
@@ -530,6 +576,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   versions is held to. Adding a version to a structure is one new constant and one more
   entry in that table, and the highest supported version follows from it.
 
+- **A Bloom-family payload could name any number of hash functions, from none to
+  4,294,967,295, and was read.** Every constructor gets its count from `Utils.OptimalK`,
+  which is at least 1 and at most 1,024: it takes the base-2 logarithm of the reciprocal of
+  the false positive rate, and a rate below about 5.6e-309 has an infinite reciprocal and
+  is refused before a filter exists. The readers of `BloomFilter`, `BloomFilter64`,
+  `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter` and
+  `StableBloomFilter` took the count from the payload as it stood, and a payload needs only
+  a valid checksum to carry one. Two things followed. A count of zero sets no bit and tests
+  none, so the filter answered present to every item; the stable filter's reader refused
+  it, and the partitioned filter's only as a count of no partitions. A huge count is a cost
+  on every call: an `Add` runs that many position computations, and so does a `Test` of a
+  member or of a filter dense enough that every bit is set. Nothing the read budget prices
+  depends on it for `BloomFilter` and `BloomFilter64`. The counting, deletable and stable
+  filters also allocate a `uint[k]` scratch array, which under the default budget is capped
+  near 268 million counts, a gibibyte from a payload of a few hundred bytes, and under
+  `ReadOptions.Unlimited` is bounded by nothing but the runtime. A partitioned filter's
+  count is its partition count, which was held only to a million.
+  <br><br>
+  Each reader now refuses a count of none, and a count above the most `OptimalK` can
+  return, in its shape check, which the read budget's pricing shares: before anything is
+  allocated from the count or priced for it. The ceiling is not written down. It is
+  `OptimalK` at the smallest rate whose reciprocal is a finite double, found by the same
+  arithmetic, and a test finds the smallest rate that builds by trying the constructors and
+  holds the ceiling to what they give there. No payload this library wrote is refused: a
+  filter built at that rate writes and reads back. [FORMAT.md](FORMAT.md#sizes) states the
+  limit for each filter. The format does not change.
+
 - **`CuckooBloomFilter.Reset` now puts the random generator back where it began.** It had
   the same gap `StableBloomFilter.Reset` had, with the same documentation promising the
   filter's original state: the entries cleared and the generator stayed wherever the adds
@@ -638,6 +711,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   <br><br>
   The stored format does not change. Payloads that were refused for their size now load,
   and every other refusal stands.
+
+- **A `DeletableBloomFilter` payload whose regions came to more than 2^32 - 1 bits was
+  read, and divided by zero on use.** The data region and the collision regions are the two
+  halves of one filter of `m` bits, and sizing refuses an `m` past 4,294,967,295, so no
+  constructor builds a filter whose regions come to more. The reader worked a region's
+  size out in 32 bits, as `(m + collisions - 1) / collisions`, and a numerator past 2^32
+  wraps: the size came out as 0, and the first `Add`, `TestAndAdd` or `TestAndRemove` that
+  met a bit already set threw `DivideByZeroException`. Probed on a payload of 536,870,966
+  bytes, a data region of 4,294,967,295 bits and two collision regions, read under
+  `ReadOptions.Unlimited`: the first `Add` succeeded and the second `Add` of the same item
+  threw. The payload needs a valid checksum and is over 512 MiB, so it is a crafted or
+  damaged one, read only under a raised or unlimited budget.
+  <br><br>
+  The reader now refuses a payload whose two regions together come to more than
+  4,294,967,295 bits, before either is allocated: the check is the one `Read` and the
+  read budget's pricing share. No payload this library wrote is refused, and the format
+  does not change.
 
 - **A `BloomFilter`, `CountingBloomFilter` or `StableBloomFilter` sized past 2^32 bits was
   built with a table too short for it, and failed on an add.** The bucket array's byte
@@ -944,6 +1034,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stored generator state stays valid: it resumes the sequence it was partway through, and
   from there evicts the new way. The stored format does not change. (#203)
 
+- **A `VarOpt` sample keeping 2^30 items or more could throw from `Add` and be left
+  unusable.** It keeps the items held at their own weights in a heap, and worked out a
+  slot's child as `2 × slot + 1` in an `int`, which wraps negative from slot 2^30. The
+  sift then read before the start of its arrays and threw `IndexOutOfRangeException`. A
+  heap has a slot 2^30 only once `k` is 1,073,741,824 or more, and the sift reaches it only
+  when unequal weights move an item that far down: with decreasing weights at that `k`,
+  the add that began sampling, item `k + 1`, threw. That add had already been counted, and
+  the next one threw too. Items of equal weight never move in the heap, so a stream of
+  them, adds without a weight among them, was not affected. With unequal weights the
+  largest `k` safe from it was 1,073,741,823, about half the 2,147,483,590 the constructor
+  allows. The child is now worked out in 64 bits, so a slot whose child would be past the
+  largest `int` has none, as no heap is that long. Reading a payload orders its heap the
+  same way, but no payload is large enough to hold a sampling heap that big. `VarOpt`
+  shipped in 6.2.0, so 6.2.0 is affected. Smaller samples sample as they did, and the
+  stored format does not change. (#209)
+
 - **A `StableBloomFilter` with as many hash functions as cells never finished an add.**
   Examples are three cells at 1%, or ten at one in a million. The number of cells an add
   decrements, `p`, is worked out from `1/k - 1/m`, which is zero for such a filter, so `p`
@@ -1054,9 +1160,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (the `SublimeCountMinSketch` limit, for the same reason) and past 2,147,483,591 for the
   private sketch, and an epsilon with no width. The readers of `CountMinSketch` and
   `PrivateCountMinSketch` refuse a payload that claims more as beyond anything built,
-  before it can ask for a row; `CountSketch`'s reader already checks its cells against its
-  dimensions. FORMAT.md's table of sizes has the four new rows. No size that built before
-  stops building.
+  before it can ask for a row, and so does `CountSketch`'s, as the entry after this one
+  describes. FORMAT.md's table of sizes has a row for each limit. No size that built
+  before stops building.
+
+- **A `CountSketch` payload could claim more rows than any constructor builds, and a size
+  that wrapped passed the check on its cells.** The reader took any non-zero width and
+  depth whose cells came to the bytes the payload carried, where the constructor refuses a
+  width past 2,147,483,591 and a depth past 710. A payload of one column and 100,000 rows,
+  built by hand with a correct checksum, read back, and then every operation cost by the
+  rows: `Add` walks them and `Count` allocates and sorts one estimate per row, so `Count`
+  took 5.1 ms where a sketch of the 5 rows a delta of 1% gives takes about a tenth of a
+  microsecond. The default read budget admitted 15 million rows of one column. The same
+  check multiplied the width, the depth and 8 in 64 bits without a guard, and that wraps:
+  a width of 2^31 and a depth of 2^30 need 2^64 bytes, which is nought, so a payload of 30
+  bytes with an empty run of cells agreed with its own size. A finite budget refused it
+  later, as costing too much, in a message that offered a budget large enough to read it.
+  With no budget, in a probe under a 4 GiB heap limit, the read went on to allocate what
+  the payload claimed and ended in an `OutOfMemoryException` instead of an
+  `InvalidDataException`. `CountSketch` shipped in 6.0.0, so 6.0.0 through 6.2.0 are
+  affected.
+  <br><br>
+  The reader now refuses a width past 2,147,483,591 and a depth past 710 as beyond anything
+  this library builds, before it multiplies, as the readers of `CountMinSketch` and
+  `PrivateCountMinSketch` do. The limits keep the product below about 1.2 × 10^13 bytes,
+  far from wrapping, and the size is worked out in `ulong` as well. No release built a
+  sketch past either limit, since the constructor allocated every row, an array holds no
+  more than 2,147,483,591 counters, and a delta with no reciprocal made a row count that
+  could not be allocated; so every payload this library has written still reads, the
+  stored `countsketch-v1.bin` among them, and only a payload edited by hand or written by
+  something else is refused. The stored format does not change. FORMAT.md's table of sizes
+  has the two rows.
 
 - **`InverseBloomFilter`, `HyperLogLog` and `DpswSketch` failed inside an allocation, or
   saturated, instead of refusing a size they could not build.** `InverseBloomFilter`'s
@@ -1218,6 +1352,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has gone, so a removal after such an add takes one off the largest count and no more.
   (#189)
 
+- **A `CountSketch` wrapped past ±2^63 without a sign, and the estimate with it.** A
+  weighted `Add` and a `Merge` summed cells with an unchecked `+=`, so two
+  `Add(key, long.MaxValue)` left a cell at −2 and `Count(key)` returned −2, which reads
+  like the noise this sketch's estimates carry. At an even depth the median averaged its
+  two middle estimates as `(a + b) / 2`, and that sum wraps when both are above 2^62
+  although no cell has: with a delta of 0.2, which gives two rows, one
+  `Add(key, 5_000_000_000_000_000_000)` returned −4,223,372,036,854,775,808. A row that
+  subtracts also formed `sign * count` and `sign * cell`, and the negation of
+  `long.MinValue` stays `long.MinValue`. Totals above 9.2 × 10^18 are rare, such as
+  nanoseconds or bytes over a very long stream, but `Add` documents no range and nothing
+  threw. `CountSketch` shipped in 6.0.0, so 6.0.0 through 6.2.0 are affected.
+  <br><br>
+  Cells now stop at `long.MaxValue` and `long.MinValue` instead of wrapping, in
+  `Add(data, long count)` and in `Merge`, as `SublimeCountMinSketch`'s counters stop at
+  their maximum. Throwing would have left a weighted add applied to some rows and not the
+  rest. A row that subtracts takes the count off as a difference held to the range and not
+  as a negated count, so `long.MinValue` needs no case of its own: taking it off a cell of
+  −5 leaves `long.MaxValue − 4`, which fits. An estimate that is one past the largest count,
+  a cell at `long.MinValue` read through a row that subtracts, stops at `long.MaxValue`.
+  At an even depth the two middle estimates are summed in 128 bits and halved by
+  truncation toward zero, as the division did, so every result that did not overflow is the
+  one it was. A sketch whose cells stay within the range is unchanged, in memory and on the
+  wire, and so is the format.
+  <br><br>
+  A cell at either end no longer records how far past it the count went, so a later
+  subtraction from it is off by that much: two adds of `long.MaxValue` and one of
+  `-long.MaxValue` now leave an item near nought, where wrapping arithmetic, which is exact
+  modulo 2^64, returned `long.MaxValue`. The documentation says so. (#211)
+
 - **A `SublimeCountMinSketch` payload whose total count did not fit the rest of it was
   read as it stood, and an `Add` to a sketch holding `ulong.MaxValue` keys wrapped the
   total to nought.** `TotalCount()` and `Epsilon()` went to 0, and the schedule of
@@ -1293,6 +1456,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged in memory and on the wire. A crowded one can keep a chunk on tails after
   removals have brought it back within its pool, until its next repacking, where before
   the next add took it off. (#188)
+
+- **`CuckooBloomFilter` read a payload whose bucket count was not a power of two, or whose
+  item count disagreed with its entries, and went on to answer wrongly.** The constructor
+  always rounds the bucket count up to a power of two, because an item's other bucket is
+  found by reducing a hash by that count, and finds the first again from the other end
+  only when it is one. A payload with any other count was read all the same, and an
+  insert that had to relocate an entry could then move it to a bucket no lookup visits:
+  the filter lost items it had accepted. Read back with its bucket count changed and
+  filled to about nine tenths, a filter of 100 buckets lost 56 of 360 items, one of 7
+  buckets 5 of 25, and one of 5 buckets 1 of 18, where one of 128 lost none. The item
+  count was never compared with the entries the payload lists. A count below them let
+  `TestAndRemove` take it under zero, where it wraps and `Count()` reports 4,294,967,295,
+  and a count of zero let `SetHash` replace the hash under entries it had placed. A
+  payload that listed the same bucket and entry twice was accepted too, its two
+  fingerprints OR-ed into one cell.
+  <br><br>
+  Reading now refuses a bucket count that is not a power of two, before the table is
+  allocated, a count that differs from the entries in the table, counted from the table
+  and not from the list, and a bucket and entry named twice. `TestAndRemove` also never
+  takes the count below zero. The library has never written such a payload, so none it
+  wrote is refused, and the stored payloads of every format version still read. The
+  format does not change. No release from 3.2.0, when a cuckoo filter first could be read
+  back, through 6.2.0 made these checks.
 
 ## [6.2.0] - 2026-08-19
 
