@@ -459,9 +459,10 @@ namespace ProbabilisticDataStructures
             for (var s = 0; s < this.substreams.Count; s++)
             {
                 var substream = this.substreams[s];
-                var last = substream.Start + substream.Held - 1;
 
-                if (last < windowStart)
+                // Whether its last item, Start + Held - 1, is before the window, compared as
+                // the reader compares it, without the sum that can wrap.
+                if (substream.Start < windowStart - substream.Held + 1)
                 {
                     continue;
                 }
@@ -535,19 +536,20 @@ namespace ProbabilisticDataStructures
 
             foreach (var segment in substream.Segments)
             {
-                var from = substream.Start + segment.From - 1;
-                var to = substream.Start + segment.To - 1;
-
                 // Never count an item the window has already passed, and never count
-                // one that has not arrived.
-                if (from < windowStart || segment.From > substream.Held)
+                // one that has not arrived. The segment's first item is
+                // Start + From - 1, compared without the sum, which can wrap.
+                if (substream.Start < windowStart - segment.From + 1
+                    || segment.From > substream.Held)
                 {
                     continue;
                 }
 
+                // Every segment of a substream is offset by the same start, so they are
+                // ordered by where they lie within it, with no position worked out.
                 if (best is null
-                    || from < substream.Start + best.From - 1
-                    || (from == substream.Start + best.From - 1 && to > substream.Start + best.To - 1))
+                    || segment.From < best.From
+                    || (segment.From == best.From && segment.To > best.To))
                 {
                     best = segment;
                 }
@@ -890,11 +892,16 @@ namespace ProbabilisticDataStructures
                     "items. A substream exists because something was added to it, " +
                     "and never holds more than its size.");
             }
-            if (start + held - 1 > position)
+            // Its last item is start + held - 1, compared without working that out: for a
+            // start within held - 1 of long.MaxValue the sum wraps negative and passed, and
+            // the window loaded holding a substream from its future, which a query then
+            // passed over and the next add expired. The position is not negative and held
+            // is from one to the substream size, so this side cannot wrap.
+            if (start > position - held + 1)
             {
                 throw new InvalidDataException(
-                    $"Substream {s} ends at item {start + held - 1}, past the " +
-                    $"{position} items the window says it has seen.");
+                    $"Substream {s} starts at item {start} and holds {held}, which ends " +
+                    $"past the {position} items the window says it has seen.");
             }
         }
 
@@ -1065,9 +1072,10 @@ namespace ProbabilisticDataStructures
             while (this.substreams.Count > 0)
             {
                 var oldest = this.substreams[0];
-                var last = oldest.Start + oldest.Held - 1;
 
-                if (last >= windowStart)
+                // Whether its last item, Start + Held - 1, is still in the window, compared
+                // as the reader compares it, without the sum that can wrap.
+                if (oldest.Start >= windowStart - oldest.Held + 1)
                 {
                     break;
                 }

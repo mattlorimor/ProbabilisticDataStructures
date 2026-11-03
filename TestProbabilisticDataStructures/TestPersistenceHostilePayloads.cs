@@ -1356,6 +1356,95 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A window whose newest substream ends past the items the window says it has
+        /// seen. Its start is moved one later, so it still follows the substream before
+        /// it and holds what it held, and its last item lands one past the window's
+        /// position: items from the future, which no stream put there.
+        /// <para>
+        /// The unedited payload is the control. Its newest substream ends exactly at the
+        /// position, so a check one too strict refuses it, and with it every window saved
+        /// part way through a substream.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestADpswWindowWithASubstreamPastItsItemsIsRefused()
+        {
+            var (bytes, layout) = SmallDpswPayload();
+            var (start, held, position) = NewestDpswSubstream(bytes, layout);
+
+            Assert.AreEqual(position, start + held - 1,
+                "the newest substream does not end at the window's position, so moving its " +
+                "start by one does not take it exactly one past.");
+            Assert.AreEqual(position, Persistence.FromByteArray<DpswSketch>(bytes).Position,
+                "the unedited payload does not read, so the edit below is not the only lie.");
+
+            var poked = PokeUInt64(
+                bytes, layout.SubstreamAt((int)layout.SubstreamCount - 1) - PayloadStart,
+                (ulong)(start + 1));
+
+            AssertRefused(
+                () => Persistence.FromByteArray<DpswSketch>(poked),
+                "the window says it has seen");
+        }
+
+        /// <summary>
+        /// The same guard where its arithmetic runs out: a substream starting so near the
+        /// largest position that its last item, start + held - 1, is past what a long
+        /// holds. Such a sum wraps negative, and a check made with it passes, so the
+        /// window loaded holding a substream from its future, which <c>Count</c> then
+        /// passed over and the next <c>Add</c> expired, every counter with it.
+        /// <para>
+        /// Three starts straddle the wrap. At <c>long.MaxValue - held + 1</c> the sum is
+        /// exactly <c>long.MaxValue</c> and does not wrap; one later it is one past and
+        /// wraps; at <c>long.MaxValue</c> it wraps furthest. Each still follows the
+        /// substream before it, so the ordering guard passes them all.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestADpswWindowWithASubstreamEndingPastTheLargestPositionIsRefused()
+        {
+            var (bytes, layout) = SmallDpswPayload();
+            var (_, held, _) = NewestDpswSubstream(bytes, layout);
+
+            Assert.IsGreaterThan(1, held,
+                "the newest substream holds one item, so no start but the largest wraps " +
+                "and the starts below do not straddle anything.");
+
+            var at = layout.SubstreamAt((int)layout.SubstreamCount - 1) - PayloadStart;
+            foreach (var start in new[]
+            {
+                long.MaxValue - held + 1,
+                long.MaxValue - held + 2,
+                long.MaxValue,
+            })
+            {
+                var poked = PokeUInt64(bytes, at, (ulong)start);
+
+                var ex = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<DpswSketch>(poked),
+                    $"a substream starting at {start} and holding {held} was read");
+                StringAssert.Contains(ex.Message, "the window says it has seen",
+                    $"a substream starting at {start} was refused for something else");
+            }
+        }
+
+        /// <summary>
+        /// The newest substream of a DPSW payload: where it starts, how many items it
+        /// holds, and the window's position, read from the bytes.
+        /// </summary>
+        private static (long Start, int Held, long Position) NewestDpswSubstream(
+            byte[] bytes, DpswLayout layout)
+        {
+            // window(8) rho(8) alpha(8) substreamSize(4) width(4) depth(4), then position(8).
+            var position = (long)BinaryPrimitives.ReadUInt64LittleEndian(
+                bytes.AsSpan(PayloadStart + 36));
+            var at = layout.SubstreamAt((int)layout.SubstreamCount - 1);
+            var start = (long)BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(at));
+            var held = (int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at + 8));
+            return (start, held, position);
+        }
+
+        /// <summary>
         /// And one claiming a substream holds nothing. A substream exists because
         /// something was added to it; an empty one is a plan with no stream under it.
         /// </summary>
