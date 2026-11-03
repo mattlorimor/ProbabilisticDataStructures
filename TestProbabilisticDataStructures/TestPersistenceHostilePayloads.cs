@@ -345,30 +345,40 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A Memento filter holding the given keys and nothing else, all in block 0 of a range
-        /// of 64 with 8-bit fingerprints, so its one table holds one box, in the only run there
-        /// is, starting at the box's own quotient. Returns the payload, and the slots of that
-        /// run in order, for a test to edit one of.
+        /// A Memento filter holding keys at the given positions of one block and nothing else,
+        /// in a range of 64 with 8-bit fingerprints, so its one table of 16 slots holds one
+        /// box, in the only run there is, starting at the box's own quotient. The block is the
+        /// first whose quotient is the table's first slot, or its last, which are the two ends
+        /// of the reader's walk over the table; at the last the run wraps round to the first.
+        /// Returns the payload, the slots of the run in order, for a test to edit one of, and
+        /// the block's first key.
         /// </summary>
-        private static (byte[] Payload, uint[] Run) OneMementoBox(params ulong[] keys)
+        private static (byte[] Payload, uint[] Run, ulong FirstKey) OneMementoBox(bool lastSlot, params ulong[] mementos)
         {
             var filter = new MementoFilter(64, 8, initialCapacity: 8);
-            foreach (var key in keys)
+            var table = filter.Segments[0];
+            var target = lastSlot ? table.Slots - 1 : 0;
+            var block = 0UL;
+            while (table.Split(MementoFilter.HashPrefix(block)).Quotient != target)
             {
-                filter.Add(key);
+                block++;
+            }
+
+            foreach (var memento in mementos)
+            {
+                filter.Add((block * 64) + memento);
             }
 
             Assert.HasCount(1, filter.Segments);
-            var table = filter.Segments[0];
-            var (quotient, _) = table.Split(MementoFilter.HashPrefix(0));
-            var fields = table.ReadRun(quotient);
+            Assert.AreSame(table, filter.Segments[0]);
+            var fields = table.ReadRun(target);
             var boxes = table.Codec.Decode(fields);
             Assert.HasCount(1, boxes, "the keys are not one box");
-            CollectionAssert.AreEqual(keys, boxes[0].Mementos.ToArray(), "the box does not hold the keys");
-            Assert.AreEqual(fields[0], table.ReadField(quotient), "the run does not start at its quotient");
+            CollectionAssert.AreEqual(mementos, boxes[0].Mementos.ToArray(), "the box does not hold the keys");
+            Assert.AreEqual(fields[0], table.ReadField(target), "the run does not start at its quotient");
 
-            var run = Enumerable.Range(0, fields.Count).Select(k => (quotient + (uint)k) & (table.Slots - 1)).ToArray();
-            return (filter.ToByteArray(), run);
+            var run = Enumerable.Range(0, fields.Count).Select(k => (target + (uint)k) & (table.Slots - 1)).ToArray();
+            return (filter.ToByteArray(), run, block * 64);
         }
 
         /// <summary>
@@ -397,14 +407,17 @@ namespace TestProbabilisticDataStructures
         /// between its first and last where its run has bits for one. The reader handed the
         /// table over without decoding a run, so the payload read, and the first query to
         /// decode the box read zeros past the end of the run for the keys it lacked. It is
-        /// refused when read, for the box.
+        /// refused when read, for the box, at the table's first slot and at its last.
         /// </summary>
         [TestMethod]
-        public void TestMementoFilterBoxClaimingMoreKeysThanItsRunHoldsIsRefused()
+        [DataRow(false)]
+        [DataRow(true)]
+        public void TestMementoFilterBoxClaimingMoreKeysThanItsRunHoldsIsRefused(bool lastSlot)
         {
-            var (payload, run) = OneMementoBox(0, 1, 2);
+            var (payload, run, first) = OneMementoBox(lastSlot, 0, 1, 2);
             Assert.HasCount(3, run);
-            Assert.IsTrue(Persistence.FromByteArray<MementoFilter>(payload).TestRange(0, 2), "the unedited payload does not read");
+            Assert.IsTrue(Persistence.FromByteArray<MementoFilter>(payload).TestRange(first, first + 2),
+                "the unedited payload does not read");
 
             AssertRefused(
                 () => Persistence.FromByteArray<MementoFilter>(PokeMementoField(payload, run[2], 0, 6, 62)),
@@ -415,14 +428,17 @@ namespace TestProbabilisticDataStructures
         /// A box of two keys whose second slot's fingerprint is edited to zero, the marker of a
         /// box of more than two, in a run that ends there. Its count would be read from past
         /// the end of the run, which gave zeros, so the payload read and the box decoded as two
-        /// keys, silently. It is refused when read.
+        /// keys, silently. It is refused when read, at the table's first slot and at its last.
         /// </summary>
         [TestMethod]
-        public void TestMementoFilterBoxWhoseCountRunsPastItsRunIsRefused()
+        [DataRow(false)]
+        [DataRow(true)]
+        public void TestMementoFilterBoxWhoseCountRunsPastItsRunIsRefused(bool lastSlot)
         {
-            var (payload, run) = OneMementoBox(0, 1);
+            var (payload, run, first) = OneMementoBox(lastSlot, 0, 1);
             Assert.HasCount(2, run);
-            Assert.IsTrue(Persistence.FromByteArray<MementoFilter>(payload).TestRange(1, 1), "the unedited payload does not read");
+            Assert.IsTrue(Persistence.FromByteArray<MementoFilter>(payload).TestRange(first + 1, first + 1),
+                "the unedited payload does not read");
 
             AssertRefused(
                 () => Persistence.FromByteArray<MementoFilter>(PokeMementoField(payload, run[1], 6, 9, 0)),
