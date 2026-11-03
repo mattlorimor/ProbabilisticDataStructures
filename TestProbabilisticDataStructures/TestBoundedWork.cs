@@ -238,5 +238,72 @@ namespace TestProbabilisticDataStructures
                 $"an Infini add costs {infiniPerAdd:F1} reads against a probed 1.5; " +
                 "its insert does not rebuild clusters and must not start to.");
         }
+
+        /// <summary>
+        /// A Memento range tests every block wholly inside it, one by one, so its work is
+        /// linear in its width and "certainly empty" is had only by testing them all: the
+        /// widest range at the default range of 256 covers 2^56 blocks. Past
+        /// <see cref="MementoFilter.MaxInteriorBlocks"/> it answers "possibly" instead, so the
+        /// blocks it tests are at most that and its two ends. Counted, not timed, with the limit
+        /// lowered to a thousand so that the range a million blocks wide, which the walk would
+        /// take to the end, is tens of milliseconds and not a hang. The ranges sit far above
+        /// every key and the fingerprints are 28 bits wide, so no block in them matches and an
+        /// uncapped walk goes the whole way. Each limit is straddled: a range of exactly that
+        /// many interior blocks is walked, every one and both ends, and answers a certain no;
+        /// one more is answered without the walk. The same at the default limit.
+        /// </summary>
+        [TestMethod]
+        public void TestAMementoRangeTestsNoMoreBlocksThanItsLimitAllows()
+        {
+            const ulong far = 1UL << 60;
+            const ulong limit = 1_000;
+            var filter = new MementoFilter(256, 28, 4096) { MaxInteriorBlocks = limit };
+            for (ulong i = 0; i < 3000; i++)
+            {
+                filter.Add(i * 7919);
+            }
+
+            // A range from the start of the block at `far`, with this many blocks wholly inside it.
+            (ulong Low, ulong High) Spanning(ulong interior) => (far, far + ((interior + 2) * 256) - 1);
+
+            long Tested(MementoFilter f, ulong interior, out bool answer)
+            {
+                var (low, high) = Spanning(interior);
+                var before = f.BlocksTested;
+                answer = f.TestRange(low, high);
+                return f.BlocksTested - before;
+            }
+
+            var atLimit = Tested(filter, limit, out var answer);
+            Assert.AreEqual((long)limit + 2, atLimit, "a range at the limit did not test each of its blocks once");
+            Assert.IsFalse(answer, "a range at the limit, holding nothing, was not walked to a certain no");
+
+            var wide = Tested(filter, 1_000_000, out answer);
+            Assert.IsLessThanOrEqualTo((long)limit + 2, wide,
+                $"a range a million blocks wide tested {wide:N0} of them, against a limit of {limit:N0}");
+            Assert.IsTrue(answer);
+
+            var past = Tested(filter, limit + 1, out answer);
+            Assert.IsLessThanOrEqualTo(2L, past, $"a range one block past the limit tested {past:N0} blocks");
+            Assert.IsTrue(answer, "a range past the limit, in a filter holding keys, must answer possibly");
+
+            // The default, straddled the same way.
+            var byDefault = new MementoFilter(256, 28, 4096);
+            for (ulong i = 0; i < 3000; i++)
+            {
+                byDefault.Add(i * 7919);
+            }
+            var limitByDefault = byDefault.MaxInteriorBlocks;
+            Assert.AreEqual(MementoFilter.DefaultMaxInteriorBlocks, limitByDefault);
+            Assert.AreEqual((long)limitByDefault + 2, Tested(byDefault, limitByDefault, out answer));
+            Assert.IsFalse(answer);
+            Assert.IsLessThanOrEqualTo(2L, Tested(byDefault, limitByDefault + 1, out answer));
+            Assert.IsTrue(answer);
+
+            // A filter holding nothing still says no past the limit, which costs nothing either.
+            var empty = new MementoFilter(256, 28, 4096) { MaxInteriorBlocks = limit };
+            Assert.IsLessThanOrEqualTo(2L, Tested(empty, 1_000_000, out answer));
+            Assert.IsFalse(answer, "a filter holding nothing answered possibly");
+        }
     }
 }

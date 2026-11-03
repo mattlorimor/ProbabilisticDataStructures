@@ -1981,6 +1981,13 @@ bool maybe = filter.TestRange(90000, 90500);   // false means certainly empty
 bool gone = filter.TestAndRemove(90210);       // deletes, which Grafite cannot
 ```
 
+A range wider than `maxRangeSize` is still answered without false negatives, by testing
+each block it covers, so what it costs is linear in its width over `maxRangeSize`. Past
+`MaxInteriorBlocks` blocks inside it, the answer is "possibly" without looking, which is
+always safe, or no if the filter is empty. The default keeps the dearest such call to a
+millisecond or two; raise it to answer wider ranges exactly at that cost, or lower it to
+bound each call more tightly. It is a setting of the instance and is not saved with it.
+
 Keys sharing a block share one stored fingerprint between them, so dense data costs far
 less than sparse: the same 256,000 keys take 41.0 bits each spread one to a block and
 20.5 packed sixty-four to a block. Sparse data gets no such saving — every block holding

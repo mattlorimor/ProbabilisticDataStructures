@@ -291,6 +291,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says that above about 2^16 registers `HyperLogLogPlus` or `UltraLogLog` is the better
   choice. `HyperLogLogPlus` has neither. Nothing stored or computed changes. (#215)
 
+- **`MementoFilter.TestRange` stops testing a range's blocks at a limit, the new
+  `MaxInteriorBlocks`, and answers "possibly" past it.** A range wider than `maxRangeSize`
+  was answered by testing every block wholly inside it, one by one, so its cost was linear
+  in its width with no bound, and a certain no took a test of every block: a range holding
+  nothing, or whose keys sit late in it, cost its whole width. `TestRange(0, ulong.MaxValue)`
+  at the default range of 256 covers 2^56 blocks. Measured, a block costs about 75 to 110 ns
+  in a table near its expansion threshold whose fingerprints are too wide for an empty range
+  to match, so that call ran for centuries, and anything handing a caller's range to the
+  filter could be stalled by one request. Narrower fingerprints end most walks early, at
+  the first block whose fingerprint matches.
+  <br><br>
+  `MaxInteriorBlocks` is a property of the instance, 16,384 by default, which keeps the
+  dearest call it allows to about 1.5 ms on the machine it was measured on. A range with
+  more blocks inside it than that returns true without testing them, which is never a false
+  negative, or false if the filter holds nothing. Ranges no wider than `maxRangeSize` have no
+  block inside them and answer exactly as before, and so does any range under the limit; a
+  range past it can now answer true where it answered false. Raise the property for exact
+  answers over wider ranges, at their cost, or set it to `ulong.MaxValue` for the old
+  behaviour. It is not written with the filter, so the stored format does not change and a
+  filter read back has the default. `MementoFilter` shipped in 6.2.0, so 6.2.0 is affected.
+
 ### Fixed
 
 - **`InvertibleBloomLookupTable.TryDecode` could report success with a wrong answer.** It
