@@ -442,12 +442,17 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Every entry the segment holds, paired with the quotient that owns it.
+        /// Every entry the segment holds, paired with the quotient that owns it, read from
+        /// the table as the walk reaches it.
         /// </summary>
-        internal List<(uint Quotient, ulong Field)> Entries()
+        /// <remarks>
+        /// Nothing may change the segment while the walk is under way, since it reads the
+        /// slots in place. The filter's doubling is the walk that matters, and it reads
+        /// the old table and writes only the new one. It used to list the entries first,
+        /// 16 bytes each beside both tables: 12.9 GB at the doubling into 2^31 slots.
+        /// </remarks>
+        internal IEnumerable<(uint Quotient, ulong Field)> Entries()
         {
-            var entries = new List<(uint Quotient, ulong Field)>((int)this.Count);
-
             for (var quotient = 0u; quotient < this.Slots; quotient++)
             {
                 if (!IsOccupied(quotient))
@@ -459,7 +464,7 @@ namespace ProbabilisticDataStructures
 
                 while (true)
                 {
-                    entries.Add((quotient, ReadField(at)));
+                    yield return (quotient, ReadField(at));
 
                     var next = Next(at);
                     if (!IsContinuation(next))
@@ -470,8 +475,6 @@ namespace ProbabilisticDataStructures
                     at = next;
                 }
             }
-
-            return entries;
         }
 
         private uint Next(uint slot) => (slot + 1) & this.slotMaskIndex;

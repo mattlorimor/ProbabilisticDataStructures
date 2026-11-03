@@ -352,5 +352,49 @@ namespace TestProbabilisticDataStructures
                 StringAssert.Contains(ex.Message, most.ToString("N0"));
             }
         }
+
+        /// <summary>
+        /// The limit is on distinct keys, so a set of exactly the limit builds however often
+        /// its keys repeat with their values, and one more key is refused, naming the pairs
+        /// and the limit. The limit is lowered through the build the public one calls.
+        /// </summary>
+        [TestMethod]
+        public void TestTheKeyLimitCountsDistinctKeys()
+        {
+            const uint limit = 100;
+            var atTheLimit = Pairs((int)limit);
+            var repeated = atTheLimit.Concat(atTheLimit).Concat(atTheLimit.Take(10)).ToArray();
+
+            var built = BloomierFilter.Build(repeated, 8, null, limit);
+            Assert.AreEqual(limit, built.Count());
+
+            var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => BloomierFilter.Build(Pairs((int)limit + 1), 8, null, limit));
+            Assert.AreEqual("pairs", ex.ParamName);
+            StringAssert.Contains(ex.Message, $"more than {limit:N0} distinct keys");
+        }
+
+        /// <summary>
+        /// A set with too many keys and a key given two values is refused for whichever the
+        /// pairs reach first: the limit is applied as the keys arrive, so the pairs are not
+        /// read past it to find a conflict further on. Before the limit was applied that way
+        /// a conflict anywhere was refused, since the count was compared only once every pair
+        /// had been collected.
+        /// </summary>
+        [TestMethod]
+        public void TestTooManyKeysAndAConflictAreRefusedForWhicheverComesFirst()
+        {
+            const uint limit = 3;
+            var conflict = new KeyValuePair<byte[], ulong>(Key("key0"), 99);
+
+            var tooManyFirst = Pairs(4).Append(conflict).ToArray();
+            Assert.AreEqual("pairs", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => BloomierFilter.Build(tooManyFirst, 8, null, limit)).ParamName);
+
+            var conflictFirst = Pairs(2).Append(conflict).Concat(Pairs(2, from: 2)).ToArray();
+            StringAssert.Contains(Assert.ThrowsExactly<ArgumentException>(
+                () => BloomierFilter.Build(conflictFirst, 8, null, limit)).Message,
+                "twice with different values");
+        }
     }
 }
