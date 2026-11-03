@@ -211,6 +211,14 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Add the data to the set. Returns the CountMinSketch to allow for chaining.
         /// </summary>
+        /// <remarks>
+        /// A counter holds at most <c>ulong.MaxValue</c>, and an add to one that has got
+        /// there leaves it there rather than wrapping it to nought, so an estimate never
+        /// falls for want of room. A stream takes 2^64 adds to take a counter there, but a
+        /// merge can: a sketch merged into itself doubles every counter, and one holding a
+        /// single add is at the largest after the 64th. <see cref="TotalCount"/> stops
+        /// there too. A counter at the largest stands for that many or more.
+        /// </remarks>
         /// <param name="data">The data to add.</param>
         /// <returns>The CountMinSketch</returns>
         public CountMinSketch Add(byte[] data)
@@ -225,13 +233,22 @@ namespace ProbabilisticDataStructures
         {
             var columns = ColumnsOf(data, this.Hash, this.Placement, this.Width);
 
-            // Increment count in each row.
+            // Increment count in each row, leaving a counter at the largest where it is: one
+            // more is nought in a ulong, which Count would read as the least a key can have.
             for (uint i = 0; i < this.Depth; i++)
             {
-                this.Matrix[i][columns[i]]++;
+                ref var counter = ref this.Matrix[i][columns[i]];
+                if (counter != UInt64.MaxValue)
+                {
+                    counter++;
+                }
             }
 
-            this.count++;
+            if (this.count != UInt64.MaxValue)
+            {
+                this.count++;
+            }
+
             return this;
         }
 
@@ -266,6 +283,13 @@ namespace ProbabilisticDataStructures
         /// Combines this CountMinSketch with another. Returns a bool if the merge was
         /// successful. Throws an exception if the matrix width and depth are not equal.
         /// </summary>
+        /// <remarks>
+        /// Counters, and the total, are added with a ceiling at <c>ulong.MaxValue</c>: a
+        /// sum past it is left there and not wrapped, so a merge never lowers an estimate.
+        /// Merging a sketch into itself doubles every counter, so one holding a single add
+        /// is at the ceiling after 64 merges, and merging overlapping sketches again and
+        /// again gets there more slowly. See <see cref="Add(byte[])"/>.
+        /// </remarks>
         /// <param name="other">The CountMinSketch to merge with the current
         /// instance.</param>
         /// <returns>True if successful.</returns>
@@ -303,16 +327,27 @@ namespace ProbabilisticDataStructures
 
             BitPlacement.SameColumns(this.Placement, other.Placement, nameof(other));
 
+            // A sum past the largest count stops there. Wrapped, it is a small number, and a
+            // sketch merged into itself reaches that after 64 merges.
             for (uint i = 0; i < this.Depth; i++)
             {
                 for (int j = 0; j < this.Width; j++)
                 {
-                    this.Matrix[i][j] += other.Matrix[i][j];
+                    this.Matrix[i][j] = SaturatingSum(this.Matrix[i][j], other.Matrix[i][j]);
                 }
             }
 
-            this.count += other.count;
+            this.count = SaturatingSum(this.count, other.count);
             return true;
+        }
+
+        /// <summary>
+        /// The sum of two counts, or the largest a <c>ulong</c> holds if they come to more.
+        /// </summary>
+        private static UInt64 SaturatingSum(UInt64 a, UInt64 b)
+        {
+            var sum = a + b;
+            return sum < a ? UInt64.MaxValue : sum;
         }
 
         /// <summary>

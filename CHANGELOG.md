@@ -221,6 +221,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `CountMinSketch` counter, and its total, wrapped to nought at 2^64 instead of
+  stopping at `ulong.MaxValue`, so `Merge` could take an estimate to 0.** A wrapped counter
+  makes `Count(key)` an undercount, which a Count-Min sketch never gives, and
+  `TotalCount()` wrapped to 0 with it. An `Add` cannot get there alone, since it takes 2^64
+  adds, but `Merge` sums counters cell by cell and the totals with them: a sketch merged
+  into itself doubles every counter each time, so one holding a single add reached 0 at the
+  64th merge, and merging overlapping sketches again and again, such as a rollup that was
+  already merged, is a slower way to the same place. `Add` wrapped as well, so a counter a
+  merge had taken to the maximum went to 0 on the next add. `TopK` counts in a
+  `CountMinSketch`, so it inherited all of it: after the same 64 self-merges `TopK.Merge`
+  read a held element back at frequency 0, and its item count went to 0. Counters and the
+  total now stop at `ulong.MaxValue`, in `Merge` and in `Add`, as `SublimeCountMinSketch`
+  already did (#189). A counter at the maximum stands for that many or more, so an
+  estimate there is a floor. A sketch with no counter that large is unchanged, in memory
+  and on the wire, and so is the format: the stored values are still `u64`, and a sketch
+  with a counter at the maximum is valid as it stands. Before this change a sketch holding
+  one add and merged into itself 64 times reported 0 for the key and for `TotalCount()`,
+  and one with a counter two short of the maximum merged with a sketch that had added five
+  to it reported 2. `Add` pays one more compare for each row and one for the total, and
+  `Merge` one for each counter. (#212)
+
 - **`InvertibleBloomLookupTable.TryDecode` could report success with a wrong answer.** It
   called a table empty once every count was zero, but two keys on opposite sides that land
   in the same cells cancel each other's counts while both stay in the key and hash sums.

@@ -946,6 +946,36 @@ namespace TestProbabilisticDataStructures
 
             // ---- Frequency ------------------------------------------------------------------
             new Claim("counts to 18 quintillion", () => Rounds(ulong.MaxValue / 1e18, 18, 0)),
+            new Claim("an `Add` to one at the limit leaves it there, and a `Merge` that would take one past it ends at it, so an estimate never falls", () =>
+            {
+                // A sketch merged into itself is the one way to the limit that costs nothing: a
+                // single item, then each merge doubles every counter and the item count.
+                var sketch = new CountMinSketch(0.01, 0.01);
+                sketch.Add(Key(0));
+                for (var merge = 0; merge < 63; merge++) sketch.Merge(sketch);
+                var justBelow = sketch.Count(Key(0)) == 1UL << 63 && sketch.TotalCount() == 1UL << 63;
+
+                sketch.Merge(sketch);
+                var merged = sketch.Count(Key(0)) == ulong.MaxValue && sketch.TotalCount() == ulong.MaxValue;
+
+                sketch.Add(Key(0));
+                return justBelow && merged
+                    && sketch.Count(Key(0)) == ulong.MaxValue && sketch.TotalCount() == ulong.MaxValue;
+            }),
+            new Claim("since a sketch merged into itself doubles every counter, and one holding a single item is at the limit after 64 merges", () =>
+            {
+                var sketch = new CountMinSketch(0.01, 0.01);
+                sketch.Add(Key(0));
+                var doubled = true;
+                for (var merge = 1; merge <= 64; merge++)
+                {
+                    sketch.Merge(sketch);
+                    var atTheLimit = sketch.Count(Key(0)) == ulong.MaxValue;
+                    doubled &= merge < 64 ? sketch.Count(Key(0)) == 1UL << merge && !atTheLimit : atTheLimit;
+                }
+
+                return doubled;
+            }),
             new Claim("5 at δ = 1%. A read charges 16 bytes a counter", () =>
                 new CountMinSketch(0.01, 0.01).Depth == 5 && Near(Slope("CountMinSketch"), 16, 0.01)),
             new Claim("A read charges 24 bytes a counter.", () => Near(Slope("CountSketch"), 24, 0.01)),
