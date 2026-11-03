@@ -708,13 +708,33 @@ namespace ProbabilisticDataStructures
         /// right one, if there is one, is the slot after it.
         /// </summary>
         /// <remarks>
-        /// <see cref="SiftDown"/> asks this, so that a test can ask it about slots that no
+        /// The left child is 2 * slot + 1, worked out in 64 bits. In 32 it wrapped negative
+        /// from slot 2^30, which is below every count, so the slot seemed to have a child,
+        /// and the sift then read before the start of the arrays. That needs a heap of more
+        /// than 2^30 entries, so a k of 2^30 or more, and weights unequal enough to move an
+        /// item that far down. The add that did it threw
+        /// <see cref="IndexOutOfRangeException"/> and left the sample unusable; with
+        /// decreasing weights at k = 2^30 it was the add that began sampling. A heap holds
+        /// at most k + 1 entries, never more than <see cref="Array.MaxLength"/>, so no slot
+        /// from 2^30 has a child, and a child that is found is below the count, which leaves
+        /// room for the slot after it.
+        /// <para>
+        /// <see cref="SiftDown"/> asks this, and every heap operation that moves an item
+        /// down goes through it: the heapify that begins sampling, the one a read does, and
+        /// the removal of the lightest heavy item. So a test can ask it about slots that no
         /// sample a test can build reaches.
+        /// </para>
         /// </remarks>
         internal static bool TryLeftChild(int slot, int count, out int child)
         {
-            child = (2 * slot) + 1;
-            return child < count;
+            var left = (2L * slot) + 1;
+            if (left < count)
+            {
+                child = (int)left;
+                return true;
+            }
+            child = -1;
+            return false;
         }
 
         /// <summary>
