@@ -1048,6 +1048,24 @@ namespace TestProbabilisticDataStructures
             AssertRefusedForItsShape<ThetaSketch>(bytes, Poke(bytes, 0, 0), "not a size this");
         }
 
+        /// <summary>
+        /// A Sublime sketch whose totals do not fit together: holding as many keys as the
+        /// count at which its rows next double, or doubling past where rows twice as wide
+        /// would. Both are read before the counters they precede are priced.
+        /// </summary>
+        [TestMethod]
+        public void TestASublimeSketchWhoseTotalsDoNotFitIsRefusedForThat()
+        {
+            var bytes = Filled(new SublimeCountMinSketch(0.02), (s, k) => s.Add(k), 6000).ToByteArray();
+
+            // Three f64, u32 depth and u32 width, then the u64 count at 32 and the u64
+            // count at which the rows double at 40.
+            AssertRefusedForItsShape<SublimeCountMinSketch>(
+                bytes, Poke64(bytes, 32, ulong.MaxValue), "fewer keys than");
+            AssertRefusedForItsShape<SublimeCountMinSketch>(
+                bytes, Poke64(bytes, 40, ulong.MaxValue), "twice as wide");
+        }
+
         // ---- A hash its reader refuses is refused for that, whatever the budget --------
 
         /// <summary>Where the envelope's header names the hash a payload was written with.</summary>

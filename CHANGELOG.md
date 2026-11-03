@@ -1127,6 +1127,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has gone, so a removal after such an add takes one off the largest count and no more.
   (#189)
 
+- **A `SublimeCountMinSketch` payload whose total count did not fit the rest of it was
+  read as it stood, and an `Add` to a sketch holding `ulong.MaxValue` keys wrapped the
+  total to nought.** `TotalCount()` and `Epsilon()` went to 0, and the schedule of
+  doublings back to its start; the counters were not affected. The reader took the total
+  and the count at which the rows next double as any `u64`. It now refuses a total at or
+  past the doubling count, since the add that reaches that count doubles the rows and sets
+  the next one past it, and a doubling count past the one rows twice the width would have.
+  Taken anyway, a total past the rows' doubling count doubled them on every add until
+  their own doubling passed it: a payload of 6 KB, four rows of 128 counters, with its
+  total edited to 2^40 grew to rows of 2,097,152 counters in fourteen adds, and a total
+  past 2^59 would run them on to 2^30 counters a row. A doubling count past what the width
+  gives left the sketch not growing at all. The doubling count is not held to exactly the
+  width's, because it is worked out with `Math.Pow`, which is not the same in its last bit
+  on every platform, and a payload written on one is read on another; the count for twice
+  the width is about twice as large or more, which no such difference reaches.
+  <br><br>
+  A sketch can hold a total near the top lawfully. Where (width × size factor)^(1 / growth)
+  is 2^64 or more, as for 64 counters at a size factor of 1 and a growth of 0.09, the
+  doubling count is held as `ulong.MaxValue`, and any total fits beneath it. That count
+  now stands for a doubling no total reaches: the add that took such a sketch's total to
+  `ulong.MaxValue` doubled its rows, and so did every add after a removal there, and
+  neither does now. The total stops at `ulong.MaxValue` rather than wrapping, as a counter
+  does. Every payload 6.2.0 wrote reads as before: a sweep of growth exponents and size
+  factors through long runs of adds, removals, resets and round trips, written by 6.2.0
+  and by this release, found every total below its doubling count and every doubling
+  count the one its width gives, and this release's reader read every payload of the
+  sweep's that 6.2.0 wrote. No sketch a stream can build behaves differently short of
+  2^64 - 1 adds, and the format is unchanged. (#202)
+
 - **A read refused for its budget named a number that did not load it.**
   `ReadBudgetExceededException.RequiredBytes` was the running total at the allocation
   that failed, so a payload was refused at its first allocation the budget did not cover,

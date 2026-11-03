@@ -1156,6 +1156,20 @@ low bits of a hash pick the counter — and more than thirty records, which woul
 counters than a row may hold. Readers before this limit was shared refused more than
 sixty-four rows, which a delta of `1e-28` already needs.
 
+The total count and the count at which the arrays next double are held to the rest. The
+arrays double once the total reaches (width × size factor)^(1 / growth exponent), rounded
+up, and the add that reaches it sets the next one past it, so a sketch always holds fewer
+keys than its doubling count. A reader refuses a total at or past the doubling count, and
+a doubling count past the one arrays twice the width would have. It is not held to the
+width's own count exactly, because that is a power worked out in floating point, which
+is not the same in its last bit on every platform, and a payload written on one is read
+on another; twice the width doubles at about twice the count or more, which no such
+difference reaches. A doubling count of 2^64 or more is written as the largest `u64` and
+stands for one no total reaches, so any total fits beneath it, the largest included.
+Every payload 6.2.0 wrote meets both. The count at which the arrays fold back is not
+checked: one that does not fit can only bring the next fold earlier or later, and every
+fold and doubling sets it afresh.
+
 ### `SetSketch` (id 30)
 
 ```

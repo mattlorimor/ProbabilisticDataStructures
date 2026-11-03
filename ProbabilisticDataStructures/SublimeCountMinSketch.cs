@@ -349,7 +349,9 @@ namespace ProbabilisticDataStructures
         /// A counter holds at most <c>ulong.MaxValue</c>, and an add to one that has got
         /// there leaves it there rather than wrapping it to nought, so an estimate never
         /// falls for want of room. That takes 2^64 adds to one counter, or a counter read
-        /// from a payload or folded back to it.
+        /// from a payload or folded back to it. <see cref="TotalCount"/> stops there too,
+        /// which only a sketch whose rows double past any count a <c>ulong</c> holds can
+        /// reach, after 2^64 - 1 adds.
         /// </remarks>
         /// <param name="data">The data to add.</param>
         /// <returns>The sketch.</returns>
@@ -362,11 +364,19 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Add(byte[])"/>
         public SublimeCountMinSketch Add(ReadOnlySpan<byte> data)
         {
+            // The add that brings the count to the limit is the one that doubles the rows.
+            // A limit held at the largest ulong stands for one past any count a ulong
+            // holds (see LimitFor), and is never reached: doubling there, the rows twice as
+            // wide were due at the same held limit, so every add that took the count back
+            // up to it after a removal doubled them again.
+            var expands = this.expansionLimit != ulong.MaxValue
+                && this.count + 1 >= this.expansionLimit;
+
             // An add that would widen the rows past what a row holds is refused before it
             // touches anything. Left to the expansion at its end, it would have
             // incremented the counters and the count and then failed to widen, leaving a
             // sketch that had taken the add and not the growth it called for.
-            if (this.count + 1 >= this.expansionLimit && (long)this.width * 2 > this.WidthLimit)
+            if (expands && (long)this.width * 2 > this.WidthLimit)
             {
                 throw new InvalidOperationException(
                     $"This sketch holds {this.count:N0} keys, and the next would double its " +
@@ -387,9 +397,15 @@ namespace ProbabilisticDataStructures
                 this.rows[i].Increment(ColumnOf(kernel, i));
             }
 
-            this.count++;
+            // The count stops at the largest a ulong holds, as a counter does. It wrapped
+            // to nought, and took the total, the expected error and the schedule of
+            // doublings back to their start with it.
+            if (this.count != ulong.MaxValue)
+            {
+                this.count++;
+            }
 
-            if (this.count >= this.expansionLimit)
+            if (expands)
             {
                 Expand();
             }
@@ -646,6 +662,7 @@ namespace ProbabilisticDataStructures
             sketch.count = reader.ReadUInt64();
             sketch.expansionLimit = reader.ReadUInt64();
             sketch.contractionLimit = reader.ReadUInt64();
+            CheckTotals(sketch.count, sketch.expansionLimit, width, sizeFactor, growthExponent);
 
             var recordCount = reader.ReadUInt32();
             var expected = FirstRecordWidth(recordCount, width);
@@ -688,9 +705,10 @@ namespace ProbabilisticDataStructures
             var width = reader.ReadUInt32();
             CheckShape(delta, growthExponent, sizeFactor, depth, width);
 
+            var count = reader.ReadUInt64();
+            var expansionLimit = reader.ReadUInt64();
             reader.ReadUInt64();
-            reader.ReadUInt64();
-            reader.ReadUInt64();
+            CheckTotals(count, expansionLimit, width, sizeFactor, growthExponent);
 
             var recordCount = reader.ReadUInt32();
             var expected = FirstRecordWidth(recordCount, width);
@@ -815,6 +833,51 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Checks that the count of keys and the count at which the rows next double fit
+        /// the shape <see cref="CheckShape"/> passed and each other, as both the read and
+        /// its price do once they have read them.
+        /// </summary>
+        /// <remarks>
+        /// Every sketch has its rows due to double at <see cref="LimitFor(int)"/> of its
+        /// width, and holds fewer keys than that: the add that reaches it doubles the rows
+        /// and sets the next doubling past it. A payload breaking either was not written by
+        /// one. Taken anyway, a count at the largest <c>ulong</c> wrapped to nought on the
+        /// next add, and a count past the rows' doubling doubled them on every add until
+        /// their own doubling passed it, from a payload of a few kilobytes as far as rows
+        /// of 2^30 counters.
+        /// <para>
+        /// The doubling is not held to exactly the count the width gives, because that is
+        /// worked out with <see cref="Math.Pow"/>, which is not the same in its last bit
+        /// on every platform, and a sketch written on one is read on another. The rows
+        /// twice as wide double at about twice the count or more, so a payload is
+        /// refused only past that, which no difference in the last bit reaches. A
+        /// doubling held at the largest <c>ulong</c> is one no count reaches, so any count
+        /// fits beneath it, the largest included.
+        /// </para>
+        /// </remarks>
+        private static void CheckTotals(
+            ulong count, ulong expansionLimit, uint width, double sizeFactor, double growthExponent)
+        {
+            var twice = LimitFor(2.0 * width, sizeFactor, growthExponent);
+            if (expansionLimit > twice)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims its rows next double at {expansionLimit:N0} keys. Rows " +
+                    $"{width:N0} counters wide, at its size factor and growth exponent, double " +
+                    $"at {LimitFor(width, sizeFactor, growthExponent):N0}, and this is past " +
+                    $"even {twice:N0}, where rows twice as wide would.");
+            }
+            if (count >= expansionLimit && expansionLimit != ulong.MaxValue)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims {count:N0} keys, with its rows due to double at " +
+                    $"{expansionLimit:N0}. The add that reaches that count doubles them and " +
+                    "sets the next doubling past it, so a sketch holds fewer keys than the " +
+                    "count at which it next doubles.");
+            }
+        }
+
+        /// <summary>
         /// Reads one state's counts and packs them.
         /// </summary>
         /// <remarks>
@@ -878,9 +941,19 @@ namespace ProbabilisticDataStructures
         /// The paper keeps the width at about n to the growth exponent, over the size
         /// factor, so the width is due to change once n reaches the inverse of that.
         /// </remarks>
-        private ulong LimitFor(int forWidth)
+        private ulong LimitFor(int forWidth) =>
+            LimitFor(forWidth, this.sizeFactor, this.growthExponent);
+
+        /// <inheritdoc cref="LimitFor(int)"/>
+        /// <remarks>
+        /// A number of keys of 2^64 or more is held as <c>ulong.MaxValue</c>, which stands
+        /// for a doubling no count reaches, and <see cref="Add(ReadOnlySpan{byte})"/> never
+        /// doubles at it. The width is a double so that the reader can ask about rows twice
+        /// the widest; at any width a row has, it is the same arithmetic.
+        /// </remarks>
+        private static ulong LimitFor(double forWidth, double sizeFactor, double growthExponent)
         {
-            var keys = Math.Pow(forWidth * this.sizeFactor, 1 / this.growthExponent);
+            var keys = Math.Pow(forWidth * sizeFactor, 1 / growthExponent);
             return keys >= ulong.MaxValue ? ulong.MaxValue : (ulong)Math.Ceiling(keys);
         }
 

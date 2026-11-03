@@ -976,6 +976,72 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Where the three totals sit in <see cref="SublimePayload"/>: the count at 32, the
+        /// count at which the rows next double at 40, and the one at which they fold back
+        /// at 48. That sketch is 128 counters wide at a size factor of 1 and a growth of
+        /// 0.5, so it doubles at 128 squared, 16,384 keys, and holds 6,000.
+        /// </summary>
+        private const int SublimeCountAt = 32;
+        private const int SublimeDoublingAt = 40;
+
+        /// <summary>
+        /// A sketch holds fewer keys than the count at which its rows next double, because
+        /// the add that reaches that count doubles them and sets the next doubling past it.
+        /// A payload holding as many or more is one no sketch wrote, and one more add to it
+        /// went on from there: at <c>ulong.MaxValue</c> the count wrapped to nought, and
+        /// <c>TotalCount</c>, <c>Epsilon</c> and the schedule of doublings with it. The edge
+        /// is straddled: one key short of the doubling reads, and doubles on its next add.
+        /// </summary>
+        [TestMethod]
+        public void TestSublimeCountMinSketchHoldingAsManyKeysAsItsDoublingIsRefused()
+        {
+            foreach (var count in new[] { 16_384UL, 16_385UL, ulong.MaxValue })
+            {
+                AssertRefused(
+                    () => Persistence.FromByteArray<SublimeCountMinSketch>(
+                        PokeUInt64(SublimePayload(), SublimeCountAt, count)),
+                    "fewer keys than");
+            }
+
+            var below = Persistence.FromByteArray<SublimeCountMinSketch>(
+                PokeUInt64(SublimePayload(), SublimeCountAt, 16_383));
+            Assert.AreEqual(16_383UL, below.TotalCount());
+            Assert.AreEqual(128, below.Width);
+            below.Add(Key("one-more"));
+            Assert.AreEqual(16_384UL, below.TotalCount());
+            Assert.AreEqual(256, below.Width, "the add that reaches the doubling count doubles the rows");
+        }
+
+        /// <summary>
+        /// The count at which rows of a given width double follows from the width, the size
+        /// factor and the growth exponent: (width * size factor)^(1 / growth). A payload
+        /// putting it past even the count at which rows twice as wide would double is one no
+        /// sketch wrote, and the sketch it described did not grow when it should: at
+        /// <c>ulong.MaxValue</c>, never. The edge is straddled at twice the width, 256
+        /// squared, 65,536, the most a payload can say before it is refused. The check is
+        /// that loose on purpose: the count is worked out with <c>Math.Pow</c>, whose last
+        /// bit is not the same on every platform, and a payload written on one is read on
+        /// another. A doubling is a factor of about two or more between the two counts, which
+        /// no such difference spans.
+        /// </summary>
+        [TestMethod]
+        public void TestSublimeCountMinSketchDoublingPastWhatItsWidthImpliesIsRefused()
+        {
+            foreach (var doubling in new[] { 65_537UL, 1UL << 40, ulong.MaxValue })
+            {
+                AssertRefused(
+                    () => Persistence.FromByteArray<SublimeCountMinSketch>(
+                        PokeUInt64(SublimePayload(), SublimeDoublingAt, doubling)),
+                    "twice as wide");
+            }
+
+            var atTheEdge = Persistence.FromByteArray<SublimeCountMinSketch>(
+                PokeUInt64(SublimePayload(), SublimeDoublingAt, 65_536));
+            Assert.AreEqual(6_000UL, atTheEdge.TotalCount());
+            Assert.AreEqual(128, atTheEdge.Width);
+        }
+
+        /// <summary>
         /// The guard the private sketch exists for. A counter is a draw from a
         /// continuous distribution plus a whole number of hits, so it is non-integral
         /// with probability one and stays so for the sketch's whole life. A payload
