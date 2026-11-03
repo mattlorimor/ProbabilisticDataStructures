@@ -823,7 +823,11 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private uint HashOfFingerprint(ulong fingerprint)
         {
-            Span<byte> bytes = stackalloc byte[8];
+            // An inline array, not a stackalloc: a method with a stackalloc cannot be
+            // inlined and carries a zeroed frame with a stack check, and this runs once
+            // for every add and test and again on every relocation step.
+            EightBytes buffer = default;
+            Span<byte> bytes = buffer;
             System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes, fingerprint);
             return this.ComputeHashSum32(bytes[..this.HashWidth]);
         }
@@ -1001,8 +1005,11 @@ namespace ProbabilisticDataStructures
         private Components GetComponents(ReadOnlySpan<byte> data)
         {
             // The hash supplies 64 bits. The fingerprint is taken from its bytes,
-            // as it was previously taken from the leading bytes of a digest.
-            Span<byte> digest = stackalloc byte[8];
+            // as it was previously taken from the leading bytes of a digest. The eight
+            // bytes are an inline array, not a stackalloc, for the reason given in
+            // HashOfFingerprint: this is every add and test.
+            EightBytes digestBytes = default;
+            Span<byte> digest = digestBytes;
             System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(digest, this.Hash(data));
 
             // The low bits of the digest, which at a width of 8n bits are exactly the

@@ -164,6 +164,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and 7.5 with 16-byte items, so what 64-bit placement adds is now about 4 to 5 nanoseconds
   with short items and 5 to 8 with long ones, the second hash and the wider arithmetic.
 
+- **`CuckooBloomFilter` is faster, and every fingerprint, bucket and payload is where it
+  was.** `GetComponents`, which every `Add`, `Test`, `TestAndAdd` and `TestAndRemove` goes
+  through, wrote the item's hash into a `stackalloc`ed eight bytes, and so did
+  `HashOfFingerprint`, which it calls and which the relocation loop calls on every step.
+  That is the cost found in `Utils.HashKernel128` above: a method with a `stackalloc`
+  cannot be inlined and carries a zeroed frame with a stack check. Both are now an inline
+  array in an ordinary local, the one `HashKernel128` uses. The bytes written and hashed
+  are the same, so a filter built from the same items and seed holds the same
+  fingerprints in the same buckets, relocates the same way and writes the same payload,
+  and FORMAT.md stands as it is. The `stackalloc` of eight bytes in the code that reads a
+  payload stays: it is allocated once per load, not per entry or per operation.
+  <br><br>
+  Measured on an AMD Ryzen 9 7950X3D under .NET 10 with the default hash, on a filter sized
+  for two million items at 1%, which is 2^20 buckets of four 10-bit fingerprints and 5.7 MB
+  with its occupancy bits, held half full and in L3. In nanoseconds per operation, the
+  median of eight launches paired with the old code on the same cores:
+
+  | | Add | Test, member | Test, not a member |
+  | --- | --- | --- | --- |
+  | 16-byte items | 57.4 → 42.1 | 38.2 → 21.2 | 63.7 → 51.7 |
+  | 1,024-byte items | 83.4 → 75.5 | 64.5 → 56.5 | 89.6 → 84.2 |
+
+  An `Add` to a filter filled to 90% of its entries, where most inserts relocate other
+  fingerprints, takes 254.9 → 238.3 with 16-byte items. The saving is 12 to 17 nanoseconds
+  an operation with short items and 5 to 8 with long ones; the relocating case is
+  dominated by its memory traffic and gains least. `Benchmarks/` gains the suites that took
+  these. (#204)
+
 - **The count-min sketches, HeavyKeeper, the inverse Bloom filter and `DpswSketch` save at
   format version 9.** Every save of `CountMinSketch`, `PrivateCountMinSketch`,
   `HeavyKeeper` and `InverseBloomFilter`, whatever its width, is now

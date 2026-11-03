@@ -169,15 +169,6 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Eight bytes of storage for the first value, as an ordinary local.
-        /// </summary>
-        [System.Runtime.CompilerServices.InlineArray(8)]
-        private struct EightBytes
-        {
-            private byte element;
-        }
-
-        /// <summary>
         /// Returns the upper and lower base hash values for a digest the caller has
         /// already computed.
         /// </summary>
