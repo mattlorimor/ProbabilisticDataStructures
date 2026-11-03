@@ -195,6 +195,11 @@ checksum still matches.
 | 26 | `Grafite` |
 | 27 | `InfiniFilter` |
 | 28 | `MementoFilter` |
+| 29 | `SublimeCountMinSketch` |
+| 30 | `SetSketch` |
+| 31 | `TupleSketch` |
+| 32 | `PrivateCountMinSketch` |
+| 33 | `DpswSketch` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
