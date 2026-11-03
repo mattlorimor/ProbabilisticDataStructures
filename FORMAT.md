@@ -309,6 +309,7 @@ address.
 | `Grafite` | reduced universe `r` | 2,305,843,009,213,693,950 | the hash works modulo 2^61 − 1, and the constructor refuses a request that needs more; every release capped it here, so a payload written for a request that is now refused carries exactly this and reads |
 | `Grafite` | words of low bits | 2,147,483,591 | they are one array |
 | `Grafite` | words of high bits | 33,554,432 | enough for 2,147,483,647 bits, the most an `int` position addresses |
+| `Grafite` | low bits of a code | 60 | a code is split where the high parts are about as numerous as the codes, at the log of the universe over the codes, so one code over the largest universe splits at 60; a reader takes no wider, which also keeps a shift by the split a shift |
 | `SetSketch` | `m` | 2,147,483,591 | the registers are one array |
 | `SublimeCountMinSketch` | rows | 710 | `ceil(ln(1 / delta))` at the smallest delta whose reciprocal is a finite double |
 | `SublimeCountMinSketch` | counters in a row | 1,073,741,824 | a width is a power of two held in an `int`, and 2^30 is the largest of those; the sketch stops widening there |
@@ -1076,7 +1077,20 @@ is rebuilt on read rather than written down, since it is a function of the bits 
 indexes.
 
 A reader also rejects a code at or above the reduced universe, a split wider than a
-code, and more codes than keys — none of which hashing can produce.
+code or than any the writer makes (the sizes table has the limit), and more codes than
+keys — none of which hashing can produce.
+
+The counts that describe the encoding are not free: the writer sets each from the
+number of codes *c*, the split *b* and the largest code *L*, and a reader refuses a
+payload that gives any other. The bits of high parts in use are (*L* >> *b*) + *c* + 1.
+The words of low bits are ⌊*c* × *b* / 64⌋ + 2, and the words of high bits are
+⌊(bits in use) / 64⌋ + 1. A filter of no codes has no split, no bits of high parts in use
+and no words of either kind. Both counts are read as unsigned, so a split or a number of
+bits from 2^31 up is too large rather than negative.
+
+The smallest and largest codes recorded in the payload are not free either. A query turns
+away anything outside them before it looks at the encoding, so a reader checks that they
+are the first and the last of the codes the encoding holds, and refuses the payload if not.
 
 ### `InfiniFilter` (id 27)
 

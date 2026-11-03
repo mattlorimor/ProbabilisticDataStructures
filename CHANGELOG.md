@@ -1220,6 +1220,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   64 bits, no false negative and no point false positive. A payload with a universe past
   that, which no release wrote, is refused. FORMAT.md's table of sizes has the row.
 
+- **`Grafite` read a payload with a negative split or bit count, or one its codes did not
+  give, and then answered false for keys it holds.** A filter's low-bit split and its count
+  of bits of high parts are stored as a `u32` and were cast to an `int` before they were
+  checked, so a value from 2^31 up went negative and passed the checks, which only refuse a
+  value that is too large. Neither was ever checked against what the codes need either, so
+  values that were possible and wrong were read as well. On a filter of sixty keys, with the
+  checksum repaired after editing one field, a split of 2^31 failed 58 of them and a split
+  of 2^32 − 1 or a count of 2^31 failed all 60, by answering false or by throwing an
+  `IndexOutOfRangeException`. A split of 8 where the codes give 7 answered false for all 60,
+  and a count of codes one too few lost a key. A false negative is the one answer a filter
+  must never give.
+  <br><br>
+  The reader now checks both as the unsigned numbers they are stored as, and recomputes
+  from the number of codes, the split and the largest code what the builder sets: the bits
+  of high parts, and the words in each of the two arrays. Any disagreement is refused with
+  an `InvalidDataException` that says which count was wrong and what the codes give. A
+  filter of no keys is built with no split, no bits and no words, and a payload of no codes
+  that has any is refused too. The smallest and largest codes the payload records are held
+  to the encoding as well: a query turns away anything outside them before it looks at the
+  encoding, so a smallest code a hundred too high lost 3 of the 60 keys, and one too high
+  lost 1; they are now refused unless they are the first and last of the codes the
+  encoding holds. The split is limited to what the builder makes, 60 low bits at the
+  most, worked from its own arithmetic: the reader took any split up to a code's width,
+  64, and a payload that agrees with itself at 64 read and then failed 59 of its 60
+  keys, because a shift by 64 is a shift by none. FORMAT.md's table of sizes has the
+  limit. It takes a valid checksum, so only a crafted file, or a
+  damaged one that was resealed, reaches this; `Build` cannot write such a payload. Every
+  filter `Build` writes reads back as before, and so does `grafite-v1.bin`, written by an
+  earlier release. `Grafite` shipped in 6.2.0, so 6.2.0 is affected. The persistence format
+  does not change.
+
 - **`CountMinSketch`, `CountSketch` and `PrivateCountMinSketch` failed inside the
   allocation of a row instead of refusing a size they could not build.** A row is one
   array, which holds 2,147,483,591 counters. `CountMinSketch` allowed a width up to
