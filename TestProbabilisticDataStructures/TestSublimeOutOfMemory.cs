@@ -21,8 +21,10 @@ namespace TestProbabilisticDataStructures
     /// again and appended another record. The width was set between the plain counts and the
     /// packed rows, so a failure between them left the width doubled over rows that had not.
     /// Folding back took its record off before it allocated, and set the width at the same
-    /// point. The audit that found it, on master b29d881, ran a process under a heap limit of
-    /// 400 MiB: three failed adds in a row held three records, and the total counted the key.
+    /// point. Under a real heap limit of 400 MiB, master b29d881 threw at the 4,504th add to a
+    /// sketch of five rows of 2^23 counters, and again at each of two more tries of the same
+    /// key, which it then counted three times, holding three records at the width it started
+    /// at. That run is a manual one; the issue, #213, has the recipe.
     /// <para>
     /// A test cannot set a heap limit from inside its own process, so the sketch has a hook,
     /// <see cref="SublimeCountMinSketch.BeforeAllocatingRow"/>, that every row a doubling or

@@ -1,5 +1,6 @@
 using System;
 using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Hashing;
 using System.Reflection;
@@ -456,6 +457,65 @@ namespace TestProbabilisticDataStructures
                 raised += now == held ? 0 : 1;
             }
             Assert.AreEqual(held == expected ? 0 : 1, raised, "the counters the add raised");
+        }
+
+        /// <summary>
+        /// The add that doubles the rows leaves a counter at the largest count there too: in
+        /// both of its copies, and in the record of the rows it doubled.
+        /// </summary>
+        /// <remarks>
+        /// That add builds the doubled rows before it takes the key, so that running out of
+        /// memory building them leaves the sketch as it was, and it counts the key into them
+        /// itself rather than through an increment, so the stop at the largest count is
+        /// written out there a second time. Without it, both copies of a counter at the
+        /// largest count wrapped to nought while the record stayed at the top, and the
+        /// estimate was nought. One row with every counter set, as above, so that the key
+        /// lands on one whatever the hash makes of it, and the doubling due at the next add.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(ulong.MaxValue, ulong.MaxValue)]
+        [DataRow(ulong.MaxValue - 1, ulong.MaxValue)]
+        [DataRow(ulong.MaxValue - 2, ulong.MaxValue - 1)]
+        public void TestTheAddThatDoublesTheRowsLeavesTheLargestCountThere(ulong held, ulong expected)
+        {
+            var sketch = Wide();
+            var row = RowsOf(sketch)[0];
+            for (var j = 0; j < 1024; j++)
+            {
+                row.Set(j, held);
+            }
+            SetField(sketch, "expansionLimit", 1UL);
+
+            sketch.Add(Key(1));
+
+            Assert.AreEqual(2048, sketch.Width, "the add should have doubled the row");
+            Assert.AreEqual(expected, sketch.Count(Key(1)), "the estimate after the add");
+
+            var widened = RowsOf(sketch)[0];
+            var record = RecordOf(sketch);
+            var raised = 0;
+            for (var j = 0; j < 1024; j++)
+            {
+                var now = widened.Get(j);
+                Assert.IsTrue(now == held || now == expected, $"counter {j} held {held} and now holds {now}");
+                Assert.AreEqual(now, widened.Get(j + 1024), $"counter {j} was not copied");
+                Assert.AreEqual(now, record.Get(j), $"the record of counter {j} differs from its copies");
+                raised += now == held ? 0 : 1;
+            }
+            Assert.AreEqual(held == expected ? 0 : 1, raised, "the counters the add raised");
+        }
+
+        /// <summary>
+        /// The one row of the sketch's one record of an earlier state.
+        /// </summary>
+        private static ValeCounterArray RecordOf(SublimeCountMinSketch sketch)
+        {
+            var field = typeof(SublimeCountMinSketch).GetField("records",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(field, "the sketch has no field records");
+            var records = (List<ValeCounterArray[]>)field.GetValue(sketch)!;
+            Assert.AreEqual(1, records.Count, "the sketch should hold the record of one doubling");
+            return records[0][0];
         }
 
         /// <summary>
