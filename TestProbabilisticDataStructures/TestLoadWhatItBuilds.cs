@@ -594,6 +594,29 @@ namespace TestProbabilisticDataStructures
             AssertRefused<Grafite>(past, PastTheLimit);
             var atTheLimit = PokeUInt32(PokeUInt32(bytes, 0, 0xFFFFFFFE), 4, 0x1FFFFFFF);
             Assert.AreEqual(Grafite.MaxUniverse, Persistence.FromByteArray<Grafite>(atTheLimit).R);
+
+            // The split, a u32 at 40, is at most the builder's widest, which is the largest
+            // universe over a single code. The limit is worked from the builder's own
+            // split, so it is held to the filter that builder makes there, which reads; one
+            // bit more is refused, and so is the width of a code, which the reader once took
+            // and which no payload this library wrote carries. (Worked by hand: the largest
+            // universe, 2^61 - 2, has its highest bit at 60.)
+            const int LowBitsOffset = 40;
+            var widest = Grafite.BuildAtUniverse(new ulong[] { 1 }, Grafite.MaxUniverse, 1, seed: 1);
+            Assert.AreEqual(Grafite.MaxLowBits, widest.LowBits);
+            Assert.AreEqual(60, Grafite.MaxLowBits);
+            var widestBytes = widest.ToByteArray();
+            Assert.AreEqual(
+                Grafite.MaxLowBits, Persistence.FromByteArray<Grafite>(widestBytes).LowBits);
+            AssertRefused<Grafite>(
+                PokeUInt32(widestBytes, LowBitsOffset, (uint)Grafite.MaxLowBits + 1), PastTheLimit);
+            AssertRefused<Grafite>(PokeUInt32(widestBytes, LowBitsOffset, 64), PastTheLimit);
+
+            // And no other input to the builder splits wider: two codes over the same
+            // universe split one bit narrower.
+            Assert.AreEqual(
+                Grafite.MaxLowBits - 1,
+                Grafite.BuildAtUniverse(new ulong[] { 1, 2 }, Grafite.MaxUniverse, 1, seed: 1).LowBits);
         }
 
         /// <summary>
@@ -1542,6 +1565,7 @@ namespace TestProbabilisticDataStructures
                 [("Grafite", "reduced universe `r`")] = Grafite.MaxUniverse,
                 [("Grafite", "words of low bits")] = Grafite.MaxLowWords,
                 [("Grafite", "words of high bits")] = Grafite.MaxHighWords,
+                [("Grafite", "low bits of a code")] = (ulong)Grafite.MaxLowBits,
                 [("SetSketch", "`m`")] = (ulong)SetSketch.MaxRegisters,
                 [("SublimeCountMinSketch", "rows")] = (ulong)SublimeCountMinSketch.MaxDepth,
                 [("SublimeCountMinSketch", "counters in a row")] = (ulong)SublimeCountMinSketch.MaxWidth,

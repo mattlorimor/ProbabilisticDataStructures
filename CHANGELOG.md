@@ -1041,7 +1041,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the encoding as well: a query turns away anything outside them before it looks at the
   encoding, so a smallest code a hundred too high lost 3 of the 60 keys, and one too high
   lost 1; they are now refused unless they are the first and last of the codes the
-  encoding holds. It takes a valid checksum, so only a crafted file, or a
+  encoding holds. The split is limited to what the builder makes, 60 low bits at the
+  most, worked from its own arithmetic: the reader took any split up to a code's width,
+  64, and a payload that agrees with itself at 64 read and then failed 59 of its 60
+  keys, because a shift by 64 is a shift by none. FORMAT.md's table of sizes has the
+  limit. It takes a valid checksum, so only a crafted file, or a
   damaged one that was resealed, reaches this; `Build` cannot write such a payload. Every
   filter `Build` writes reads back as before, and so does `grafite-v1.bin`, written by an
   earlier release. `Grafite` shipped in 6.2.0, so 6.2.0 is affected. The persistence format

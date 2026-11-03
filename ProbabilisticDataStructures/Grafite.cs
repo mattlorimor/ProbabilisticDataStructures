@@ -518,7 +518,7 @@ namespace ProbabilisticDataStructures
 
             // Split where the high parts are about as numerous as the codes, which is
             // what balances the two halves of the encoding.
-            this.LowBits = Math.Max(0, BitOperations.Log2(this.R / (ulong)n));
+            this.LowBits = SplitFor(this.R, n);
             var lowMask = this.LowBits == 64 ? ulong.MaxValue : (1UL << this.LowBits) - 1;
 
             // In a long, and refused past an int: the high bits are addressed by int
@@ -550,6 +550,24 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Where <see cref="Encode"/> splits this many codes over a universe of this size,
+        /// in low bits: where the high parts are about as numerous as the codes.
+        /// </summary>
+        internal static int SplitFor(ulong universe, int codeCount)
+        {
+            return Math.Max(0, BitOperations.Log2(universe / (ulong)codeCount));
+        }
+
+        /// <summary>
+        /// The widest split any filter has, which is also the widest the reader takes: the
+        /// largest universe over the fewest codes. Worked from <see cref="SplitFor"/>, the
+        /// split the builder makes, so that nothing it builds is refused and nothing it
+        /// could not build is read. It is below a code's width, 64, which is what makes a
+        /// shift by the split a shift.
+        /// </summary>
+        internal static int MaxLowBits => SplitFor(MaxUniverse, 1);
+
+        /// <summary>
         /// What <see cref="Encode"/> makes of this many codes, the largest of them given,
         /// split at this many low bits: the bits of high parts in use, and the words of low
         /// bits and of high bits that hold them. The reader asks the same question of the
@@ -561,7 +579,8 @@ namespace ProbabilisticDataStructures
         /// <remarks>
         /// In 64 bits, so that none of it wraps: the largest code is below the universe,
         /// which is below 2^61, so its high part and the sum of that with the codes are
-        /// well inside a long. Whether the bits fit an int is the caller's to ask.
+        /// well inside a long. Whether the bits fit an int is the caller's to ask. The split
+        /// is at most <see cref="MaxLowBits"/>, so shifting by it is a shift.
         /// </remarks>
         internal static (long HighBits, long LowWords, long HighWords) LayoutOf(
             int codeCount, int lowBits, ulong lastCode)
@@ -571,8 +590,7 @@ namespace ProbabilisticDataStructures
                 return (0, 0, 0);
             }
 
-            // A split of 64 leaves nothing above it, and a shift by 64 would shift by none.
-            var highPart = lowBits >= 64 ? 0UL : lastCode >> lowBits;
+            var highPart = lastCode >> lowBits;
             var highBits = (long)highPart + codeCount + 1;
             return (highBits, ((long)codeCount * lowBits / 64) + 2, (highBits / 64) + 1);
         }
@@ -1119,6 +1137,15 @@ namespace ProbabilisticDataStructures
                 throw new InvalidDataException(
                     $"Filter splits its codes at {lowBits} low bits, and a " +
                     "code is sixty-four bits wide.");
+            }
+            // The builder's own limit again: its universe is below 2^61, so it never splits
+            // wider than this, and a wider split is read as a shift that is not the one meant.
+            if (lowBits > MaxLowBits)
+            {
+                throw new InvalidDataException(
+                    $"Filter splits its codes at {lowBits} low bits, beyond anything this " +
+                    $"library builds: a universe is at most {MaxUniverse}, so the widest " +
+                    $"split is {MaxLowBits}.");
             }
             if (codeCount < 0 || (ulong)codeCount > keyCount)
             {

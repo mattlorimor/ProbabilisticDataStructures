@@ -897,7 +897,7 @@ namespace TestProbabilisticDataStructures
 
             foreach (var wanted in new[]
             {
-                "no split", "a split", "split 60", "high bits at 0 of a word",
+                "no split", "a split", $"split {Grafite.MaxLowBits}", "high bits at 0 of a word",
                 "high bits at 1 of a word", "high bits at 63 of a word", "low bits end on a word",
                 "low bits end inside a word", "colliding codes", "distinct codes",
             })
@@ -911,20 +911,19 @@ namespace TestProbabilisticDataStructures
         /// the bits of high parts are the largest high part plus a bit for each code plus
         /// one, the low parts take n × b bits and two words beyond them, and the high bits
         /// take a word for every 64 and one more. The rows straddle a word of high bits
-        /// (63 bits and 64) and of low bits (63 low bits of one code and 64); the split of
-        /// 64 is the one where a shift of the largest code by 64 would shift it by none; the
-        /// most codes an int counts, at 60 bits each, is the row where the products and the
-        /// bit count pass what an int holds; and a filter of no codes has none of any,
-        /// whatever the fields beside it say.
+        /// (63 bits and 64) and of low bits (two codes of 31 low bits and of 32); the
+        /// widest split, 60, is the row whose largest code has a high part; the most codes
+        /// an int counts, at 60 bits each, is the row where the products and the bit count
+        /// pass what an int holds; and a filter of no codes has none of any, whatever the
+        /// fields beside it say.
         /// </summary>
         [TestMethod]
         [DataRow(60, 7, 6826UL, 114L, 8L, 2L)]
         [DataRow(1, 0, 5UL, 7L, 2L, 1L)]
         [DataRow(1, 0, 61UL, 63L, 2L, 1L)]
         [DataRow(1, 0, 62UL, 64L, 2L, 2L)]
-        [DataRow(1, 63, 9UL, 2L, 2L, 1L)]
-        [DataRow(1, 64, 9UL, 2L, 3L, 1L)]
-        [DataRow(3, 64, 123_456UL, 4L, 5L, 1L)]
+        [DataRow(2, 31, 9UL, 3L, 2L, 1L)]
+        [DataRow(2, 32, 9UL, 3L, 3L, 1L)]
         [DataRow(1, 60, (1UL << 61) - 3, 3L, 2L, 1L)]
         [DataRow(int.MaxValue, 60, 5UL, 2_147_483_648L, 2_013_265_921L, 33_554_433L)]
         [DataRow(0, 0, 0UL, 0L, 0L, 0L)]
