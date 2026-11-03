@@ -1200,6 +1200,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has gone, so a removal after such an add takes one off the largest count and no more.
   (#189)
 
+- **A `CountSketch` wrapped past ±2^63 without a sign, and the estimate with it.** A
+  weighted `Add` and a `Merge` summed cells with an unchecked `+=`, so two
+  `Add(key, long.MaxValue)` left a cell at −2 and `Count(key)` returned −2, which reads
+  like the noise this sketch's estimates carry. At an even depth the median averaged its
+  two middle estimates as `(a + b) / 2`, and that sum wraps when both are above 2^62
+  although no cell has: with a delta of 0.2, which gives two rows, one
+  `Add(key, 5_000_000_000_000_000_000)` returned −4,223,372,036,854,775,808. A row that
+  subtracts also formed `sign * count` and `sign * cell`, and the negation of
+  `long.MinValue` stays `long.MinValue`. Totals above 9.2 × 10^18 are rare, such as
+  nanoseconds or bytes over a very long stream, but `Add` documents no range and nothing
+  threw. `CountSketch` shipped in 6.0.0, so 6.0.0 through 6.2.0 are affected.
+  <br><br>
+  Cells now stop at `long.MaxValue` and `long.MinValue` instead of wrapping, in
+  `Add(data, long count)` and in `Merge`, as `SublimeCountMinSketch`'s counters stop at
+  their maximum. Throwing would have left a weighted add applied to some rows and not the
+  rest. A row that subtracts takes the count off as a difference held to the range and not
+  as a negated count, so `long.MinValue` needs no case of its own: taking it off a cell of
+  −5 leaves `long.MaxValue − 4`, which fits. An estimate that is one past the largest count,
+  a cell at `long.MinValue` read through a row that subtracts, stops at `long.MaxValue`.
+  At an even depth the two middle estimates are summed in 128 bits and halved by
+  truncation toward zero, as the division did, so every result that did not overflow is the
+  one it was. A sketch whose cells stay within the range is unchanged, in memory and on the
+  wire, and so is the format.
+  <br><br>
+  A cell at either end no longer records how far past it the count went, so a later
+  subtraction from it is off by that much: two adds of `long.MaxValue` and one of
+  `-long.MaxValue` now leave an item near nought, where wrapping arithmetic, which is exact
+  modulo 2^64, returned `long.MaxValue`. The documentation says so. (#211)
+
 - **A `SublimeCountMinSketch` payload whose total count did not fit the rest of it was
   read as it stood, and an `Add` to a sketch holding `ulong.MaxValue` keys wrapped the
   total to nought.** `TotalCount()` and `Epsilon()` went to 0, and the schedule of
