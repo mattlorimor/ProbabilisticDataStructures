@@ -912,8 +912,10 @@ namespace TestProbabilisticDataStructures
         /// one, the low parts take n × b bits and two words beyond them, and the high bits
         /// take a word for every 64 and one more. The rows straddle a word of high bits
         /// (63 bits and 64) and of low bits (63 low bits of one code and 64); the split of
-        /// 64 is the one where a shift of the largest code by 64 would shift it by none; and
-        /// a filter of no codes has none of any, whatever the fields beside it say.
+        /// 64 is the one where a shift of the largest code by 64 would shift it by none; the
+        /// most codes an int counts, at 60 bits each, is the row where the products and the
+        /// bit count pass what an int holds; and a filter of no codes has none of any,
+        /// whatever the fields beside it say.
         /// </summary>
         [TestMethod]
         [DataRow(60, 7, 6826UL, 114L, 8L, 2L)]
@@ -924,6 +926,7 @@ namespace TestProbabilisticDataStructures
         [DataRow(1, 64, 9UL, 2L, 3L, 1L)]
         [DataRow(3, 64, 123_456UL, 4L, 5L, 1L)]
         [DataRow(1, 60, (1UL << 61) - 3, 3L, 2L, 1L)]
+        [DataRow(int.MaxValue, 60, 5UL, 2_147_483_648L, 2_013_265_921L, 33_554_433L)]
         [DataRow(0, 0, 0UL, 0L, 0L, 0L)]
         [DataRow(0, 7, 100UL, 0L, 0L, 0L)]
         public void TestTheLayoutOfCodesIsWhatTheEncodingNeeds(
