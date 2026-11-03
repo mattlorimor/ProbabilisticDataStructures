@@ -1229,6 +1229,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sweep's that 6.2.0 wrote. No sketch a stream can build behaves differently short of
   2^64 - 1 adds, and the format is unchanged. (#202)
 
+- **A `SublimeCountMinSketch` that ran out of memory doubling or folding back its rows was
+  left half-changed.** The `Add` that doubles the rows counted its key, appended the record
+  of the rows it was about to double, and only then allocated the doubled rows: eight bytes
+  a counter before they are packed, 5 GiB to double five rows to 2^27 counters, where an
+  `OutOfMemoryException` is the likely failure. One there left the key counted though the
+  `Add` threw, a record of a doubling that had not happened, and the next doubling where it
+  was, so that every later `Add` tried again and appended another record. A failure after
+  the plain counts and before the packed rows left the width doubled over rows that were
+  not, and the next `Add` threw `ArgumentOutOfRangeException`. Either way the sketch wrote a
+  payload its own reader refused. Under a heap limit of 400 MiB, a sketch of five rows of
+  2^23 counters threw at its 4,504th `Add`, and the same key added twice more threw twice
+  more, leaving it counted three times, the total at 4,506 and three records held at the
+  width it started at. The doubled rows are now built first, the key's counters included,
+  and only then are the key counted, the record appended, and the rows, the width and the
+  next doubling put in place. An `Add` that runs out of memory there leaves the sketch
+  exactly as it was, and adding the key again counts it once: the same run now ends with
+  the total at 4,503, no record and the key not counted. Folding back after removals had
+  the same fault. It took its record off before it allocated the folded rows and set the
+  width before it packed them, so a failure lost the record, and with it any folding back,
+  or left the width halved over rows that were not. It now builds the folded rows first
+  too, and a failure leaves the rows, the width and the record as they were. The removal
+  that called for the folding is taken, as before, and the next removal folds. A sketch
+  that gets its memory is unchanged, in memory and on the wire, and so is the format.
+  (#213)
+
 - **A read refused for its budget named a number that did not load it.**
   `ReadBudgetExceededException.RequiredBytes` was the running total at the allocation
   that failed, so a payload was refused at its first allocation the budget did not cover,
