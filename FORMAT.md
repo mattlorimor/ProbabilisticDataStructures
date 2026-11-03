@@ -600,6 +600,12 @@ refused, as is a payload claiming more occupied entries than `m` buckets of `b` 
 reader still allocates the whole table, so it cannot size by what the payload holds; it
 refuses a table past the constructor's limit instead (see [Sizes](#sizes)).
 
+`m` must be a power of two, as the constructor always makes it: an item's other bucket
+is found by reducing a hash by `m`, and finds the first again from the other end only
+for a power of two. `count` must equal the number of entries the table holds, since
+each item is one entry, and a bucket and entry listed twice is refused, so the count is
+compared with the places filled and not with the length of the list.
+
 How a fingerprint is written, and what `f` counts, depends on the version:
 
 | Version | `f` counts | One fingerprint |
@@ -614,7 +620,8 @@ version 3 the filter holds each fingerprint at exactly `f` bits, so a width that
 multiple of eight leaves the high bits of the last byte zero, and a fingerprint with a
 bit set at or above `f` is refused, since the writer cannot have produced it. A payload
 whose width, in bits, is not between 1 and 64 is refused, as is one with no buckets, no
-entries per bucket, or a bucket count beyond what the reader will allocate for.
+entries per bucket, a bucket count that is not a power of two, or a bucket count beyond
+what the reader will allocate for.
 
 The generator's state follows the entries, and version 1 payloads simply end before it.
 The state it began in is the last field, and payloads before version 6 simply end before
