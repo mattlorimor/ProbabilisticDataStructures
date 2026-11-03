@@ -29,6 +29,20 @@ namespace ProbabilisticDataStructures
     /// would take two to four times the room.
     /// </para>
     /// <para>
+    /// A large sketch whose register count is not a power of two estimates cardinality
+    /// slightly low. Each element's first value goes to the register a 32-bit
+    /// multiply-and-shift draws, which gives each of m registers floor(2^32 / m) of the
+    /// 2^32 values or one more, and once the sketch holds many more elements than
+    /// registers the estimate falls short by about r (m - r) / 2^64, for r = 2^32 mod m.
+    /// That is nothing at a power of two, under 2% of the estimate's standard error up to
+    /// 2^24 registers, as large as that error from about 88.5 million, and 4% of the
+    /// estimate at worst, at 0.4 * 2^32 registers. Jaccard similarity is not affected, as
+    /// far as a scaled-down simulation of the draw could measure. Past about 2^24
+    /// registers, choose a power of two. The draw is not changed, because it decides which
+    /// registers the elements of a stored sketch went to. CAPACITY.md has the figures and
+    /// how they were found.
+    /// </para>
+    /// <para>
     /// Registers combine under maximum, so sketches merge, and the merge is both
     /// idempotent and commutative. That is not a convenience: the paper shows the
     /// maximum is the <em>only</em> operation with those properties that also allows
@@ -1126,7 +1140,10 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <remarks>
         /// One step of Fisher-Yates, reading an entry not written on this pass as
-        /// though it still held its own index.
+        /// though it still held its own index. The step is drawn with
+        /// <see cref="SeededRandom.NextBelow"/>, which is exact only when m - i is a power of
+        /// two; the class remarks say what that does to a very large sketch, and why the draw
+        /// stays as it is.
         /// </remarks>
         private int NextIndex(ref SeededRandom random, int i)
         {

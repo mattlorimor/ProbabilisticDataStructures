@@ -1696,6 +1696,10 @@ Merging two sketches is exact under either construction, but merging one of each
 refused: the merge promises the sketch that adding both sets from the start would have
 built, and no single sketch draws its runs both ways.
 
+**For a very large sketch, choose a power of two registers.** With many millions of
+registers that are not a power of two, a sketch holding many more elements than registers
+estimates cardinality slightly low; [CAPACITY.md](CAPACITY.md#setsketch) says by how much.
+
 Described by Otmar Ertl in
 [SetSketch: Filling the Gap between MinHash and HyperLogLog](https://doi.org/10.14778/3476249.3476276),
 VLDB 2021.

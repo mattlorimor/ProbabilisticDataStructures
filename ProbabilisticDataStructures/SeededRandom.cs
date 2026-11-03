@@ -74,14 +74,17 @@ namespace ProbabilisticDataStructures
         /// of the 2^32 inputs or by one more. That puts every value within 2^-32 of
         /// 1/bound, but the two counts differ by a factor of 1 + 1 / floor(2^32 / bound):
         /// close to one for a small bound, and two once the bound passes 2^31. The
-        /// stable filter's cell count reaches that range, which is why it draws its decay
-        /// with a 64-bit multiply of its own, <see cref="StableBloomFilter.DecayStart"/>,
-        /// and not with this.
+        /// stable filter's cell count reaches that range and VarOpt's light region comes
+        /// close to it, which is why the one draws its decay and the other its evictions
+        /// with a 64-bit multiply of their own, <see cref="StableBloomFilter.DecayStart"/>
+        /// and <see cref="VarOpt.EvictionSlot"/>, and not with this.
         /// <para>
         /// Changing this changes more than seeded sequences. <see cref="SetSketch"/>
         /// shuffles each element's registers with a generator seeded from the element's
         /// hash, so this decides which registers the elements of a stored sketch went
-        /// to, and a sketch read back has to go on agreeing with it.
+        /// to, and a sketch read back has to go on agreeing with it. That is also why a
+        /// very large sketch whose register count is not a power of two estimates
+        /// cardinality slightly low, which <see cref="SetSketch"/> documents.
         /// </para>
         /// </remarks>
         internal uint NextBelow(uint bound)

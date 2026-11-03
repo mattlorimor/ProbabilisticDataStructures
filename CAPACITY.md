@@ -418,6 +418,20 @@ back by default: a read is charged three times the registers.
 `m` two-byte registers, which a read is charged 12 bytes a register for (the registers and
 the two arrays that order their updates, and the payload they came in).
 
+A large sketch whose register count is not a power of two estimates cardinality slightly
+low. An element's first value goes to a register drawn with a 32-bit multiply-and-shift, which
+gives each of `m` registers `floor(2^32 / m)` of the 2^32 values or one more, so for
+`r = 2^32 mod m` the registers take first values at two rates. Once a sketch holds many
+more elements than registers, the estimate falls short by about `r · (m − r) / 2^64`, at
+most about `(m / 2^33)²`, which is nothing at a power of two. That is under 2% of the
+estimate's standard error, `1 / √m`, up to 2^24 registers, as large as that error from
+about 88.5 million, and at its largest 4% of the estimate, at 0.4 · 2^32 registers, about
+1.72 billion. These are worked out from the two rates. A scaled-down simulation of the
+draw reproduced them, found the shortfall smaller in a sketch holding fewer elements, and
+found no change in Jaccard similarity. Past about 2^24 registers, choose a power of two.
+The draw is not changed, because it decides which registers the elements of a stored
+sketch went to, and a sketch read back has to go on agreeing with one built now.
+
 ### `CountMinSketch`
 
 Counters are 64-bit, so a row holds counts to 18 quintillion and the sketch takes any
