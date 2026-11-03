@@ -736,6 +736,20 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// The other end is unchanged by the refusal at the fine end: an error so large that
+        /// it wants fewer registers than the smallest estimator has is met with the smallest,
+        /// precision 4, which delivers less error than was asked. Half wants about 4.3
+        /// registers, precision 3 once rounded up.
+        /// </summary>
+        [TestMethod]
+        public void TestALargeErrorBuildsTheSmallestEstimator()
+        {
+            Assert.AreEqual(4u, HyperLogLogPlus.NewDefault(0.5).Precision());
+            Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new HyperLogLogPlus(3),
+                "precision 3 is a precision the estimator has, so this does not reach the smallest");
+        }
+
         [TestMethod]
         public void TestAddRejectsNull()
         {

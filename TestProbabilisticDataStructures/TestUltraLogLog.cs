@@ -451,6 +451,18 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The other end is unchanged by the refusal at the fine end: an error so large that
+        /// it wants fewer registers than the smallest sketch has is met with the smallest,
+        /// which delivers less error than was asked. An error of 0.9 wants fewer than one
+        /// register, precision 0.
+        /// </summary>
+        [TestMethod]
+        public void TestALargeErrorBuildsTheSmallestSketch()
+        {
+            Assert.AreEqual(UltraLogLog.MinPrecision, UltraLogLog.NewDefault(0.9).Precision());
+        }
+
+        /// <summary>
         /// The hash cannot be replaced once anything has been added, because
         /// everything already counted sits where the old hash put it.
         /// </summary>
