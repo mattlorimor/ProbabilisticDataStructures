@@ -578,6 +578,13 @@ namespace TestProbabilisticDataStructures
             AssertRefused(
                 Forged(shape, 0, quarter, new[] { quarter, quarter }, new[] { eighth, eighth }),
                 "values between them");
+
+            // The wrap is between the negative store and the zero count, 2^63 + 2^63, with
+            // the positive store's two left over as the claimed total. A sum that added
+            // those two in 64 bits before adding the positive store would let it through.
+            AssertRefused(
+                Forged(shape, 2, half, new ulong[] { 1, 1 }, new[] { quarter, quarter }),
+                "values between them");
         }
 
         /// <summary>
