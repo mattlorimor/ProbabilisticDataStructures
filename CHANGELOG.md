@@ -1036,9 +1036,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (the `SublimeCountMinSketch` limit, for the same reason) and past 2,147,483,591 for the
   private sketch, and an epsilon with no width. The readers of `CountMinSketch` and
   `PrivateCountMinSketch` refuse a payload that claims more as beyond anything built,
-  before it can ask for a row; `CountSketch`'s reader already checks its cells against its
-  dimensions. FORMAT.md's table of sizes has the four new rows. No size that built before
-  stops building.
+  before it can ask for a row, and so does `CountSketch`'s, as the entry after this one
+  describes. FORMAT.md's table of sizes has a row for each limit. No size that built
+  before stops building.
+
+- **A `CountSketch` payload could claim more rows than any constructor builds, and a size
+  that wrapped passed the check on its cells.** The reader took any non-zero width and
+  depth whose cells came to the bytes the payload carried, where the constructor refuses a
+  width past 2,147,483,591 and a depth past 710. A payload of one column and 100,000 rows,
+  built by hand with a correct checksum, read back, and then every operation cost by the
+  rows: `Add` walks them and `Count` allocates and sorts one estimate per row, so `Count`
+  took 5.1 ms where a sketch of the 5 rows a delta of 1% gives takes about a tenth of a
+  microsecond. The default read budget admitted 15 million rows of one column. The same
+  check multiplied the width, the depth and 8 in 64 bits without a guard, and that wraps:
+  a width of 2^31 and a depth of 2^30 need 2^64 bytes, which is nought, so a payload of 30
+  bytes with an empty run of cells agreed with its own size. A finite budget refused it
+  later, as costing too much, in a message that offered a budget large enough to read it.
+  With no budget, in a probe under a 4 GiB heap limit, the read went on to allocate what
+  the payload claimed and ended in an `OutOfMemoryException` instead of an
+  `InvalidDataException`. `CountSketch` shipped in 6.0.0, so 6.0.0 through 6.2.0 are
+  affected.
+  <br><br>
+  The reader now refuses a width past 2,147,483,591 and a depth past 710 as beyond anything
+  this library builds, before it multiplies, as the readers of `CountMinSketch` and
+  `PrivateCountMinSketch` do. The limits keep the product below about 1.2 × 10^13 bytes,
+  far from wrapping, and the size is worked out in `ulong` as well. No release built a
+  sketch past either limit, since the constructor allocated every row, an array holds no
+  more than 2,147,483,591 counters, and a delta with no reciprocal made a row count that
+  could not be allocated; so every payload this library has written still reads, the
+  stored `countsketch-v1.bin` among them, and only a payload edited by hand or written by
+  something else is refused. The stored format does not change. FORMAT.md's table of sizes
+  has the two rows.
 
 - **`InverseBloomFilter`, `HyperLogLog` and `DpswSketch` failed inside an allocation, or
   saturated, instead of refusing a size they could not build.** `InverseBloomFilter`'s

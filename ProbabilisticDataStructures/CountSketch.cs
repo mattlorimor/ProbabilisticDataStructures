@@ -393,7 +393,9 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The most counters a row can hold, which is the most an array holds.
+        /// The most counters a row can hold, which is the most an array holds. The
+        /// constructor refuses an epsilon that asks for more, and the reader refuses a
+        /// payload that claims more.
         /// </summary>
         internal static uint MaxWidth => Guard.MaxSketchWidth;
 
@@ -403,6 +405,18 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal static uint MaxDepth => Guard.MaxSketchRows;
 
+        /// <summary>
+        /// Refuses dimensions no sketch has, or whose cells are not the bytes a payload
+        /// carries.
+        /// </summary>
+        /// <remarks>
+        /// The limits come first, so that the product below cannot wrap: it is at most
+        /// 2,147,483,591 by 710 by 8 bytes, about 1.2e13. Unchecked, a width of 2^31 and a
+        /// depth of 2^30 came to 2^64, which is nought, and agreed with a payload whose cell
+        /// run was empty. The limits also keep the reader to what the constructor builds: a
+        /// sketch of a million rows would make every <c>Count</c> allocate and sort a
+        /// million estimates.
+        /// </remarks>
         internal static void CheckCells(uint width, uint depth, long stored)
         {
             if (width == 0 || depth == 0)
@@ -412,8 +426,24 @@ namespace ProbabilisticDataStructures
                     "count in.");
             }
 
-            var expected = (long)width * depth * sizeof(long);
-            if (stored != expected)
+            // The constructor's own limits, so that every sketch it builds reads back and
+            // a few bytes cannot ask for a row that no array could hold.
+            if (width > MaxWidth)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims rows {width} counters wide, beyond anything this library " +
+                    $"builds: a row is one array, of at most {MaxWidth}.");
+            }
+
+            if (depth > MaxDepth)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims {depth} rows, beyond anything this library builds: it " +
+                    $"builds at most {MaxDepth}, for the smallest delta with a finite reciprocal.");
+            }
+
+            var expected = (ulong)width * depth * sizeof(long);
+            if ((ulong)stored != expected)
             {
                 throw new InvalidDataException(
                     $"Sketch is {depth} by {width}, which needs {expected} bytes of " +

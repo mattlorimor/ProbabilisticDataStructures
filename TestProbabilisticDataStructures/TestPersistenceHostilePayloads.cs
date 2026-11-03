@@ -1599,6 +1599,31 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The limits keep the cell bytes far from wrapping in 64 bits, but not the cell
+        /// count from wrapping in 32: a width of 2^26 and a depth of 64 are each within
+        /// them, and their product is 2^32, which a <c>uint</c> holds as nought. A check
+        /// that multiplied the dimensions before widening them agreed with an empty run of
+        /// cells for a sketch of 32 GiB.
+        /// </summary>
+        [TestMethod]
+        public void TestCountSketchWhoseCellCountWrapsInThirtyTwoBitsIsRefused()
+        {
+            var width = 1u << 26;
+            var depth = 64u;
+            Assert.IsLessThanOrEqualTo(CountSketch.MaxWidth, width);
+            Assert.IsLessThanOrEqualTo(CountSketch.MaxDepth, depth);
+            Assert.AreEqual(0u, unchecked(width * depth));
+
+            var ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => CountSketch.CheckCells(width, depth, 0));
+            StringAssert.Contains(ex.Message, "needs 34359738368 bytes of cells");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<CountSketch>(CountSketchPayload(width, depth, 0)),
+                "needs 34359738368 bytes of cells");
+        }
+
+        /// <summary>
         /// A key occupies several cells at once, so a table with fewer cells than that
         /// cannot hold one key.
         /// </summary>

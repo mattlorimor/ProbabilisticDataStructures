@@ -292,6 +292,8 @@ address.
 | `HeavyKeeper` | depth | 2,147,483,591 | the arrays are held in one |
 | `CountMinSketch` | width | 2,147,483,591 | each row is one array |
 | `CountMinSketch` | depth | 710 | `ceil(ln(1 / delta))` at the smallest delta whose reciprocal is a finite double |
+| `CountSketch` | width | 2,147,483,591 | each row is one array |
+| `CountSketch` | depth | 710 | `ceil(ln(1 / delta))` at the smallest delta whose reciprocal is a finite double |
 | `PrivateCountMinSketch` | width | 2,147,483,591 | each row is one array |
 | `PrivateCountMinSketch` | depth | 2,147,483,591 | the rows are held in one array |
 | `DpswSketch` | items in a substream | 2,147,483,591 | the checkpoints of a substream are a list with a slot for each item, and a list holds no more than an array |
@@ -852,8 +854,9 @@ subtracts at each cell rather than only adding. A payload read as unsigned would
 with every negative cell as an enormous positive one, so they are written as `i64` rather
 than reinterpreted.
 
-A payload with no rows or no columns is refused, as is one whose cells do not come to
-`width * depth * 8` bytes.
+A payload with no rows or no columns is refused, as is one with a width or a depth past
+the limits in [Sizes](#sizes), and one whose cells do not come to `width * depth * 8`
+bytes. The limits are checked first, so that the product cannot wrap.
 
 ### `InvertibleBloomLookupTable` (id 21)
 
