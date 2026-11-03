@@ -477,7 +477,7 @@ namespace ProbabilisticDataStructures
             reader.Budget.Price(ScratchCost(k));
         }
 
-        private static void CheckRegions(uint m, uint buckets, uint collisions)
+        internal static void CheckRegions(uint m, uint buckets, uint collisions)
         {
             if (m == 0 || buckets != m)
             {
