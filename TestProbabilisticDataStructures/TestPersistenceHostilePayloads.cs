@@ -1228,6 +1228,47 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The same guard where its arithmetic runs out: a substream starting so near the
+        /// largest position that its last item, start + held - 1, is past what a long
+        /// holds. Such a sum wraps negative, and a check made with it passes, so the
+        /// window loaded holding a substream from its future, which <c>Count</c> then
+        /// passed over and the next <c>Add</c> expired, every counter with it.
+        /// <para>
+        /// Three starts straddle the wrap. At <c>long.MaxValue - held + 1</c> the sum is
+        /// exactly <c>long.MaxValue</c> and does not wrap; one later it is one past and
+        /// wraps; at <c>long.MaxValue</c> it wraps furthest. Each still follows the
+        /// substream before it, so the ordering guard passes them all.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestADpswWindowWithASubstreamEndingPastTheLargestPositionIsRefused()
+        {
+            var (bytes, layout) = SmallDpswPayload();
+            var (_, held, _) = NewestDpswSubstream(bytes, layout);
+
+            Assert.IsGreaterThan(1, held,
+                "the newest substream holds one item, so no start but the largest wraps " +
+                "and the starts below do not straddle anything.");
+
+            var at = layout.SubstreamAt((int)layout.SubstreamCount - 1) - PayloadStart;
+            foreach (var start in new[]
+            {
+                long.MaxValue - held + 1,
+                long.MaxValue - held + 2,
+                long.MaxValue,
+            })
+            {
+                var poked = PokeUInt64(bytes, at, (ulong)start);
+
+                var ex = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<DpswSketch>(poked),
+                    $"a substream starting at {start} and holding {held} was read");
+                StringAssert.Contains(ex.Message, "the window says it has seen",
+                    $"a substream starting at {start} was refused for something else");
+            }
+        }
+
+        /// <summary>
         /// The newest substream of a DPSW payload: where it starts, how many items it
         /// holds, and the window's position, read from the bytes.
         /// </summary>
