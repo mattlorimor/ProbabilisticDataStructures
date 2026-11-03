@@ -49,17 +49,17 @@ namespace TestProbabilisticDataStructures
         // ---- TopK and HeavyKeeper: the heap ------------------------------------------------
 
         /// <summary>
-        /// The two sizes of k compared. At the larger the old heap, a list and a dictionary
-        /// pre-sized to k, was about 44 bytes for each unit of k, so the two differed by about
-        /// 44 MB; now neither allocates anything for k until elements arrive.
+        /// The two sizes of k compared. The old heap, a list and a dictionary pre-sized to k,
+        /// was some 44 to 50 bytes for each unit of k as the dictionary's prime fell, and the
+        /// two differed by 49 MB; now neither allocates anything for k until elements arrive.
         /// </summary>
         private const uint SmallK = 10_000;
         private const uint LargeK = 1_000_000;
 
         /// <summary>
         /// How far apart the two may be. The structures are the same apart from k, so they
-        /// allocate the same; this is room for nothing more than an object's padding, and is
-        /// a thousandth of what the old heap differed by.
+        /// allocate the same, to the byte; this is room for nothing more than an object's
+        /// padding, and a ten-thousandth of what the old heap differed by.
         /// </summary>
         private const long HeapSlack = 4096;
 
