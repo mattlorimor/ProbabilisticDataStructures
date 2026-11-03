@@ -198,5 +198,57 @@ namespace TestProbabilisticDataStructures
                 buckets.Set(ResetBuckets - 1, 255);
             }
         }
+
+        // ---- InfiniFilter: doubling ----------------------------------------------------------
+
+        /// <summary>
+        /// A doubling allocates the doubled table and next to nothing else. It used to list
+        /// every entry of the old table first, 16 bytes an entry, which at the doubling into
+        /// 2^31 slots was 12.9 GB beside the two tables; the old table is not changed while it
+        /// is read, so its entries can be walked in place.
+        /// </summary>
+        /// <remarks>
+        /// A table of 2^16 slots doubles at its 49,152nd entry, so a list of them is 786,432
+        /// bytes. Each of several filters, built alike, is filled to the brink and given the
+        /// add that doubles it, and the least that any of those adds allocated past the new
+        /// table is held to the slack: the new table's object, the list of entries that went
+        /// void (none do at a first doubling), and the walk.
+        /// </remarks>
+        [TestMethod]
+        public void TestAnInfiniFilterDoublesWithoutListingItsEntries()
+        {
+            const int quotientBits = 16;
+            const int entries = 3 << (quotientBits - 2);
+            var keys = Enumerable.Range(0, entries + 1).Select(Key).ToArray();
+
+            var least = long.MaxValue;
+            for (var run = 0; run < 5; run++)
+            {
+                var filter = new InfiniFilter(initialCapacity: entries, fingerprintBits: 8);
+                Assert.AreEqual(quotientBits, filter.Segments[0].QuotientBits, "premise: the table's size");
+                for (var i = 0; i < entries; i++)
+                {
+                    filter.Add(keys[i]);
+                }
+
+                Assert.AreEqual(0u, filter.ExpansionCount(), "premise: the table is full and has not doubled");
+                Assert.AreEqual((uint)entries, filter.Segments[0].Count);
+
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                filter.Add(keys[entries]);
+                var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+                Assert.AreEqual(1u, filter.ExpansionCount(), "premise: that add doubled the table");
+                Assert.AreEqual(quotientBits + 1, filter.Segments[0].QuotientBits);
+                Assert.HasCount(1, filter.Segments, "premise: nothing went void");
+
+                var table = (long)filter.Segments[0].Data.Length * sizeof(ulong);
+                least = Math.Min(least, allocated - table);
+            }
+
+            Assert.IsLessThan(4096L, least,
+                $"the add that doubled a table of {entries:N0} entries allocated {least:N0} " +
+                "bytes past the doubled table: the entries were listed before they were moved");
+        }
     }
 }
