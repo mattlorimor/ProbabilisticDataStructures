@@ -71,12 +71,14 @@ the structure with an exception that names the limit, before anything changes, a
   without an error, and it failed on `Add`; a payload written then is refused when read,
   with that said.
 - **A table of 2^32 slots is not a table.** `InfiniFilter` and `MementoFilter` double their
-  table when three quarters full, up to 2^31 slots, and the `Add` that would double it
-  past that throws, with the filter as it was.
+  table when three quarters full, up to 2^31 slots, or 2^30 for a Memento slot of 64 bits,
+  and the `Add` that would double it past that throws, with the filter as it was.
 - **A Sublime row is at most 2^30 counters.** The `Add` that would double it past that
   throws, with the sketch as it was.
 - **A Memento slot is at most 64 bits.** The constructor refuses a fingerprint and a range
-  that make it wider, and a slot of exactly 64 bits holds its keys.
+  that make it wider, and a slot of exactly 64 bits holds its keys. A table is one array of
+  words, and 2^31 slots of 64 bits are more words than an array holds, so a table of them
+  stops at 2^30 slots.
 
 ## How the 32-bit filters place their bits
 

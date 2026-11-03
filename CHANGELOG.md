@@ -783,6 +783,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   built again from its keys. A table of slots wider than 64 bits, empty or not, is refused
   for its width. Payloads of narrower slots read as they always did.
 
+- **A `MementoFilter` of 64-bit slots threw a bare `OverflowException` at 2^31 slots**, one
+  doubling before the refusal the documentation describes. A table is one `ulong[]` of
+  (2^q × slot bits ÷ 64) + 2 words, and 2^31 slots of 64 bits are 2,147,483,650 of them, more
+  than an array holds; 2^31 slots of 63 bits fit. It was reached two ways: an
+  `initialCapacity` above 805,306,368 with a 64-bit slot, such as
+  `new MementoFilter(1UL << 32, 28, 805_306_369)`, which started the table there and threw
+  from the constructor, and the doubling from 2^30 slots, which the expansion's check let
+  through and the new table's allocation then refused, with the old table still in place. A
+  slot is 64 bits when `fingerprintBits` and the range's bits come to 60. 6.2.0 sized the
+  table the same way, so it is affected too, though there a 64-bit slot also stored no key
+  (above).
+  <br><br>
+  A table's widest is now a function of its slot width: the widest whose words fit in an
+  array, and at most 2^31 slots, so 2^31 for slots of up to 63 bits and 2^30 for 64. The
+  constructor starts the first table no wider, and the `Add` that would double past it
+  throws the `InvalidOperationException` other tables throw at 2^31, saying why, with the
+  filter unchanged. Only the size at which a 64-bit slot is refused moves, to one that could
+  not be built before. The stored format does not change. (#217)
+
 - **`QuotientFilter.WriteTo` threw an `OverflowException` on filters its own constructor
   builds.** It sized the byte array for the table as `data.Length * 8` in an `int`, which is
   negative from 2^28 words, two gibibytes of table. A filter of 2^31 slots with five or more
