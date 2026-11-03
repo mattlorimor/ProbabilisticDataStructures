@@ -233,6 +233,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `StableBloomFilter`, and `CuckooBloomFilter`'s occupancy bits, now clear it where it is on
   `Reset`. A new array was allocated while the old one was still held, so a reset needed
   twice the array at once: 4 GiB for an 8-bit counting or stable filter at its largest.
+  <br><br>
+  `InfiniFilter` doubles its table by walking the old table's entries in place. It listed
+  them first, 16 bytes an entry beside both tables, which at the doubling into 2^31 slots
+  was 12.9 GB more than the 4.8 GB of the two 8-bit tables.
 
 ### Fixed
 
