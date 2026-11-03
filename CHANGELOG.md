@@ -227,6 +227,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again on every `Reset`, and for the heap `TopK.Merge` rebuilds, which measured 49 MB at a
   `k` of a million before the first `Add`. `k` still bounds what they hold, and the most it
   can be is unchanged.
+  <br><br>
+  The filters that keep their bits or counters in a bucket array, `BloomFilter`,
+  `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter` and
+  `StableBloomFilter`, and `CuckooBloomFilter`'s occupancy bits, now clear it where it is on
+  `Reset`. A new array was allocated while the old one was still held, so a reset needed
+  twice the array at once: 4 GiB for an 8-bit counting or stable filter at its largest.
 
 ### Fixed
 
