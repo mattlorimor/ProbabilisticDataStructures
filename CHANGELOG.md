@@ -119,6 +119,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or a cast. The method is not on `IFilter`, and no other structure's `Capacity()`
   changes type: each of those is one filter, which its own type already holds. (#171)
 
+- **A `ScalableBloomFilter` hint too large for its first filter is refused naming `hint`.**
+  The first contained filter is built for the hint, and a hint whose filter needs more than
+  the 4,294,967,295 bits a contained filter addresses, more than 448,089,842 items at 1%,
+  was refused by that filter's constructor: an `ArgumentOutOfRangeException` naming its own
+  parameter, `n`, and recommending `ScalableBloomFilter`, the structure that refused. The
+  constructor now throws its own, naming `hint`, with the largest hint at that rate and a
+  pointer to a smaller hint or `BloomFilter64`. Only the exception's `ParamName` and message
+  change, so a caller that reads `ParamName` sees `hint` where it saw `n`. 6.2.0 is
+  affected. (#220)
+
+- **`HyperLogLogPlus.NewDefault` and `UltraLogLog.NewDefault` refuse an error they cannot
+  deliver, and that is a breaking change.** Each works out the registers an error needs and
+  built at most its largest, 2^18 and 2^26 registers, whatever was asked:
+  `HyperLogLogPlus.NewDefault(0.001)` wants 2^21 and returned an estimator of 2^18, whose
+  error is about 0.2%, twice the one asked for, and nothing said so. Each now throws an
+  `ArgumentOutOfRangeException` naming `errorRate` for an error below what its largest
+  delivers, 1.04 / 512 (about 0.00203) and about 9.55e-5, with that figure in the message,
+  as `HyperLogLog.NewDefaultHyperLogLog` already refused an error it could not deliver. An
+  error too large for the smallest estimator still builds the smallest. 6.2.0 is
+  affected. (#220)
+
 - **The 32-bit Bloom filters count in 64 bits, and save at format version 8.**
   `Count()` on `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter` and
   `PartitionedBloomFilter` returns a `ulong` where it returned a `uint`. This is a
