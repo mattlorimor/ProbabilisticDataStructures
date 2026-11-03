@@ -128,6 +128,13 @@ namespace TestProbabilisticDataStructures
             void Merge(IReadOnlyList<string> sideAdds);
             void Reset();
             void AssertMatches(object filter, string where);
+
+            /// <summary>
+            /// What the structure's count should be, where that is not simply the ledger
+            /// of adds less removals: a structure whose removal can be refused, and then
+            /// takes nothing off the count.
+            /// </summary>
+            ulong? Count => null;
         }
 
         /// <summary>What a run exercised, for the vacuity guards.</summary>
@@ -380,7 +387,7 @@ namespace TestProbabilisticDataStructures
 
                 if (spec.Count is not null)
                 {
-                    Assert.AreEqual((ulong)live.Count, spec.Count(subject),
+                    Assert.AreEqual(model?.Count ?? (ulong)live.Count, spec.Count(subject),
                         $"{where}: the count must match the ledger of adds and removals " +
                         "since the last Reset.");
                 }
@@ -734,6 +741,12 @@ namespace TestProbabilisticDataStructures
             private readonly uint m, k, regionSize;
             private readonly Tally tally;
 
+            // Items added, less those removals that took a bit out. A removal that was
+            // answered true and refused, every one of its regions having collided, leaves
+            // the item a member and the count where it was; one that finds nothing left
+            // to count leaves it at zero.
+            private ulong items;
+
             public DeletableModel(uint m, uint r, uint k, Tally tally)
             {
                 this.bits = new bool[m];
@@ -743,6 +756,8 @@ namespace TestProbabilisticDataStructures
                 this.regionSize = (m + r - 1) / r;
                 this.tally = tally;
             }
+
+            public ulong? Count => this.items;
 
             public bool Test(string key) =>
                 Positions(key, this.k, this.m).All(i => this.bits[i]);
@@ -754,6 +769,7 @@ namespace TestProbabilisticDataStructures
                     if (this.bits[i]) this.collided[i / this.regionSize] = true;
                     else this.bits[i] = true;
                 }
+                this.items++;
             }
 
             public bool Remove(string key)
@@ -769,6 +785,7 @@ namespace TestProbabilisticDataStructures
                     }
                 }
                 this.tally.Note(cleared ? "removal cleared bits" : "removal cleared nothing");
+                if (cleared && this.items > 0) this.items--;
                 return true;
             }
 
@@ -779,6 +796,7 @@ namespace TestProbabilisticDataStructures
             {
                 Array.Clear(this.bits);
                 Array.Clear(this.collided);
+                this.items = 0;
             }
 
             public void AssertMatches(object filter, string where)
