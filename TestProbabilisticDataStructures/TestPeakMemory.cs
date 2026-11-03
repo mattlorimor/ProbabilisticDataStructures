@@ -312,5 +312,48 @@ namespace TestProbabilisticDataStructures
 
             IEnumerator IEnumerable.GetEnumerator() => this.GetEnumerator();
         }
+
+        // ---- DpswSketch: the checkpoints -----------------------------------------------------
+
+        /// <summary>
+        /// A substream's checkpoints are built by a walk that keeps the offsets it chooses,
+        /// so building them allocates the array they end as and nothing else. They were
+        /// thinned from a list of every offset in the substream, which at the largest window
+        /// the constructor takes was 8.6 GB of list for a few dozen checkpoints.
+        /// </summary>
+        /// <remarks>
+        /// A substream of two million at factors from fine to coarse, held to its array to
+        /// within its header and padding; and a sketch over a window of a billion, whose
+        /// substreams are of 1,995,263 items, built in a few kilobytes where the list of every
+        /// offset was 16 MB with its growth.
+        /// </remarks>
+        [TestMethod]
+        public void TestADpswSketchBuildsItsCheckpointsWithoutAListOfEveryOffset()
+        {
+            const int substream = 2_000_000;
+            var listed = new List<string>();
+            foreach (var alpha in new[] { 0.01, 0.5, 0.9 })
+            {
+                var count = DpswSketch.CheckpointCount(substream, alpha);
+                var array = 24L + ((4L * count + 7) & ~7L);
+                var allocated = Allocated(() => DpswSketch.Checkpoints(substream, alpha));
+                if (allocated - array >= 64)
+                {
+                    listed.Add($"a substream of {substream:N0} at alpha {alpha}: {allocated:N0} " +
+                        $"bytes for {count:N0} checkpoints, an array of {array:N0}");
+                }
+            }
+
+            Assert.AreEqual(1_995_263, DpswSketch.SubstreamSizeFor(1_000_000_000, 0.7), "premise: the substream");
+            var window = Allocated(() => new DpswSketch(1_000_000_000, 1.0, seed: 1));
+            if (window >= 64 * 1024)
+            {
+                listed.Add($"a sketch over a window of a billion: {window:N0} bytes to be built");
+            }
+
+            Assert.IsEmpty(listed,
+                "checkpoints allocated more than their array, as if thinned from a list of " +
+                "every offset in a substream: " + string.Join("; ", listed));
+        }
     }
 }
