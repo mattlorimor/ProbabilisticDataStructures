@@ -219,6 +219,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SetSketch` shipped in 6.2.0, so 6.2.0 is affected. Nothing stored or computed
   changes. (#203)
 
+- **Large structures no longer allocate for what they might hold before they hold it.**
+  No answer and no stored byte changes. (#219)
+  <br><br>
+  `TopK` and `HeavyKeeper` start their heap of tracked elements empty and grow it as
+  elements arrive. The heap and its index were sized to `k` when the structure was built,
+  again on every `Reset`, and for the heap `TopK.Merge` rebuilds, which measured 49 MB at a
+  `k` of a million before the first `Add`. `k` still bounds what they hold, and the most it
+  can be is unchanged.
+
 ### Fixed
 
 - **`InvertibleBloomLookupTable.TryDecode` could report success with a wrong answer.** It

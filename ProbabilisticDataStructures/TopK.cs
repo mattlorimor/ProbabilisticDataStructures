@@ -71,7 +71,7 @@ namespace ProbabilisticDataStructures
 
             this.Cms = new CountMinSketch(epsilon, delta, hash, placement);
             this.K = k;
-            this.elements = new ElementHeap((int)k);
+            this.elements = new ElementHeap();
         }
 
         /// <summary>
@@ -172,7 +172,8 @@ namespace ProbabilisticDataStructures
                 candidates[element.Data.ToArray()] = 0;
             }
 
-            var rebuilt = new ElementHeap((int)this.K);
+            // Sized by what it is about to hold, which is every candidate up to k.
+            var rebuilt = new ElementHeap(Math.Min(candidates.Count, (int)this.K));
 
             foreach (var data in candidates.Keys
                 .OrderByDescending(d => this.Cms.Count(d))
@@ -436,7 +437,7 @@ namespace ProbabilisticDataStructures
         public TopK Reset()
         {
             this.Cms.Reset();
-            this.elements = new ElementHeap((int)K);
+            this.elements = new ElementHeap();
             return this;
         }
     }
