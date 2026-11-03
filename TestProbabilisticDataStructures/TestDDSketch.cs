@@ -543,6 +543,210 @@ namespace TestProbabilisticDataStructures
                 badCount.AsSpan(14 + 8), 999999);
             RepairChecksum(badCount);
             AssertRefused(badCount, "do not add up");
+
+            // Counts that wrap past 2^64 and so add up to a total the payload claims. Each
+            // of these passed the check above, because the sum it compares was taken
+            // modulo 2^64, and left a sketch that disagreed with itself: a store whose
+            // counts wrapped to zero reports itself empty while its bounds and counts are
+            // still set. Each is refused for what it is, by a phrase "do not add up" is
+            // not, so that this cannot be credited to the check above catching it.
+            var shape = TwoBucketsEachSideAndAZero();
+            const ulong half = 1UL << 63;
+            const ulong quarter = 1UL << 62;
+            const ulong eighth = 1UL << 61;
+
+            // One sign's own counts wrap, to a store total of zero. The claimed total is
+            // what the other sign and the zero count come to, so the sum of the three is
+            // exactly what the payload says and only the store's own count can refuse it.
+            AssertRefused(
+                Forged(shape, 3, 1, new[] { half, half }, new ulong[] { 1, 1 }),
+                "positive buckets hold more than");
+            AssertRefused(
+                Forged(shape, 3, 1, new ulong[] { 1, 1 }, new[] { half, half }),
+                "negative buckets hold more than");
+
+            // Neither store wraps and the sum of the three does. The first addition wraps
+            // (positive and negative are 2^63 each) and the zero count lands on the wrapped
+            // value, which is the total the payload claims.
+            AssertRefused(
+                Forged(shape, 5, 5, new[] { quarter, quarter }, new[] { quarter, quarter }),
+                "values between them");
+
+            // The first addition does not wrap and the second does, so that checking only
+            // the two stores against each other would let it through:
+            // 2^63 + 2^62 + 2^62 = 2^64.
+            AssertRefused(
+                Forged(shape, 0, quarter, new[] { quarter, quarter }, new[] { eighth, eighth }),
+                "values between them");
+        }
+
+        /// <summary>
+        /// The most a count holds, 2^64 - 1, is not too many. An honest sketch has a total
+        /// of at most that, so the refusal of totals that wrap must stop one short of
+        /// refusing a full one. Each case is the edge of one guard: a store whose counts
+        /// come to exactly that, and a sum of the three that does with the last addition
+        /// being a store and then the zero count.
+        /// </summary>
+        [TestMethod]
+        public void TestATotalOfExactlyTheLargestCountIsRead()
+        {
+            var shape = TwoBucketsEachSideAndAZero();
+            const ulong half = 1UL << 63;
+            const ulong quarter = 1UL << 62;
+            const ulong eighth = 1UL << 61;
+
+            var cases = new (string Name, byte[] Payload)[]
+            {
+                ("one store", Forged(
+                    shape, ulong.MaxValue, 0, new[] { half, half - 1 }, new ulong[] { 0, 0 })),
+
+                ("two stores", Forged(
+                    shape, ulong.MaxValue, 0,
+                    new[] { quarter, quarter }, new[] { quarter, quarter - 1 })),
+
+                ("the zero count", Forged(
+                    shape, ulong.MaxValue, quarter - 1,
+                    new[] { quarter, quarter }, new[] { eighth, eighth })),
+            };
+
+            foreach (var (name, payload) in cases)
+            {
+                var sketch = Persistence.FromByteArray<DDSketch>(payload);
+                Assert.AreEqual(ulong.MaxValue, sketch.Count(), name);
+            }
+        }
+
+        /// <summary>
+        /// Merging two sketches whose counts together pass 2^64 - 1 is refused and leaves
+        /// the sketch as it was, where the sum used to wrap: the total went round to a
+        /// small number and the quantiles with it. An honest sketch cannot get here, since
+        /// it would take 2^64 adds; a payload can, since a count is only a number in it.
+        /// </summary>
+        [TestMethod]
+        public void TestMergingCountsThatWouldPassTheLargestCountChangesNothing()
+        {
+            const ulong half = 1UL << 63;
+
+            // Which side each sketch's weight is on. When they differ, every store's own
+            // total and every bucket is well within a count, and only the total is not, so
+            // a check of the stores or the buckets alone would pass them.
+            var cases = new (string Name, Func<ulong, DDSketch> Into, Func<ulong, DDSketch> From)[]
+            {
+                ("positive into positive", HeavyPositive, HeavyPositive),
+                ("negative into positive", HeavyPositive, HeavyNegative),
+                ("zero into negative", HeavyNegative, HeavyZeros),
+                ("positive into zero", HeavyZeros, HeavyPositive),
+            };
+
+            foreach (var (name, into, from) in cases)
+            {
+                var sketch = into(half);
+                var other = from(half);
+                var before = sketch.ToByteArray();
+                var otherBefore = other.ToByteArray();
+
+                var ex = Assert.ThrowsExactly<ArgumentException>(() => sketch.Merge(other), name);
+                StringAssert.Contains(ex.Message, "a sketch can count", name);
+
+                CollectionAssert.AreEqual(before, sketch.ToByteArray(),
+                    $"{name}: a merge that was refused changed the sketch it was merging into");
+                CollectionAssert.AreEqual(otherBefore, other.ToByteArray(),
+                    $"{name}: a merge that was refused changed the sketch it was merging from");
+
+                // The same pair one short is the most that merges, so the refusal is not
+                // turning away a full sketch.
+                var merged = into(half).Merge(from(half - 1));
+                Assert.AreEqual(ulong.MaxValue, merged.Count(), name);
+
+                // And a full sketch takes no more, however small the one that brings it.
+                var one = SingleValue(5);
+                var full = merged.ToByteArray();
+                var ex2 = Assert.ThrowsExactly<ArgumentException>(() => merged.Merge(one), name);
+                StringAssert.Contains(ex2.Message, "a sketch can count", name);
+                CollectionAssert.AreEqual(full, merged.ToByteArray(),
+                    $"{name}: a refused merge into a full sketch changed it");
+            }
+        }
+
+        /// <summary>
+        /// A sketch of <c>1, 2, -1, -2</c> and <c>0</c>, at an accuracy coarse enough
+        /// (gamma is 3) that 1 and 2 are in neighbouring buckets: two buckets for each
+        /// sign and a zero, for <see cref="Forged"/> to rewrite the counts of.
+        /// </summary>
+        private static DDSketch TwoBucketsEachSideAndAZero()
+        {
+            var sketch = new DDSketch(0.5);
+            foreach (var value in new double[] { 1, 2, -1, -2, 0 })
+            {
+                sketch.Add(value);
+            }
+
+            return sketch;
+        }
+
+        private static DDSketch SingleValue(double value)
+        {
+            var sketch = new DDSketch(0.5);
+            sketch.Add(value);
+            return sketch;
+        }
+
+        // A sketch holding that many of one value: one bucket on one sign, or the zero
+        // count. Made by rewriting the counts of one that holds a single value, which is
+        // the only way to a count this large without adding that many times.
+        private static DDSketch HeavyPositive(ulong count) =>
+            Persistence.FromByteArray<DDSketch>(Forged(
+                SingleValue(5), count, 0, new[] { count }, Array.Empty<ulong>()));
+
+        private static DDSketch HeavyNegative(ulong count) =>
+            Persistence.FromByteArray<DDSketch>(Forged(
+                SingleValue(-5), count, 0, Array.Empty<ulong>(), new[] { count }));
+
+        private static DDSketch HeavyZeros(ulong count) =>
+            Persistence.FromByteArray<DDSketch>(Forged(
+                SingleValue(0), count, count, Array.Empty<ulong>(), Array.Empty<ulong>()));
+
+        /// <summary>
+        /// The payload of <paramref name="shape"/> with the recorded total, the zero count
+        /// and the counts of each store's buckets replaced, and the checksum repaired. The
+        /// shape fixes everything else: where each store starts, how many buckets it has
+        /// and the smallest and largest value.
+        /// </summary>
+        private static byte[] Forged(
+            DDSketch shape, ulong count, ulong zeroCount, ulong[] positive, ulong[] negative)
+        {
+            // Offsets from FORMAT.md: after the envelope's 14 bytes, an f64 accuracy, then
+            // the total and the zero count, then the smallest and largest, then the stores.
+            const int countAt = 14 + 8;
+            const int zeroCountAt = countAt + 8;
+            const int storesAt = zeroCountAt + 8 + 8 + 8;
+
+            var bytes = shape.ToByteArray();
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
+                bytes.AsSpan(countAt), count);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
+                bytes.AsSpan(zeroCountAt), zeroCount);
+
+            // Each store is its first index, then its counts as a length-prefixed run.
+            var at = storesAt;
+            foreach (var counts in new[] { positive, negative })
+            {
+                var length = (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+                    bytes.AsSpan(at + 4));
+                Assert.AreEqual(counts.Length * sizeof(ulong), length,
+                    "the shape's store is not as many buckets as the counts given for it");
+
+                for (var i = 0; i < counts.Length; i++)
+                {
+                    System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
+                        bytes.AsSpan(at + 8 + (i * sizeof(ulong))), counts[i]);
+                }
+
+                at += 8 + length;
+            }
+
+            RepairChecksum(bytes);
+            return bytes;
         }
 
         private static void AssertRefused(byte[] payload, string expected)
