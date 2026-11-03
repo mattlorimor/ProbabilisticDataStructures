@@ -322,6 +322,12 @@ a `u32` counts, 4,294,967,295, which is 536,870,912 bytes, and their sizing refu
 anything beyond it. The same arithmetic limits the counting and stable filters from four
 bits up: at 4 bits it is 4,294,967,182 buckets, and at 8 bits 2,147,483,591.
 
+A `DeletableBloomFilter` keeps its data region and its collision regions out of one `m`
+that sizing holds to that same 4,294,967,295, so the two come to no more than that
+between them, and a reader refuses a payload whose regions do. Without the refusal the
+region size, worked out in 32 bits, wraps to zero past 2^32, and the first add that finds
+a bit already set divides by it.
+
 A bucket array of 2^32 bits or more, 512 MiB, was written by 6.2.0 and every release before
 it with a byte count that had wrapped in 32 bits: a Bloom filter of 4,294,967,294 buckets
 was stored with no bytes, and a counting filter of 1,127,428,565 four-bit counters with

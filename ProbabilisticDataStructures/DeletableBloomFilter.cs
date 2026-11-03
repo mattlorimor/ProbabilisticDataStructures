@@ -477,7 +477,7 @@ namespace ProbabilisticDataStructures
             reader.Budget.Price(ScratchCost(k));
         }
 
-        private static void CheckRegions(uint m, uint buckets, uint collisions)
+        internal static void CheckRegions(uint m, uint buckets, uint collisions)
         {
             if (m == 0 || buckets != m)
             {
@@ -491,6 +491,22 @@ namespace ProbabilisticDataStructures
                 throw new InvalidDataException(
                     "Filter has no collision regions, which is what makes its deletions " +
                     "safe; it divides by that count on first use.");
+            }
+
+            // The two regions are the halves of one filter of m bits, and sizing refuses an
+            // m past uint.MaxValue, so no filter built here has regions that come to more.
+            // The reader derives a region's size as (m + collisions - 1) / collisions in 32
+            // bits, so a sum past 2^32 wraps the numerator, makes the size zero, and the
+            // first Add that finds a bit set divides by it. Checked here, where Read and
+            // Price both pass, so the refusal comes before either region is allocated.
+            if ((ulong)m + collisions > uint.MaxValue)
+            {
+                throw new InvalidDataException(
+                    $"Filter has a data region of {m:N0} bits and {collisions:N0} collision " +
+                    $"regions, which together are {(ulong)m + collisions:N0} bits. A filter " +
+                    $"addresses at most {uint.MaxValue:N0}, so no filter this library builds " +
+                    "is this large; its region size would wrap to zero, and it divides by " +
+                    "that on first use.");
             }
         }
 
