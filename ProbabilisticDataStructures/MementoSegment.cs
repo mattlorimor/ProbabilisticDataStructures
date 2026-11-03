@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 
 namespace ProbabilisticDataStructures
 {
@@ -462,9 +463,20 @@ namespace ProbabilisticDataStructures
         internal List<ulong> ReadRun(uint quotient)
         {
             var fields = new List<ulong>();
+            ReadRun(quotient, fields);
+            return fields;
+        }
+
+        /// <summary>
+        /// The slot values of the run belonging to a quotient, in order, into a list the
+        /// caller keeps, which is cleared first.
+        /// </summary>
+        private void ReadRun(uint quotient, List<ulong> fields)
+        {
+            fields.Clear();
             if (!IsOccupied(quotient))
             {
-                return fields;
+                return;
             }
 
             var slot = FindRunStart(quotient);
@@ -474,8 +486,39 @@ namespace ProbabilisticDataStructures
                 slot = Next(slot);
             }
             while (IsContinuation(slot));
+        }
 
-            return fields;
+        /// <summary>
+        /// Refuses a table holding a run whose boxes do not decode, so that a filter read
+        /// from a payload answers every query without the codec's backstop firing.
+        /// </summary>
+        /// <remarks>
+        /// One pass: every occupied quotient's run is read, as a query reads it, into one list
+        /// kept for the walk, and checked by the codec without its boxes being built. So the
+        /// walk allocates the longest run's slots once and nothing for each key.
+        /// </remarks>
+        internal void CheckRuns(int table)
+        {
+            var fields = new List<ulong>();
+            for (var quotient = 0u; quotient < this.Slots; quotient++)
+            {
+                if (!IsOccupied(quotient))
+                {
+                    continue;
+                }
+
+                ReadRun(quotient, fields);
+                try
+                {
+                    this.Codec.Check(fields);
+                }
+                catch (InvalidDataException e)
+                {
+                    throw new InvalidDataException(
+                        $"Table {table}, the run of slot {quotient}: {e.Message} The payload is " +
+                        "damaged or was not written by this library.", e);
+                }
+            }
         }
 
         /// <summary>
