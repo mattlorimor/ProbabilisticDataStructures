@@ -133,12 +133,14 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The refusal comes before anything is built. A window of a billion at the
-        /// default factor has substreams of about two million items, and the checkpoints
-        /// of one are a list of that many offsets, so a constructor that checked the shape
-        /// after sizing them would allocate megabytes to say no. The allocation is the
-        /// least of three runs, as <see cref="TestReadBudget"/> measures a read: the
-        /// first throw of an exception costs more than the ones after it.
+        /// The refusal costs nothing to speak of. A window of a billion at the default
+        /// factor has substreams of about two million items, and while their checkpoints
+        /// were thinned from a list of that many offsets, a constructor that checked the
+        /// shape after building them allocated megabytes to say no. Since #219 the
+        /// checkpoints are a walk's few dozen offsets, so this no longer tells whether the
+        /// shape is checked first; what it holds is that a refusal allocates little. The
+        /// allocation is the least of three runs, as <see cref="TestReadBudget"/> measures a
+        /// read: the first throw of an exception costs more than the ones after it.
         /// </summary>
         [TestMethod]
         public void TestARefusedShapeBuildsNothing()
@@ -158,10 +160,8 @@ namespace TestProbabilisticDataStructures
                     least = Math.Min(least, GC.GetAllocatedBytesForCurrentThread() - before);
                 }
 
-                // Checkpoints alone for this window is about eight megabytes.
                 Assert.IsLessThan(64 * 1024, least,
-                    $"a refused {depth} by {width} shape allocated {least:N0} bytes, " +
-                    "which is the checkpoints of a substream: it was built before it was refused");
+                    $"a refused {depth} by {width} shape allocated {least:N0} bytes to be refused");
             }
         }
 

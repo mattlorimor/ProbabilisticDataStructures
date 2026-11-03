@@ -247,6 +247,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was refused for the two values, an `ArgumentException`, wherever they came; now, if the
   limit is passed first, it is the `ArgumentOutOfRangeException` naming `pairs`. A set that
   builds is built as before.
+  <br><br>
+  `DpswSketch` finds a substream's checkpoints by a walk that keeps only the offsets it
+  chooses, the walk that already counted them for a read's price. They were thinned from a
+  list of every offset in the substream: 8.6 GB at the largest window the constructor
+  takes, and 1 GB at a window of 10^12, for a few dozen checkpoints. They are the same
+  checkpoints. A read is charged for the array it builds, where it was charged for the list
+  as well, so a sketch over a wide window reads under a smaller budget: the default budget
+  refused any payload whose substreams were of more than 2^26 items for the list alone, and
+  now that is decided by the sketches it holds.
 
 ### Fixed
 
