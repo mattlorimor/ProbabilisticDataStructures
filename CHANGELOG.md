@@ -777,6 +777,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data. Payloads of sizes that did not wrap read as they always did. The format does not
   change, and [FORMAT.md](FORMAT.md#sizes) says which length is refused as the wrapped one.
 
+- **`Count()` on `CountingBloomFilter` and `DeletableBloomFilter` wrapped to 2^64 - 1 once
+  more removals had returned true than items were added, and now stops at zero.**
+  `TestAndRemove` took one off the count whenever it returned true, and it returns true
+  whenever every one of the item's positions is set, which is not the same as the item
+  having been added and now being gone. A counter that reached its maximum is never
+  decremented, so an item added as often as the counter holds still tests present after it
+  has been removed as often, and its next removal went below zero: 16 `Add` calls of one
+  item into 4-bit counters and 17 `TestAndRemove` calls gave 18,446,744,073,709,551,615.
+  A deletable filter does not clear bits in a region that has seen a collision, with the
+  same result after 2 adds and 3 removals; and removing an item that was never added,
+  which a false positive answers true, did the same. `WriteTo` stored the wrapped value, a
+  filter read back reported it, and `CountingBloomFilter.Merge` added it to the other
+  filter's count. Before the count was 64 bits it wrapped to 4,294,967,295, so every
+  release is affected.
+  <br><br>
+  Both filters now decrement only when the count is above zero, as
+  `SublimeCountMinSketch.Remove` does. `DeletableBloomFilter` also decrements only when
+  the removal cleared a bit, so a deletion that is refused, because every region of the
+  item has collided, still returns true and leaves the item a member, and leaves the count
+  where it was. Return values and counters do not change, and nor does the stored format.
+  After removing items that were never added, `Count()` is an undercount of what the
+  filter holds, where it was nonsense, and its documentation now says so. A wrapped count
+  saved by an earlier release is read back as stored, since a huge count cannot be told
+  from a real one. (#210)
+
 - **Writing a structure whose payload passed a gibibyte got slower with every field, and
   one that passed two gibibytes failed without saying why.** The buffer a payload is built
   in doubled in an `int`, which wraps negative from 1 GiB up, so from there it was exactly

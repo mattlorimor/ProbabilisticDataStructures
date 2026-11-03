@@ -491,6 +491,10 @@ At version 1 there is no placement byte, the counters were placed with 32-bit va
 and the count is a `u32`. Which items a counter counts is described in
 [Bit placement](#bit-placement).
 
+The count stops at zero as items are removed. A payload saved by a release before that
+fix, after more removals than adds, holds the wrapped value (2^64 - 1, or 2^32 - 1 before
+version 8), and it is read as it was stored: a huge count cannot be told from a real one.
+
 ### `DeletableBloomFilter` (id 4)
 
 At version 8:
@@ -508,6 +512,11 @@ At version 1 there is no placement byte, the bits were placed with 32-bit values
 the count is a `u32`. The region size is **not** stored. See
 [What is not stored](#what-is-not-stored). Which item a bit of the data region stands for
 is described in [Bit placement](#bit-placement), with `m` the data region.
+
+The count falls only for a removal that cleared a bit, and stops at zero. A payload saved
+by a release before that fix holds a count that fell for every removal answered true, and
+after more of those than adds, the wrapped value (2^64 - 1, or 2^32 - 1 before version 8); it
+is read as it was stored.
 
 ### `PartitionedBloomFilter` (id 5)
 
