@@ -1339,6 +1339,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can leave it up to a unit (0.75 at worst, measured) outside the accuracy; it is not
   corrected, because a bucket there that answered within the accuracy must keep its answer.
 
+- **`DDSketch` read a payload whose bucket counts wrapped past 2^64 as one that added up,
+  and `Merge` could wrap a total the same way.** The reader checks that the buckets add up
+  to the recorded total, and added in unsigned 64 bits, so counts that came to more than a
+  count holds could come, modulo 2^64, to exactly the total the payload claimed. Two places
+  wrapped: a store's total while its counts were loaded, and the sum of the two stores and
+  the zero count. A payload of two buckets of 2^63 with a total of zero read without a word,
+  as a sketch whose store reported itself empty with its bounds and counts still set: it
+  answered `Count()` zero, and after one more `Add` its `Quantile` threw an
+  `IndexOutOfRangeException`. The payload needs a valid checksum, so no use of the public
+  API builds one, and the format spec already said such a payload was refused.
+  <br><br>
+  The reader now refuses both with an `InvalidDataException` of their own, naming the sign
+  for a store and saying the three together hold more than 2^64 − 1 for the sum, instead of
+  the "do not add up" it gave a total that merely disagreed. A total of exactly
+  2^64 − 1 is still read, as is any payload the writer wrote: an honest sketch's total is
+  never more than its count. `Merge` refuses a merge whose counts together would pass
+  2^64 − 1 with an `ArgumentException` and the sketch unchanged, before either store is
+  touched, as it already did for buckets no array could hold, where it used to let the
+  count wrap. Nothing but a payload gets a sketch within reach of that, since `Add` takes
+  one value at a time. No format change.
+
 - **A payload whose byte run claimed almost `int.MaxValue` bytes was refused with an
   `ArgumentOutOfRangeException`, not the `InvalidDataException` every other payload the
   library will not read gets.** The reader checked a run against the payload as
