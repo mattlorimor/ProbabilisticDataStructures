@@ -161,6 +161,55 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A top-k merged into itself doubles the sketch inside it, and an element held
+        /// is read back from that sketch, so its frequency doubles with it and, once the
+        /// sketch's counters stop at the largest count, stops there. Wrapped, the 64th
+        /// merge read the held element back at nought. Neither the element's frequency nor
+        /// the item count falls on the way, and an add after the last leaves both at the
+        /// largest.
+        /// </summary>
+        [TestMethod]
+        public void TestSelfMergesNeverLowerAHeldElementsFrequency()
+        {
+            var topK = new TopK(0.01, 0.01, 3);
+            topK.Add(BOB_BYTES);
+
+            var held = topK.Elements().Single();
+            CollectionAssert.AreEqual(BOB_BYTES, held.Data.ToArray());
+            var frequency = held.Freq;
+            var items = topK.N;
+            Assert.AreEqual(1UL, frequency);
+            Assert.AreEqual(1UL, items);
+
+            for (var merge = 1; merge <= 64; merge++)
+            {
+                topK.Merge(topK);
+
+                var expected = merge < 64 ? 1UL << merge : ulong.MaxValue;
+                var element = topK.Elements().Single();
+                CollectionAssert.AreEqual(BOB_BYTES, element.Data.ToArray(),
+                    $"the element held after merge {merge}");
+
+                Assert.IsGreaterThanOrEqualTo(frequency, element.Freq,
+                    $"merge {merge} lowered the held element's frequency from {frequency} to {element.Freq}");
+                Assert.IsGreaterThanOrEqualTo(items, topK.N,
+                    $"merge {merge} lowered the item count from {items} to {topK.N}");
+                Assert.AreEqual(expected, element.Freq, $"the held element's frequency after merge {merge}");
+                Assert.AreEqual(expected, topK.N, $"the item count after merge {merge}");
+
+                frequency = element.Freq;
+                items = topK.N;
+            }
+
+            Assert.AreEqual(ulong.MaxValue, frequency);
+            Assert.AreEqual(ulong.MaxValue, items);
+
+            topK.Add(BOB_BYTES);
+            Assert.AreEqual(ulong.MaxValue, topK.Elements().Single().Freq, "an add to an element at the largest");
+            Assert.AreEqual(ulong.MaxValue, topK.N, "an add to a count at the largest");
+        }
+
+        /// <summary>
         /// Below the field's limit nothing changes: the stored count is the count.
         /// </summary>
         [TestMethod]

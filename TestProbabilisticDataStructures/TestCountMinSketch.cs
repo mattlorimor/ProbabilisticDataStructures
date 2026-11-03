@@ -165,6 +165,188 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        // ---- A counter stops at the largest count rather than wrapping -----------------
+
+        /// <summary>
+        /// A sketch merged into itself doubles every counter and its total, so one that
+        /// has counted a single key holds 2^n of it after n merges, and passes what a
+        /// <c>ulong</c> holds at the 64th. Wrapped, that merge took the key's estimate and
+        /// the total to nought, an undercount from a structure that never gives one. Both
+        /// stop at the largest instead, and neither falls on the way.
+        /// </summary>
+        [TestMethod]
+        public void TestSelfMergesNeverLowerAnEstimateOrTheTotal()
+        {
+            var cms = new CountMinSketch(0.001, 0.01);
+            cms.Add(A_BYTES);
+
+            var estimate = cms.Count(A_BYTES);
+            var total = cms.TotalCount();
+            Assert.AreEqual(1UL, estimate, "one add is one in every counter of the key");
+            Assert.AreEqual(1UL, total);
+
+            for (var merge = 1; merge <= 64; merge++)
+            {
+                cms.Merge(cms);
+
+                // 2^n is exact up to 2^63, and 2^64 is not a count: the 64th merge stops.
+                var expected = merge < 64 ? 1UL << merge : ulong.MaxValue;
+                var estimateNow = cms.Count(A_BYTES);
+                var totalNow = cms.TotalCount();
+
+                Assert.IsGreaterThanOrEqualTo(estimate, estimateNow,
+                    $"merge {merge} lowered the key's estimate from {estimate} to {estimateNow}");
+                Assert.IsGreaterThanOrEqualTo(total, totalNow,
+                    $"merge {merge} lowered the total from {total} to {totalNow}");
+                Assert.AreEqual(expected, estimateNow, $"the key's estimate after merge {merge}");
+                Assert.AreEqual(expected, totalNow, $"the total after merge {merge}");
+
+                estimate = estimateNow;
+                total = totalNow;
+            }
+
+            Assert.AreEqual(ulong.MaxValue, estimate);
+            Assert.AreEqual(ulong.MaxValue, total);
+        }
+
+        /// <summary>
+        /// An add to a sketch a merge has taken to the largest count leaves the key's
+        /// estimate and the total there. Wrapped, the add took both to nought, which is
+        /// what saturating only in <c>Merge</c> would leave.
+        /// </summary>
+        [TestMethod]
+        public void TestAnAddAfterSelfMergesLeavesTheEstimateAndTheTotalAtTheLargest()
+        {
+            var cms = new CountMinSketch(0.001, 0.01);
+            cms.Add(A_BYTES);
+            for (var merge = 0; merge < 64; merge++)
+            {
+                cms.Merge(cms);
+            }
+
+            Assert.AreEqual(ulong.MaxValue, cms.Count(A_BYTES), "the sketch is not at the largest to begin with");
+            Assert.AreEqual(ulong.MaxValue, cms.TotalCount());
+
+            cms.Add(A_BYTES);
+
+            Assert.AreEqual(ulong.MaxValue, cms.Count(A_BYTES), "an add to the key's counters at the largest");
+            Assert.AreEqual(ulong.MaxValue, cms.TotalCount(), "an add to the total at the largest");
+
+            // A key the merges never reached is counted as it always was.
+            cms.Add(B_BYTES);
+            Assert.AreEqual(1UL, cms.Count(B_BYTES));
+            Assert.AreEqual(ulong.MaxValue, cms.TotalCount());
+        }
+
+        /// <summary>
+        /// A counter at the largest count stays there when it is added to, in whichever
+        /// row it is. The estimate is the least of a key's counters, so a wrapped one is
+        /// the estimate: with one row at the largest and the others at 40, an add must give
+        /// 41, and a counter that wrapped gives 0 where a sketch never undercounts. Each
+        /// row takes its turn, so a row the loop skipped does not pass.
+        /// </summary>
+        [TestMethod]
+        public void TestAnAddToASaturatedCounterInAnyRowLeavesItThere()
+        {
+            var depth = new CountMinSketch(0.001, 0.01).Depth;
+            Assert.IsGreaterThan(1u, depth, "one row cannot show which of several is the one that wrapped");
+
+            for (var saturated = 0; saturated < depth; saturated++)
+            {
+                var cms = new CountMinSketch(0.001, 0.01);
+                for (var row = 0; row < depth; row++)
+                {
+                    Array.Fill(cms.Matrix[row], row == saturated ? ulong.MaxValue : 40UL);
+                }
+
+                Assert.AreEqual(40UL, cms.Count(A_BYTES), "the estimate before the add");
+
+                cms.Add(A_BYTES);
+
+                Assert.AreEqual(41UL, cms.Count(A_BYTES),
+                    $"with row {saturated} at the largest and the others at 40, an add is 41");
+            }
+        }
+
+        /// <summary>
+        /// The counters and the total reach the largest count by an add that takes them
+        /// from one short of it, and stay there after the next. A stop that came one count
+        /// early would leave them a count short of the largest for good, which no test that
+        /// starts at the largest sees. One short is 2 + 4 + ... + 2^63, the sketches a
+        /// single add becomes in 1 to 63 self-merges, summed by merging; the merges sum to
+        /// below the largest every time, so nothing here has stopped yet.
+        /// </summary>
+        [TestMethod]
+        public void TestAnAddTakesTheCountersAndTheTotalToTheLargestAndNoFurther()
+        {
+            var powers = new CountMinSketch(0.001, 0.01);
+            powers.Add(A_BYTES);
+            var sum = new CountMinSketch(0.001, 0.01);
+            for (var doublings = 1; doublings <= 63; doublings++)
+            {
+                powers.Merge(powers);
+                sum.Merge(powers);
+            }
+
+            Assert.AreEqual(ulong.MaxValue - 1, sum.Count(A_BYTES), "2 + 4 + ... + 2^63 in every counter of the key");
+            Assert.AreEqual(ulong.MaxValue - 1, sum.TotalCount(), "and in the total");
+
+            sum.Add(A_BYTES);
+            Assert.AreEqual(ulong.MaxValue, sum.Count(A_BYTES), "one add from one short");
+            Assert.AreEqual(ulong.MaxValue, sum.TotalCount(), "one add from one short, in the total");
+
+            sum.Add(A_BYTES);
+            Assert.AreEqual(ulong.MaxValue, sum.Count(A_BYTES), "an add at the largest");
+            Assert.AreEqual(ulong.MaxValue, sum.TotalCount(), "an add at the largest, in the total");
+        }
+
+        /// <summary>
+        /// Merging a sketch whose counters are near the largest into one that adds more
+        /// than is left stops them at the largest, and counters that the sum does not carry
+        /// past it are the sum, exact. The second half is what stops a merge that saturates
+        /// too readily from passing: one that takes a sum equal to the counter it started
+        /// from, which is every counter the other sketch did not touch, for an overflow.
+        /// </summary>
+        [TestMethod]
+        public void TestMergingTwoSketchesStopsAtTheLargestAndIsExactBelowIt()
+        {
+            const ulong headroom = 2;
+            var cms = new CountMinSketch(0.001, 0.01);
+            foreach (var row in cms.Matrix)
+            {
+                Array.Fill(row, ulong.MaxValue - headroom);
+            }
+
+            var other = new CountMinSketch(0.001, 0.01);
+            for (var i = 0; i < 5; i++)
+            {
+                other.Add(A_BYTES);
+            }
+
+            cms.Merge(other);
+
+            Assert.AreEqual(ulong.MaxValue, cms.Count(A_BYTES),
+                "five more than the headroom of two in every counter of the key");
+
+            // B's counters were not touched, unless they share every row with A.
+            Assert.AreEqual(ulong.MaxValue - headroom, cms.Count(B_BYTES),
+                "counters the other sketch added nothing to are as they were");
+            Assert.AreEqual(5UL, cms.TotalCount());
+
+            // And a sum that lands on the largest exactly is the largest, not past it.
+            var exact = new CountMinSketch(0.001, 0.01);
+            foreach (var row in exact.Matrix)
+            {
+                Array.Fill(row, ulong.MaxValue - headroom);
+            }
+
+            var two = new CountMinSketch(0.001, 0.01);
+            two.Add(A_BYTES).Add(A_BYTES);
+            exact.Merge(two);
+            Assert.AreEqual(ulong.MaxValue, exact.Count(A_BYTES));
+            Assert.AreEqual(ulong.MaxValue - headroom, exact.Count(B_BYTES));
+        }
+
         // ---- A constructor refuses what it cannot build ------------------------------
 
         /// <summary>

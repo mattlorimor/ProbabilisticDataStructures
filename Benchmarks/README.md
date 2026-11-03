@@ -33,6 +33,7 @@ Results are written to `BenchmarkDotNet.Artifacts/` (git-ignored).
 | `PlacementKernelBenchmarks` | The placement kernel in place, over a bare bit array: `Utils.HashKernel` against `Utils.HashKernel128`, the same bits from an implementation that can be inlined, and a different derivation (SplitMix64), for short and long items. It says where the cost of `WidePlacementBenchmarks` goes |
 | `CuckooOperationBenchmarks` | `Add`, and `Test` of a member and of a stranger, on a `CuckooBloomFilter` of about 5.7 MB (L3-resident), for short and long items. Items are made from their index as they are used, so the cache sees the table alone. `Add` goes into a filter rebuilt for each iteration |
 | `CuckooEvictionBenchmarks` | `Add` to a `CuckooBloomFilter` filled to 90% of its entries, where most inserts relocate other fingerprints |
+| `CountMinSketchBenchmarks` | `Add` to a `CountMinSketch`, and a `Merge` of two, at a width whose rows fit in L2 and at one that leaves it. It prices what a counter update does beyond adding |
 
 `Add` mutates the filter, so those benchmarks rebuild it in `[IterationSetup]` and
 insert a fixed batch per invocation. `OperationsPerInvoke` reports per-item cost and

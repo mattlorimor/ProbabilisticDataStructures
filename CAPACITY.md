@@ -491,11 +491,16 @@ sketch went to, and a sketch read back has to go on agreeing with one built now.
 
 ### `CountMinSketch`
 
-Counters are 64-bit, so a row holds counts to 18 quintillion and the sketch takes any
-number of items. What grows with them is the error: an estimate is at most `ε · N` over
-the truth for `N` items added, so a sketch for a stream you expect to reach `N` wants `ε`
-about the error you can accept divided by `N`. Width is `⌈e/ε⌉` and depth `⌈ln(1/δ)⌉`,
-5 at δ = 1%. A read charges 16 bytes a counter.
+Counters are 64-bit, so a row holds counts to 18 quintillion, and a stream takes that many
+items to reach it. A counter and the item count stop at the limit and do not wrap to
+nought: an `Add` to one at the limit leaves it there, and a `Merge` that would take one
+past it ends at it, so an estimate never falls. A merge can get there with far fewer items,
+since a sketch merged into itself doubles every counter, and one holding a single item is
+at the limit after 64 merges. A counter at the limit stands for that many items or more, so
+an estimate there is a floor, not an upper bound. What grows with the items is the error:
+an estimate is at most `ε · N` over the truth for `N` items added, so a sketch for a stream
+you expect to reach `N` wants `ε` about the error you can accept divided by `N`. Width is
+`⌈e/ε⌉` and depth `⌈ln(1/δ)⌉`, 5 at δ = 1%. A read charges 16 bytes a counter.
 
 A row is one array, so the widest is 2,147,483,591, an `ε` of about 1.27e-9, and the
 constructor refuses a finer one with an `ArgumentOutOfRangeException` naming `epsilon`. The
