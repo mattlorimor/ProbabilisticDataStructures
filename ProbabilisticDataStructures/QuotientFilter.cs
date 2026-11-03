@@ -341,8 +341,18 @@ namespace ProbabilisticDataStructures
                 entries = held;
             }
 
-            foreach (var (quotient, remainder) in entries)
+            // At most as many as the other filter held when the merge began, whatever the
+            // walk yields. The check above left room for exactly that many, and Insert
+            // searches forward for an empty slot with nothing to stop it if there is
+            // none, so this is what keeps a walk that goes wrong -- one that meets the
+            // entries it has just written, say -- from filling the table and hanging in
+            // the insert instead of ending with a wrong answer a test can see. The count
+            // is a uint, so it is held as one: on a full table of 2^31 slots it does not
+            // fit an int.
+            using var walk = entries.GetEnumerator();
+            for (var left = other.count; left > 0 && walk.MoveNext(); left--)
             {
+                var (quotient, remainder) = walk.Current;
                 this.Insert(quotient, remainder);
                 this.count++;
             }
