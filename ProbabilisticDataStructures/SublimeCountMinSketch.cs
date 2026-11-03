@@ -154,6 +154,14 @@ namespace ProbabilisticDataStructures
         internal int WidthLimit { get; set; } = MaxWidth;
 
         /// <summary>
+        /// Called before each row of counters that a doubling, a folding or a repacking
+        /// allocates, plain counts and packed rows alike. It is null; a test sets it to
+        /// throw an <see cref="OutOfMemoryException"/> at one of them, to reach a resize
+        /// that cannot get its memory without building a sketch of gigabytes.
+        /// </summary>
+        internal Action? BeforeAllocatingRow { get; set; }
+
+        /// <summary>
         /// The width a row starts at: a chunk's worth of counters over the size factor,
         /// rounded down to a power of two.
         /// </summary>
@@ -1022,7 +1030,7 @@ namespace ProbabilisticDataStructures
             var folded = new ulong[this.rows.Length][];
             for (var i = 0; i < this.rows.Length; i++)
             {
-                folded[i] = new ulong[halved];
+                folded[i] = NewCounts(halved);
                 for (var j = 0; j < halved; j++)
                 {
                     var gathered = (UInt128)this.rows[i].Get(j) + this.rows[i].Get(j + halved);
@@ -1050,7 +1058,7 @@ namespace ProbabilisticDataStructures
             var values = new ulong[this.rows.Length][];
             for (var i = 0; i < this.rows.Length; i++)
             {
-                values[i] = new ulong[newWidth];
+                values[i] = NewCounts(newWidth);
                 for (var j = 0; j < newWidth; j++)
                 {
                     values[i][j] = this.rows[i].Get(j & (this.width - 1));
@@ -1071,7 +1079,7 @@ namespace ProbabilisticDataStructures
             var rebuilt = new ValeCounterArray[values.Length];
             for (var i = 0; i < values.Length; i++)
             {
-                var row = new ValeCounterArray(this.width, chunkCounters, stub);
+                var row = NewRow(this.width, chunkCounters, stub);
                 for (var j = 0; j < this.width; j++)
                 {
                     if (values[i][j] != 0)
@@ -1085,6 +1093,26 @@ namespace ProbabilisticDataStructures
             this.rows = rebuilt;
             this.countersPerChunk = chunkCounters;
             this.stubBits = stub;
+        }
+
+        /// <summary>
+        /// A row of plain counts for a resize to fill, allocated past
+        /// <see cref="BeforeAllocatingRow"/>.
+        /// </summary>
+        private ulong[] NewCounts(int forWidth)
+        {
+            this.BeforeAllocatingRow?.Invoke();
+            return new ulong[forWidth];
+        }
+
+        /// <summary>
+        /// A row of packed counters for a resize to fill, allocated past
+        /// <see cref="BeforeAllocatingRow"/>.
+        /// </summary>
+        private ValeCounterArray NewRow(int forWidth, int chunkCounters, int stub)
+        {
+            this.BeforeAllocatingRow?.Invoke();
+            return new ValeCounterArray(forWidth, chunkCounters, stub);
         }
 
         /// <summary>
