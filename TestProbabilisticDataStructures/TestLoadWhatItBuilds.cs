@@ -811,12 +811,13 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A substream's checkpoints are a list with a slot for each item, so the
-        /// longest substream is the longest list. The constructor refuses a window and
-        /// factor that make more, before building the list; the reader refuses a payload
-        /// that claims more, and one that claims exactly that is refused for what the
-        /// list would cost. (<see cref="TestDpswSketch"/> holds the sizing rule to its
-        /// edge, one item either side.)
+        /// The longest substream is the longest array. The constructor refuses a window and
+        /// factor that make more; the reader refuses a payload that claims more, and reads
+        /// one that claims exactly that, whose checkpoints cost a few dozen offsets: they
+        /// are found by a walk, where they were thinned from a list with a slot for each
+        /// item and a payload at the limit was refused for what that list would cost.
+        /// (<see cref="TestDpswSketch"/> holds the sizing rule to its edge, one item either
+        /// side.)
         /// <para>
         /// The sketches a window holds are private sketches, so its width and depth are
         /// limited by theirs, and by the same symbols rather than a second pair: the
@@ -837,13 +838,14 @@ namespace TestProbabilisticDataStructures
             AssertRefused<DpswSketch>(
                 PokeUInt32(bytes, 24, (uint)DpswSketch.MaxSubstreamSize + 1), PastTheLimit);
 
-            // A window the low word of which is 2^32 - 1 can have a substream at the limit.
+            // A window the low word of which is 2^32 - 1 can have a substream at the limit,
+            // and it reads under the default budget.
             var wide = PokeUInt32(bytes, 0, uint.MaxValue);
-            var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() =>
-                Persistence.FromByteArray<DpswSketch>(
-                    PokeUInt32(wide, 24, (uint)DpswSketch.MaxSubstreamSize)));
-            Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
-                "a payload at the limit should be refused for what it costs, not its size");
+            var atTheLimit = Persistence.FromByteArray<DpswSketch>(
+                PokeUInt32(wide, 24, (uint)DpswSketch.MaxSubstreamSize));
+            Assert.AreEqual(DpswSketch.MaxSubstreamSize, atTheLimit.SubstreamSize);
+            Assert.AreEqual(DpswSketch.CheckpointCount(DpswSketch.MaxSubstreamSize, 0.5),
+                atTheLimit.Checkpointing.Length);
 
             // The shape of the sketches it holds is the private sketch's, the same symbols.
             Assert.AreEqual("width", Assert.ThrowsExactly<ArgumentOutOfRangeException>(

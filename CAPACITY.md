@@ -210,6 +210,13 @@ the most distinct keys are 1,908,641,337 at 8 bits and 954,204,160 at 16; a set 
 is refused, naming `items`, before the fingerprints are allocated. A read is charged
 twice the table, which is about 2.25 bytes a key for 8-bit fingerprints.
 
+It is not refused before the items are hashed, though. The build puts the hash of every item
+it is given into one list, duplicates and all, and holds that list and a sorted copy of it,
+at least 16 bytes an item, before it can refuse: the distinct keys are counted only then.
+That is 30.5 GB at the 1,908,641,337 keys of the 8-bit limit, and more for a set past it.
+And a list holds at most 2,147,483,591 hashes, so a build given more items than that fails
+with an `OutOfMemoryException`, however few of them are distinct.
+
 ### `BloomierFilter`
 
 Built once from the whole set of keys and their values, at about the same cells per key. A
@@ -261,6 +268,11 @@ The high parts are addressed with an `int`, so a filter has at most 2,147,483,64
 them. How many depends on where the keys' largest code falls in the universe, which
 depends on the keys, so the table gives the worst case: filters of those sizes always
 build and read, and many key sets do better.
+
+The build holds the keys twice over before it knows whether they fit: the distinct keys in
+one sorted set and their codes in another, 48 bytes a key each, about 96 between them,
+before the high parts are counted. At the 838 million keys of the worst case that is 80 GB,
+and a set past it is refused only after.
 
 ### `InvertibleBloomLookupTable`
 
@@ -370,6 +382,9 @@ table, which is charged like any other count-min sketch and nested.
 A sample of `k` items out of any number. Its five regions are `k + 1` slots each from the
 start, so an empty sample is charged for all of them and a full one also for the items it
 keeps, the second row.
+
+The regions are allocated whole when the sample is made, before it holds anything, at 40
+bytes for each unit of `k`: 80 GiB at the largest `k`, 2,147,483,590.
 
 ## Takes unlimited items
 
@@ -501,11 +516,12 @@ Takes any number of items, and what it holds is a window of the most recent `win
 of them, as a set of sketches whose number grows slowly with the window. The table gives the
 window it reads back at with the default width and depth, which is a measurement.
 
-A substream holds `window^β` items (β of 0.7 unless you say otherwise) and the checkpoints of
-one are a list with a slot for each, so `window^β` is at most 2,147,483,591, the longest
-list. The constructor refuses a window and β that make more, naming `window`. At the
-default β that is a window of 21,445,114,182,289, which is the table's figure for what is
-built; memory is what stops a real one long before.
+A substream holds `window^β` items (β of 0.7 unless you say otherwise), and at most
+2,147,483,591, the longest array: the limit was set when the checkpoints of a substream were
+a list with a slot for each item, and has stayed now that they are found without one. The
+constructor refuses a window and β that make more, naming `window`. At the default β that
+is a window of 21,445,114,182,289, which is the table's figure for what is built; memory is
+what stops a real one long before.
 
 The sketches of a window are at most as wide and as deep as a `PrivateCountMinSketch` is, 2,147,483,591
 each: the constructor refuses a width or a depth past that, naming it, before anything is built, and

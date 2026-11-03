@@ -219,6 +219,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SetSketch` shipped in 6.2.0, so 6.2.0 is affected. Nothing stored or computed
   changes. (#203)
 
+- **Large structures no longer allocate for what they might hold before they hold it.**
+  No answer and no stored byte changes. (#219)
+  <br><br>
+  `TopK` and `HeavyKeeper` start their heap of tracked elements empty and grow it as
+  elements arrive. The heap and its index were sized to `k` when the structure was built,
+  again on every `Reset`, and for the heap `TopK.Merge` rebuilds, which measured 49 MB at a
+  `k` of a million before the first `Add`. `k` still bounds what they hold, and the most it
+  can be is unchanged.
+  <br><br>
+  The filters that keep their bits or counters in a bucket array, `BloomFilter`,
+  `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter` and
+  `StableBloomFilter`, and `CuckooBloomFilter`'s occupancy bits, now clear it where it is on
+  `Reset`. A new array was allocated while the old one was still held, so a reset needed
+  twice the array at once: 4 GiB for an 8-bit counting or stable filter at its largest.
+  <br><br>
+  `InfiniFilter` doubles its table by walking the old table's entries in place. It listed
+  them first, 16 bytes an entry beside both tables, which at the doubling into 2^31 slots
+  was 12.9 GB more than the 4.8 GB of the two 8-bit tables.
+  <br><br>
+  `BloomierFilter.Build` refuses a set with more distinct keys than a map holds at the first
+  key past the most, without reading the rest of the pairs. It collected every pair first,
+  into a dictionary and then a list, and compared the count afterwards, so a set too large
+  was held whole before it was refused: more than 42 GB for any set past 954,204,160 keys,
+  the most at 8-bit values. **One refusal changes:** a set that has too many keys and also
+  gives a key two different values is now refused for whichever the pairs reach first. It
+  was refused for the two values, an `ArgumentException`, wherever they came; now, if the
+  limit is passed first, it is the `ArgumentOutOfRangeException` naming `pairs`. A set that
+  builds is built as before.
+  <br><br>
+  `DpswSketch` finds a substream's checkpoints by a walk that keeps only the offsets it
+  chooses, the walk that already counted them for a read's price. They were thinned from a
+  list of every offset in the substream: 8.6 GB at the largest window the constructor
+  takes, and 1 GB at a window of 10^12, for a few dozen checkpoints. They are the same
+  checkpoints. A read is charged for the array it builds, where it was charged for the list
+  as well, so a sketch over a wide window reads under a smaller budget: the default budget
+  refused any payload whose substreams were of more than 2^26 items for the list alone, and
+  now that is decided by the sketches it holds.
+  <br><br>
+  Three costs stay, and [CAPACITY.md](CAPACITY.md) now gives them beside each structure's
+  limits: a `VarOpt` allocates its five regions of `k + 1` slots when it is made, 40 bytes
+  for each unit of `k`; `BinaryFuseFilter.Build` hashes every item it is given, duplicates
+  included, into a list of at least 16 bytes an item before it can refuse a set too large,
+  and fails with an `OutOfMemoryException` when given more items than a list holds,
+  however few are distinct; and `Grafite.Build` holds the keys in two sorted sets, about
+  96 bytes a key, before it can refuse.
+
 ### Fixed
 
 - **`InvertibleBloomLookupTable.TryDecode` could report success with a wrong answer.** It
