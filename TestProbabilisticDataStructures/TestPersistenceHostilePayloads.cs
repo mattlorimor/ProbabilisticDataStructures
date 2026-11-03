@@ -565,6 +565,38 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The most bits of high parts a filter can address, 2^31 - 1, is a count the
+        /// builder writes at its edge, and the reader takes it: a payload whose single code
+        /// gives exactly that many is refused only for the words it does not hold, which are
+        /// the 33,554,432 that many bits fill. (The code ends at 2^32 - 6 and is split at one
+        /// bit, so its high part is 2^31 - 3, plus the code, plus one.) A count past it is
+        /// refused by the tests above. Structural: a filter of that many bits is gigabytes
+        /// of words, so the payload claims them and does not carry them.
+        /// </summary>
+        [TestMethod]
+        public void TestGrafiteAtTheMostBitsOfHighPartsIsRefusedOnlyForTheWordsItLacks()
+        {
+            const int HighWordsOffset = GrafiteLowWordsOffset + 4 + (2 * 8);
+            const ulong LastCode = (1UL << 32) - 6;
+
+            var original = Grafite.Build(new ulong[] { 5 }, 0.5, 1, seed: 1).ToByteArray();
+            var filter = Persistence.FromByteArray<Grafite>(original);
+            Assert.AreEqual(1, filter.CodeCount);
+            Assert.AreEqual(1, filter.LowBits, "the code above ends at a high part of 2^31 - 3");
+            Assert.AreEqual(2, filter.Lows.Length, "the words the one code gives its low bits");
+
+            // The universe, which the code is below, and the smallest and largest codes at
+            // 52 and 60 (the same code).
+            var edge = PokeUInt64(original, 0, 1UL << 33);
+            edge = PokeUInt64(edge, 52, LastCode);
+            edge = PokeUInt64(edge, 60, LastCode);
+            edge = PokeUInt32(edge, GrafiteHighBitCountOffset, int.MaxValue);
+            edge = PokeUInt32(edge, HighWordsOffset, Grafite.MaxHighWords);
+
+            AssertRefused(() => Persistence.FromByteArray<Grafite>(edge), "bytes remain");
+        }
+
+        /// <summary>
         /// A count of bits of high parts that is possible, and that the words behind it can
         /// hold, but that the codes do not give: the builder sets it to the largest high
         /// part, plus the number of codes, plus one, and nothing else is the right number.
