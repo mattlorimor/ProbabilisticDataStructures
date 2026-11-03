@@ -555,7 +555,12 @@ scripts/stryker-file.sh --out ~/sweeps --concurrency 28 \
 
 It works in copies of HEAD that it removes when it ends, so the tree you are in is never
 built in or edited, and like `mutate.sh` it refuses to start on uncommitted changes,
-since the commit is what it measures. Name several files and they run side by side,
+since the commit is what it measures. What its runs write to `TMPDIR` goes in a
+directory of its own, removed with the copies; the code coverage collector would
+otherwise leave an empty directory there for every test method. That directory is kept
+short, under `/tmp` if `TMPDIR` is long, because the collector listens on a socket
+inside it and a run whose `TMPDIR` is longer than 64 characters hangs before its tests
+start. Name several files and they run side by side,
 sharing `--concurrency`, after one pass that finds the tests for all of them. For each
 file `--out` gets Stryker's JSON and HTML reports, its log, the tests it ran, and
 `summary.txt`: the mutants by verdict, then every Survived, Timeout and NoCoverage one

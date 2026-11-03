@@ -126,6 +126,7 @@ fi
 # stop it and everything it started -- its test hosts above all -- without a pkill that
 # could name someone else's.
 pids=""
+tmp=""
 stop_runs() {
     local pid
     for pid in $pids; do
@@ -139,9 +140,29 @@ stop_runs() {
 cleanup() {
     stop_runs
     rm -rf "$work"
+    [ -z "$tmp" ] || rm -rf "$tmp"
 }
 trap cleanup EXIT
 trap 'echo "stryker-file: interrupted; stopping the runs and removing $work" >&2; exit 130' INT TERM HUP
+
+# What the runs write to TMPDIR goes in a directory of the script's own, removed with
+# the copies, and not in the caller's TMPDIR: the code coverage collector leaves an
+# empty CodeCoverage.<guid> directory behind for every run, which is one for each test
+# method. The directory has to be short. The collector listens on a socket at
+# $TMPDIR/<guid>/.pipe, a socket's path holds at most 107 bytes, and a run whose TMPDIR
+# is longer than 64 characters hangs without a word before its tests start. So it is
+# inside the scratch directory where that is short enough, and under /tmp where not.
+if [ "${#work}" -le 54 ]; then
+    tmp="$work/t"
+    mkdir "$tmp" || die "cannot make $tmp"
+else
+    tmp="$(mktemp -d /tmp/sf.XXXXXX)" || die "cannot make a short temporary directory under /tmp"
+fi
+mkdir "$tmp/m" || die "cannot make $tmp/m"
+export TMPDIR="$tmp/m"
+# The builds, Stryker's among them, would otherwise leave a compiler server and build
+# nodes running for minutes afterwards, listening in that directory after it is gone.
+export MSBUILDDISABLENODEREUSE=1 UseSharedCompilation=false
 
 head_sha="$(git rev-parse --short HEAD)"
 copy_head() {
@@ -226,12 +247,17 @@ reach_one() {
     done
     dir="$REACH_DIR/methods/$method"
     mkdir -p "$dir"
-    dotnet test "$REACH_DIR/slot$slot/TestProbabilisticDataStructures.dll" \
+    # A TMPDIR of the run's own, emptied when it ends: what the collector leaves is gone
+    # before the slot's next run, and the path stays short (above).
+    rm -rf "$REACH_TMP/$slot"
+    mkdir -p "$REACH_TMP/$slot"
+    TMPDIR="$REACH_TMP/$slot" dotnet test "$REACH_DIR/slot$slot/TestProbabilisticDataStructures.dll" \
         --test-adapter-path "$REACH_ADAPTER" \
         --filter "FullyQualifiedName=$method" \
         --settings "$REACH_DIR/coverage.runsettings" --collect "Code Coverage" \
         --results-directory "$dir" > "$dir/test.log" 2>&1
     rc=$?
+    rm -rf "$REACH_TMP/$slot"
     rmdir "$REACH_DIR/lock/$slot"
     report="$(find "$dir" -name '*.cobertura.xml' | head -n 1)"
     # One line per file: the lines of it the method executed. The report itself runs to
@@ -258,7 +284,7 @@ EOF
     [ -z "$report" ] || rm -f "$report"
 }
 export -f reach_one
-export REACH_DIR="$reach" REACH_JOBS="$jobs" REACH_ADAPTER="$adapter"
+export REACH_DIR="$reach" REACH_JOBS="$jobs" REACH_ADAPTER="$adapter" REACH_TMP="$tmp"
 # In the background and in a group of its own, like the Stryker runs below, so that an
 # interrupt is acted on at once, and stops it, rather than after every method has run.
 set -m
@@ -268,6 +294,9 @@ set +m
 wait "$pids"
 pids=""
 rm -rf "$reach"/slot*
+missing="$(while read -r m; do [ -f "$reach/methods/$m/result" ] || echo "$m"; done < "$reach/roster.txt")"
+[ -z "$missing" ] || die "no result for $(echo "$missing" | wc -l | tr -d ' ') test method(s), the first $(echo "$missing" | head -n 1)"
+echo "stryker-file: every test method ran alone"
 
 # 3 and 4: a copy per file, the filter and the config, and Stryker, side by side.
 share=$((concurrency / ${#rel[@]}))
