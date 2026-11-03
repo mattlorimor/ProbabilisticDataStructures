@@ -262,6 +262,37 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The limit on the blocks a range tests belongs to the instance: it starts at the
+        /// default, is the caller's to set, survives a reset, and is not written with the
+        /// filter, so a filter read back has the default. At a limit of none, a range of two
+        /// blocks is still exact, since neither is inside it; a range of three answers
+        /// possibly while the filter holds a key, and no once it does not.
+        /// </summary>
+        [TestMethod]
+        public void TestTheBlockLimitIsTheInstancesAndNotThePayloads()
+        {
+            var filter = new MementoFilter(maxRangeSize: 64, fingerprintBits: 10);
+            Assert.AreEqual(MementoFilter.DefaultMaxInteriorBlocks, filter.MaxInteriorBlocks);
+
+            filter.MaxInteriorBlocks = 0;
+            filter.Add(10000);
+            Assert.AreEqual(0UL, filter.MaxInteriorBlocks);
+
+            // 10000 is in block 156; 9984 to 10111 is all of blocks 156 and 157.
+            Assert.IsTrue(filter.TestRange(9984, 10111));
+            Assert.IsFalse(filter.TestRange(10001, 10111), "two blocks with nothing in the range were not tested exactly");
+            Assert.IsTrue(filter.TestRange(20000, 20200), "a range past a limit of none must answer possibly");
+
+            var read = Persistence.FromByteArray<MementoFilter>(filter.ToByteArray());
+            Assert.AreEqual(MementoFilter.DefaultMaxInteriorBlocks, read.MaxInteriorBlocks,
+                "the limit was written with the filter");
+
+            filter.Reset();
+            Assert.AreEqual(0UL, filter.MaxInteriorBlocks, "a reset changed the caller's limit");
+            Assert.IsFalse(filter.TestRange(20000, 20200), "an empty filter answered possibly");
+        }
+
+        /// <summary>
         /// Keys arriving in any order must all be found, including when they land in
         /// one block back to front.
         /// </summary>

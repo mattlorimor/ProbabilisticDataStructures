@@ -78,6 +78,19 @@ namespace ProbabilisticDataStructures
         public ulong MaxRangeSize => 1UL << this.MementoBits;
 
         /// <summary>
+        /// The most blocks wholly inside a range that <see cref="TestRange"/> tests one by one.
+        /// </summary>
+        public ulong MaxInteriorBlocks { get; set; } = DefaultMaxInteriorBlocks;
+
+        internal const ulong DefaultMaxInteriorBlocks = 16_384;
+
+        /// <summary>
+        /// Every block <see cref="TestRange"/> has tested, so the work-bound tests can hold a
+        /// range to the blocks it is allowed rather than to a clock.
+        /// </summary>
+        internal long BlocksTested { get; private set; }
+
+        /// <summary>
         /// Creates a filter that grows as it is filled.
         /// </summary>
         /// <param name="maxRangeSize">
@@ -281,6 +294,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private bool BlockHasMementoBetween(ulong block, ulong low, ulong high)
         {
+            this.BlocksTested++;
             var hash = HashPrefix(block);
             foreach (var segment in this.Segments)
             {

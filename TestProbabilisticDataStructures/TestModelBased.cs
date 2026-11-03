@@ -309,6 +309,127 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// A Memento filter answering under a lowered block limit still finds every range that
+        /// holds a key, held to the keys themselves as the model: whatever was added and not
+        /// removed. Past the limit a range is not walked, and the answer must then be
+        /// "possibly" while the filter holds anything and a certain no once it holds nothing.
+        /// The ranges are of three kinds, every one deterministic: around a live key and wide
+        /// enough to pass the limit, which is where a cap could lose a key; anywhere and as
+        /// wide; and narrow ones under the limit, which are walked as before. The tallies
+        /// require each outcome the cap decides to have happened many times, and walked
+        /// ranges that hold nothing to have been answered no, so the cap is not simply
+        /// answering yes to everything.
+        /// </summary>
+        [TestMethod]
+        public void TestMementoFilterFindsEveryRangeHoldingAKeyUnderItsBlockLimit()
+        {
+            const ulong limit = 8;
+            const ulong blockWidth = 64;
+            var filter = new MementoFilter(blockWidth, 24, initialCapacity: 64) { MaxInteriorBlocks = limit };
+            var live = new List<ulong>();
+            var rand = new Random(83);
+            int cappedHolding = 0, cappedPossibly = 0, walkedHolding = 0, walkedNo = 0;
+
+            bool Holds(ulong low, ulong high) => live.Exists(k => k >= low && k <= high);
+
+            ulong Interior(ulong low, ulong high)
+            {
+                var span = (high / blockWidth) - (low / blockWidth);
+                return span > 1 ? span - 1 : 0;
+            }
+
+            // Wide ranges span at least twelve blocks, past the limit; narrow ones at most seven.
+            (ulong, ulong) Draw()
+            {
+                switch (rand.Next(4))
+                {
+                    case 0 when live.Count > 0:
+                        var key = live[rand.Next(live.Count)];
+                        var below = (ulong)rand.Next(0, (int)blockWidth * 2000);
+                        var above = (ulong)rand.Next((int)blockWidth * 12, (int)blockWidth * 2000);
+                        return (key > below ? key - below : 0, key + above);
+                    case 1:
+                        var start = (ulong)rand.NextInt64(1L << 30);
+                        return (start, start + (ulong)rand.Next((int)blockWidth * 12, (int)blockWidth * 4000));
+                    case 2 when live.Count > 0:
+                        var near = live[rand.Next(live.Count)];
+                        var under = (ulong)rand.Next(0, (int)blockWidth * 3);
+                        return (near > under ? near - under : 0, near + (ulong)rand.Next(0, (int)blockWidth * 3));
+                    default:
+                        var from = (ulong)rand.NextInt64(1L << 30);
+                        return (from, from + (ulong)rand.Next(0, (int)blockWidth * 6));
+                }
+            }
+
+            for (var phase = 0; phase < 8; phase++)
+            {
+                for (var i = 0; i < 200; i++)
+                {
+                    var key = (ulong)rand.NextInt64(1L << 30);
+                    filter.Add(key);
+                    live.Add(key);
+                }
+                for (var i = 0; i < 100; i++)
+                {
+                    var at = rand.Next(live.Count);
+                    Assert.IsTrue(filter.TestAndRemove(live[at]));
+                    live.RemoveAt(at);
+                }
+
+                for (var q = 0; q < 300; q++)
+                {
+                    var (low, high) = Draw();
+                    var answer = filter.TestRange(low, high);
+                    var holds = Holds(low, high);
+                    if (holds)
+                    {
+                        Assert.IsTrue(answer,
+                            $"phase {phase}: [{low}, {high}] holds a live key and was answered no");
+                    }
+
+                    if (Interior(low, high) > limit)
+                    {
+                        Assert.IsTrue(answer,
+                            $"phase {phase}: [{low}, {high}] is past the limit, in a filter holding " +
+                            $"{live.Count} keys, and must answer possibly");
+                        if (holds) cappedHolding++; else cappedPossibly++;
+                    }
+                    else if (holds)
+                    {
+                        walkedHolding++;
+                    }
+                    else if (!answer)
+                    {
+                        walkedNo++;
+                    }
+                }
+            }
+
+            foreach (var key in live)
+            {
+                Assert.IsTrue(filter.TestAndRemove(key));
+            }
+            live.Clear();
+            Assert.AreEqual(0UL, filter.Count());
+
+            var emptyCapped = 0;
+            for (var q = 0; q < 600; q++)
+            {
+                var (low, high) = Draw();
+                Assert.IsFalse(filter.TestRange(low, high), $"[{low}, {high}] in a filter holding nothing");
+                if (Interior(low, high) > limit) emptyCapped++;
+            }
+
+            Console.WriteLine($"capped holding {cappedHolding}, capped possibly {cappedPossibly}, " +
+                $"walked holding {walkedHolding}, walked no {walkedNo}, empty capped {emptyCapped}");
+            Assert.IsGreaterThan(100, cappedHolding, "too few ranges past the limit held a key to show none was lost");
+            Assert.IsGreaterThan(100, cappedPossibly, "too few ranges past the limit held nothing");
+            Assert.IsGreaterThan(100, walkedNo, "too few walked ranges answered no, so the filter may be answering yes to everything");
+            Assert.IsGreaterThan(20, walkedHolding, "too few walked ranges held a key");
+            Assert.IsGreaterThan(100, emptyCapped, "too few ranges past the limit were asked of the empty filter");
+        }
+
         private static List<string> Shuffled(List<string> xs, int seed)
         {
             var copy = new List<string>(xs);
