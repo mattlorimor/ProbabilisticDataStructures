@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 
 namespace ProbabilisticDataStructures
 {
@@ -70,6 +71,14 @@ namespace ProbabilisticDataStructures
         internal static int SlotBits(int fingerprintBits, int mementoBits) =>
             fingerprintBits + 1 + mementoBits + MetadataBits;
 
+        /// <summary>
+        /// The words a table of this many slots of this width is held in: its slots end to
+        /// end, and two words more for the reads and writes that straddle the end. A table
+        /// is one array of them.
+        /// </summary>
+        internal static long Words(uint slots, int slotBits) =>
+            (((long)slots * slotBits) >> 6) + 2;
+
         private uint slotMaskIndex;
         private int bitsPerSlot;
         private ulong slotMask;
@@ -101,7 +110,17 @@ namespace ProbabilisticDataStructures
             // Not (1UL << bits) - 1: a ulong shifts by its count mod 64, so for a slot of
             // exactly 64 bits that was (1 << 0) - 1, zero, and every write was masked away.
             this.slotMask = ulong.MaxValue >> (64 - this.bitsPerSlot);
-            this.Data = new ulong[(((long)this.Slots * this.bitsPerSlot) >> 6) + 2];
+
+            // The filter stops its tables short of this (MementoFilter.QuotientBitsLimitFor);
+            // without the check, a table past it threw a bare OverflowException here.
+            var words = Words(this.Slots, this.bitsPerSlot);
+            if (words > Array.MaxLength)
+            {
+                throw new ArgumentOutOfRangeException(nameof(quotientBits), quotientBits,
+                    $"A table of {this.Slots:N0} slots of {this.bitsPerSlot} bits is {words:N0} " +
+                    $"words, and a table is one array, which holds at most {Array.MaxLength:N0}.");
+            }
+            this.Data = new ulong[words];
             this.Codec = new KeepsakeCodec(fingerprintBits, mementoBits);
         }
 
@@ -462,9 +481,20 @@ namespace ProbabilisticDataStructures
         internal List<ulong> ReadRun(uint quotient)
         {
             var fields = new List<ulong>();
+            ReadRun(quotient, fields);
+            return fields;
+        }
+
+        /// <summary>
+        /// The slot values of the run belonging to a quotient, in order, into a list the
+        /// caller keeps, which is cleared first.
+        /// </summary>
+        private void ReadRun(uint quotient, List<ulong> fields)
+        {
+            fields.Clear();
             if (!IsOccupied(quotient))
             {
-                return fields;
+                return;
             }
 
             var slot = FindRunStart(quotient);
@@ -474,8 +504,39 @@ namespace ProbabilisticDataStructures
                 slot = Next(slot);
             }
             while (IsContinuation(slot));
+        }
 
-            return fields;
+        /// <summary>
+        /// Refuses a table holding a run whose boxes do not decode, so that a filter read
+        /// from a payload answers every query without the codec's backstop firing.
+        /// </summary>
+        /// <remarks>
+        /// One pass: every occupied quotient's run is read, as a query reads it, into one list
+        /// kept for the walk, and checked by the codec without its boxes being built. So the
+        /// walk allocates the longest run's slots once and nothing for each key.
+        /// </remarks>
+        internal void CheckRuns(int table)
+        {
+            var fields = new List<ulong>();
+            for (var quotient = 0u; quotient < this.Slots; quotient++)
+            {
+                if (!IsOccupied(quotient))
+                {
+                    continue;
+                }
+
+                ReadRun(quotient, fields);
+                try
+                {
+                    this.Codec.Check(fields);
+                }
+                catch (InvalidDataException e)
+                {
+                    throw new InvalidDataException(
+                        $"Table {table}, the run of slot {quotient}: {e.Message} The payload is " +
+                        "damaged or was not written by this library.", e);
+                }
+            }
         }
 
         /// <summary>

@@ -229,6 +229,11 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// The cuckoo filter's bucket count sizes its whole fingerprint array.
         /// </summary>
+        /// <remarks>
+        /// A power of two, so that it is the size limit that refuses it. A count that is
+        /// not one is refused for that before its size is looked at, and this test would
+        /// pass on the wrong guard.
+        /// </remarks>
         [TestMethod]
         public void TestAbsurdCuckooBucketCountIsRefused()
         {
@@ -236,8 +241,128 @@ namespace TestProbabilisticDataStructures
 
             AssertRefused(
                 () => Persistence.FromByteArray<CuckooBloomFilter>(
-                    PokeUInt32(bytes, 0, 900_000_000)),
-                "buckets");
+                    PokeUInt32(bytes, 0, 1u << 30)),
+                "beyond anything this library builds");
+        }
+
+        /// <summary>
+        /// Where a cuckoo payload's header fields and first entry begin, within the
+        /// payload: the bucket count, entries per bucket, fingerprint width, item count and
+        /// capacity, then the number of occupied entries, then the entries.
+        /// </summary>
+        private const int CuckooItemCountOffset = 12;
+        private const int CuckooOccupiedOffset = 20;
+        private const int CuckooFirstEntryOffset = 24;
+
+        /// <summary>
+        /// A cuckoo filter of five items in distinct places, written, with the layout
+        /// the tests below edit checked against it so that an edit lands where it says.
+        /// </summary>
+        private static byte[] CuckooWithFiveItems()
+        {
+            var filter = new CuckooBloomFilter(1000, 0.01, seed: 1);
+            for (var i = 0; i < 5; i++)
+            {
+                Assert.IsTrue(filter.Add(Key($"c{i}")));
+            }
+            var bytes = filter.ToByteArray();
+
+            Assert.AreEqual(5u, BinaryPrimitives.ReadUInt32LittleEndian(
+                bytes.AsSpan(PayloadStart + CuckooItemCountOffset)), "the item count is not where this test expects it");
+            Assert.AreEqual(5u, BinaryPrimitives.ReadUInt32LittleEndian(
+                bytes.AsSpan(PayloadStart + CuckooOccupiedOffset)), "the occupied entries are not where this test expects them");
+            return bytes;
+        }
+
+        /// <summary>
+        /// The bytes one entry occupies in a cuckoo payload: its bucket and entry
+        /// indexes, then its fingerprint in the fewest whole bytes that hold the width.
+        /// </summary>
+        private static int CuckooEntryLength(byte[] bytes)
+        {
+            var bits = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + 8));
+            return 8 + (int)((bits + 7) / 8);
+        }
+
+        /// <summary>
+        /// A cuckoo filter finds an item's other bucket by combining the first with a hash
+        /// of its fingerprint and reducing the result by the bucket count. The two
+        /// agree about where an item lives only when that count is a power of two, which is
+        /// why the constructor rounds up to one. With any other, an insert that relocates
+        /// an entry can leave it where no lookup looks, and the filter then loses an item
+        /// it accepted. The writer never produces one, so the reader refuses it.
+        /// </summary>
+        /// <remarks>
+        /// The filter holds nothing, so what refuses the payload is the count and nothing
+        /// beside it. The counts straddle the powers of two they are nearest, and the
+        /// powers of two read, the smallest included, so the refusal is not a blanket one.
+        /// </remarks>
+        [TestMethod]
+        public void TestACuckooBucketCountThatIsNotAPowerOfTwoIsRefused()
+        {
+            var bytes = new CuckooBloomFilter(1000, 0.01).ToByteArray();
+            Assert.AreEqual(512u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart)),
+                "the bucket count is not where this test expects it");
+
+            foreach (var buckets in new uint[] { 3, 5, 6, 7, 100, 511, 513, 1000, 1023, 1025 })
+            {
+                AssertRefused(
+                    () => Persistence.FromByteArray<CuckooBloomFilter>(PokeUInt32(bytes, 0, buckets)),
+                    "is not a power of two");
+            }
+
+            foreach (var buckets in new uint[] { 1, 2, 4, 256, 512, 1024 })
+            {
+                Assert.AreEqual(buckets, Persistence.FromByteArray<CuckooBloomFilter>(
+                    PokeUInt32(bytes, 0, buckets)).BucketCount());
+            }
+        }
+
+        /// <summary>
+        /// A cuckoo filter holds one entry for each item, so the count a payload carries is
+        /// the number of entries it lists. A count below it lets a removal take the count
+        /// under zero, where it wraps to 4,294,967,295; a count of zero over entries lets
+        /// the hash be replaced under them, which an occupied filter refuses. A count above
+        /// it claims items the filter does not hold. The writer produces neither.
+        /// </summary>
+        [TestMethod]
+        public void TestACuckooItemCountThatDisagreesWithItsEntriesIsRefused()
+        {
+            var bytes = CuckooWithFiveItems();
+
+            foreach (var count in new uint[] { 0, 1, 4, 6, 7, uint.MaxValue })
+            {
+                AssertRefused(
+                    () => Persistence.FromByteArray<CuckooBloomFilter>(
+                        PokeUInt32(bytes, CuckooItemCountOffset, count)),
+                    $"item count is {count}");
+            }
+
+            Assert.AreEqual(5u, Persistence.FromByteArray<CuckooBloomFilter>(bytes).Count());
+        }
+
+        /// <summary>
+        /// A payload that lists the same bucket and entry twice is accepted today, and
+        /// the two fingerprints are OR-ed into one cell. The count is compared with the
+        /// entries filled rather than the entries listed, so the repeat cannot hide in
+        /// it, and the repeat is refused for itself. The second case is the one only that
+        /// refusal sees: a count that agrees with the cells filled, four, while five
+        /// entries are listed.
+        /// </summary>
+        [TestMethod]
+        public void TestACuckooPayloadThatListsAnEntryTwiceIsRefused()
+        {
+            var bytes = CuckooWithFiveItems();
+            var second = CuckooFirstEntryOffset + CuckooEntryLength(bytes);
+
+            var bucket = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + CuckooFirstEntryOffset));
+            var entry = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + CuckooFirstEntryOffset + 4));
+            var repeated = PokeUInt32(PokeUInt32(bytes, second, bucket), second + 4, entry);
+
+            AssertRefused(() => Persistence.FromByteArray<CuckooBloomFilter>(repeated), "named more than once");
+            AssertRefused(
+                () => Persistence.FromByteArray<CuckooBloomFilter>(PokeUInt32(repeated, CuckooItemCountOffset, 4)),
+                "named more than once");
         }
 
         /// <summary>
@@ -345,6 +470,107 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A Memento filter holding keys at the given positions of one block and nothing else,
+        /// in a range of 64 with 8-bit fingerprints, so its one table of 16 slots holds one
+        /// box, in the only run there is, starting at the box's own quotient. The block is the
+        /// first whose quotient is the table's first slot, or its last, which are the two ends
+        /// of the reader's walk over the table; at the last the run wraps round to the first.
+        /// Returns the payload, the slots of the run in order, for a test to edit one of, and
+        /// the block's first key.
+        /// </summary>
+        private static (byte[] Payload, uint[] Run, ulong FirstKey) OneMementoBox(bool lastSlot, params ulong[] mementos)
+        {
+            var filter = new MementoFilter(64, 8, initialCapacity: 8);
+            var table = filter.Segments[0];
+            var target = lastSlot ? table.Slots - 1 : 0;
+            var block = 0UL;
+            while (table.Split(MementoFilter.HashPrefix(block)).Quotient != target)
+            {
+                block++;
+            }
+
+            foreach (var memento in mementos)
+            {
+                filter.Add((block * 64) + memento);
+            }
+
+            Assert.HasCount(1, filter.Segments);
+            Assert.AreSame(table, filter.Segments[0]);
+            var fields = table.ReadRun(target);
+            var boxes = table.Codec.Decode(fields);
+            Assert.HasCount(1, boxes, "the keys are not one box");
+            CollectionAssert.AreEqual(mementos, boxes[0].Mementos.ToArray(), "the box does not hold the keys");
+            Assert.AreEqual(fields[0], table.ReadField(target), "the run does not start at its quotient");
+
+            var run = Enumerable.Range(0, fields.Count).Select(k => (target + (uint)k) & (table.Slots - 1)).ToArray();
+            return (filter.ToByteArray(), run, block * 64);
+        }
+
+        /// <summary>
+        /// Overwrites bits of one slot's field in the first table of a Memento payload with a
+        /// range of 64 and 8-bit fingerprints, and repairs the checksum. A slot there is 18
+        /// bits, the three of metadata below the field, and the table's words follow the
+        /// filter's 20 bytes and the table's 16, laid end to end from the low bit up.
+        /// </summary>
+        private static byte[] PokeMementoField(byte[] original, uint slot, int fromBit, int bits, ulong value)
+        {
+            var bytes = (byte[])original.Clone();
+            var start = ((long)slot * MementoSegment.SlotBits(8, 6)) + 3 + fromBit;
+            for (var i = 0; i < bits; i++)
+            {
+                var at = start + i;
+                var index = PayloadStart + 36 + (int)(at / 8);
+                var mask = (byte)(1 << (int)(at % 8));
+                bytes[index] = ((value >> i) & 1) == 1 ? (byte)(bytes[index] | mask) : (byte)(bytes[index] & ~mask);
+            }
+            RepairChecksum(bytes);
+            return bytes;
+        }
+
+        /// <summary>
+        /// A box of three keys whose count, the low six bits of its third slot, claims 62 keys
+        /// between its first and last where its run has bits for one. The reader handed the
+        /// table over without decoding a run, so the payload read, and the first query to
+        /// decode the box read zeros past the end of the run for the keys it lacked. It is
+        /// refused when read, for the box, at the table's first slot and at its last.
+        /// </summary>
+        [TestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public void TestMementoFilterBoxClaimingMoreKeysThanItsRunHoldsIsRefused(bool lastSlot)
+        {
+            var (payload, run, first) = OneMementoBox(lastSlot, 0, 1, 2);
+            Assert.HasCount(3, run);
+            Assert.IsTrue(Persistence.FromByteArray<MementoFilter>(payload).TestRange(first, first + 2),
+                "the unedited payload does not read");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<MementoFilter>(PokeMementoField(payload, run[2], 0, 6, 62)),
+                "more keys than its run holds");
+        }
+
+        /// <summary>
+        /// A box of two keys whose second slot's fingerprint is edited to zero, the marker of a
+        /// box of more than two, in a run that ends there. Its count would be read from past
+        /// the end of the run, which gave zeros, so the payload read and the box decoded as two
+        /// keys, silently. It is refused when read, at the table's first slot and at its last.
+        /// </summary>
+        [TestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public void TestMementoFilterBoxWhoseCountRunsPastItsRunIsRefused(bool lastSlot)
+        {
+            var (payload, run, first) = OneMementoBox(lastSlot, 0, 1);
+            Assert.HasCount(2, run);
+            Assert.IsTrue(Persistence.FromByteArray<MementoFilter>(payload).TestRange(first + 1, first + 1),
+                "the unedited payload does not read");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<MementoFilter>(PokeMementoField(payload, run[1], 6, 9, 0)),
+                "past the end of its run");
+        }
+
+        /// <summary>
         /// An InfiniFilter payload for the tests below to corrupt. Its prefix is
         /// fixed, so field offsets are too: the item count at 0, the expansion count
         /// at 8, the number of tables at 12, and then per table its address bits,
@@ -421,12 +647,80 @@ namespace TestProbabilisticDataStructures
         /// A Grafite payload for the tests below to corrupt. Its scalar prefix is
         /// fixed, so field offsets are too: the reduced universe at 0, the hash
         /// multiplier at 8, its addend at 16, the key count at 24, the largest
-        /// promised range at 32, and the low-bit split at 40.
+        /// promised range at 32, the low-bit split at 40, the number of hash codes
+        /// at 44, the bits of high parts in use at 48, the smallest and largest codes
+        /// at 52 and 60, and the count of words of low bits at 68, which the low words
+        /// follow.
         /// </summary>
         private static byte[] GrafitePayload()
         {
             var keys = Enumerable.Range(0, 60).Select(i => (ulong)(i * 37));
             return Grafite.Build(keys, 0.05, 8, seed: 11).ToByteArray();
+        }
+
+        private const int GrafiteLowBitsOffset = 40;
+        private const int GrafiteCodeCountOffset = 44;
+        private const int GrafiteHighBitCountOffset = 48;
+        private const int GrafiteFirstCodeOffset = 52;
+        private const int GrafiteLastCodeOffset = 60;
+        private const int GrafiteLowWordsOffset = 68;
+
+        /// <summary>
+        /// A Grafite payload of no keys, which Build leaves without a split, without bits of
+        /// high parts and without a word of either array.
+        /// </summary>
+        private static byte[] EmptyGrafitePayload() =>
+            Grafite.Build(Array.Empty<ulong>(), 0.01, 16).ToByteArray();
+
+        /// <summary>
+        /// The payload with the number of words in its low bits and in its high bits
+        /// changed, each array cut short or padded with zero words to match its new count,
+        /// and sealed. Of everything the payload says, only those counts then disagree with
+        /// the codes it holds.
+        /// </summary>
+        private static byte[] GrafiteWithWords(byte[] original, int lowWordsDelta, int highWordsDelta)
+        {
+            var payload = original.AsSpan(PayloadStart, original.Length - PayloadStart - 4);
+            var lowWords = (int)BinaryPrimitives.ReadUInt32LittleEndian(
+                payload.Slice(GrafiteLowWordsOffset));
+            var lows = payload.Slice(GrafiteLowWordsOffset + 4, lowWords * 8);
+            var highWordsOffset = GrafiteLowWordsOffset + 4 + (lowWords * 8);
+            var highWords = (int)BinaryPrimitives.ReadUInt32LittleEndian(
+                payload.Slice(highWordsOffset));
+            var highs = payload.Slice(highWordsOffset + 4, highWords * 8);
+
+            using var rewritten = new MemoryStream();
+            rewritten.Write(payload.Slice(0, GrafiteLowWordsOffset));
+            WriteWords(rewritten, lows, lowWords + lowWordsDelta);
+            WriteWords(rewritten, highs, highWords + highWordsDelta);
+
+            using var sealedPayload = new MemoryStream();
+            PersistenceFormat.Write(
+                sealedPayload, StructureId.Grafite, HashId.None, rewritten.ToArray());
+            return sealedPayload.ToArray();
+        }
+
+        /// <summary>A count of words, and that many of them: the given ones, cut or padded with zeros.</summary>
+        private static void WriteWords(Stream to, ReadOnlySpan<byte> words, int count)
+        {
+            var header = new byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(header, (uint)count);
+            to.Write(header);
+
+            var kept = Math.Min(words.Length, count * 8);
+            to.Write(words.Slice(0, kept));
+            to.Write(new byte[(count * 8) - kept]);
+        }
+
+        /// <summary>
+        /// Asserts that the payload as written reads and that the edited one is refused for
+        /// the stated reason, so that the edit is what is refused and not the payload.
+        /// </summary>
+        private static void AssertGrafiteEditRefused(byte[] original, byte[] edited, string expected)
+        {
+            Assert.IsNotNull(Persistence.FromByteArray<Grafite>(original),
+                "the payload before the edit should read");
+            AssertRefused(() => Persistence.FromByteArray<Grafite>(edited), expected);
         }
 
         /// <summary>
@@ -469,6 +763,321 @@ namespace TestProbabilisticDataStructures
             AssertRefused(
                 () => Persistence.FromByteArray<Grafite>(bytes),
                 "sixty-four bits wide");
+        }
+
+        /// <summary>
+        /// The split is a u32 in the payload and an int in the filter, and a u32 from 2^31
+        /// up is negative once it is cast. The reader cast first and then checked that the
+        /// split is no wider than a code, which a negative number is not, so the payload
+        /// loaded and the filter answered false for keys it holds.
+        /// </summary>
+        [TestMethod]
+        [DataRow(0x8000_0000u)]
+        [DataRow(0xFFFF_FFFFu)]
+        public void TestGrafiteWithALowBitCountPastAnIntIsRefused(uint lowBits)
+        {
+            var bytes = PokeUInt32(GrafitePayload(), GrafiteLowBitsOffset, lowBits);
+            AssertGrafiteEditRefused(GrafitePayload(), bytes, "sixty-four bits wide");
+        }
+
+        /// <summary>
+        /// The count of bits of high parts is cast the same way, and the check that it
+        /// fits the words behind it was a comparison a negative number passes.
+        /// </summary>
+        [TestMethod]
+        [DataRow(0x8000_0000u)]
+        [DataRow(0xFFFF_FFFFu)]
+        public void TestGrafiteWithAHighBitCountPastAnIntIsRefused(uint highBitCount)
+        {
+            var bytes = PokeUInt32(GrafitePayload(), GrafiteHighBitCountOffset, highBitCount);
+            AssertGrafiteEditRefused(GrafitePayload(), bytes, "a filter can address");
+        }
+
+        /// <summary>
+        /// The most bits of high parts a filter can address, 2^31 - 1, is a count the
+        /// builder writes at its edge, and the reader takes it: a payload whose single code
+        /// gives exactly that many is refused only for the words it does not hold, which are
+        /// the 33,554,432 that many bits fill. (The code ends at 2^32 - 6 and is split at one
+        /// bit, so its high part is 2^31 - 3, plus the code, plus one.) A count past it is
+        /// refused by the tests above. Structural: a filter of that many bits is gigabytes
+        /// of words, so the payload claims them and does not carry them.
+        /// </summary>
+        [TestMethod]
+        public void TestGrafiteAtTheMostBitsOfHighPartsIsRefusedOnlyForTheWordsItLacks()
+        {
+            const int HighWordsOffset = GrafiteLowWordsOffset + 4 + (2 * 8);
+            const ulong LastCode = (1UL << 32) - 6;
+
+            var original = Grafite.Build(new ulong[] { 5 }, 0.5, 1, seed: 1).ToByteArray();
+            var filter = Persistence.FromByteArray<Grafite>(original);
+            Assert.AreEqual(1, filter.CodeCount);
+            Assert.AreEqual(1, filter.LowBits, "the code above ends at a high part of 2^31 - 3");
+            Assert.AreEqual(2, filter.Lows.Length, "the words the one code gives its low bits");
+
+            // The universe, which the code is below, and the smallest and largest codes
+            // (the same code).
+            var edge = PokeUInt64(original, 0, 1UL << 33);
+            edge = PokeUInt64(edge, GrafiteFirstCodeOffset, LastCode);
+            edge = PokeUInt64(edge, GrafiteLastCodeOffset, LastCode);
+            edge = PokeUInt32(edge, GrafiteHighBitCountOffset, int.MaxValue);
+            edge = PokeUInt32(edge, HighWordsOffset, Grafite.MaxHighWords);
+
+            AssertRefused(() => Persistence.FromByteArray<Grafite>(edge), "bytes remain");
+        }
+
+        /// <summary>
+        /// A count of bits of high parts that is possible, and that the words behind it can
+        /// hold, but that the codes do not give: the builder sets it to the largest high
+        /// part, plus the number of codes, plus one, and nothing else is the right number.
+        /// The claim stays within the words the payload carries, so it is the codes that
+        /// refuse it and not the words.
+        /// </summary>
+        [TestMethod]
+        [DataRow(-1)]
+        [DataRow(1)]
+        public void TestGrafiteWhoseHighBitCountDisagreesWithItsCodesIsRefused(int offBy)
+        {
+            var original = GrafitePayload();
+            var filter = Persistence.FromByteArray<Grafite>(original);
+            var claimed = filter.HighBitCount + offBy;
+            Assert.IsTrue(
+                claimed > (filter.Highs.Length - 1) * 64 && claimed <= filter.Highs.Length * 64,
+                $"{claimed} bits should fit the {filter.Highs.Length} words the payload has, " +
+                "and not the one fewer");
+
+            var bytes = PokeUInt32(original, GrafiteHighBitCountOffset, (uint)claimed);
+            AssertGrafiteEditRefused(original, bytes, "take exactly");
+        }
+
+        /// <summary>
+        /// A split that is possible and that the codes do not give. The payload is one of
+        /// seven bits: one fewer and one more are as plausible as it, and 60 is the widest
+        /// any filter is split at. None of them was refused, and probed against the keys
+        /// the filter holds, one more and 60 answered false for every one.
+        /// </summary>
+        [TestMethod]
+        [DataRow(6u)]
+        [DataRow(8u)]
+        [DataRow(60u)]
+        public void TestGrafiteWhoseSplitDisagreesWithItsCodesIsRefused(uint lowBits)
+        {
+            var original = GrafitePayload();
+            Assert.AreEqual(7, Persistence.FromByteArray<Grafite>(original).LowBits,
+                "the rows above are the neighbours of this payload's split");
+
+            var bytes = PokeUInt32(original, GrafiteLowBitsOffset, lowBits);
+            AssertGrafiteEditRefused(original, bytes, "take exactly");
+        }
+
+        /// <summary>
+        /// A split wider than a builder ever makes. It splits at the log of the universe
+        /// over the codes, and the universe is below 2^61, so no filter has more than 60
+        /// low bits. A split of 61 to 64 is not wider than a code, which the limit before
+        /// it allowed, and is read by a query as a shift that is not the one that was
+        /// meant: C# masks a shift of 64 to a shift of none, so a code is "split" at 64 by
+        /// being left whole.
+        /// </summary>
+        [TestMethod]
+        [DataRow(61u)]
+        [DataRow(62u)]
+        [DataRow(63u)]
+        [DataRow(64u)]
+        public void TestGrafiteWithASplitPastWhatABuilderMakesIsRefused(uint lowBits)
+        {
+            var bytes = PokeUInt32(GrafitePayload(), GrafiteLowBitsOffset, lowBits);
+            AssertGrafiteEditRefused(
+                GrafitePayload(), bytes, "beyond anything this library builds");
+        }
+
+        /// <summary>
+        /// One code fewer than the filter holds is a count the keys allow, and it leaves a
+        /// code at the end of the encoding that the filter no longer knows is there: a key
+        /// the filter holds is answered false.
+        /// </summary>
+        [TestMethod]
+        public void TestGrafiteClaimingOneCodeFewerThanItHoldsIsRefused()
+        {
+            var original = GrafitePayload();
+            var codes = Persistence.FromByteArray<Grafite>(original).CodeCount;
+
+            var bytes = PokeUInt32(original, GrafiteCodeCountOffset, (uint)(codes - 1));
+            AssertGrafiteEditRefused(original, bytes, "take exactly");
+        }
+
+        /// <summary>
+        /// The filter of <see cref="GrafitePayload"/> re-encoded at a split of 64 bits, a
+        /// payload no builder writes and that agrees with itself in every field: each code
+        /// is its own low part, every high part is zero (so the bit count is a one for each
+        /// code and the one the encoding ends on), and the arrays are the sizes the codes
+        /// give them. Of the sixty codes the high bits fit one word.
+        /// </summary>
+        private static byte[] GrafiteSplitAtSixtyFour()
+        {
+            var source = Persistence.FromByteArray<Grafite>(GrafitePayload());
+            var codes = source.CodeCount;
+            Assert.IsLessThan(64, codes, "the high bits of the codes should fit one word");
+
+            var payload = new PayloadWriter();
+            payload.WriteUInt64(source.R);
+            payload.WriteUInt64(source.C1);
+            payload.WriteUInt64(source.C2);
+            payload.WriteUInt64(source.KeyCount);
+            payload.WriteUInt64(source.MaxRange);
+            payload.WriteUInt32(64);
+            payload.WriteUInt32((uint)codes);
+            payload.WriteUInt32((uint)codes + 1);
+            payload.WriteUInt64(source.FirstCode);
+            payload.WriteUInt64(source.LastCode);
+
+            payload.WriteUInt32((uint)codes + 2);
+            for (var i = 0; i < codes; i++)
+            {
+                payload.WriteUInt64(source.CodeAt(i));
+            }
+            payload.WriteUInt64(0);
+            payload.WriteUInt64(0);
+
+            payload.WriteUInt32(1);
+            payload.WriteUInt64((1UL << codes) - 1);
+
+            using var stream = new MemoryStream();
+            PersistenceFormat.Write(stream, StructureId.Grafite, HashId.None, payload.WrittenSpan);
+            return stream.ToArray();
+        }
+
+        /// <summary>
+        /// The one split past a builder's that a payload can agree with itself at, and the
+        /// one that is wrong to read: a query shifts a code by the split to find its high
+        /// part, and C# shifts a 64-bit value by a count of 64 as it shifts it by none, so
+        /// every code is taken for its own high part. The earlier limit, a split no wider
+        /// than a code, allowed it.
+        /// </summary>
+        [TestMethod]
+        public void TestGrafiteWhoseEveryFieldAgreesAtASplitOfSixtyFourIsRefused()
+        {
+            var bytes = GrafiteSplitAtSixtyFour();
+            AssertRefused(
+                () => Persistence.FromByteArray<Grafite>(bytes), "beyond anything this library builds");
+        }
+
+        /// <summary>
+        /// The smallest code is recorded beside the encoding, and a query turns away
+        /// anything below it without looking at the encoding at all. A smallest code that
+        /// is not the encoding's first is a filter that answers false for the keys whose
+        /// codes lie between the two (one above and a hundred above lost one and three of
+        /// the sixty), or that records a code it does not hold (one below).
+        /// </summary>
+        [TestMethod]
+        [DataRow(-1L)]
+        [DataRow(1L)]
+        [DataRow(100L)]
+        public void TestGrafiteWhoseSmallestCodeIsNotTheEncodingsFirstIsRefused(long offBy)
+        {
+            var original = GrafitePayload();
+            var first = Persistence.FromByteArray<Grafite>(original).FirstCode;
+
+            var bytes = PokeUInt64(original, GrafiteFirstCodeOffset, (ulong)((long)first + offBy));
+            AssertGrafiteEditRefused(original, bytes, "records its smallest code as");
+        }
+
+        /// <summary>
+        /// The extreme of the same edit: the smallest code recorded as the largest, which
+        /// no longer exceeds it, so the order check passes, and which turns away every
+        /// code but one (59 of the sixty keys answered false).
+        /// </summary>
+        [TestMethod]
+        public void TestGrafiteWhoseSmallestCodeIsItsLargestIsRefused()
+        {
+            var original = GrafitePayload();
+            var last = Persistence.FromByteArray<Grafite>(original).LastCode;
+
+            var bytes = PokeUInt64(original, GrafiteFirstCodeOffset, last);
+            AssertGrafiteEditRefused(original, bytes, "records its smallest code as");
+        }
+
+        /// <summary>
+        /// And the largest code, which a query also checks first. One below the
+        /// encoding's last turns away the key whose code is the last (one of the sixty
+        /// answered false), and one above records a code the filter does not hold. The
+        /// edits stay within the high part the bit count is worked from, so it is the
+        /// recorded code that refuses them and not the count.
+        /// </summary>
+        [TestMethod]
+        [DataRow(-1L)]
+        [DataRow(1L)]
+        public void TestGrafiteWhoseLargestCodeIsNotTheEncodingsLastIsRefused(long offBy)
+        {
+            var original = GrafitePayload();
+            var filter = Persistence.FromByteArray<Grafite>(original);
+            var claimed = (ulong)((long)filter.LastCode + offBy);
+            Assert.AreEqual(
+                filter.LastCode >> filter.LowBits, claimed >> filter.LowBits,
+                "the edit should leave the high part, which the bit count follows, as it was");
+
+            var bytes = PokeUInt64(original, GrafiteLastCodeOffset, claimed);
+            AssertGrafiteEditRefused(original, bytes, "records its largest code as");
+        }
+
+        /// <summary>
+        /// The words of low bits are as many as the codes at their width need, as the
+        /// builder sizes them. A count of one more or one fewer, with the array to match,
+        /// was read as the filter it was not.
+        /// </summary>
+        [TestMethod]
+        [DataRow(-1)]
+        [DataRow(1)]
+        public void TestGrafiteWithTheWrongNumberOfWordsOfLowBitsIsRefused(int offBy)
+        {
+            var original = GrafitePayload();
+            AssertGrafiteEditRefused(
+                original, GrafiteWithWords(original, offBy, 0), "words of low bits, but");
+        }
+
+        /// <summary>
+        /// The words of high bits are as many as hold the bits in use. One more, with the
+        /// array to match, was read as the filter it was not; one fewer was refused, but
+        /// for the bits that the words then fell short of and not for the count.
+        /// </summary>
+        [TestMethod]
+        [DataRow(-1)]
+        [DataRow(1)]
+        public void TestGrafiteWithTheWrongNumberOfWordsOfHighBitsIsRefused(int offBy)
+        {
+            var original = GrafitePayload();
+            AssertGrafiteEditRefused(
+                original, GrafiteWithWords(original, 0, offBy), "words of high bits, but");
+        }
+
+        /// <summary>
+        /// A filter of no keys has nothing to split or to count: the builder leaves the
+        /// split and the bits of high parts at nothing, and a payload that gives either a
+        /// value describes an encoding the filter does not have. A split of five bits was
+        /// read, on a filter that holds no codes to split.
+        /// </summary>
+        [TestMethod]
+        [DataRow(GrafiteLowBitsOffset, 5u)]
+        [DataRow(GrafiteHighBitCountOffset, 1u)]
+        public void TestAnEmptyGrafiteThatClaimsAnEncodingIsRefused(int offset, uint value)
+        {
+            var original = EmptyGrafitePayload();
+            AssertGrafiteEditRefused(
+                original, PokeUInt32(original, offset, value), "holds no hash codes");
+        }
+
+        /// <summary>
+        /// And it has no words of either array. The sizes the builder gives a filter of
+        /// codes, two words of low bits at the least and one of high bits, do not apply to
+        /// a filter of none, which has neither.
+        /// </summary>
+        [TestMethod]
+        [DataRow(1, 0, "words of low bits, but")]
+        [DataRow(0, 1, "words of high bits, but")]
+        public void TestAnEmptyGrafiteThatCarriesWordsIsRefused(
+            int lowWords, int highWords, string expected)
+        {
+            var original = EmptyGrafitePayload();
+            AssertGrafiteEditRefused(
+                original, GrafiteWithWords(original, lowWords, highWords), expected);
         }
 
         /// <summary>
@@ -1083,6 +1692,41 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A private sketch's counters are checked against the bytes behind them at the
+        /// edges of the check. The unedited sketch, 64 by 2, holds exactly its 128
+        /// counters and reads; one column more claims 130, two more than it holds, and is
+        /// refused for that.
+        /// <para>
+        /// And where 32 bits run out: a sketch four rows deep with its width edited to
+        /// 2^30 + 1 claims 2^32 + 4 counters, which as a 32-bit product is 4, and four
+        /// counters fit. Counted in 64 bits it is refused for the counters it lacks. Counted
+        /// in 32 it is priced at 34 GB and refused for its budget instead, or under no
+        /// budget would allocate a row of eight gigabytes, which is why it is read only
+        /// under the default.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestAPrivateSketchClaimingMoreCountersThanItHoldsIsRefusedAtTheEdges()
+        {
+            // u32 width at 0.
+            var narrow = new PrivateCountMinSketch(64, 2, 1.0, seed: 3).ToByteArray();
+            Assert.AreEqual(64u, Persistence.FromByteArray<PrivateCountMinSketch>(narrow).Width,
+                "the unedited sketch does not read, so the edit below is not the only lie.");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<PrivateCountMinSketch>(PokeUInt32(narrow, 0, 65)),
+                "counters, beyond what it can hold");
+
+            // Four rows of 2^30 + 1: 2^32 + 4 counters, and 4 as a product of two u32.
+            const uint Wraps = (1u << 30) + 1;
+            var deep = new PrivateCountMinSketch(64, 4, 1.0, seed: 3).ToByteArray();
+
+            AssertRefused(
+                () => Persistence.FromByteArray<PrivateCountMinSketch>(PokeUInt32(deep, 0, Wraps)),
+                "counters, beyond what it can hold");
+        }
+
+        /// <summary>
         /// The same guard reached through a DPSW payload, which holds its private
         /// sketches inline. Every counter in every nested sketch is floored, which is
         /// what a window built with the mechanism disabled would have written.
@@ -1193,6 +1837,95 @@ namespace TestProbabilisticDataStructures
             AssertRefused(
                 () => Persistence.FromByteArray<DpswSketch>(poked),
                 "of a possible");
+        }
+
+        /// <summary>
+        /// A window whose newest substream ends past the items the window says it has
+        /// seen. Its start is moved one later, so it still follows the substream before
+        /// it and holds what it held, and its last item lands one past the window's
+        /// position: items from the future, which no stream put there.
+        /// <para>
+        /// The unedited payload is the control. Its newest substream ends exactly at the
+        /// position, so a check one too strict refuses it, and with it every window saved
+        /// part way through a substream.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestADpswWindowWithASubstreamPastItsItemsIsRefused()
+        {
+            var (bytes, layout) = SmallDpswPayload();
+            var (start, held, position) = NewestDpswSubstream(bytes, layout);
+
+            Assert.AreEqual(position, start + held - 1,
+                "the newest substream does not end at the window's position, so moving its " +
+                "start by one does not take it exactly one past.");
+            Assert.AreEqual(position, Persistence.FromByteArray<DpswSketch>(bytes).Position,
+                "the unedited payload does not read, so the edit below is not the only lie.");
+
+            var poked = PokeUInt64(
+                bytes, layout.SubstreamAt((int)layout.SubstreamCount - 1) - PayloadStart,
+                (ulong)(start + 1));
+
+            AssertRefused(
+                () => Persistence.FromByteArray<DpswSketch>(poked),
+                "the window says it has seen");
+        }
+
+        /// <summary>
+        /// The same guard where its arithmetic runs out: a substream starting so near the
+        /// largest position that its last item, start + held - 1, is past what a long
+        /// holds. Such a sum wraps negative, and a check made with it passes, so the
+        /// window loaded holding a substream from its future, which <c>Count</c> then
+        /// passed over and the next <c>Add</c> expired, every counter with it.
+        /// <para>
+        /// Three starts straddle the wrap. At <c>long.MaxValue - held + 1</c> the sum is
+        /// exactly <c>long.MaxValue</c> and does not wrap; one later it is one past and
+        /// wraps; at <c>long.MaxValue</c> it wraps furthest. Each still follows the
+        /// substream before it, so the ordering guard passes them all.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestADpswWindowWithASubstreamEndingPastTheLargestPositionIsRefused()
+        {
+            var (bytes, layout) = SmallDpswPayload();
+            var (_, held, _) = NewestDpswSubstream(bytes, layout);
+
+            Assert.IsGreaterThan(1, held,
+                "the newest substream holds one item, so no start but the largest wraps " +
+                "and the starts below do not straddle anything.");
+
+            var at = layout.SubstreamAt((int)layout.SubstreamCount - 1) - PayloadStart;
+            foreach (var start in new[]
+            {
+                long.MaxValue - held + 1,
+                long.MaxValue - held + 2,
+                long.MaxValue,
+            })
+            {
+                var poked = PokeUInt64(bytes, at, (ulong)start);
+
+                var ex = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<DpswSketch>(poked),
+                    $"a substream starting at {start} and holding {held} was read");
+                StringAssert.Contains(ex.Message, "the window says it has seen",
+                    $"a substream starting at {start} was refused for something else");
+            }
+        }
+
+        /// <summary>
+        /// The newest substream of a DPSW payload: where it starts, how many items it
+        /// holds, and the window's position, read from the bytes.
+        /// </summary>
+        private static (long Start, int Held, long Position) NewestDpswSubstream(
+            byte[] bytes, DpswLayout layout)
+        {
+            // window(8) rho(8) alpha(8) substreamSize(4) width(4) depth(4), then position(8).
+            var position = (long)BinaryPrimitives.ReadUInt64LittleEndian(
+                bytes.AsSpan(PayloadStart + 36));
+            var at = layout.SubstreamAt((int)layout.SubstreamCount - 1);
+            var start = (long)BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(at));
+            var held = (int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at + 8));
+            return (start, held, position);
         }
 
         /// <summary>

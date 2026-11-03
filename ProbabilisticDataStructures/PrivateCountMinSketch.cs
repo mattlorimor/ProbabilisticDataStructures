@@ -475,14 +475,21 @@ namespace ProbabilisticDataStructures
             BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             var rho = reader.ReadDouble();
             reader.ReadUInt64();
-            CheckShape(width, depth, rho);
+            CheckShape(ref reader, width, depth, rho);
 
             reader.Budget.Price(MatrixCost(width, depth));
+
+            // The shape check has held the counters to the bytes that remain, so this is
+            // at most what remains and cannot wrap.
             reader.Skip((long)width * depth * sizeof(double));
             return (width, depth);
         }
 
-        private static void CheckShape(uint width, uint depth, double rho)
+        /// <summary>
+        /// Checks the shape a body claims, as both the read and its price do, before the
+        /// matrix is priced or allocated.
+        /// </summary>
+        private static void CheckShape(ref PayloadReader reader, uint width, uint depth, double rho)
         {
             if (width == 0 || depth == 0)
             {
@@ -512,6 +519,16 @@ namespace ProbabilisticDataStructures
                     "number: at nought the noise would be infinite and at infinity " +
                     "there would be none, and neither is a sketch.");
             }
+
+            // Every counter is written, so the matrix is checked against the bytes behind
+            // it before a row is priced or allocated: a few bytes claiming millions of
+            // counters had the reader allocate their rows before it found them missing,
+            // and the price skip them as width * depth * 8, which wraps past 2^63. The
+            // product of two u32 cannot wrap a ulong, and the check divides. The price
+            // makes it so that such a payload is refused for this rather than for its
+            // budget, and the read makes it too, since a price that throws does not stop
+            // the read.
+            reader.RequireHolds((ulong)width * depth, sizeof(double), "counters");
         }
 
         /// <summary>A matrix of <paramref name="depth"/> rows of <paramref name="width"/> counters, and the sketch.</summary>
@@ -539,7 +556,7 @@ namespace ProbabilisticDataStructures
             var placement = BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             var rho = reader.ReadDouble();
             var count = reader.ReadUInt64();
-            CheckShape(width, depth, rho);
+            CheckShape(ref reader, width, depth, rho);
 
             // Each row is allocated before it is read.
             reader.Budget.Charge(MatrixCost(width, depth));

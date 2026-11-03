@@ -2004,6 +2004,13 @@ bool maybe = filter.TestRange(90000, 90500);   // false means certainly empty
 bool gone = filter.TestAndRemove(90210);       // deletes, which Grafite cannot
 ```
 
+A range wider than `maxRangeSize` is still answered without false negatives, by testing
+each block it covers, so what it costs is linear in its width over `maxRangeSize`. Past
+`MaxInteriorBlocks` blocks inside it, the answer is "possibly" without looking, which is
+always safe, or no if the filter is empty. The default keeps the dearest such call to a
+millisecond or two; raise it to answer wider ranges exactly at that cost, or lower it to
+bound each call more tightly. It is a setting of the instance and is not saved with it.
+
 Keys sharing a block share one stored fingerprint between them, so dense data costs far
 less than sparse: the same 256,000 keys take 41.0 bits each spread one to a block and
 20.5 packed sixty-four to a block. Sparse data gets no such saving — every block holding
@@ -2013,8 +2020,9 @@ A slot is held in a 64-bit word, so the fingerprint and the range, in bits, have
 beside four bits of bookkeeping: `fingerprintBits` plus the bits of `maxRangeSize` is at
 most 60. A pair past that — a range of 2^32 with a 29-bit fingerprint, say — is refused by
 the constructor, which names the widest fingerprint for the range. The table doubles as it
-fills, up to 2^31 slots; an `Add` that would pass that throws before changing anything, and
-the filter goes on answering.
+fills, up to 2^31 slots, or 2^30 when the pair comes to exactly 60, since 2^31 slots of 64
+bits are more than one array holds; an `Add` that would pass that throws before changing
+anything, and the filter goes on answering.
 
 Described by Eslami and Dayan in
 [Memento Filter: A Fast, Dynamic, and Robust Range Filter](https://doi.org/10.1145/3698820).
@@ -2042,9 +2050,13 @@ would have matched.
 
 The estimate is unbiased, and its variance is the smallest any k-item sample can
 achieve — that is the "var-opt" in the name, and it is a proof, not a benchmark. One
-number is not estimated at all: the sampled weights sum to the **exact** total weight
-of the stream, because every eviction hands the evicted item's weight to the
-survivors rather than dropping it.
+number is not estimated at all: the total weight of the stream. Every eviction hands
+the evicted item's weight to the survivors rather than dropping it, so no weight is
+lost, and `TotalWeight` is the total rather than an estimate of it. It is a sum of
+`double`s, though, so it is exact only while the weights are integers and every
+partial sum stays below 2^53. Past that the additions round, and with unit weights the
+total stops growing at 2^53. A weight with a fraction can round as soon as it is added.
+The sampled weights add up to the total to within rounding.
 
 Items heavier than the current threshold are kept at their own weights; the rest
 share the threshold, since below it survival is luck and luck is priced the same for
@@ -2066,7 +2078,7 @@ sample.Add(orderBytes, weight: 249.99);       // sample by revenue
 
 double revenue = sample.EstimateSubset(       // a question asked later
     item => IsFromEurope(item.Span));
-double exact = sample.TotalWeight;            // not an estimate
+double total = sample.TotalWeight;            // a running sum, not an estimate
 
 WeightedElement[] kept = sample.Samples();
 ```

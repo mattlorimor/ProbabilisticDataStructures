@@ -78,13 +78,48 @@ namespace ProbabilisticDataStructures
         public ulong MaxRangeSize => 1UL << this.MementoBits;
 
         /// <summary>
+        /// The most blocks wholly inside a range that <see cref="TestRange"/> tests one by one.
+        /// A range with more of them answers true, "possibly", without testing them, or false
+        /// if the filter holds nothing.
+        /// </summary>
+        /// <remarks>
+        /// A block is <see cref="MaxRangeSize"/> keys wide, so a range no wider than that has
+        /// no block inside it and this does not touch it. A wider range is answered by testing
+        /// its two end blocks and then each block between them against every table in the
+        /// chain, so what it costs is linear in the blocks it covers, and a certain no takes a
+        /// test of every one: [0, ulong.MaxValue] at the default range of 256 covers 2^56
+        /// blocks. True is always a safe answer, so a range past the limit costs nothing and
+        /// gives up only the chance of a certain no. The default keeps the dearest call it
+        /// allows, one that tests every block of a table near its expansion threshold, to a
+        /// millisecond or two. Raise it to answer wider ranges exactly, at that cost per block,
+        /// or lower it to bound a call more tightly. It is not written with the filter: a filter
+        /// read back has the default.
+        /// </remarks>
+        public ulong MaxInteriorBlocks { get; set; } = DefaultMaxInteriorBlocks;
+
+        /// <summary>
+        /// The default <see cref="MaxInteriorBlocks"/>. Measured when it was chosen, a block
+        /// costs about 75 to 110 ns in a table near its expansion threshold whose fingerprints
+        /// are too wide for an empty range to match, and is far cheaper otherwise, since a
+        /// narrower fingerprint matches within a few hundred blocks and ends the walk.
+        /// </summary>
+        internal const ulong DefaultMaxInteriorBlocks = 16_384;
+
+        /// <summary>
+        /// Every block <see cref="TestRange"/> has tested, so the work-bound tests can hold a
+        /// range to the blocks it is allowed rather than to a clock.
+        /// </summary>
+        internal long BlocksTested { get; private set; }
+
+        /// <summary>
         /// Creates a filter that grows as it is filled.
         /// </summary>
         /// <param name="maxRangeSize">
         /// The widest range you mean to ask about. This sets how many low bits of each
         /// key are stored verbatim: a wider promise costs a bit per key per doubling
         /// of the range. Ranges wider than this are still answered without false
-        /// negatives, at the cost of touching more blocks.
+        /// negatives, at the cost of touching more blocks, up to
+        /// <see cref="MaxInteriorBlocks"/> of them.
         /// </param>
         /// <param name="fingerprintBits">
         /// Bits of fingerprint per block. This sets how often two unrelated blocks are
@@ -132,8 +167,9 @@ namespace ProbabilisticDataStructures
                     $"range of at most 2^{widest - 4 - fingerprintBits}.");
             }
 
+            this.QuotientBitsLimit = QuotientBitsLimitFor(slotBits);
             this.Segments.Add(new MementoSegment(
-                InitialQuotientBits(initialCapacity), fingerprintBits, this.MementoBits));
+                InitialQuotientBits(initialCapacity, slotBits), fingerprintBits, this.MementoBits));
         }
 
         /// <summary>
@@ -144,23 +180,41 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// The most address bits this filter lets a table grow to. It is
-        /// <see cref="MaxQuotientBits"/>; a test lowers it to reach the refusal at the
-        /// limit without building a table of gigabytes.
+        /// <see cref="QuotientBitsLimitFor"/> its slot width, set when the filter is built
+        /// or read; a test lowers it to reach the refusal at the limit without building a
+        /// table of gigabytes.
         /// </summary>
         internal int QuotientBitsLimit { get; set; } = MaxQuotientBits;
+
+        /// <summary>
+        /// The most address bits a table of slots this wide can have: the widest whose
+        /// words fit in the one array a table is, and never more than
+        /// <see cref="MaxQuotientBits"/>. That is 31 for slots of up to 63 bits, and 30 for
+        /// a slot of 64, since 2^31 of those are 2^31 + 2 words, more than an array holds.
+        /// The constructor starts the first table no wider and an expansion stops there.
+        /// </summary>
+        internal static int QuotientBitsLimitFor(int slotBits)
+        {
+            var quotientBits = MaxQuotientBits;
+            while (MementoSegment.Words(1u << quotientBits, slotBits) > Array.MaxLength)
+            {
+                quotientBits--;
+            }
+            return quotientBits;
+        }
 
         /// <summary>
         /// The address bits the first table gets for an initial capacity: enough slots
         /// that the capacity fills no more than the expansion threshold of them, a
         /// power of two, and at least four.
         /// </summary>
-        internal static int InitialQuotientBits(uint initialCapacity)
+        internal static int InitialQuotientBits(uint initialCapacity, int slotBits)
         {
             // Clamped at the widest table rather than left to a uint that saturates: the
             // capacity is where the filter starts and not a limit on it, so one that asks
             // for more than the widest table starts at the widest.
             var wanted = Math.Ceiling(Math.Log2(initialCapacity / ExpansionThreshold));
-            return (int)Math.Clamp(wanted, 2, MaxQuotientBits);
+            return (int)Math.Clamp(wanted, 2, QuotientBitsLimitFor(slotBits));
         }
 
         private MementoFilter(bool empty)
@@ -230,6 +284,12 @@ namespace ProbabilisticDataStructures
         /// Whether any stored key might fall in [low, high], both ends included. False
         /// is certain; true is not.
         /// </summary>
+        /// <remarks>
+        /// A range no wider than <see cref="MaxRangeSize"/> is two lookups at most. A wider
+        /// one also tests each block wholly inside it, so its cost is linear in the blocks it
+        /// covers, up to <see cref="MaxInteriorBlocks"/>; past that it answers true without
+        /// testing them, or false if the filter holds nothing.
+        /// </remarks>
         /// <param name="low">The low end of the range, included.</param>
         /// <param name="high">The high end of the range, included.</param>
         public bool TestRange(ulong low, ulong high)
@@ -250,6 +310,14 @@ namespace ProbabilisticDataStructures
             if (firstBlock == lastBlock)
             {
                 return BlockHasMementoBetween(firstBlock, lowMemento, highMemento);
+            }
+
+            // Every block wholly inside the range would be tested on its own below. Past the
+            // limit the answer is "possibly", which is never a false negative, unless nothing
+            // is stored, in which case no is certain without looking.
+            if (lastBlock - firstBlock - 1 > this.MaxInteriorBlocks)
+            {
+                return !IsEmpty();
             }
 
             // The range runs off the end of its first block and into the last one, so
@@ -276,11 +344,28 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Whether no table holds an entry. A table's count is the slots it uses, so this
+        /// is a fact about what is stored and not about the keys counted.
+        /// </summary>
+        private bool IsEmpty()
+        {
+            foreach (var segment in this.Segments)
+            {
+                if (segment.Count > 0)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
         /// Whether a block holds a key whose position within it falls in the given
         /// span.
         /// </summary>
         private bool BlockHasMementoBetween(ulong block, ulong low, ulong high)
         {
+            this.BlocksTested++;
             var hash = HashPrefix(block);
             foreach (var segment in this.Segments)
             {
@@ -387,11 +472,18 @@ namespace ProbabilisticDataStructures
 
             if (widest + 1 > this.QuotientBitsLimit)
             {
+                // The limit is the slot count's unless the words of the next table would not
+                // fit in an array first, which is so only for a slot of 64 bits.
+                var slotBits = MementoSegment.SlotBits(this.Active.FingerprintBits, this.MementoBits);
+                var why = this.QuotientBitsLimit < MaxQuotientBits
+                    && MementoSegment.Words(1u << (this.QuotientBitsLimit + 1), slotBits) > Array.MaxLength
+                    ? $"a table is one array of words, and 2^{this.QuotientBitsLimit + 1} slots of " +
+                      $"{slotBits} bits are more words than an array holds"
+                    : "a table's slot count is a 32-bit number holding 2^q, and 2^32 is not one";
                 throw new InvalidOperationException(
                     $"The filter's widest table has {1UL << widest:N0} slots and is at its " +
                     "expansion threshold, and doubling it would pass the " +
-                    $"{1UL << this.QuotientBitsLimit:N0} a table can have: a table's slot " +
-                    "count is a 32-bit number holding 2^q, and 2^32 is not one. Nothing was " +
+                    $"{1UL << this.QuotientBitsLimit:N0} a table can have: {why}. Nothing was " +
                     "added and the filter is unchanged; it can still be queried and " +
                     "written, and removing keys makes room for more. To hold more keys, " +
                     "split them over several filters.");
@@ -676,6 +768,10 @@ namespace ProbabilisticDataStructures
                 var words = reader.ReadUInt32();
                 var slotBits = CheckSegment(i, quotientBits, fingerprintBits, mementoBits, count, words);
 
+                // As the constructor sets it, from the slot width. Every table of a filter
+                // has the same width, and if a payload says otherwise the lowest limit holds.
+                filter.QuotientBitsLimit = Math.Min(filter.QuotientBitsLimit, QuotientBitsLimitFor(slotBits));
+
                 // Read into one array, then copied into the table the segment builds.
                 budget.Charge(SegmentCost(words));
                 var data = new ulong[words];
@@ -701,8 +797,13 @@ namespace ProbabilisticDataStructures
                         "keys and denies them all. Build the filter again from the keys.");
                 }
 
-                filter.Segments.Add(MementoSegment.Restore(
-                    quotientBits, fingerprintBits, mementoBits, count, data));
+                // The words above are only the table's shape. What a run says about its own
+                // boxes is checked here, once for each occupied run, so that a box the codec
+                // cannot decode is refused now rather than by the first query that reads it.
+                var segment = MementoSegment.Restore(
+                    quotientBits, fingerprintBits, mementoBits, count, data);
+                segment.CheckRuns(i);
+                filter.Segments.Add(segment);
             }
 
             reader.ExpectEnd();
@@ -833,8 +934,7 @@ namespace ProbabilisticDataStructures
                     "stores one entry per slot.");
             }
 
-            var expected =
-                (((long)slots * (fingerprintBits + 1 + mementoBits + 3)) >> 6) + 2;
+            var expected = MementoSegment.Words(slots, slotBits);
             if (words != expected)
             {
                 throw new InvalidDataException(

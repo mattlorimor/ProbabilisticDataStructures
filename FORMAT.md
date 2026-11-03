@@ -195,6 +195,11 @@ checksum still matches.
 | 26 | `Grafite` |
 | 27 | `InfiniFilter` |
 | 28 | `MementoFilter` |
+| 29 | `SublimeCountMinSketch` |
+| 30 | `SetSketch` |
+| 31 | `TupleSketch` |
+| 32 | `PrivateCountMinSketch` |
+| 33 | `DpswSketch` |
 
 Ids are assigned once and never reused, including for structures that no longer exist.
 
@@ -304,12 +309,19 @@ address.
 | `Grafite` | reduced universe `r` | 2,305,843,009,213,693,950 | the hash works modulo 2^61 − 1, and the constructor refuses a request that needs more; every release capped it here, so a payload written for a request that is now refused carries exactly this and reads |
 | `Grafite` | words of low bits | 2,147,483,591 | they are one array |
 | `Grafite` | words of high bits | 33,554,432 | enough for 2,147,483,647 bits, the most an `int` position addresses |
+| `Grafite` | low bits of a code | 60 | a code is split where the high parts are about as numerous as the codes, at the log of the universe over the codes, so one code over the largest universe splits at 60; a reader takes no wider, which also keeps a shift by the split a shift |
 | `SetSketch` | `m` | 2,147,483,591 | the registers are one array |
 | `SublimeCountMinSketch` | rows | 710 | `ceil(ln(1 / delta))` at the smallest delta whose reciprocal is a finite double |
 | `SublimeCountMinSketch` | counters in a row | 1,073,741,824 | a width is a power of two held in an `int`, and 2^30 is the largest of those; the sketch stops widening there |
 | `ScalableBloomFilter` | filter count | 2,147,483,591 | the filters are a list; a filter stops growing sooner, when its next filter would have no finite rate to be sized from, or would be built for more items or bits than a contained filter addresses, which is a limit on growing and not on reading |
 | `CountingBloomFilter` | bytes of counters, `m` × `b` bits, rounded up | 2,147,483,591 | the counters are one array; from four-bit counters up that is fewer counters than a `u32` counts |
 | `StableBloomFilter` | bytes of cells, `m` × `d` bits, rounded up | 2,147,483,591 | the cells are one array, as the counters are |
+| `BloomFilter` | hash functions, `k` | 1,024 | `ceil(log2(1 / rate))` at the smallest false positive rate whose reciprocal is a finite double; the constructor refuses a smaller rate. A reader also refuses none, which sets no bit and tests none |
+| `BloomFilter64` | hash functions, `k` | 1,024 | as `BloomFilter` |
+| `CountingBloomFilter` | hash functions, `k` | 1,024 | as `BloomFilter`; a scratch buffer of four bytes per hash function is allocated for it |
+| `DeletableBloomFilter` | hash functions, `k` | 1,024 | as `CountingBloomFilter` |
+| `PartitionedBloomFilter` | hash functions, `k` | 1,024 | as `BloomFilter`; it is also the number of partitions, and the reader checks it first |
+| `StableBloomFilter` | hash functions, `k` | 1,024 | as `CountingBloomFilter`; the constructor halves the count, and the factory that builds a plain Bloom filter of cells does not, so the reader accepts the whole of it |
 | `InfiniFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; a filter stops expanding there |
 | `MementoFilter` | quotient bits | 31 | as `InfiniFilter` |
 | `MementoFilter` | bits of a slot | 64 | a slot is held in a 64-bit word: three bits of metadata, and a field of the fingerprint, one bit for its age counter and the memento |
@@ -321,6 +333,12 @@ The other filters built on `Buckets` hold one-bit buckets, so the most they hold
 a `u32` counts, 4,294,967,295, which is 536,870,912 bytes, and their sizing refuses
 anything beyond it. The same arithmetic limits the counting and stable filters from four
 bits up: at 4 bits it is 4,294,967,182 buckets, and at 8 bits 2,147,483,591.
+
+A `DeletableBloomFilter` keeps its data region and its collision regions out of one `m`
+that sizing holds to that same 4,294,967,295, so the two come to no more than that
+between them, and a reader refuses a payload whose regions do. Without the refusal the
+region size, worked out in 32 bits, wraps to zero past 2^32, and the first add that finds
+a bit already set divides by it.
 
 A bucket array of 2^32 bits or more, 512 MiB, was written by 6.2.0 and every release before
 it with a byte count that had wrapped in 32 bits: a Bloom filter of 4,294,967,294 buckets
@@ -474,6 +492,10 @@ At version 1 there is no placement byte, the counters were placed with 32-bit va
 and the count is a `u32`. Which items a counter counts is described in
 [Bit placement](#bit-placement).
 
+The count stops at zero as items are removed. A payload saved by a release before that
+fix, after more removals than adds, holds the wrapped value (2^64 - 1, or 2^32 - 1 before
+version 8), and it is read as it was stored: a huge count cannot be told from a real one.
+
 ### `DeletableBloomFilter` (id 4)
 
 At version 8:
@@ -491,6 +513,11 @@ At version 1 there is no placement byte, the bits were placed with 32-bit values
 the count is a `u32`. The region size is **not** stored. See
 [What is not stored](#what-is-not-stored). Which item a bit of the data region stands for
 is described in [Bit placement](#bit-placement), with `m` the data region.
+
+The count falls only for a removal that cleared a bit, and stops at zero. A payload saved
+by a release before that fix holds a count that fell for every removal answered true, and
+after more of those than adds, the wrapped value (2^64 - 1, or 2^32 - 1 before version 8); it
+is read as it was stored.
 
 ### `PartitionedBloomFilter` (id 5)
 
@@ -602,6 +629,12 @@ refused, as is a payload claiming more occupied entries than `m` buckets of `b` 
 reader still allocates the whole table, so it cannot size by what the payload holds; it
 refuses a table past the constructor's limit instead (see [Sizes](#sizes)).
 
+`m` must be a power of two, as the constructor always makes it: an item's other bucket
+is found by reducing a hash by `m`, and finds the first again from the other end only
+for a power of two. `count` must equal the number of entries the table holds, since
+each item is one entry, and a bucket and entry listed twice is refused, so the count is
+compared with the places filled and not with the length of the list.
+
 How a fingerprint is written, and what `f` counts, depends on the version:
 
 | Version | `f` counts | One fingerprint |
@@ -616,7 +649,8 @@ version 3 the filter holds each fingerprint at exactly `f` bits, so a width that
 multiple of eight leaves the high bits of the last byte zero, and a fingerprint with a
 bit set at or above `f` is refused, since the writer cannot have produced it. A payload
 whose width, in bits, is not between 1 and 64 is refused, as is one with no buckets, no
-entries per bucket, or a bucket count beyond what the reader will allocate for.
+entries per bucket, a bucket count that is not a power of two, or a bucket count beyond
+what the reader will allocate for.
 
 The generator's state follows the entries, and version 1 payloads simply end before it.
 The state it began in is the last field, and payloads before version 6 simply end before
@@ -720,7 +754,10 @@ The counts run contiguously from the first occupied bucket, so the store's bound
 its total follow from the run itself rather than being written alongside it and given
 the chance to disagree with it. A payload whose buckets do not add up to the recorded
 total is refused: every quantile would land at the wrong rank while each individual
-bucket still looked reasonable.
+bucket still looked reasonable. The sum is of the counts themselves, not of what they
+come to modulo 2^64: a store whose counts come to more than 2^64 − 1, or the two stores
+and the zero count together, is refused even where the wrapped sum is the recorded
+total. No sketch the writer wrote has more than a total can hold.
 
 `gamma`, which is `(1+a)/(1-a)`, is derived from the accuracy rather than stored. So is
 the log of it. See [What is not stored](#what-is-not-stored).
@@ -936,8 +973,11 @@ bytes     the item's data
 
 The threshold itself is **not** stored. It is the region's total weight divided by
 the region's size, and storing the quotient instead of the total would let rounding
-accumulate across a save-and-reload cycle — the one number this structure promises
-exactly is the sum of its adjusted weights.
+accumulate across a save-and-reload cycle. The total is stored as it is held, so a save
+and a load change none of it. What the structure promises of its total is that no weight
+is lost when an item is dropped, because the survivors inherit it. The total is still a
+sum of doubles, exact only while the weights are integers and every partial sum stays
+below 2^53; a weight with a fraction can round as soon as it is added.
 
 Which reading a payload gets is decided by the threshold-region size: zero means the
 sample is still exact and holds everything it has seen, so the reader requires the
@@ -1037,7 +1077,20 @@ is rebuilt on read rather than written down, since it is a function of the bits 
 indexes.
 
 A reader also rejects a code at or above the reduced universe, a split wider than a
-code, and more codes than keys — none of which hashing can produce.
+code or than any the writer makes (the sizes table has the limit), and more codes than
+keys — none of which hashing can produce.
+
+The counts that describe the encoding are not free: the writer sets each from the
+number of codes *c*, the split *b* and the largest code *L*, and a reader refuses a
+payload that gives any other. The bits of high parts in use are (*L* >> *b*) + *c* + 1.
+The words of low bits are ⌊*c* × *b* / 64⌋ + 2, and the words of high bits are
+⌊(bits in use) / 64⌋ + 1. A filter of no codes has no split, no bits of high parts in use
+and no words of either kind. Both counts are read as unsigned, so a split or a number of
+bits from 2^31 up is too large rather than negative.
+
+The smallest and largest codes recorded in the payload are not free either. A query turns
+away anything outside them before it looks at the encoding, so a reader checks that they
+are the first and the last of the codes the encoding holds, and refuses the payload if not.
 
 ### `InfiniFilter` (id 27)
 
@@ -1114,7 +1167,10 @@ read another", so a small count costs as much as one memento and a large one sti
 A reader rejects an impossible memento width, a chain of no tables or absurdly many, a
 table with more than 31 bits of address (as `InfiniFilter`'s), a table whose slots are wider
 than 64 bits, a table with more entries than slots, and a word count disagreeing with the
-shape claimed.
+shape claimed. It then decodes every occupied run once and rejects a box whose count claims
+more keys than the rest of its run has bits for, or whose run ends inside its count; no
+writer produces either, and refusing them at read is what keeps every query on a filter it
+read from meeting one.
 
 A slot of exactly 64 bits — the fingerprint plus the memento width come to 60 — was written
 by releases up to and including 6.2.0 with a mask of zero, which dropped every write: the
@@ -1264,7 +1320,8 @@ no transcendental function, so a stored sketch answers identically everywhere �
 does mean these payloads have no byte-exact write fixture, only a pinned layout.
 
 A reader rejects a sketch with no rows or no columns, a budget that is not a positive
-finite number, and any counter that is infinite or not a number.
+finite number, more counters than the rest of the payload could hold, which it checks
+before allocating a row, and any counter that is infinite or not a number.
 
 It also rejects a payload whose counters are **all exact integers**. A counter is a draw
 from a continuous distribution plus a whole number of hits, so it is non-integral with

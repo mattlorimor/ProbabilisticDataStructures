@@ -594,6 +594,29 @@ namespace TestProbabilisticDataStructures
             AssertRefused<Grafite>(past, PastTheLimit);
             var atTheLimit = PokeUInt32(PokeUInt32(bytes, 0, 0xFFFFFFFE), 4, 0x1FFFFFFF);
             Assert.AreEqual(Grafite.MaxUniverse, Persistence.FromByteArray<Grafite>(atTheLimit).R);
+
+            // The split, a u32 at 40, is at most the builder's widest, which is the largest
+            // universe over a single code. The limit is worked from the builder's own
+            // split, so it is held to the filter that builder makes there, which reads; one
+            // bit more is refused, and so is the width of a code, which the reader once took
+            // and which no payload this library wrote carries. (Worked by hand: the largest
+            // universe, 2^61 - 2, has its highest bit at 60.)
+            const int LowBitsOffset = 40;
+            var widest = Grafite.BuildAtUniverse(new ulong[] { 1 }, Grafite.MaxUniverse, 1, seed: 1);
+            Assert.AreEqual(Grafite.MaxLowBits, widest.LowBits);
+            Assert.AreEqual(60, Grafite.MaxLowBits);
+            var widestBytes = widest.ToByteArray();
+            Assert.AreEqual(
+                Grafite.MaxLowBits, Persistence.FromByteArray<Grafite>(widestBytes).LowBits);
+            AssertRefused<Grafite>(
+                PokeUInt32(widestBytes, LowBitsOffset, (uint)Grafite.MaxLowBits + 1), PastTheLimit);
+            AssertRefused<Grafite>(PokeUInt32(widestBytes, LowBitsOffset, 64), PastTheLimit);
+
+            // And no other input to the builder splits wider: two codes over the same
+            // universe split one bit narrower.
+            Assert.AreEqual(
+                Grafite.MaxLowBits - 1,
+                Grafite.BuildAtUniverse(new ulong[] { 1, 2 }, Grafite.MaxUniverse, 1, seed: 1).LowBits);
         }
 
         /// <summary>
@@ -756,7 +779,8 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// The rows and the counters in each are arrays. Structural at the limit, where a
         /// sketch is gigabytes of noise: the constructor's refusal one past, the reader's
-        /// the same, and the cost a payload at the limit is refused for.
+        /// the same, and a payload at the limit refused only for the counters it does not
+        /// hold, which its reader checks are there before it prices or allocates a row.
         /// </summary>
         [TestMethod]
         public void TestPrivateCountMinSketchLimitsAreShared()
@@ -776,14 +800,10 @@ namespace TestProbabilisticDataStructures
             AssertRefused<PrivateCountMinSketch>(
                 PokeUInt32(bytes, 4, PrivateCountMinSketch.MaxDepth + 1), PastTheLimit);
 
-            foreach (var offset in new[] { 0, 4 })
-            {
-                var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() =>
-                    Persistence.FromByteArray<PrivateCountMinSketch>(
-                        PokeUInt32(bytes, offset, (uint)Array.MaxLength)));
-                Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
-                    "a payload at the limit should be refused for what it costs, not its size");
-            }
+            AssertRefusedOnlyForMissingBytes<PrivateCountMinSketch>(
+                PokeUInt32(bytes, 0, PrivateCountMinSketch.MaxWidth));
+            AssertRefusedOnlyForMissingBytes<PrivateCountMinSketch>(
+                PokeUInt32(bytes, 4, PrivateCountMinSketch.MaxDepth));
         }
 
         /// <summary>
@@ -1179,7 +1199,8 @@ namespace TestProbabilisticDataStructures
             Assert.IsLessThanOrEqualTo((ulong)uint.MaxValue, 1UL << MementoFilter.MaxQuotientBits);
             Assert.IsGreaterThan((ulong)uint.MaxValue, 1UL << (MementoFilter.MaxQuotientBits + 1));
 
-            Assert.AreEqual(MementoFilter.MaxQuotientBits, MementoFilter.InitialQuotientBits(uint.MaxValue));
+            Assert.AreEqual(MementoFilter.MaxQuotientBits,
+                MementoFilter.InitialQuotientBits(uint.MaxValue, MementoSegment.SlotBits(8, 8)));
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new MementoFilter(256, 1));
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new MementoFilter(256, 33));
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new MementoFilter((1UL << 32) + 1));
@@ -1593,6 +1614,7 @@ namespace TestProbabilisticDataStructures
                 [("Grafite", "reduced universe `r`")] = Grafite.MaxUniverse,
                 [("Grafite", "words of low bits")] = Grafite.MaxLowWords,
                 [("Grafite", "words of high bits")] = Grafite.MaxHighWords,
+                [("Grafite", "low bits of a code")] = (ulong)Grafite.MaxLowBits,
                 [("SetSketch", "`m`")] = (ulong)SetSketch.MaxRegisters,
                 [("SublimeCountMinSketch", "rows")] = (ulong)SublimeCountMinSketch.MaxDepth,
                 [("SublimeCountMinSketch", "counters in a row")] = (ulong)SublimeCountMinSketch.MaxWidth,
@@ -1604,6 +1626,13 @@ namespace TestProbabilisticDataStructures
                 [("QuotientFilter", "quotient + remainder bits")] = QuotientFilter.HashBits,
                 [("QuotientFilter", "remainder bits")] = QuotientFilter.MaxRemainderBits,
             };
+
+            // The hash count a reader accepts, which every filter that stores one shares:
+            // the most Utils.OptimalK can return.
+            foreach (var structure in TestHashCountLimit.StructuresThatStoreAHashCount())
+            {
+                expected[(structure, "hash functions, `k`")] = Utils.MaxHashCount;
+            }
 
             using var resource = typeof(TestLoadWhatItBuilds).Assembly
                 .GetManifestResourceStream("TestProbabilisticDataStructures.FORMAT.md");
@@ -1637,7 +1666,8 @@ namespace TestProbabilisticDataStructures
             }
 
             CollectionAssert.AreEquivalent(
-                Declared.Select(d => d.Id.ToString()).ToArray(),
+                Declared.Select(d => d.Id.ToString())
+                    .Union(TestHashCountLimit.StructuresThatStoreAHashCount()).ToArray(),
                 expected.Keys.Select(k => k.Structure).Distinct().ToArray(),
                 "the structures with a documented limit are not the ones that declare one");
         }

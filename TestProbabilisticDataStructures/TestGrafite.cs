@@ -849,6 +849,94 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The reader holds a payload's counts to what the codes in it need, and the
+        /// builder sets them, so a filter the builder writes has to read back at every
+        /// shape its counts turn on. They turn on the split (none at all when the universe
+        /// is under two to a code, up to 60 bits when it is the cap), on where the codes
+        /// end in the words (a count of bits that is a whole number of words, one under and
+        /// one over), on codes that collide (fewer codes than keys), and on the number of
+        /// codes itself. Each of those is asserted to have been reached, and a filter that
+        /// does not come back byte for byte, with every key found, fails the sweep.
+        /// </summary>
+        [TestMethod]
+        public void TestFiltersAcrossTheShapesTheirCountsTurnOnRoundTrip()
+        {
+            var reached = new HashSet<string>();
+            var keyCounts = Enumerable.Range(1, 140).Concat(new[] { 255, 256, 257, 1000 });
+
+            foreach (var n in keyCounts)
+            {
+                var keys = Enumerable.Range(0, n).Select(i => ((ulong)i * 1_000_003) + 7).ToArray();
+                var universes = new[]
+                {
+                    2UL, (ulong)n, (2UL * (ulong)n) - 1, 2UL * (ulong)n, (3UL * (ulong)n) + 1,
+                    1UL << 20, 1UL << 40, Grafite.MaxUniverse,
+                }.Select(u => Math.Max(u, 2)).Distinct();
+
+                foreach (var universe in universes)
+                {
+                    var built = Grafite.BuildAtUniverse(keys, universe, 16, seed: (ulong)n);
+                    var bytes = built.ToByteArray();
+                    var label = $"{n} keys over a universe of {universe}";
+
+                    var restored = Persistence.FromByteArray<Grafite>(bytes);
+                    CollectionAssert.AreEqual(bytes, restored.ToByteArray(), label);
+                    foreach (var key in keys)
+                    {
+                        Assert.IsTrue(restored.Test(key), $"{label}: the key {key} was lost");
+                    }
+
+                    reached.Add(built.LowBits == 0 ? "no split" : "a split");
+                    reached.Add($"split {built.LowBits}");
+                    reached.Add($"high bits at {built.HighBitCount % 64} of a word");
+                    reached.Add(((long)built.CodeCount * built.LowBits) % 64 == 0
+                        ? "low bits end on a word" : "low bits end inside a word");
+                    reached.Add(built.CodeCount < n ? "colliding codes" : "distinct codes");
+                }
+            }
+
+            foreach (var wanted in new[]
+            {
+                "no split", "a split", $"split {Grafite.MaxLowBits}", "high bits at 0 of a word",
+                "high bits at 1 of a word", "high bits at 63 of a word", "low bits end on a word",
+                "low bits end inside a word", "colliding codes", "distinct codes",
+            })
+            {
+                Assert.Contains(wanted, reached, $"the sweep never reached: {wanted}");
+            }
+        }
+
+        /// <summary>
+        /// The size the codes give their encoding, worked by hand from how it is laid out:
+        /// the bits of high parts are the largest high part plus a bit for each code plus
+        /// one, the low parts take n × b bits and two words beyond them, and the high bits
+        /// take a word for every 64 and one more. The rows straddle a word of high bits
+        /// (63 bits and 64) and of low bits (two codes of 31 low bits and of 32); the
+        /// widest split, 60, is the row whose largest code has a high part; the most codes
+        /// an int counts, at 60 bits each, is the row where the products and the bit count
+        /// pass what an int holds; and a filter of no codes has none of any, whatever the
+        /// fields beside it say.
+        /// </summary>
+        [TestMethod]
+        [DataRow(60, 7, 6826UL, 114L, 8L, 2L)]
+        [DataRow(1, 0, 5UL, 7L, 2L, 1L)]
+        [DataRow(1, 0, 61UL, 63L, 2L, 1L)]
+        [DataRow(1, 0, 62UL, 64L, 2L, 2L)]
+        [DataRow(2, 31, 9UL, 3L, 2L, 1L)]
+        [DataRow(2, 32, 9UL, 3L, 3L, 1L)]
+        [DataRow(1, 60, (1UL << 61) - 3, 3L, 2L, 1L)]
+        [DataRow(int.MaxValue, 60, 5UL, 2_147_483_648L, 2_013_265_921L, 33_554_433L)]
+        [DataRow(0, 0, 0UL, 0L, 0L, 0L)]
+        [DataRow(0, 7, 100UL, 0L, 0L, 0L)]
+        public void TestTheLayoutOfCodesIsWhatTheEncodingNeeds(
+            int codes, int lowBits, ulong lastCode, long highBits, long lowWords, long highWords)
+        {
+            var layout = Grafite.LayoutOf(codes, lowBits, lastCode);
+
+            Assert.AreEqual((highBits, lowWords, highWords), layout);
+        }
+
+        /// <summary>
         /// A set of no keys wants no universe, whatever range it is asked about.
         /// </summary>
         [TestMethod]

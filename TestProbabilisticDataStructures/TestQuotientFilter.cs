@@ -270,6 +270,135 @@ namespace TestProbabilisticDataStructures
             Assert.IsFalse(b.Test(Key("a0")), "the merge wrote into the wrong filter");
         }
 
+        /// <summary>
+        /// A filter merged into itself holds everything twice: exactly what a twin that
+        /// was given every item twice holds, to the byte.
+        /// </summary>
+        /// <remarks>
+        /// This is the behaviour <c>Merge</c> keeps a snapshot of the entries for. Every
+        /// insert shifts the entries after it along their cluster, so a merge that read
+        /// the table lazily while writing into the same table would meet entries it had
+        /// already moved. A filter holding 600 is sparse, and one holding half the slots
+        /// leaves clusters long enough for the shifting to reach far; the byte
+        /// comparison covers every slot either way, which a count and a handful of
+        /// lookups would not.
+        /// </remarks>
+        [TestMethod]
+        public void TestAFilterMergedIntoItselfHoldsEverythingTwice()
+        {
+            var slots = new QuotientFilter(2000, 0.01).SlotCount;
+
+            foreach (var held in new[] { 600u, slots / 2 })
+            {
+                var filter = new QuotientFilter(2000, 0.01);
+                var twin = new QuotientFilter(2000, 0.01);
+
+                for (var i = 0; i < held; i++)
+                {
+                    filter.Add(Key($"item{i}"));
+                    twin.Add(Key($"item{i}"));
+                    twin.Add(Key($"item{i}"));
+                }
+
+                var returned = filter.Merge(filter);
+
+                Assert.AreSame(filter, returned, "the merge did not return the filter it was called on");
+                Assert.AreEqual(2 * held, filter.Count(), $"{held} entries merged into themselves");
+                CollectionAssert.AreEqual(twin.ToByteArray(), filter.ToByteArray(),
+                    $"{held} entries merged into themselves did not leave what adding each twice does");
+
+                for (var i = 0; i < held; i++)
+                {
+                    Assert.IsTrue(filter.Test(Key($"item{i}")), $"item{i} was lost by the self-merge");
+                }
+            }
+        }
+
+        /// <summary>
+        /// The most a filter can merge into itself is the half of its slots it can hold
+        /// twice over. That leaves a table with no empty slot, and the next entry over
+        /// the half is refused before anything is written.
+        /// </summary>
+        [TestMethod]
+        public void TestAFilterMergedIntoItselfIsRefusedPastHalfItsSlots()
+        {
+            var filter = new QuotientFilter(2000, 0.01);
+            var slots = filter.SlotCount;
+
+            for (var i = 0; i < slots / 2; i++)
+            {
+                filter.Add(Key($"item{i}"));
+            }
+
+            filter.Merge(filter);
+
+            Assert.AreEqual(slots, filter.Count(), "half the slots, merged into themselves, did not fill the table");
+            Assert.ThrowsExactly<InvalidOperationException>(() => filter.Add(Key("one more")));
+
+            var small = new QuotientFilter(2000, 0.01);
+            for (var i = 0; i <= slots / 2; i++)
+            {
+                small.Add(Key($"item{i}"));
+            }
+
+            var before = small.ToByteArray();
+            Assert.ThrowsExactly<InvalidOperationException>(() => small.Merge(small));
+            CollectionAssert.AreEqual(before, small.ToByteArray(), "a refused self-merge changed the filter");
+        }
+
+        /// <summary>
+        /// Merging reads the other filter's entries as it goes rather than listing them
+        /// first: the allocation of a merge does not grow with the entries merged in.
+        /// </summary>
+        /// <remarks>
+        /// Listing the entries first cost 16 bytes each (a <c>uint</c> and a <c>ulong</c>,
+        /// padded) on top of both tables, and for a count of 2^31 or more it could not be
+        /// built at all. Measured on the sample below: 4,000,056 bytes, 16.0 an entry,
+        /// with the list; 56, the walk's own state, without it. The bound is 16 KiB,
+        /// which is a fraction of a byte an entry here, so no cost that scales with the
+        /// entries can hide in it, and well above the few kilobytes of noise below.
+        /// <para>
+        /// The target is read from a payload each time so that every repeat merges into
+        /// the same table, and the measurement is the least of five, as
+        /// <see cref="TestReadBudget"/> takes it: a collection landing mid-merge retires
+        /// this thread's allocation context, and the counter can then report a few
+        /// kilobytes the merge did not ask for. That noise only ever adds.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestMergeAllocatesNothingPerEntryMergedIn()
+        {
+            const int each = 250_000;
+
+            var target = new QuotientFilter(400_000, 0.01);
+            var source = new QuotientFilter(400_000, 0.01);
+            for (var i = 0; i < each; i++)
+            {
+                target.Add(Key($"t{i}"));
+                source.Add(Key($"s{i}"));
+            }
+
+            var payload = target.ToByteArray();
+            var least = long.MaxValue;
+            for (var run = 0; run < 5; run++)
+            {
+                var merged = Persistence.FromByteArray<QuotientFilter>(payload);
+
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                merged.Merge(source);
+                least = Math.Min(least, GC.GetAllocatedBytesForCurrentThread() - before);
+
+                // The merge did the work the allocation is being asked about.
+                Assert.AreEqual((uint)(2 * each), merged.Count());
+                Assert.IsTrue(merged.Test(Key("t0")) && merged.Test(Key("s0")));
+                Assert.IsTrue(merged.Test(Key($"s{each - 1}")) && merged.Test(Key($"t{each - 1}")));
+            }
+
+            Assert.IsLessThan(16 * 1024, least,
+                $"merging in {each:N0} entries allocated {least:N0} bytes, " +
+                $"{(double)least / each:N1} an entry: the entries were held while they were merged");
+        }
+
         [TestMethod]
         public void TestMergeRejectsFiltersItCannotCombine()
         {

@@ -64,6 +64,12 @@ namespace TestProbabilisticDataStructures
         private static readonly Regex VersionRow =
             new(@"^\| (?<version>\d+) \| [^|]* \| (?<who>[^|]*) \|", RegexOptions.Multiline);
 
+        // One row of the table of structure ids: the id and the structure's name. The
+        // header and the rule under it have no digits and no backticks, so they match
+        // nothing. The trailing \r is matched for the reason PayloadSection's is.
+        private static readonly Regex IdRow =
+            new(@"^\| (?<id>\d+) \| `(?<name>[A-Za-z0-9]+)` \|\r?$", RegexOptions.Multiline);
+
         /// <summary>
         /// The table of format versions says, structure by structure, the same versions
         /// the readers accept. Someone decoding a payload by hand reads that table to
@@ -161,6 +167,70 @@ namespace TestProbabilisticDataStructures
                     (ushort)Enum.Parse<StructureId>(name), documented,
                     $"FORMAT.md documents {name} under id {documented}");
             }
+        }
+
+        /// <summary>
+        /// The table of structure ids lists every structure, under the id the envelope
+        /// carries. It is the first thing someone decoding a payload by hand needs --
+        /// the id is how they learn which section to read -- and it stopped short of the
+        /// last structures <see cref="StructureId"/> gained, so an envelope holding one of
+        /// their ids named a structure that appeared in no table, while the document's own
+        /// sections for it were headed with that id. Nothing read the table, and a
+        /// document has no build to fail.
+        /// </summary>
+        /// <remarks>
+        /// The roster is the enum, through <see cref="StructureRoster"/>, so a structure
+        /// added to it and not to the table fails by name. The rows are the other half:
+        /// each must name a structure and carry its id, no name or id may appear twice,
+        /// and the pattern that finds them must tolerate the CRLF line endings the file
+        /// is checked out with on Windows, which the last assertion holds it to.
+        /// </remarks>
+        [TestMethod]
+        public void TestEveryStructureIsInTheIdTableUnderItsId()
+        {
+            var spec = Specification();
+            var start = spec.IndexOf("### Structure ids", StringComparison.Ordinal);
+            Assert.IsGreaterThanOrEqualTo(0, start, "FORMAT.md has no table of structure ids");
+            var end = spec.IndexOf("\n### ", start + 1, StringComparison.Ordinal);
+            var section = spec[start..(end < 0 ? spec.Length : end)];
+
+            var rows = IdRow.Matches(section);
+            Assert.IsGreaterThan(0, rows.Count,
+                "no rows were found in the table of structure ids, so every assertion " +
+                "made about it below is vacuous. The row pattern and the document have diverged.");
+
+            var names = rows.Select(row => row.Groups["name"].Value).ToArray();
+            Assert.AreEqual(names.Length, names.Distinct().Count(),
+                "FORMAT.md lists the same structure twice in its table of structure ids");
+
+            var ids = rows.Select(row => ushort.Parse(row.Groups["id"].Value)).ToArray();
+            Assert.AreEqual(ids.Length, ids.Distinct().Count(),
+                "FORMAT.md lists the same id twice in its table of structure ids");
+
+            foreach (Match row in rows)
+            {
+                var name = row.Groups["name"].Value;
+                var listed = ushort.Parse(row.Groups["id"].Value);
+
+                Assert.IsTrue(Enum.GetNames<StructureId>().Contains(name, StringComparer.Ordinal),
+                    $"the table of structure ids lists '{name}', which is not a structure");
+                Assert.AreEqual(
+                    (ushort)Enum.Parse<StructureId>(name), listed,
+                    $"FORMAT.md lists {name} under id {listed} in its table of structure ids");
+            }
+
+            StructureRoster.AssertCoversEveryStructure(
+                "structure id table",
+                names.Select(Enum.Parse<StructureId>));
+
+            // The same section with each line ending the other way, as a checkout on the
+            // other platform would have it: the rows found must not depend on it.
+            var lf = section.Replace("\r\n", "\n");
+            var crlf = lf.Replace("\n", "\r\n");
+            Assert.AreEqual(rows.Count, IdRow.Matches(lf).Count,
+                "the table of structure ids is read differently with LF line endings");
+            Assert.AreEqual(rows.Count, IdRow.Matches(crlf).Count,
+                "the table of structure ids is read differently with CRLF line endings");
         }
     }
 }

@@ -91,6 +91,35 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The most hash functions <see cref="OptimalK"/> can return, and so the most any
+        /// filter this library builds has.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="OptimalK"/> grows as the false positive rate falls, and takes the
+        /// reciprocal of the rate, which is a double that stops being finite below about
+        /// 5.6e-309; a smaller rate fails there, in every constructor, before a filter
+        /// exists. So the most is its value at the smallest rate whose reciprocal is
+        /// finite, found here by the same arithmetic <see cref="OptimalK"/> uses and not
+        /// written down. A reader refuses a payload with more, since nothing it could have
+        /// been written by has them and every add and test would run that many position
+        /// computations.
+        /// </remarks>
+        internal static uint MaxHashCount => HashCountAtTheSmallestRate();
+
+        private static uint HashCountAtTheSmallestRate()
+        {
+            // The reciprocal of the largest double is subnormal, so it may be a step short
+            // of the smallest rate whose own reciprocal is finite. Step up to it.
+            var rate = 1 / double.MaxValue;
+            while (double.IsInfinity(1 / rate))
+            {
+                rate = Math.BitIncrement(rate);
+            }
+
+            return OptimalK(rate);
+        }
+
+        /// <summary>
         /// Returns the upper and lower base hash values from which the k hashes are
         /// derived. The result is the same regardless of the endianness of the
         /// architecture.
