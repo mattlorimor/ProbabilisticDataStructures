@@ -346,6 +346,59 @@ namespace TestProbabilisticDataStructures
             CollectionAssert.AreEqual(before, small.ToByteArray(), "a refused self-merge changed the filter");
         }
 
+        /// <summary>
+        /// Merging reads the other filter's entries as it goes rather than listing them
+        /// first: the allocation of a merge does not grow with the entries merged in.
+        /// </summary>
+        /// <remarks>
+        /// Listing the entries first cost 16 bytes each (a <c>uint</c> and a <c>ulong</c>,
+        /// padded) on top of both tables, and for a count of 2^31 or more it could not be
+        /// built at all. Measured on the sample below: 4,000,056 bytes, 16.0 an entry,
+        /// with the list; 56, the walk's own state, without it. The bound is 16 KiB,
+        /// which is a fraction of a byte an entry here, so no cost that scales with the
+        /// entries can hide in it, and well above the few kilobytes of noise below.
+        /// <para>
+        /// The target is read from a payload each time so that every repeat merges into
+        /// the same table, and the measurement is the least of five, as
+        /// <see cref="TestReadBudget"/> takes it: a collection landing mid-merge retires
+        /// this thread's allocation context, and the counter can then report a few
+        /// kilobytes the merge did not ask for. That noise only ever adds.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestMergeAllocatesNothingPerEntryMergedIn()
+        {
+            const int each = 250_000;
+
+            var target = new QuotientFilter(400_000, 0.01);
+            var source = new QuotientFilter(400_000, 0.01);
+            for (var i = 0; i < each; i++)
+            {
+                target.Add(Key($"t{i}"));
+                source.Add(Key($"s{i}"));
+            }
+
+            var payload = target.ToByteArray();
+            var least = long.MaxValue;
+            for (var run = 0; run < 5; run++)
+            {
+                var merged = Persistence.FromByteArray<QuotientFilter>(payload);
+
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                merged.Merge(source);
+                least = Math.Min(least, GC.GetAllocatedBytesForCurrentThread() - before);
+
+                // The merge did the work the allocation is being asked about.
+                Assert.AreEqual((uint)(2 * each), merged.Count());
+                Assert.IsTrue(merged.Test(Key("t0")) && merged.Test(Key("s0")));
+                Assert.IsTrue(merged.Test(Key($"s{each - 1}")) && merged.Test(Key($"t{each - 1}")));
+            }
+
+            Assert.IsLessThan(16 * 1024, least,
+                $"merging in {each:N0} entries allocated {least:N0} bytes, " +
+                $"{(double)least / each:N1} an entry: the entries were held while they were merged");
+        }
+
         [TestMethod]
         public void TestMergeRejectsFiltersItCannotCombine()
         {
