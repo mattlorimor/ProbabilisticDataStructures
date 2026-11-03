@@ -625,15 +625,14 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// A split that is possible and that the codes do not give. The payload is one of
-        /// seven bits: one fewer and one more are as plausible as it, and 64 is the widest
-        /// the bound on the split allows, which no filter is built with. None of them was
-        /// refused, and probed against the keys the filter holds, one more and 64 answered
-        /// false for every one.
+        /// seven bits: one fewer and one more are as plausible as it, and 60 is the widest
+        /// any filter is split at. None of them was refused, and probed against the keys
+        /// the filter holds, one more and 60 answered false for every one.
         /// </summary>
         [TestMethod]
         [DataRow(6u)]
         [DataRow(8u)]
-        [DataRow(64u)]
+        [DataRow(60u)]
         public void TestGrafiteWhoseSplitDisagreesWithItsCodesIsRefused(uint lowBits)
         {
             var original = GrafitePayload();
@@ -642,6 +641,26 @@ namespace TestProbabilisticDataStructures
 
             var bytes = PokeUInt32(original, GrafiteLowBitsOffset, lowBits);
             AssertGrafiteEditRefused(original, bytes, "take exactly");
+        }
+
+        /// <summary>
+        /// A split wider than a builder ever makes. It splits at the log of the universe
+        /// over the codes, and the universe is below 2^61, so no filter has more than 60
+        /// low bits. A split of 61 to 64 is not wider than a code, which the limit before
+        /// it allowed, and is read by a query as a shift that is not the one that was
+        /// meant: C# masks a shift of 64 to a shift of none, so a code is "split" at 64 by
+        /// being left whole.
+        /// </summary>
+        [TestMethod]
+        [DataRow(61u)]
+        [DataRow(62u)]
+        [DataRow(63u)]
+        [DataRow(64u)]
+        public void TestGrafiteWithASplitPastWhatABuilderMakesIsRefused(uint lowBits)
+        {
+            var bytes = PokeUInt32(GrafitePayload(), GrafiteLowBitsOffset, lowBits);
+            AssertGrafiteEditRefused(
+                GrafitePayload(), bytes, "beyond anything this library builds");
         }
 
         /// <summary>
@@ -657,6 +676,62 @@ namespace TestProbabilisticDataStructures
 
             var bytes = PokeUInt32(original, GrafiteCodeCountOffset, (uint)(codes - 1));
             AssertGrafiteEditRefused(original, bytes, "take exactly");
+        }
+
+        /// <summary>
+        /// The filter of <see cref="GrafitePayload"/> re-encoded at a split of 64 bits, a
+        /// payload no builder writes and that agrees with itself in every field: each code
+        /// is its own low part, every high part is zero (so the bit count is a one for each
+        /// code and the one the encoding ends on), and the arrays are the sizes the codes
+        /// give them. Of the sixty codes the high bits fit one word.
+        /// </summary>
+        private static byte[] GrafiteSplitAtSixtyFour()
+        {
+            var source = Persistence.FromByteArray<Grafite>(GrafitePayload());
+            var codes = source.CodeCount;
+            Assert.IsLessThan(64, codes, "the high bits of the codes should fit one word");
+
+            var payload = new PayloadWriter();
+            payload.WriteUInt64(source.R);
+            payload.WriteUInt64(source.C1);
+            payload.WriteUInt64(source.C2);
+            payload.WriteUInt64(source.KeyCount);
+            payload.WriteUInt64(source.MaxRange);
+            payload.WriteUInt32(64);
+            payload.WriteUInt32((uint)codes);
+            payload.WriteUInt32((uint)codes + 1);
+            payload.WriteUInt64(source.FirstCode);
+            payload.WriteUInt64(source.LastCode);
+
+            payload.WriteUInt32((uint)codes + 2);
+            for (var i = 0; i < codes; i++)
+            {
+                payload.WriteUInt64(source.CodeAt(i));
+            }
+            payload.WriteUInt64(0);
+            payload.WriteUInt64(0);
+
+            payload.WriteUInt32(1);
+            payload.WriteUInt64((1UL << codes) - 1);
+
+            using var stream = new MemoryStream();
+            PersistenceFormat.Write(stream, StructureId.Grafite, HashId.None, payload.WrittenSpan);
+            return stream.ToArray();
+        }
+
+        /// <summary>
+        /// The one split past a builder's that a payload can agree with itself at, and the
+        /// one that is wrong to read: a query shifts a code by the split to find its high
+        /// part, and C# shifts a 64-bit value by a count of 64 as it shifts it by none, so
+        /// every code is taken for its own high part. The earlier limit, a split no wider
+        /// than a code, allowed it.
+        /// </summary>
+        [TestMethod]
+        public void TestGrafiteWhoseEveryFieldAgreesAtASplitOfSixtyFourIsRefused()
+        {
+            var bytes = GrafiteSplitAtSixtyFour();
+            AssertRefused(
+                () => Persistence.FromByteArray<Grafite>(bytes), "beyond anything this library builds");
         }
 
         /// <summary>
