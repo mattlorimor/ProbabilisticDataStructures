@@ -639,6 +639,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The stored format does not change. Payloads that were refused for their size now load,
   and every other refusal stands.
 
+- **A `DeletableBloomFilter` payload whose regions came to more than 2^32 - 1 bits was
+  read, and divided by zero on use.** The data region and the collision regions are the two
+  halves of one filter of `m` bits, and sizing refuses an `m` past 4,294,967,295, so no
+  constructor builds a filter whose regions come to more. The reader worked a region's
+  size out in 32 bits, as `(m + collisions - 1) / collisions`, and a numerator past 2^32
+  wraps: the size came out as 0, and the first `Add`, `TestAndAdd` or `TestAndRemove` that
+  met a bit already set threw `DivideByZeroException`. Probed on a payload of 536,870,966
+  bytes, a data region of 4,294,967,295 bits and two collision regions, read under
+  `ReadOptions.Unlimited`: the first `Add` succeeded and the second `Add` of the same item
+  threw. The payload needs a valid checksum and is over 512 MiB, so it is a crafted or
+  damaged one, read only under a raised or unlimited budget.
+  <br><br>
+  The reader now refuses a payload whose two regions together come to more than
+  4,294,967,295 bits, before either is allocated: the check is the one `Read` and the
+  read budget's pricing share. No payload this library wrote is refused, and the format
+  does not change.
+
 - **A `BloomFilter`, `CountingBloomFilter` or `StableBloomFilter` sized past 2^32 bits was
   built with a table too short for it, and failed on an add.** The bucket array's byte
   count was worked out in 32 bits, so it wrapped at 512 MiB of one-bit buckets, 128 MiB
