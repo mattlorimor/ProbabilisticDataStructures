@@ -219,6 +219,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SetSketch` shipped in 6.2.0, so 6.2.0 is affected. Nothing stored or computed
   changes. (#203)
 
+- **`HyperLogLog` now documents two biases in its raw estimate, which it keeps.** The
+  estimator's constant is the paper's four-digit 0.7213, a rounding of 1 / (2 ln 2) =
+  0.72135, so with 2^14 registers or more the raw estimate is 0.0066% low, which is more
+  than the standard error from about 2^28 registers. And just after `Count()` changes from
+  linear counting to the raw estimate, at 2.5 · m, that estimate reads high, by the paper's
+  own design: by 2.7% at 2.44 · m distinct items, 1.0% at 3 · m and 0.2% at 4 · m, and it is
+  within 0.01% of the truth from 6 · m. Both are in the estimator and not in the 32-bit
+  hash. Neither is corrected, because a sketch stored by an earlier version would then be
+  read back to a different estimate. [CAPACITY.md](CAPACITY.md#hyperloglog) says so, and
+  says that above about 2^16 registers `HyperLogLogPlus` or `UltraLogLog` is the better
+  choice. `HyperLogLogPlus` has neither. Nothing stored or computed changes. (#215)
+
 ### Fixed
 
 - **`InvertibleBloomLookupTable.TryDecode` could report success with a wrong answer.** It
