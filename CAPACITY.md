@@ -418,6 +418,21 @@ rebuilt by the suite, overestimated past about 143 million distinct items, by +3
 +13% at 2^30, and returned 0 from about 5.7 billion (2^32.4). For more than a few billion
 distinct items use `HyperLogLogPlus` or `UltraLogLog`, which use 64 bits.
 
+`Count()` uses linear counting while the raw estimate is at most 2.5 · m and a register is
+still zero, and the raw estimate otherwise. The range above is the hash's. The raw estimate
+is also biased in ways of its own: through its constant, and in a band just after `Count()`
+switches to it. The constant is the paper's 0.7213, a four-digit rounding of the limit
+1 / (2 ln 2) = 0.72135, so with 2^14 registers or more the raw estimate is 0.0066% low.
+That is more than the standard error, 1.04 / √m, from about 2^28 registers. The band is
+where the raw estimate reads high, by the paper's own design: by 2.7% at 2.44 · m distinct
+items, 1.0% at 3 · m and 0.2% at 4 · m, and it is within 0.01% of the truth from 6 · m.
+With 2^20 registers, whose standard error is 0.10%, the band is larger than that error from
+2.44 · m to about 4.3 · m. Above about 2^16 registers the worst of the band is more than
+six times the standard error, and `HyperLogLogPlus` or `UltraLogLog` is the better choice;
+`HyperLogLogPlus` uses the exact limit and Ertl's estimator, which has neither. The
+estimator is left as it is, because a stored sketch would then be read back to a different
+estimate.
+
 ### `HyperLogLogPlus`
 
 Registers 2^p with `p` at most 18, in a sparse form while small. Counts are 64-bit. The

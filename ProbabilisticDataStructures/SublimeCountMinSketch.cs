@@ -154,6 +154,14 @@ namespace ProbabilisticDataStructures
         internal int WidthLimit { get; set; } = MaxWidth;
 
         /// <summary>
+        /// Called before each row of counters that a doubling, a folding or a repacking
+        /// allocates, plain counts and packed rows alike. It is null; a test sets it to
+        /// throw an <see cref="OutOfMemoryException"/> at one of them, to reach a resize
+        /// that cannot get its memory without building a sketch of gigabytes.
+        /// </summary>
+        internal Action? BeforeAllocatingRow { get; set; }
+
+        /// <summary>
         /// The width a row starts at: a chunk's worth of counters over the size factor,
         /// rounded down to a power of two.
         /// </summary>
@@ -352,6 +360,13 @@ namespace ProbabilisticDataStructures
         /// from a payload or folded back to it. <see cref="TotalCount"/> stops there too,
         /// which only a sketch whose rows double past any count a <c>ulong</c> holds can
         /// reach, after 2^64 - 1 adds.
+        /// <para>
+        /// The add that doubles the rows builds the doubled rows before it changes anything.
+        /// They are the most a sketch allocates at once, eight bytes a counter before they
+        /// are packed, and if it cannot get them it throws the
+        /// <see cref="OutOfMemoryException"/> with the sketch as it was before the add: the
+        /// key is not counted, so adding it again counts it once.
+        /// </para>
         /// </remarks>
         /// <param name="data">The data to add.</param>
         /// <returns>The sketch.</returns>
@@ -390,6 +405,15 @@ namespace ProbabilisticDataStructures
             }
 
             var kernel = Utils.HashKernel(data, this.Hash);
+
+            // The add that doubles the rows takes its key only once the doubled rows have
+            // been built, which is the part that can run out of memory.
+            if (expands)
+            {
+                Expand(kernel);
+                return this;
+            }
+
             var onTailsBefore = ChunksOnTails();
 
             for (var i = 0; i < this.rows.Length; i++)
@@ -405,15 +429,7 @@ namespace ProbabilisticDataStructures
                 this.count++;
             }
 
-            if (expands)
-            {
-                Expand();
-            }
-            else
-            {
-                RetuneIfCrowded(onTailsBefore);
-            }
-
+            RetuneIfCrowded(onTailsBefore);
             return this;
         }
 
@@ -958,7 +974,8 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Doubles every row, copying each counter into the new half.
+        /// Takes the add of the key that calls for the doubling, and doubles every row,
+        /// copying each counter into the new half.
         /// </summary>
         /// <remarks>
         /// A key whose hash chose counter j now chooses j or j + w, and both hold what
@@ -966,13 +983,51 @@ namespace ProbabilisticDataStructures
         /// over the sketch as a whole -- which is the error the paper accepts, and
         /// which shrinks in importance as the keys inserted after the expansion come to
         /// outnumber those inserted before it.
+        /// <para>
+        /// The key is counted before the rows double, as it always was: in the rows that
+        /// become the record, and so in both copies of each of its counters. But the doubled
+        /// rows are built first, the key's counters included, and nothing in the sketch is
+        /// changed until they are, so a doubling that runs out of memory leaves the sketch as
+        /// it was. It used to count the key, append the record and then allocate, and a
+        /// failure left the key counted though the add threw, a record of a doubling that had
+        /// not happened, and the next doubling where it was, so that every add after it tried
+        /// again and appended another; the payload such a sketch wrote, its own reader
+        /// refused.
+        /// </para>
         /// </remarks>
-        private void Expand()
+        private void Expand(in HashKernelReturnValue kernel)
         {
             var doubled = this.width * 2;
 
+            var values = CountsAt(doubled);
+            for (var i = 0; i < this.rows.Length; i++)
+            {
+                // Both copies of the key's counter, stopping at the largest count as an
+                // increment does.
+                var column = ColumnOf(kernel, i);
+                var counted = values[i][column] == ulong.MaxValue
+                    ? ulong.MaxValue
+                    : values[i][column] + 1;
+                values[i][column] = counted;
+                values[i][column + this.width] = counted;
+            }
+
+            var laidOut = LayOut(values, doubled);
+            this.records.EnsureCapacity(this.records.Count + 1);
+
+            // Everything the doubling needs has been built, and only from here is the sketch
+            // changed. Nothing below allocates but an increment whose counter outgrows its
+            // chunk's pool, which moves the chunk to a tails array, small beside the rows.
+            for (var i = 0; i < this.rows.Length; i++)
+            {
+                this.rows[i].Increment(ColumnOf(kernel, i));
+            }
+
+            // The count is below the one the rows double at, which is below the largest a
+            // ulong holds, so it has room.
+            this.count++;
             this.records.Add(this.rows);
-            Retune(doubled);
+            Install(laidOut);
 
             this.expansionLimit = LimitFor(doubled);
             this.contractionLimit = ContractionLimitFor(doubled);
@@ -1012,17 +1067,24 @@ namespace ProbabilisticDataStructures
         /// reach. The sum is taken in 128 bits, unsigned: in signed longs, as it once was,
         /// a counter of 2^63 or more came out negative and was folded to nought.
         /// </para>
+        /// <para>
+        /// The folded rows are built before anything is changed, so a folding that runs out
+        /// of memory leaves the rows, their width and the record as they were, and the next
+        /// removal tries again. It used to take the record off first and set the width before
+        /// packing the rows, so a failure lost the record, and with it the folding, or left
+        /// the width halved over rows that were not. The removal that calls for it has been
+        /// taken already, and stays taken.
+        /// </para>
         /// </remarks>
         private void Contract()
         {
             var record = this.records[^1];
-            this.records.RemoveAt(this.records.Count - 1);
 
             var halved = this.width / 2;
             var folded = new ulong[this.rows.Length][];
             for (var i = 0; i < this.rows.Length; i++)
             {
-                folded[i] = new ulong[halved];
+                folded[i] = NewCounts(halved);
                 for (var j = 0; j < halved; j++)
                 {
                     var gathered = (UInt128)this.rows[i].Get(j) + this.rows[i].Get(j + halved);
@@ -1032,8 +1094,11 @@ namespace ProbabilisticDataStructures
                 }
             }
 
-            this.width = halved;
-            LayOut(folded);
+            var laidOut = LayOut(folded, halved);
+
+            // Built; from here the sketch is changed, and nothing allocates.
+            this.records.RemoveAt(this.records.Count - 1);
+            Install(laidOut);
 
             this.expansionLimit = LimitFor(halved);
             this.contractionLimit = this.records.Count == 0
@@ -1042,37 +1107,63 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Lays the counters out again, at a width and a tuning suited to what they now
+        /// Lays the counters out again at their width, at a tuning suited to what they now
         /// hold.
         /// </summary>
-        private void Retune(int newWidth)
+        /// <remarks>
+        /// The rows are built before they are put in place, so a repacking that runs out of
+        /// memory leaves them as they were packed. This used to double the rows as well, and
+        /// set the width before it built them, so a doubling that failed building them left
+        /// the width doubled over rows that were not.
+        /// </remarks>
+        private void Retune()
+        {
+            Install(LayOut(CountsAt(this.width), this.width));
+        }
+
+        /// <summary>
+        /// The rows' counts as plain counts, at the given width: each counter copied into
+        /// every place in the wider rows that a key choosing it may now choose.
+        /// </summary>
+        private ulong[][] CountsAt(int forWidth)
         {
             var values = new ulong[this.rows.Length][];
             for (var i = 0; i < this.rows.Length; i++)
             {
-                values[i] = new ulong[newWidth];
-                for (var j = 0; j < newWidth; j++)
+                values[i] = NewCounts(forWidth);
+                for (var j = 0; j < forWidth; j++)
                 {
                     values[i][j] = this.rows[i].Get(j & (this.width - 1));
                 }
             }
 
-            this.width = newWidth;
-            LayOut(values);
+            return values;
         }
 
         /// <summary>
-        /// Stores the given counts, choosing a tuning to suit them.
+        /// Rows that <see cref="LayOut"/> has built, with the width and the tuning they were
+        /// built at, for <see cref="Install"/> to put in place.
         /// </summary>
-        private void LayOut(ulong[][] values)
+        private readonly record struct Layout(
+            ValeCounterArray[] Rows, int Width, int CountersPerChunk, int StubBits);
+
+        /// <summary>
+        /// Packs the given counts into rows of their own, choosing a tuning to suit them.
+        /// </summary>
+        /// <remarks>
+        /// It changes nothing in the sketch. What it builds is put in place by
+        /// <see cref="Install"/>, so a resize that runs out of memory here, or building the
+        /// counts it packs, leaves the sketch as it was.
+        /// </remarks>
+        private Layout LayOut(ulong[][] values, int forWidth)
         {
             var (chunkCounters, stub) = Tune(values);
 
             var rebuilt = new ValeCounterArray[values.Length];
             for (var i = 0; i < values.Length; i++)
             {
-                var row = new ValeCounterArray(this.width, chunkCounters, stub);
-                for (var j = 0; j < this.width; j++)
+                var row = NewRow(forWidth, chunkCounters, stub);
+                for (var j = 0; j < forWidth; j++)
                 {
                     if (values[i][j] != 0)
                     {
@@ -1082,9 +1173,39 @@ namespace ProbabilisticDataStructures
                 rebuilt[i] = row;
             }
 
-            this.rows = rebuilt;
-            this.countersPerChunk = chunkCounters;
-            this.stubBits = stub;
+            return new Layout(rebuilt, forWidth, chunkCounters, stub);
+        }
+
+        /// <summary>
+        /// Puts rows that <see cref="LayOut"/> built in place. It only assigns, so it cannot
+        /// fail partway.
+        /// </summary>
+        private void Install(in Layout layout)
+        {
+            this.rows = layout.Rows;
+            this.width = layout.Width;
+            this.countersPerChunk = layout.CountersPerChunk;
+            this.stubBits = layout.StubBits;
+        }
+
+        /// <summary>
+        /// A row of plain counts for a resize to fill, allocated past
+        /// <see cref="BeforeAllocatingRow"/>.
+        /// </summary>
+        private ulong[] NewCounts(int forWidth)
+        {
+            this.BeforeAllocatingRow?.Invoke();
+            return new ulong[forWidth];
+        }
+
+        /// <summary>
+        /// A row of packed counters for a resize to fill, allocated past
+        /// <see cref="BeforeAllocatingRow"/>.
+        /// </summary>
+        private ValeCounterArray NewRow(int forWidth, int chunkCounters, int stub)
+        {
+            this.BeforeAllocatingRow?.Invoke();
+            return new ValeCounterArray(forWidth, chunkCounters, stub);
         }
 
         /// <summary>
@@ -1117,7 +1238,7 @@ namespace ProbabilisticDataStructures
             var onTails = ChunksOnTails();
             if (onTails > onTailsBefore && onTails > chunks * TailsFractionBeforeRetuning)
             {
-                Retune(this.width);
+                Retune();
             }
         }
 

@@ -301,6 +301,71 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Where a substream leaves the window, to the item. The tests above measure the
+        /// window thousands of items from its edge, where an item one either side of it is
+        /// lost in the noise; these answers are exact, so an off-by-one in any of the three
+        /// places that decide it shows.
+        /// </summary>
+        /// <remarks>
+        /// With the noise turned down and every item but two distinct, an estimate is the
+        /// count of that item in the sketches the window chooses, to within a ten-thousandth.
+        /// A window of 64 has substreams of 19, the second of them items 20 to 38, and its
+        /// checkpoints end at 2 and 1, so it has sketches starting at its last two items.
+        /// Item 37 is J and item 38, the substream's last, is K. Then:
+        /// <list type="bullet">
+        /// <item>With the window starting at 37, both are counted, from the sketch starting
+        /// there: the query takes the earliest sketch that starts inside the window.</item>
+        /// <item>At 38, K still is, from the sketch of the substream's last item alone, and the
+        /// substream is still held; J is not, since the sketch starting at 37 now starts one
+        /// before the window. That is the query's skip of a substream before the window, its
+        /// test of where a sketch starts, and the expiry of the oldest substream, each at the
+        /// item where it changes.</item>
+        /// <item>At 39 K is gone, and so are the substream's sketches; none began meanwhile,
+        /// since the substream filling then began at 96.</item>
+        /// </list>
+        /// </remarks>
+        [TestMethod]
+        public void TestASubstreamLeavesTheWindowWithItsLastItem()
+        {
+            var sketch = new DpswSketch(64, 1e12, alpha: 0.6, width: 1024, depth: 3, seed: 1);
+            var checkpoints = sketch.Checkpointing;
+            var plan = 1 + (2 * (checkpoints.Length - 1));
+
+            Assert.AreEqual(19, sketch.SubstreamSize);
+            CollectionAssert.AreEqual(new[] { 2, 1 }, checkpoints[^2..],
+                "the substream has no sketch starting at each of its last two items, so " +
+                "nothing below lands on the window's edge");
+
+            var j = Key(1);
+            var k = Key(2);
+            var answers = new List<string>();
+            var heldAt = new Dictionary<long, int>();
+
+            for (var p = 1; p <= 102; p++)
+            {
+                sketch.Add(p == 37 ? j : p == 38 ? k : Key(10_000 + p));
+                heldAt[p] = sketch.SketchesHeld / plan;
+
+                if (p >= 100)
+                {
+                    var start = p - 64 + 1;
+                    answers.Add($"window from {start}: J {sketch.Count(j):F6}, K {sketch.Count(k):F6}, substreams {heldAt[p]}");
+
+                    Assert.AreEqual(start <= 37 ? 1.0 : 0.0, sketch.Count(j), 0.25,
+                        $"with the window starting at {start}, J at 37 read {sketch.Count(j):F4}");
+                    Assert.AreEqual(start <= 38 ? 1.0 : 0.0, sketch.Count(k), 0.25,
+                        $"with the window starting at {start}, K at 38 read {sketch.Count(k):F4}");
+                }
+            }
+
+            Console.WriteLine(string.Join(Environment.NewLine, answers));
+            Assert.AreEqual(heldAt[100], heldAt[101],
+                "the substream holding items 20 to 38 was dropped with item 38 still in the window");
+            Assert.AreEqual(heldAt[101] - 1, heldAt[102],
+                "the substream holding items 20 to 38 was kept once all of it had left the window");
+        }
+
+        /// <summary>
         /// Items inside the window are counted.
         /// </summary>
         [TestMethod]

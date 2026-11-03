@@ -229,6 +229,11 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// The cuckoo filter's bucket count sizes its whole fingerprint array.
         /// </summary>
+        /// <remarks>
+        /// A power of two, so that it is the size limit that refuses it. A count that is
+        /// not one is refused for that before its size is looked at, and this test would
+        /// pass on the wrong guard.
+        /// </remarks>
         [TestMethod]
         public void TestAbsurdCuckooBucketCountIsRefused()
         {
@@ -236,8 +241,128 @@ namespace TestProbabilisticDataStructures
 
             AssertRefused(
                 () => Persistence.FromByteArray<CuckooBloomFilter>(
-                    PokeUInt32(bytes, 0, 900_000_000)),
-                "buckets");
+                    PokeUInt32(bytes, 0, 1u << 30)),
+                "beyond anything this library builds");
+        }
+
+        /// <summary>
+        /// Where a cuckoo payload's header fields and first entry begin, within the
+        /// payload: the bucket count, entries per bucket, fingerprint width, item count and
+        /// capacity, then the number of occupied entries, then the entries.
+        /// </summary>
+        private const int CuckooItemCountOffset = 12;
+        private const int CuckooOccupiedOffset = 20;
+        private const int CuckooFirstEntryOffset = 24;
+
+        /// <summary>
+        /// A cuckoo filter of five items in distinct places, written, with the layout
+        /// the tests below edit checked against it so that an edit lands where it says.
+        /// </summary>
+        private static byte[] CuckooWithFiveItems()
+        {
+            var filter = new CuckooBloomFilter(1000, 0.01, seed: 1);
+            for (var i = 0; i < 5; i++)
+            {
+                Assert.IsTrue(filter.Add(Key($"c{i}")));
+            }
+            var bytes = filter.ToByteArray();
+
+            Assert.AreEqual(5u, BinaryPrimitives.ReadUInt32LittleEndian(
+                bytes.AsSpan(PayloadStart + CuckooItemCountOffset)), "the item count is not where this test expects it");
+            Assert.AreEqual(5u, BinaryPrimitives.ReadUInt32LittleEndian(
+                bytes.AsSpan(PayloadStart + CuckooOccupiedOffset)), "the occupied entries are not where this test expects them");
+            return bytes;
+        }
+
+        /// <summary>
+        /// The bytes one entry occupies in a cuckoo payload: its bucket and entry
+        /// indexes, then its fingerprint in the fewest whole bytes that hold the width.
+        /// </summary>
+        private static int CuckooEntryLength(byte[] bytes)
+        {
+            var bits = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + 8));
+            return 8 + (int)((bits + 7) / 8);
+        }
+
+        /// <summary>
+        /// A cuckoo filter finds an item's other bucket by combining the first with a hash
+        /// of its fingerprint and reducing the result by the bucket count. The two
+        /// agree about where an item lives only when that count is a power of two, which is
+        /// why the constructor rounds up to one. With any other, an insert that relocates
+        /// an entry can leave it where no lookup looks, and the filter then loses an item
+        /// it accepted. The writer never produces one, so the reader refuses it.
+        /// </summary>
+        /// <remarks>
+        /// The filter holds nothing, so what refuses the payload is the count and nothing
+        /// beside it. The counts straddle the powers of two they are nearest, and the
+        /// powers of two read, the smallest included, so the refusal is not a blanket one.
+        /// </remarks>
+        [TestMethod]
+        public void TestACuckooBucketCountThatIsNotAPowerOfTwoIsRefused()
+        {
+            var bytes = new CuckooBloomFilter(1000, 0.01).ToByteArray();
+            Assert.AreEqual(512u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart)),
+                "the bucket count is not where this test expects it");
+
+            foreach (var buckets in new uint[] { 3, 5, 6, 7, 100, 511, 513, 1000, 1023, 1025 })
+            {
+                AssertRefused(
+                    () => Persistence.FromByteArray<CuckooBloomFilter>(PokeUInt32(bytes, 0, buckets)),
+                    "is not a power of two");
+            }
+
+            foreach (var buckets in new uint[] { 1, 2, 4, 256, 512, 1024 })
+            {
+                Assert.AreEqual(buckets, Persistence.FromByteArray<CuckooBloomFilter>(
+                    PokeUInt32(bytes, 0, buckets)).BucketCount());
+            }
+        }
+
+        /// <summary>
+        /// A cuckoo filter holds one entry for each item, so the count a payload carries is
+        /// the number of entries it lists. A count below it lets a removal take the count
+        /// under zero, where it wraps to 4,294,967,295; a count of zero over entries lets
+        /// the hash be replaced under them, which an occupied filter refuses. A count above
+        /// it claims items the filter does not hold. The writer produces neither.
+        /// </summary>
+        [TestMethod]
+        public void TestACuckooItemCountThatDisagreesWithItsEntriesIsRefused()
+        {
+            var bytes = CuckooWithFiveItems();
+
+            foreach (var count in new uint[] { 0, 1, 4, 6, 7, uint.MaxValue })
+            {
+                AssertRefused(
+                    () => Persistence.FromByteArray<CuckooBloomFilter>(
+                        PokeUInt32(bytes, CuckooItemCountOffset, count)),
+                    $"item count is {count}");
+            }
+
+            Assert.AreEqual(5u, Persistence.FromByteArray<CuckooBloomFilter>(bytes).Count());
+        }
+
+        /// <summary>
+        /// A payload that lists the same bucket and entry twice is accepted today, and
+        /// the two fingerprints are OR-ed into one cell. The count is compared with the
+        /// entries filled rather than the entries listed, so the repeat cannot hide in
+        /// it, and the repeat is refused for itself. The second case is the one only that
+        /// refusal sees: a count that agrees with the cells filled, four, while five
+        /// entries are listed.
+        /// </summary>
+        [TestMethod]
+        public void TestACuckooPayloadThatListsAnEntryTwiceIsRefused()
+        {
+            var bytes = CuckooWithFiveItems();
+            var second = CuckooFirstEntryOffset + CuckooEntryLength(bytes);
+
+            var bucket = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + CuckooFirstEntryOffset));
+            var entry = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + CuckooFirstEntryOffset + 4));
+            var repeated = PokeUInt32(PokeUInt32(bytes, second, bucket), second + 4, entry);
+
+            AssertRefused(() => Persistence.FromByteArray<CuckooBloomFilter>(repeated), "named more than once");
+            AssertRefused(
+                () => Persistence.FromByteArray<CuckooBloomFilter>(PokeUInt32(repeated, CuckooItemCountOffset, 4)),
+                "named more than once");
         }
 
         /// <summary>
@@ -342,6 +467,107 @@ namespace TestProbabilisticDataStructures
                 () => Persistence.FromByteArray<MementoFilter>(
                     PokeUInt32(MementoPayload(), 20, 12)),
                 "carries");
+        }
+
+        /// <summary>
+        /// A Memento filter holding keys at the given positions of one block and nothing else,
+        /// in a range of 64 with 8-bit fingerprints, so its one table of 16 slots holds one
+        /// box, in the only run there is, starting at the box's own quotient. The block is the
+        /// first whose quotient is the table's first slot, or its last, which are the two ends
+        /// of the reader's walk over the table; at the last the run wraps round to the first.
+        /// Returns the payload, the slots of the run in order, for a test to edit one of, and
+        /// the block's first key.
+        /// </summary>
+        private static (byte[] Payload, uint[] Run, ulong FirstKey) OneMementoBox(bool lastSlot, params ulong[] mementos)
+        {
+            var filter = new MementoFilter(64, 8, initialCapacity: 8);
+            var table = filter.Segments[0];
+            var target = lastSlot ? table.Slots - 1 : 0;
+            var block = 0UL;
+            while (table.Split(MementoFilter.HashPrefix(block)).Quotient != target)
+            {
+                block++;
+            }
+
+            foreach (var memento in mementos)
+            {
+                filter.Add((block * 64) + memento);
+            }
+
+            Assert.HasCount(1, filter.Segments);
+            Assert.AreSame(table, filter.Segments[0]);
+            var fields = table.ReadRun(target);
+            var boxes = table.Codec.Decode(fields);
+            Assert.HasCount(1, boxes, "the keys are not one box");
+            CollectionAssert.AreEqual(mementos, boxes[0].Mementos.ToArray(), "the box does not hold the keys");
+            Assert.AreEqual(fields[0], table.ReadField(target), "the run does not start at its quotient");
+
+            var run = Enumerable.Range(0, fields.Count).Select(k => (target + (uint)k) & (table.Slots - 1)).ToArray();
+            return (filter.ToByteArray(), run, block * 64);
+        }
+
+        /// <summary>
+        /// Overwrites bits of one slot's field in the first table of a Memento payload with a
+        /// range of 64 and 8-bit fingerprints, and repairs the checksum. A slot there is 18
+        /// bits, the three of metadata below the field, and the table's words follow the
+        /// filter's 20 bytes and the table's 16, laid end to end from the low bit up.
+        /// </summary>
+        private static byte[] PokeMementoField(byte[] original, uint slot, int fromBit, int bits, ulong value)
+        {
+            var bytes = (byte[])original.Clone();
+            var start = ((long)slot * MementoSegment.SlotBits(8, 6)) + 3 + fromBit;
+            for (var i = 0; i < bits; i++)
+            {
+                var at = start + i;
+                var index = PayloadStart + 36 + (int)(at / 8);
+                var mask = (byte)(1 << (int)(at % 8));
+                bytes[index] = ((value >> i) & 1) == 1 ? (byte)(bytes[index] | mask) : (byte)(bytes[index] & ~mask);
+            }
+            RepairChecksum(bytes);
+            return bytes;
+        }
+
+        /// <summary>
+        /// A box of three keys whose count, the low six bits of its third slot, claims 62 keys
+        /// between its first and last where its run has bits for one. The reader handed the
+        /// table over without decoding a run, so the payload read, and the first query to
+        /// decode the box read zeros past the end of the run for the keys it lacked. It is
+        /// refused when read, for the box, at the table's first slot and at its last.
+        /// </summary>
+        [TestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public void TestMementoFilterBoxClaimingMoreKeysThanItsRunHoldsIsRefused(bool lastSlot)
+        {
+            var (payload, run, first) = OneMementoBox(lastSlot, 0, 1, 2);
+            Assert.HasCount(3, run);
+            Assert.IsTrue(Persistence.FromByteArray<MementoFilter>(payload).TestRange(first, first + 2),
+                "the unedited payload does not read");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<MementoFilter>(PokeMementoField(payload, run[2], 0, 6, 62)),
+                "more keys than its run holds");
+        }
+
+        /// <summary>
+        /// A box of two keys whose second slot's fingerprint is edited to zero, the marker of a
+        /// box of more than two, in a run that ends there. Its count would be read from past
+        /// the end of the run, which gave zeros, so the payload read and the box decoded as two
+        /// keys, silently. It is refused when read, at the table's first slot and at its last.
+        /// </summary>
+        [TestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public void TestMementoFilterBoxWhoseCountRunsPastItsRunIsRefused(bool lastSlot)
+        {
+            var (payload, run, first) = OneMementoBox(lastSlot, 0, 1);
+            Assert.HasCount(2, run);
+            Assert.IsTrue(Persistence.FromByteArray<MementoFilter>(payload).TestRange(first + 1, first + 1),
+                "the unedited payload does not read");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<MementoFilter>(PokeMementoField(payload, run[1], 6, 9, 0)),
+                "past the end of its run");
         }
 
         /// <summary>
@@ -1083,6 +1309,41 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A private sketch's counters are checked against the bytes behind them at the
+        /// edges of the check. The unedited sketch, 64 by 2, holds exactly its 128
+        /// counters and reads; one column more claims 130, two more than it holds, and is
+        /// refused for that.
+        /// <para>
+        /// And where 32 bits run out: a sketch four rows deep with its width edited to
+        /// 2^30 + 1 claims 2^32 + 4 counters, which as a 32-bit product is 4, and four
+        /// counters fit. Counted in 64 bits it is refused for the counters it lacks. Counted
+        /// in 32 it is priced at 34 GB and refused for its budget instead, or under no
+        /// budget would allocate a row of eight gigabytes, which is why it is read only
+        /// under the default.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestAPrivateSketchClaimingMoreCountersThanItHoldsIsRefusedAtTheEdges()
+        {
+            // u32 width at 0.
+            var narrow = new PrivateCountMinSketch(64, 2, 1.0, seed: 3).ToByteArray();
+            Assert.AreEqual(64u, Persistence.FromByteArray<PrivateCountMinSketch>(narrow).Width,
+                "the unedited sketch does not read, so the edit below is not the only lie.");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<PrivateCountMinSketch>(PokeUInt32(narrow, 0, 65)),
+                "counters, beyond what it can hold");
+
+            // Four rows of 2^30 + 1: 2^32 + 4 counters, and 4 as a product of two u32.
+            const uint Wraps = (1u << 30) + 1;
+            var deep = new PrivateCountMinSketch(64, 4, 1.0, seed: 3).ToByteArray();
+
+            AssertRefused(
+                () => Persistence.FromByteArray<PrivateCountMinSketch>(PokeUInt32(deep, 0, Wraps)),
+                "counters, beyond what it can hold");
+        }
+
+        /// <summary>
         /// The same guard reached through a DPSW payload, which holds its private
         /// sketches inline. Every counter in every nested sketch is floored, which is
         /// what a window built with the mechanism disabled would have written.
@@ -1193,6 +1454,95 @@ namespace TestProbabilisticDataStructures
             AssertRefused(
                 () => Persistence.FromByteArray<DpswSketch>(poked),
                 "of a possible");
+        }
+
+        /// <summary>
+        /// A window whose newest substream ends past the items the window says it has
+        /// seen. Its start is moved one later, so it still follows the substream before
+        /// it and holds what it held, and its last item lands one past the window's
+        /// position: items from the future, which no stream put there.
+        /// <para>
+        /// The unedited payload is the control. Its newest substream ends exactly at the
+        /// position, so a check one too strict refuses it, and with it every window saved
+        /// part way through a substream.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestADpswWindowWithASubstreamPastItsItemsIsRefused()
+        {
+            var (bytes, layout) = SmallDpswPayload();
+            var (start, held, position) = NewestDpswSubstream(bytes, layout);
+
+            Assert.AreEqual(position, start + held - 1,
+                "the newest substream does not end at the window's position, so moving its " +
+                "start by one does not take it exactly one past.");
+            Assert.AreEqual(position, Persistence.FromByteArray<DpswSketch>(bytes).Position,
+                "the unedited payload does not read, so the edit below is not the only lie.");
+
+            var poked = PokeUInt64(
+                bytes, layout.SubstreamAt((int)layout.SubstreamCount - 1) - PayloadStart,
+                (ulong)(start + 1));
+
+            AssertRefused(
+                () => Persistence.FromByteArray<DpswSketch>(poked),
+                "the window says it has seen");
+        }
+
+        /// <summary>
+        /// The same guard where its arithmetic runs out: a substream starting so near the
+        /// largest position that its last item, start + held - 1, is past what a long
+        /// holds. Such a sum wraps negative, and a check made with it passes, so the
+        /// window loaded holding a substream from its future, which <c>Count</c> then
+        /// passed over and the next <c>Add</c> expired, every counter with it.
+        /// <para>
+        /// Three starts straddle the wrap. At <c>long.MaxValue - held + 1</c> the sum is
+        /// exactly <c>long.MaxValue</c> and does not wrap; one later it is one past and
+        /// wraps; at <c>long.MaxValue</c> it wraps furthest. Each still follows the
+        /// substream before it, so the ordering guard passes them all.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestADpswWindowWithASubstreamEndingPastTheLargestPositionIsRefused()
+        {
+            var (bytes, layout) = SmallDpswPayload();
+            var (_, held, _) = NewestDpswSubstream(bytes, layout);
+
+            Assert.IsGreaterThan(1, held,
+                "the newest substream holds one item, so no start but the largest wraps " +
+                "and the starts below do not straddle anything.");
+
+            var at = layout.SubstreamAt((int)layout.SubstreamCount - 1) - PayloadStart;
+            foreach (var start in new[]
+            {
+                long.MaxValue - held + 1,
+                long.MaxValue - held + 2,
+                long.MaxValue,
+            })
+            {
+                var poked = PokeUInt64(bytes, at, (ulong)start);
+
+                var ex = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<DpswSketch>(poked),
+                    $"a substream starting at {start} and holding {held} was read");
+                StringAssert.Contains(ex.Message, "the window says it has seen",
+                    $"a substream starting at {start} was refused for something else");
+            }
+        }
+
+        /// <summary>
+        /// The newest substream of a DPSW payload: where it starts, how many items it
+        /// holds, and the window's position, read from the bytes.
+        /// </summary>
+        private static (long Start, int Held, long Position) NewestDpswSubstream(
+            byte[] bytes, DpswLayout layout)
+        {
+            // window(8) rho(8) alpha(8) substreamSize(4) width(4) depth(4), then position(8).
+            var position = (long)BinaryPrimitives.ReadUInt64LittleEndian(
+                bytes.AsSpan(PayloadStart + 36));
+            var at = layout.SubstreamAt((int)layout.SubstreamCount - 1);
+            var start = (long)BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(at));
+            var held = (int)BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at + 8));
+            return (start, held, position);
         }
 
         /// <summary>

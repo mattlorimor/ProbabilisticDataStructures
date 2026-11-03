@@ -270,7 +270,11 @@ and a third had a section about its variant byte that never said what the rest o
 payload holds. It is now embedded in the test assembly and held to `StructureId`: every
 structure has a section, and every section's heading names the id a reader will find in
 the envelope. A section under the wrong id is worse than a missing one, because someone
-decoding by hand gets an answer.
+decoding by hand gets an answer. The table of ids is held the same way, and that was
+found by the same means: it had stopped short of the structures added last, while their
+sections carried the ids. Its rows are read with a pattern that tolerates CRLF, and the
+test checks that, because a pattern that finds no rows turns every assertion about them
+into a loop over nothing.
 
 Prose counts belong in the same category. `PersistenceFormat.DefaultVersion` explained
 that two filters write version 2 and "the other eleven" version 1 — true at thirteen

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
+using System.Numerics;
 using System.Security.Cryptography;
 
 namespace ProbabilisticDataStructures
@@ -347,7 +348,15 @@ namespace ProbabilisticDataStructures
                 if (idx != -1)
                 {
                     SetOccupied(bucket, (uint)idx, false);
-                    this.count--;
+
+                    // The count is the entries the filter holds, so an entry being here
+                    // means it is at least one. Never taken below zero all the same: a
+                    // uint wraps to 4,294,967,295, which Count would then report.
+                    if (this.count > 0)
+                    {
+                        this.count--;
+                    }
+
                     return true;
                 }
             }
@@ -595,6 +604,27 @@ namespace ProbabilisticDataStructures
                 occupancy.Set(bucket * b + entry, 1);
             }
 
+            // The entries held, counted from the map rather than from the list: a list
+            // that names a place twice fills it once, and the two fingerprints were
+            // OR-ed into one cell. The filter then holds fewer entries than it listed.
+            var filled = CountOccupied(occupancy);
+            if (filled != occupied)
+            {
+                throw new InvalidDataException(
+                    $"Filter lists {occupied} entries but they fill {filled} places in " +
+                    "its table: a bucket and entry is named more than once.");
+            }
+
+            // The writer's count is the entries it holds, since each item is one. A count
+            // below that lets a removal take it under zero, and a count of zero lets the
+            // hash be replaced under entries it was used to place.
+            if (count != filled)
+            {
+                throw new InvalidDataException(
+                    $"Filter's item count is {count}, but its table holds {filled} " +
+                    "entries, one for each item.");
+            }
+
             // Version 1 predates the stored generator state. Such a filter resumes with
             // an unpredictable one: its fingerprints are exactly right, and only the
             // sequence of entries it will evict next is unknowable.
@@ -667,6 +697,20 @@ namespace ProbabilisticDataStructures
             return occupied;
         }
 
+        /// <summary>
+        /// The entries marked occupied in the map, which has a bit for each.
+        /// </summary>
+        private static uint CountOccupied(Buckets occupancy)
+        {
+            // Bits past the last entry are never set, so every set bit is an entry.
+            uint filled = 0;
+            foreach (var packed in occupancy.RawData)
+            {
+                filled += (uint)BitOperations.PopCount(packed);
+            }
+            return filled;
+        }
+
         private static void CheckEntry(uint bucket, uint entry, uint m, uint b)
         {
             if (bucket >= m || entry >= b)
@@ -702,6 +746,18 @@ namespace ProbabilisticDataStructures
                 throw new InvalidDataException(
                     $"Filter has {m} buckets of {b} entries, leaving nowhere to put " +
                     "anything.");
+            }
+
+            // An item's other bucket is found by combining its first with a hash of its
+            // fingerprint and reducing by the bucket count, and the first is found again
+            // from the other end only when that count is a power of two. That is why the
+            // constructor rounds up to one. With any other, a relocation can leave an entry
+            // in a bucket no lookup visits, and the filter loses an item it accepted.
+            if (!BitOperations.IsPow2(m))
+            {
+                throw new InvalidDataException(
+                    $"Filter has {m} buckets, which is not a power of two, and the " +
+                    "index arithmetic of a cuckoo filter needs one.");
             }
 
             // Version 2 and earlier recorded a width in bytes; version 3 records it in

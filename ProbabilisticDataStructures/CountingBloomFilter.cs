@@ -166,6 +166,17 @@ namespace ProbabilisticDataStructures
         /// A 64-bit count, so that it crosses 2^32 rather than wrapping to zero, and comes
         /// back down across it as items are removed. Before the release after 6.2.0 it was
         /// a <c>uint</c>.
+        /// <para>
+        /// It stops at zero. <see cref="TestAndRemove(byte[])"/> returns true whenever
+        /// every counter of the item is set, which an item that was never added can meet
+        /// by chance and an item that was added can meet after it has been removed as
+        /// often as it was added, because a counter that reached its maximum is never
+        /// decremented. Each such removal takes one off the count, so after removing items
+        /// that were never added the count can be lower than the number of items the
+        /// filter holds: an undercount, where before it wrapped to 2^64 - 1. Remove only
+        /// what was added and it is exact. A wrapped count saved by an earlier release
+        /// is read back as it was stored.
+        /// </para>
         /// </remarks>
         public ulong Count()
         {
@@ -312,7 +323,15 @@ namespace ProbabilisticDataStructures
                         this.Buckets.Increment(idx, -1);
                     }
                 }
-                this.count--;
+
+                // The answer above is "every counter is set", which is not "this item
+                // was added and is now gone": a saturated counter is never decremented,
+                // so an item removed as often as it was added still answers true, and
+                // so does a false positive. Taken below zero, a ulong is 2^64 - 1.
+                if (this.count > 0)
+                {
+                    this.count--;
+                }
             }
 
             return member;
@@ -437,6 +456,7 @@ namespace ProbabilisticDataStructures
             var buckets = PersistenceFormat.ReadBuckets(ref reader);
             reader.ExpectEnd();
             CheckBuckets(m, buckets.count);
+            PersistenceFormat.CheckHashCount(k);
 
             // The scratch buffer below is sized by the hash count the payload claims.
             budget.Charge(ScratchCost(k));
@@ -468,6 +488,7 @@ namespace ProbabilisticDataStructures
             var buckets = PersistenceFormat.PriceBuckets(ref reader);
             reader.ExpectEnd();
             CheckBuckets(m, buckets);
+            PersistenceFormat.CheckHashCount(k);
             reader.Budget.Price(ScratchCost(k));
         }
 
