@@ -138,6 +138,97 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// How far short of the truth, as a fraction of it, a SetSketch of
+        /// <paramref name="m"/> registers holding many more elements than registers
+        /// estimates cardinality, when each element's first value goes to a register drawn
+        /// with the 32-bit multiply-and-shift.
+        /// </summary>
+        /// <remarks>
+        /// The model is the one the measurement for #203 used. Of the m registers,
+        /// r = 2^32 mod m take first values at (1 + (m - r) / 2^32) / m and the rest at
+        /// (1 - r / 2^32) / m. Once the sketch is full a register's value is set
+        /// by the first values it takes, and the closed-form estimator returns the truth
+        /// times the harmonic mean of the rates over their mean. Worked through, that falls
+        /// short by exactly r (m - r) / (2^32 (2^32 + m - 2r)), which is what this computes,
+        /// so that nothing cancels at a small m: the leading term is r (m - r) / 2^64.
+        /// </remarks>
+        private static double ShuffleShortfall(ulong m)
+        {
+            const double TwoTo32 = 4294967296.0;
+            var r = (1UL << 32) % m;
+            return (double)r * (m - r) / (TwoTo32 * (TwoTo32 + m - (2.0 * r)));
+        }
+
+        private static readonly double TwoTo64 = Math.ScaleB(1.0, 64);
+        private static readonly double TwoTo66 = Math.ScaleB(1.0, 66);
+
+        /// <summary>
+        /// The shortfall at every register count up to 2^24: the largest it comes to against
+        /// the standard error 1 / √m, the farthest it strays from its leading term
+        /// r (m - r) / 2^64, and the largest it comes to against (m / 2^33)².
+        /// </summary>
+        private static readonly Lazy<(double AgainstError, double FromLeading, double AgainstBound)> ShortfallUpTo2To24 = new(() =>
+        {
+            double againstError = 0, fromLeading = 0, againstBound = 0;
+            for (ulong m = 1; m <= 1UL << 24; m++)
+            {
+                var r = (1UL << 32) % m;
+                var shortfall = ShuffleShortfall(m);
+                againstError = Math.Max(againstError, shortfall * Math.Sqrt(m));
+                againstBound = Math.Max(againstBound, shortfall * TwoTo66 / ((double)m * m));
+                if (r != 0)
+                {
+                    fromLeading = Math.Max(fromLeading, Math.Abs((shortfall * TwoTo64 / ((double)r * (m - r))) - 1));
+                }
+            }
+
+            return (againstError, fromLeading, againstBound);
+        });
+
+        /// <summary>
+        /// The largest shortfall of any register count, where it is, and the largest it comes
+        /// to against (m / 2^33)². Each tooth of the sawtooth is the counts sharing
+        /// floor(2^32 / m), sampled at 2,001 points, from the top one down to 2^32 / 65;
+        /// below that the shortfall is at most (m / 2^33)² / (1 - m / 2^32), under a
+        /// hundredth of a percent. Around 0.4 · 2^32, where the top tooth peaks, every count
+        /// is taken.
+        /// </summary>
+        private static readonly Lazy<(double Largest, ulong At, double AgainstBound)> ShortfallTeeth = new(() =>
+        {
+            double largest = 0, againstBound = 0;
+            ulong at = 0;
+            void See(ulong m)
+            {
+                var shortfall = ShuffleShortfall(m);
+                if (shortfall > largest)
+                {
+                    largest = shortfall;
+                    at = m;
+                }
+
+                againstBound = Math.Max(againstBound, shortfall * TwoTo66 / ((double)m * m));
+            }
+
+            for (ulong q = 2; q <= 64; q++)
+            {
+                var low = ((1UL << 32) / (q + 1)) + 1;
+                var high = Math.Min((1UL << 32) / q, (ulong)SetSketch.MaxRegisters);
+                for (ulong step = 0; step <= 2000; step++)
+                {
+                    See(low + ((high - low) * step / 2000));
+                }
+            }
+
+            var peak = (ulong)Math.Round(0.4 * 4294967296.0);
+            for (var m = peak - 2000; m <= peak + 2000; m++)
+            {
+                See(m);
+            }
+
+            return (largest, at, againstBound);
+        });
+
+        /// <summary>
         /// Sentences of CAPACITY.md that state what was measured at a scale the suite cannot
         /// build, each with the reason it cannot, which is checked. The figures themselves
         /// are the measurement's; what is checked is that they could not have been rebuilt
@@ -169,6 +260,15 @@ namespace TestProbabilisticDataStructures
                         && 0.673 * 16 * Math.Pow(2, 27) > Math.Pow(2, 32) / 30
                         && FullHyperLogLog(1024).Count() > 0;
                 }),
+            ("A scaled-down simulation of the draw reproduced them, found the shortfall smaller in a sketch holding " +
+                "fewer elements, and found no change in Jaccard similarity",
+                "it drew with 16 bits, not 32, at 26,214 and 6,241 registers, whose first values then go at the two " +
+                "rates the 32-bit draw gives 1,717,960,704 and 409,010,176 registers. A sketch is built with 10 bytes " +
+                "a register, so those are sketches of 17 and 4 gigabytes, and a measurement takes hundreds of them. " +
+                "The library's draw cannot be narrowed to run the same thing smaller",
+                () => new ulong[] { 26_214, 6241 }.All(m => (1UL << 32) % (m << 16) == ((1UL << 16) % m) << 16)
+                    && (26_214UL << 16) == 1_717_960_704 && (6241UL << 16) == 409_010_176
+                    && (6241UL << 16) * (sizeof(ushort) + (2 * sizeof(uint))) > 4_000_000_000),
         };
 
         // ---- HyperLogLog ----------------------------------------------------------------
@@ -785,6 +885,64 @@ namespace TestProbabilisticDataStructures
             new Claim("a read is charged three times the registers", () =>
                 Near(Slope("UltraLogLog"), 3, 0.01)),
             new Claim("12 bytes a register", () => Near(Slope("SetSketch"), 12, 0.01)),
+            // The defect is there: a sketch sends an element's first value where the 32-bit
+            // draw says, at a size and for an element where a 64-bit one would not. When the
+            // draw changes, this fails, and so should the rest of the paragraph.
+            new Claim("An element's first value goes to a register drawn with a 32-bit multiply-and-shift", () =>
+                TestSetSketchShuffle.ShufflesWithThe32BitDraw()),
+            // Counted over every 64-bit input at sampled registers: each count is a whole
+            // number of 2^32, and that number is floor(2^32 / m) or one more, both seen.
+            new Claim("which gives each of `m` registers `floor(2^32 / m)` of the 2^32 values or one more", () =>
+                new uint[] { 12_345, 1_000_003 }.All(m =>
+                {
+                    var counts = new TestStableDecayDraw.InputCounts(TestSetSketchShuffle.Narrow, m);
+                    var share = (1UL << 32) / m;
+                    var seen = TestStableDecayDraw.SampledStarts(m).Distinct().Select(v =>
+                    {
+                        var whole = BigInteger.DivRem(counts.At(v), 1UL << 32, out var rest);
+                        return rest.IsZero ? (ulong)whole : 0;
+                    }).ToHashSet();
+                    return seen.SetEquals(new[] { share, share + 1 });
+                })),
+            new Claim("the estimate falls short by about `r · (m − r) / 2^64`, at most about `(m / 2^33)²`, which is " +
+                "nothing at a power of two", () =>
+                // Within a percent of the leading term up to 2^24 registers, where it is the
+                // rule of thumb's job (past that it strays by a factor of up to m / 2^32 either
+                // way), within a twentieth over the bound everywhere, and exactly nought at
+                // every power of two a sketch holds.
+                ShortfallUpTo2To24.Value.FromLeading < 0.01
+                && ShortfallUpTo2To24.Value.AgainstBound <= 1.05
+                && ShortfallTeeth.Value.AgainstBound <= 1.05
+                && 1 / (1 - (1.0 / 65)) <= 1.05
+                && Enumerable.Range(0, 31).All(j => ShuffleShortfall(1UL << j) == 0)),
+            new Claim("That is under 2% of the estimate's standard error, `1 / √m`, up to 2^24 registers", () =>
+                ShortfallUpTo2To24.Value.AgainstError is < 0.02 and > 0.015),
+            new Claim("as large as that error from about 88.5 million", () =>
+            {
+                // Below 86 million the shortfall is at most (m / 2^33)² / (1 - m / 2^32), which
+                // against 1 / √m rises with m and is under one there; from there, every count.
+                const ulong From = 86_000_000;
+                var below = Math.Pow(From / 8589934592.0, 2) * Math.Sqrt(From) / (1 - (From / 4294967296.0)) < 1;
+                ulong first = 0;
+                for (var m = From; m < 90_000_000 && first == 0; m++)
+                {
+                    if (ShuffleShortfall(m) * Math.Sqrt(m) >= 1)
+                    {
+                        first = m;
+                    }
+                }
+
+                return below && first > From && Rounds(first / 1e6, 88.5, 1);
+            }),
+            new Claim("at its largest 4% of the estimate, at 0.4 · 2^32 registers, about 1.72 billion", () =>
+            {
+                var (largest, at, _) = ShortfallTeeth.Value;
+                var belowTheTeeth = Math.Pow(1.0 / 130, 2) / (1 - (1.0 / 65));
+                return Rounds(largest * 100, 4, 2)
+                    && Math.Abs(at - (0.4 * 4294967296.0)) <= 2000
+                    && Rounds(at / 1e9, 1.72, 2)
+                    && belowTheTeeth < largest;
+            }),
 
             // ---- Frequency ------------------------------------------------------------------
             new Claim("counts to 18 quintillion", () => Rounds(ulong.MaxValue / 1e18, 18, 0)),

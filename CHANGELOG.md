@@ -176,6 +176,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with what it holds. A `TopK` keeps version 1: its sketch is in an envelope of its own, and
   that is version 9. (#192)
 
+- **`SetSketch` now documents a small low bias in a very large sketch's cardinality, which
+  it keeps.** An element's first value goes to a register drawn with a 32-bit
+  multiply-and-shift, the draw `VarOpt` evicted with until the fix below, and it is exact
+  only when the register count `m` is a power of two. Otherwise, once a sketch holds many
+  more elements than registers, `Cardinality()` falls short by about `r · (m − r) / 2^64`,
+  for `r = 2^32 mod m`. That is under 2% of the estimate's standard error up to 2^24
+  registers, as large as that error from about 88.5 million, and 4% at worst, at
+  0.4 · 2^32 registers. Jaccard similarity is not affected. The draw stays as it is,
+  because it decides which registers a stored sketch's elements went to. Changing it would
+  need a new format version, and a sketch read from an older payload could then not be
+  merged with or compared to a new one. [CAPACITY.md](CAPACITY.md#setsketch) and the class
+  documentation now say this, and recommend a power of two registers past about 2^24.
+  `SetSketch` shipped in 6.2.0, so 6.2.0 is affected. Nothing stored or computed
+  changes. (#203)
+
 ### Fixed
 
 - **`InvertibleBloomLookupTable.TryDecode` could report success with a wrong answer.** It

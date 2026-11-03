@@ -82,7 +82,9 @@ namespace ProbabilisticDataStructures
         /// Changing this changes more than seeded sequences. <see cref="SetSketch"/>
         /// shuffles each element's registers with a generator seeded from the element's
         /// hash, so this decides which registers the elements of a stored sketch went
-        /// to, and a sketch read back has to go on agreeing with it.
+        /// to, and a sketch read back has to go on agreeing with it. That is also why a
+        /// very large sketch whose register count is not a power of two estimates
+        /// cardinality slightly low, which <see cref="SetSketch"/> documents.
         /// </para>
         /// </remarks>
         internal uint NextBelow(uint bound)
