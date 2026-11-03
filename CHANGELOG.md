@@ -219,6 +219,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SetSketch` shipped in 6.2.0, so 6.2.0 is affected. Nothing stored or computed
   changes. (#203)
 
+- **`VarOpt` now says what is exact about its total weight, and keeps the arithmetic.**
+  The documentation said the sampled weights sum to *exactly* the stream's total weight.
+  What holds is that no weight is lost when an item is dropped, because the survivors
+  inherit it. The total is a sum of `double`s, so it is exact only while the weights are
+  integers and every partial sum stays below 2^53. Past that the additions round. With
+  unit weights the total stops growing at 2^53, which takes about 28.5 years at ten
+  million adds a second, and the threshold and every subset estimate stop with it. Large
+  weights get there sooner: in a sample of 2 holding three items of 2^52, a thousand more
+  items of weight 1 leave `TotalWeight` where it was. A weight with a fraction can round
+  as soon as it is added, and the sampled weights add up to `TotalWeight` only to within
+  rounding, since each item held at the threshold carries the threshold, a quotient. The
+  class documentation, the README and FORMAT.md now say this. `VarOpt` shipped in 6.2.0,
+  so 6.2.0 is affected. Nothing stored or computed changes. (#214)
+
 ### Fixed
 
 - **`InvertibleBloomLookupTable.TryDecode` could report success with a wrong answer.** It

@@ -17,9 +17,13 @@ namespace ProbabilisticDataStructures
     /// years after the stream was consumed -- estimates that predicate's true weight.
     /// The estimate is unbiased, the variance is the minimum any k-item sample can
     /// achieve, and the estimate of the whole stream's weight is not an estimate at
-    /// all: the adjusted weights sum to exactly the weight that went in. The price is
-    /// that k items answer every question, so any question known in advance is served
-    /// far better per byte by the structure dedicated to it.
+    /// all: no weight is lost when an item is dropped, because the survivors inherit
+    /// it, so the adjusted weights account for all the weight that went in. That
+    /// holds up to the rounding of doubles: <see cref="TotalWeight"/> is exact only
+    /// while the weights are integers and every partial sum stays below 2^53, and
+    /// says what rounds. The price is that k items answer every question, so any
+    /// question known in advance is served far better per byte by the structure
+    /// dedicated to it.
     /// <para>
     /// The sample lives in two regions. Items heavier than the current threshold are
     /// held with their exact weights; everything else that survived holds a share of
@@ -74,10 +78,12 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal int LightCount { get; set; }
         /// <summary>
-        /// The light region's total weight, maintained exactly across every drop:
-        /// when a contestant is eliminated, the survivors inherit its weight rather
-        /// than the stream losing it. The threshold is this divided by the count,
-        /// and is never stored, so the total never drifts.
+        /// The light region's total weight, which no drop loses any of: when a
+        /// contestant is eliminated, the survivors inherit its weight rather than the
+        /// stream losing it. The threshold is this divided by the count, and is never
+        /// stored, so the quotient's rounding never feeds back into the total. The
+        /// total is a sum of doubles all the same, exact only while integer partial
+        /// sums stay below 2^53; see <see cref="TotalWeight"/>.
         /// </summary>
         internal double LightWeight { get; set; }
         /// <summary>
@@ -132,9 +138,18 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// The total weight of everything ever added. This is bookkeeping, not
-        /// estimation: dropping an item hands its weight to the survivors, so the
-        /// total is preserved exactly.
+        /// estimation: dropping an item hands its weight to the survivors, so no drop
+        /// loses any of it.
         /// </summary>
+        /// <remarks>
+        /// The total is a sum of doubles, so it is exact only while the weights are
+        /// integers and every partial sum stays below 2^53. Past that the additions
+        /// round, and a weight smaller than the spacing of doubles there can be lost
+        /// entirely: with unit weights the total stops growing at 2^53, and the
+        /// threshold and every subset estimate stop with it. A weight with a fraction
+        /// can round as soon as it is added. So can a merge with a sample that has
+        /// begun sampling, whose threshold items come in at the threshold, a quotient.
+        /// </remarks>
         public double TotalWeight
         {
             get
@@ -242,8 +257,8 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// The sampled items with their adjusted weights. Summing the weights of the
         /// items matching any predicate is an unbiased estimate of that subset's
-        /// true weight; summing all of them returns <see cref="TotalWeight"/>
-        /// exactly.
+        /// true weight; summing all of them gives <see cref="TotalWeight"/>, to within
+        /// rounding, since each light item carries the threshold, a quotient.
         /// </summary>
         public WeightedElement[] Samples()
         {

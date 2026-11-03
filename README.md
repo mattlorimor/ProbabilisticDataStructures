@@ -2014,9 +2014,13 @@ would have matched.
 
 The estimate is unbiased, and its variance is the smallest any k-item sample can
 achieve — that is the "var-opt" in the name, and it is a proof, not a benchmark. One
-number is not estimated at all: the sampled weights sum to the **exact** total weight
-of the stream, because every eviction hands the evicted item's weight to the
-survivors rather than dropping it.
+number is not estimated at all: the total weight of the stream. Every eviction hands
+the evicted item's weight to the survivors rather than dropping it, so no weight is
+lost, and `TotalWeight` is the total rather than an estimate of it. It is a sum of
+`double`s, though, so it is exact only while the weights are integers and every
+partial sum stays below 2^53. Past that the additions round, and with unit weights the
+total stops growing at 2^53. A weight with a fraction can round as soon as it is added.
+The sampled weights add up to the total to within rounding.
 
 Items heavier than the current threshold are kept at their own weights; the rest
 share the threshold, since below it survival is luck and luck is priced the same for
@@ -2038,7 +2042,7 @@ sample.Add(orderBytes, weight: 249.99);       // sample by revenue
 
 double revenue = sample.EstimateSubset(       // a question asked later
     item => IsFromEurope(item.Span));
-double exact = sample.TotalWeight;            // not an estimate
+double total = sample.TotalWeight;            // a running sum, not an estimate
 
 WeightedElement[] kept = sample.Samples();
 ```
