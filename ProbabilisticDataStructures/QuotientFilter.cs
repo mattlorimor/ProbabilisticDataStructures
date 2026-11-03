@@ -327,10 +327,21 @@ namespace ProbabilisticDataStructures
                     $"entries and has {this.slots} slots.");
             }
 
-            // Read out in full before writing anything, so that merging a filter into
-            // itself doubles what it holds rather than reading entries it is in the
-            // middle of moving.
-            foreach (var (quotient, remainder) in other.Entries())
+            // Another filter's table is not written to by inserting into this one, so its
+            // entries are read as they are walked and nothing is held. A filter merged
+            // into itself is the one case that reads the table it is writing, and each
+            // insert shifts the entries after it, so it would meet entries it had
+            // already moved: those are read out first. The check above leaves them at
+            // most half the slots, which is also why the count fits an int here.
+            var entries = other.Entries();
+            if (ReferenceEquals(this, other))
+            {
+                var held = new List<(uint Quotient, ulong Remainder)>((int)this.count);
+                held.AddRange(entries);
+                entries = held;
+            }
+
+            foreach (var (quotient, remainder) in entries)
             {
                 this.Insert(quotient, remainder);
                 this.count++;
@@ -341,12 +352,13 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Every entry in the table, as the quotient that owns it and the remainder
-        /// stored for it.
+        /// stored for it, read one at a time as the caller asks for them.
         /// </summary>
-        private List<(uint Quotient, ulong Remainder)> Entries()
+        /// <remarks>
+        /// The table must not be written to while this is being read.
+        /// </remarks>
+        private IEnumerable<(uint Quotient, ulong Remainder)> Entries()
         {
-            var entries = new List<(uint, ulong)>((int)this.count);
-
             for (var quotient = 0u; quotient < this.slots; quotient++)
             {
                 if (!this.IsOccupied(quotient))
@@ -358,7 +370,7 @@ namespace ProbabilisticDataStructures
 
                 while (true)
                 {
-                    entries.Add((quotient, this.RemainderAt(at)));
+                    yield return (quotient, this.RemainderAt(at));
 
                     var next = Next(at, this.slotMaskIndex);
                     if (!this.IsContinuation(next))
@@ -369,8 +381,6 @@ namespace ProbabilisticDataStructures
                     at = next;
                 }
             }
-
-            return entries;
         }
 
         /// <summary>

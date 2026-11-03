@@ -797,6 +797,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filter is untouched. The format does not grow to carry a larger table: such a filter can be
   built and used and cannot be saved. Filters whose payload fits write as they did.
 
+- **`QuotientFilter.Merge` listed every entry of the filter it merged in, and threw on a
+  completely full table of 2^31 slots.** It copied the other filter's entries into a
+  `List` before inserting the first, sized from that filter's count with `(int)count`. The
+  count is a `uint`, and it reaches 2^31 when a table of 2^31 slots is full, which the
+  size check lets merge into an empty filter of the same shape: the cast made it
+  `int.MinValue`, and the list's constructor threw an `ArgumentOutOfRangeException` with
+  the merge not begun. Short of that the list was 16 bytes an entry (a `uint` and a
+  `ulong`, padded) beside both tables: 12.9 GB for a filter of 805,306,368 entries, and
+  from 2,147,483,592 entries a list that could not be allocated. `QuotientFilter` shipped
+  in 6.0.0 with this `Merge`, so every release since is affected.
+  <br><br>
+  The merge now reads the other filter's table as it walks it and holds nothing. Inserting
+  into one filter does not touch another's table, so the walk is safe for two filters.
+  Merging 250,000 entries in allocated 4,000,056 bytes before and 56 after. A filter merged
+  into itself is the one case that reads the table it is writing, and still reads its
+  entries out first; the size check leaves them at most half the slots. What a merge
+  produces, the exceptions it throws and the stored format are unchanged.
+
 - **`HyperLogLog` overestimated large counts, and from about 5.7 billion distinct items
   returned 0.** It applied the original paper's large-range correction, -2^32 ln(1 -
   E/2^32), once its raw estimate E passed 2^32/30, about 143 million. The correction
