@@ -426,7 +426,7 @@ namespace TestProbabilisticDataStructures
             Assert.IsGreaterThan(100, cappedHolding, "too few ranges past the limit held a key to show none was lost");
             Assert.IsGreaterThan(100, cappedPossibly, "too few ranges past the limit held nothing");
             Assert.IsGreaterThan(100, walkedNo, "too few walked ranges answered no, so the filter may be answering yes to everything");
-            Assert.IsGreaterThan(20, walkedHolding, "too few walked ranges held a key");
+            Assert.IsGreaterThan(100, walkedHolding, "too few walked ranges held a key");
             Assert.IsGreaterThan(100, emptyCapped, "too few ranges past the limit were asked of the empty filter");
         }
 

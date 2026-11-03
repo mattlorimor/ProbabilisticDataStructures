@@ -79,9 +79,30 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// The most blocks wholly inside a range that <see cref="TestRange"/> tests one by one.
+        /// A range with more of them answers true, "possibly", without testing them, or false
+        /// if the filter holds nothing.
         /// </summary>
+        /// <remarks>
+        /// A block is <see cref="MaxRangeSize"/> keys wide, so a range no wider than that has
+        /// no block inside it and this does not touch it. A wider range is answered by testing
+        /// its two end blocks and then each block between them against every table in the
+        /// chain, so what it costs is linear in the blocks it covers, and a certain no takes a
+        /// test of every one: [0, ulong.MaxValue] at the default range of 256 covers 2^56
+        /// blocks. True is always a safe answer, so a range past the limit costs nothing and
+        /// gives up only the chance of a certain no. The default keeps the dearest call it
+        /// allows, one that tests every block of a table near its expansion threshold, to a
+        /// millisecond or two. Raise it to answer wider ranges exactly, at that cost per block,
+        /// or lower it to bound a call more tightly. It is not written with the filter: a filter
+        /// read back has the default.
+        /// </remarks>
         public ulong MaxInteriorBlocks { get; set; } = DefaultMaxInteriorBlocks;
 
+        /// <summary>
+        /// The default <see cref="MaxInteriorBlocks"/>. Measured when it was chosen, a block
+        /// costs about 75 to 110 ns in a table near its expansion threshold whose fingerprints
+        /// are too wide for an empty range to match, and is far cheaper otherwise, since a
+        /// narrower fingerprint matches within a few hundred blocks and ends the walk.
+        /// </summary>
         internal const ulong DefaultMaxInteriorBlocks = 16_384;
 
         /// <summary>
@@ -97,7 +118,8 @@ namespace ProbabilisticDataStructures
         /// The widest range you mean to ask about. This sets how many low bits of each
         /// key are stored verbatim: a wider promise costs a bit per key per doubling
         /// of the range. Ranges wider than this are still answered without false
-        /// negatives, at the cost of touching more blocks.
+        /// negatives, at the cost of touching more blocks, up to
+        /// <see cref="MaxInteriorBlocks"/> of them.
         /// </param>
         /// <param name="fingerprintBits">
         /// Bits of fingerprint per block. This sets how often two unrelated blocks are
@@ -243,6 +265,12 @@ namespace ProbabilisticDataStructures
         /// Whether any stored key might fall in [low, high], both ends included. False
         /// is certain; true is not.
         /// </summary>
+        /// <remarks>
+        /// A range no wider than <see cref="MaxRangeSize"/> is two lookups at most. A wider
+        /// one also tests each block wholly inside it, so its cost is linear in the blocks it
+        /// covers, up to <see cref="MaxInteriorBlocks"/>; past that it answers true without
+        /// testing them, or false if the filter holds nothing.
+        /// </remarks>
         /// <param name="low">The low end of the range, included.</param>
         /// <param name="high">The high end of the range, included.</param>
         public bool TestRange(ulong low, ulong high)
@@ -263,6 +291,14 @@ namespace ProbabilisticDataStructures
             if (firstBlock == lastBlock)
             {
                 return BlockHasMementoBetween(firstBlock, lowMemento, highMemento);
+            }
+
+            // Every block wholly inside the range would be tested on its own below. Past the
+            // limit the answer is "possibly", which is never a false negative, unless nothing
+            // is stored, in which case no is certain without looking.
+            if (lastBlock - firstBlock - 1 > this.MaxInteriorBlocks)
+            {
+                return !IsEmpty();
             }
 
             // The range runs off the end of its first block and into the last one, so
@@ -286,6 +322,22 @@ namespace ProbabilisticDataStructures
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Whether no table holds an entry. A table's count is the slots it uses, so this
+        /// is a fact about what is stored and not about the keys counted.
+        /// </summary>
+        private bool IsEmpty()
+        {
+            foreach (var segment in this.Segments)
+            {
+                if (segment.Count > 0)
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         /// <summary>
