@@ -849,6 +849,64 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The reader holds a payload's counts to what the codes in it need, and the
+        /// builder sets them, so a filter the builder writes has to read back at every
+        /// shape its counts turn on. They turn on the split (none at all when the universe
+        /// is under two to a code, up to 60 bits when it is the cap), on where the codes
+        /// end in the words (a count of bits that is a whole number of words, one under and
+        /// one over), on codes that collide (fewer codes than keys), and on the number of
+        /// codes itself. Each of those is asserted to have been reached, and a filter that
+        /// does not come back byte for byte, with every key found, fails the sweep.
+        /// </summary>
+        [TestMethod]
+        public void TestFiltersAcrossTheShapesTheirCountsTurnOnRoundTrip()
+        {
+            var reached = new HashSet<string>();
+            var keyCounts = Enumerable.Range(1, 140).Concat(new[] { 255, 256, 257, 1000 });
+
+            foreach (var n in keyCounts)
+            {
+                var keys = Enumerable.Range(0, n).Select(i => ((ulong)i * 1_000_003) + 7).ToArray();
+                var universes = new[]
+                {
+                    2UL, (ulong)n, (2UL * (ulong)n) - 1, 2UL * (ulong)n, (3UL * (ulong)n) + 1,
+                    1UL << 20, 1UL << 40, Grafite.MaxUniverse,
+                }.Select(u => Math.Max(u, 2)).Distinct();
+
+                foreach (var universe in universes)
+                {
+                    var built = Grafite.BuildAtUniverse(keys, universe, 16, seed: (ulong)n);
+                    var bytes = built.ToByteArray();
+                    var label = $"{n} keys over a universe of {universe}";
+
+                    var restored = Persistence.FromByteArray<Grafite>(bytes);
+                    CollectionAssert.AreEqual(bytes, restored.ToByteArray(), label);
+                    foreach (var key in keys)
+                    {
+                        Assert.IsTrue(restored.Test(key), $"{label}: the key {key} was lost");
+                    }
+
+                    reached.Add(built.LowBits == 0 ? "no split" : "a split");
+                    reached.Add($"split {built.LowBits}");
+                    reached.Add($"high bits at {built.HighBitCount % 64} of a word");
+                    reached.Add(((long)built.CodeCount * built.LowBits) % 64 == 0
+                        ? "low bits end on a word" : "low bits end inside a word");
+                    reached.Add(built.CodeCount < n ? "colliding codes" : "distinct codes");
+                }
+            }
+
+            foreach (var wanted in new[]
+            {
+                "no split", "a split", "split 60", "high bits at 0 of a word",
+                "high bits at 1 of a word", "high bits at 63 of a word", "low bits end on a word",
+                "low bits end inside a word", "colliding codes", "distinct codes",
+            })
+            {
+                Assert.Contains(wanted, reached, $"the sweep never reached: {wanted}");
+            }
+        }
+
+        /// <summary>
         /// A set of no keys wants no universe, whatever range it is asked about.
         /// </summary>
         [TestMethod]
