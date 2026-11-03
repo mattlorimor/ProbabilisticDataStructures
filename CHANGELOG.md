@@ -256,6 +256,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as well, so a sketch over a wide window reads under a smaller budget: the default budget
   refused any payload whose substreams were of more than 2^26 items for the list alone, and
   now that is decided by the sketches it holds.
+  <br><br>
+  Three costs stay, and [CAPACITY.md](CAPACITY.md) now gives them beside each structure's
+  limits: a `VarOpt` allocates its five regions of `k + 1` slots when it is made, 40 bytes
+  for each unit of `k`; `BinaryFuseFilter.Build` hashes every item it is given, duplicates
+  included, into a list of at least 16 bytes an item before it can refuse a set too large,
+  and fails with an `OutOfMemoryException` when given more items than a list holds,
+  however few are distinct; and `Grafite.Build` holds the keys in two sorted sets, about
+  96 bytes a key, before it can refuse.
 
 ### Fixed
 
