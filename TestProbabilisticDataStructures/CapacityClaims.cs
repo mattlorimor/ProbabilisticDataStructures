@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using System.Reflection;
+using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 using static TestProbabilisticDataStructures.CapacityModel;
@@ -305,6 +306,53 @@ namespace TestProbabilisticDataStructures
             var mean = errors.Average();
             var spread = Math.Sqrt(errors.Sum(e => (e - mean) * (e - mean)) / (trials - 1));
             return (mean, spread / Math.Sqrt(trials), spread / (1.04 / Math.Sqrt(m)));
+        }
+
+        /// <summary>
+        /// The raw estimate alpha m^2 / sum of 2^-M_j for a register state, as the paper writes
+        /// it: a capped register counts as its plain 2^-M, which is what the library's
+        /// correction for the cap moves by a part in a million at the sizes used here.
+        /// </summary>
+        private static double RawEstimate(byte[] registers, double alpha)
+        {
+            var sum = 0.0;
+            foreach (var register in registers)
+            {
+                sum += Math.Pow(2.0, -register);
+            }
+
+            return alpha * registers.Length * (double)registers.Length / sum;
+        }
+
+        private static HyperLogLog ExpectedHyperLogLog(uint m, double lambda)
+        {
+            var hll = new HyperLogLog(m);
+            HyperLogLogBias.FillExpected(hll.RegisterState, lambda, 32 - BitOperations.Log2(m));
+            return hll;
+        }
+
+        /// <summary>
+        /// The mean relative error of sketches of real keys, <paramref name="trials"/> streams
+        /// of λm distinct items each, keyed by trial, and its standard error.
+        /// </summary>
+        private static (double Mean, double StandardError) RealHyperLogLogError(uint m, double lambda, int trials)
+        {
+            var n = (int)(lambda * m);
+            var errors = new double[trials];
+            for (var t = 0; t < trials; t++)
+            {
+                var hll = new HyperLogLog(m);
+                for (var i = 0; i < n; i++)
+                {
+                    hll.Add(Encoding.ASCII.GetBytes($"t{t}-item-{i}"));
+                }
+
+                errors[t] = (hll.Count() - (double)n) / n;
+            }
+
+            var mean = errors.Average();
+            var spread = Math.Sqrt(errors.Sum(e => (e - mean) * (e - mean)) / (trials - 1));
+            return (mean, spread / Math.Sqrt(trials));
         }
 
         private static readonly MethodInfo SublimeLimit = typeof(SublimeCountMinSketch)
@@ -879,6 +927,143 @@ namespace TestProbabilisticDataStructures
                 return Enumerable.Range(0, 64).All(_ =>
                     TestHyperLogLogRange.PoissonSketch(1024, Math.Pow(2, 32), random).Count() < 1UL << 33
                     && TestHyperLogLogRange.PoissonSketch(1024, Math.Pow(2, 34), random).Count() > 1UL << 33);
+            }),
+
+            // The estimator's own bias (#215). Each figure is worked out from the library's Count() on
+            // the register state the Poisson model expects, or from the constant it is built from, and
+            // held to a derivation that does not pass through HyperLogLog.cs: the integral that defines
+            // the paper's alpha and the closed form for the expected raw estimate (HyperLogLogBias).
+            new Claim("`Count()` uses linear counting while the raw estimate is at most 2.5 · m and a register is " +
+                "still zero, and the raw estimate otherwise", () =>
+            {
+                // The states the model expects after 2.43 m and 2.44 m items, one on each side of the line
+                // (their raw estimates are 2.496 m and 2.505 m), and a state of all ones, whose raw
+                // estimate is under the line with no register at zero to count.
+                const uint M = 1u << 20;
+                var alpha = HyperLogLogBias.LibraryAlpha(M);
+                var below = ExpectedHyperLogLog(M, 2.43);
+                var past = ExpectedHyperLogLog(M, 2.44);
+                var ones = new HyperLogLog(M);
+                Array.Fill(ones.RegisterState, (byte)1);
+
+                var zeros = below.RegisterState.Count(r => r == 0);
+                var counted = M * Math.Log((double)M / zeros);
+                var belowRaw = RawEstimate(below.RegisterState, alpha);
+                var pastRaw = RawEstimate(past.RegisterState, alpha);
+                var onesRaw = RawEstimate(ones.RegisterState, alpha);
+
+                return zeros > 0 && belowRaw <= 2.5 * M && Math.Abs(below.Count() - counted) <= 1
+                    && Math.Abs(belowRaw - counted) / counted > 0.02
+                    && pastRaw > 2.5 * M && Math.Abs(past.Count() - pastRaw) <= pastRaw * 1e-5
+                    && ones.RegisterState.All(r => r == 1) && onesRaw <= 2.5 * M && Math.Abs(ones.Count() - onesRaw) <= 1;
+            }),
+            new Claim("The constant is the paper's 0.7213, a four-digit rounding of the limit 1 / (2 ln 2) = 0.72135", () =>
+                Rounds(HyperLogLogBias.LimitAlpha, 0.7213, 4)
+                && Rounds(HyperLogLogBias.LimitAlpha, 0.72135, 5)
+                // The integral that defines alpha tends to the same number, and the library's constant is
+                // 0.7213 to the finite-m term, which is under a part in 10^9 of it at these sizes.
+                && Rounds(HyperLogLogBias.ExactAlpha(1u << 30), 0.72135, 5)
+                && new[] { 28, 30 }.All(b => Near(HyperLogLogBias.LibraryAlpha(1u << b), 0.7213, 1e-8))),
+            new Claim("so with 2^14 registers or more the raw estimate is 0.0066% low", () =>
+            {
+                // The library's constant against the integral at every power of two from 2^14 to the
+                // largest sketch, and then through Count() on every register at 8, where the estimate
+                // is alpha m 2^8 and the truncation to a whole number is a part in 10^8.
+                const uint M = 1u << 20;
+                var hll = new HyperLogLog(M);
+                Array.Fill(hll.RegisterState, (byte)8);
+                var viaCount = (hll.Count() / (HyperLogLogBias.ExactAlpha(M) * M * 256)) - 1;
+
+                return Enumerable.Range(14, 17).All(b => Rounds(HyperLogLogBias.AlphaBias(1u << b) * 100, -0.0066, 4))
+                    && Rounds(viaCount * 100, -0.0066, 4);
+            }),
+            new Claim("That is more than the standard error, 1.04 / √m, from about 2^28 registers", () =>
+            {
+                static double Ratio(int b) => -HyperLogLogBias.AlphaBias(1u << b) / (1.04 / Math.Sqrt(1u << b));
+
+                // The register count at which the two are equal, and the powers of two either side.
+                var equal = Math.Pow(1.04 / -HyperLogLogBias.AlphaBias(1u << 28), 2);
+                return Rounds(Math.Log2(equal), 28, 0) && Ratio(27) < 1 && Ratio(28) > 1 && Ratio(29) > 1 && Ratio(30) > 1;
+            }),
+            new Claim("by 2.7% at 2.44 · m distinct items, 1.0% at 3 · m and 0.2% at 4 · m, and it is within 0.01% " +
+                "of the truth from 6 · m", () =>
+            {
+                const uint M = 1u << 20;
+                double Closed(double lambda) => HyperLogLogBias.RawRatio(lambda, HyperLogLogBias.LibraryAlpha(M)) - 1;
+
+                // Count() on the state the model expects, and the closed form for the paper's exact limit.
+                var figures = new[] { (2.44, 2.7), (3.0, 1.0), (4.0, 0.2) }.All(s =>
+                    Rounds(HyperLogLogBias.CountBias(M, s.Item1) * 100, s.Item2, 1)
+                    && Rounds((HyperLogLogBias.RawRatio(s.Item1, HyperLogLogBias.LimitAlpha) - 1) * 100, s.Item2, 1));
+
+                // Count() is the closed form to the rounding of a state of a million registers, with the
+                // constant it has, and past 6 m both are within a hundredth of a percent. 5 m is not, so
+                // that the bound has something to bound.
+                var agrees = new[] { 2.44, 3, 4, 4.3, 5, 6, 8 }.All(lambda =>
+                    Math.Abs(HyperLogLogBias.CountBias(M, lambda) - Closed(lambda)) < 1e-5);
+                var gone = new[] { 6.0, 6.5, 7, 8, 10, 16, 32 }.All(lambda => Math.Abs(HyperLogLogBias.CountBias(M, lambda)) < 1e-4);
+
+                // And in sketches of real keys, which neither the model nor the state it expects has
+                // anything to do with: at 3 m the mean error of 200 streams is the closed form's, to
+                // within four standard errors, and clearly above nought; at 6 m it is nought.
+                var (high, highError) = RealHyperLogLogError(4096, 3, 200);
+                var (control, controlError) = RealHyperLogLogError(4096, 6, 200);
+                var real = Math.Abs(high - (HyperLogLogBias.RawRatio(3, HyperLogLogBias.LibraryAlpha(4096)) - 1)) <= 4 * highError
+                    && high > 0.005 && Math.Abs(control) <= 4 * controlError;
+
+                return figures && agrees && gone && HyperLogLogBias.CountBias(M, 5) > 1e-4 && real;
+            }),
+            new Claim("With 2^20 registers, whose standard error is 0.10%, the band is larger than that error from " +
+                "2.44 · m to about 4.3 · m", () =>
+            {
+                const uint M = 1u << 20;
+                var error = 1.04 / Math.Sqrt(M);
+                var alpha = HyperLogLogBias.LibraryAlpha(M);
+                double Band(double lambda) => HyperLogLogBias.RawRatio(lambda, alpha) - 1;
+
+                // The closed form is above the error at every step from the switch to the crossing and
+                // under it at every step after, to 40 m; and Count() agrees at the ends and just past.
+                var lambdas = Enumerable.Range(0, 3757).Select(i => 2.44 + (i * 0.01)).ToArray();
+                var crossing = lambdas.First(lambda => Band(lambda) <= error);
+                return Rounds(error * 100, 0.10, 2) && Rounds(crossing, 4.3, 1)
+                    && lambdas.TakeWhile(lambda => lambda < crossing).All(lambda => Band(lambda) > error)
+                    && lambdas.SkipWhile(lambda => lambda < crossing).All(lambda => Band(lambda) <= error)
+                    && HyperLogLogBias.CountBias(M, 2.44) > error
+                    && HyperLogLogBias.CountBias(M, 4.3) > error
+                    && HyperLogLogBias.CountBias(M, 4.4) < error;
+            }),
+            new Claim("Above about 2^16 registers the worst of the band is more than six times the standard error", () =>
+            {
+                // The worst the library's Count() gets, on a grid across the switch at 2.434 m, where
+                // the raw estimate first passes 2.5 m. It does not depend on the register count, so
+                // the count at which it is six standard errors is where the sentence puts its line.
+                const uint M = 1u << 16;
+                var worst = 0.0;
+                for (var lambda = 2.40; lambda <= 2.50; lambda += 0.002)
+                {
+                    worst = Math.Max(worst, HyperLogLogBias.CountBias(M, lambda));
+                }
+
+                var ratio = worst / (1.04 / Math.Sqrt(M));
+                return ratio is > 6 and < 7 && Rounds(Math.Log2(Math.Pow(6 * 1.04 / worst, 2)), 16, 0);
+            }),
+            new Claim("`HyperLogLogPlus` uses the exact limit and Ertl's estimator, which has neither", () =>
+            {
+                // The constant it is built from, and its Count() on the states the model expects at the
+                // largest precision, where it is within three parts in a hundred thousand of the truth
+                // all the way across the band that the classic estimator reads 2.7% high in.
+                var constant = (double)typeof(HyperLogLogPlus)
+                    .GetField("AlphaInfinity", BindingFlags.NonPublic | BindingFlags.Static)!.GetRawConstantValue()!;
+                var plus = new HyperLogLogPlus(18);
+                for (var i = 0; i < 40_000; i++)
+                {
+                    plus.Add(Encoding.ASCII.GetBytes($"tau-{i}"));
+                }
+
+                return Math.Abs((constant / HyperLogLogBias.LimitAlpha) - 1) < 1e-12 && !plus.IsSparse
+                    && new[] { 1.0, 2.0, 2.43, 2.44, 3.0, 4.0, 5.0, 6.0, 8.0 }.All(lambda =>
+                        Math.Abs(HyperLogLogBias.PlusBias(plus, lambda)) < 3e-5)
+                    && HyperLogLogBias.CountBias(1u << 18, 2.44) > 0.02;
             }),
             new Claim("The largest is about half a megabyte", () =>
                 Rounds(ChargeLine.Known["HyperLogLogPlus"].At(1 << 18) / 1_000_000, 0.5, 1)),
