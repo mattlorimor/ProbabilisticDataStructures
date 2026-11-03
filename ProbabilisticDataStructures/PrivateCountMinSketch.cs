@@ -167,6 +167,7 @@ namespace ProbabilisticDataStructures
             var random = seed.HasValue
                 ? new SeededRandom(seed.Value)
                 : SeededRandom.Unpredictable();
+            this.NoiseIncrement = random.Increment;
 
             this.matrix = new double[depth][];
             for (var i = 0; i < depth; i++)
@@ -200,6 +201,13 @@ namespace ProbabilisticDataStructures
         /// The counters themselves, for tests that check the noise is what it claims.
         /// </summary>
         internal double[][] Counters => this.matrix;
+
+        /// <summary>
+        /// What the generator the noise was drawn from stepped by, for a test to see which
+        /// stream each sketch drew from; nought for a sketch read back, which was given its
+        /// noise and drew none.
+        /// </summary>
+        internal ulong NoiseIncrement { get; }
 
         /// <summary>
         /// The epsilon of the (epsilon, delta)-differential privacy that a given

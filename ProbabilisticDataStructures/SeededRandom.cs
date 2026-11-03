@@ -43,6 +43,9 @@ namespace ProbabilisticDataStructures
 
         internal SeededRandom(ulong state) => this.State = state;
 
+        /// <summary>What the state steps by at every draw.</summary>
+        internal ulong Increment => Gamma;
+
         /// <summary>
         /// Seeds unpredictably, for a filter that was not given a seed.
         /// </summary>

@@ -726,5 +726,88 @@ namespace TestProbabilisticDataStructures
                 "substreams built after them, which means the reader is installing " +
                 "a predictable generator rather than an unpredictable one.");
         }
+
+        /// <summary>
+        /// Every sketch a window builds draws its noise from a stream no other sketch of
+        /// the window draws from: over its whole life, the sketches since expired among
+        /// them, and across a save and load.
+        /// </summary>
+        /// <remarks>
+        /// The generator is SplitMix64, whose state steps by an odd increment at every
+        /// draw. Two generators stepping by the same increment are one sequence read from
+        /// two places, so two sketches whose seeds lay within their draws of each other
+        /// along it drew some of the same noise, shifted, and an observer holding both
+        /// matrices could subtract it away where it lined up. With one increment for every
+        /// sketch, as the window had, whether that happened was a matter of chance. With an
+        /// increment of each sketch's own it cannot: two streams stepping by different
+        /// increments never pass through two consecutive states in common, and each normal
+        /// is drawn from two consecutive draws.
+        /// <para>
+        /// So this asks for the structure and not a probability. Every sketch built is
+        /// collected as it appears, and its increment must be odd, so that its stream has
+        /// the whole period, and different from every other's. The sketches read back drew
+        /// their noise before the write and report none; the ones the restored window goes
+        /// on to build must not repeat an increment of those built before it.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestEverySketchAWindowBuildsDrawsFromAStreamOfItsOwn()
+        {
+            var sketch = new DpswSketch(64, 4.0, alpha: 0.6, width: 4, depth: 2, seed: 11);
+            var plan = 1 + (2 * (sketch.Checkpointing.Length - 1));
+            var seen = new HashSet<PrivateCountMinSketch>();
+            var drawnBy = new Dictionary<ulong, string>();
+            var shared = new List<string>();
+
+            void Collect(DpswSketch window, string when)
+            {
+                var index = 0;
+                foreach (var held in window.Sketches())
+                {
+                    if (seen.Add(held))
+                    {
+                        var name = $"sketch {index} held {when}";
+                        Assert.AreEqual(1UL, held.NoiseIncrement & 1,
+                            $"{name} steps by an even increment, {held.NoiseIncrement:X16}");
+                        if (!drawnBy.TryAdd(held.NoiseIncrement, name))
+                        {
+                            shared.Add($"{name} steps by {held.NoiseIncrement:X16}, as {drawnBy[held.NoiseIncrement]} did");
+                        }
+                    }
+                    index++;
+                }
+            }
+
+            for (var i = 1; i <= 1_000; i++)
+            {
+                sketch.Add(Key(i));
+                Collect(sketch, $"at item {i}");
+            }
+
+            var restored = Persistence.FromByteArray<DpswSketch>(sketch.ToByteArray());
+            foreach (var read in restored.Sketches())
+            {
+                Assert.AreEqual(0UL, read.NoiseIncrement, "a sketch read back reports a stream it drew from");
+                seen.Add(read);
+            }
+
+            for (var i = 1_001; i <= 2_000; i++)
+            {
+                restored.Add(Key(i));
+                Collect(restored, $"at item {i}, after the read");
+            }
+
+            // A substream begins every 19 items, so 2,000 items begin 106 of them, each
+            // building the whole plan; a window of 64 holds only four or five at a time.
+            Assert.AreEqual(19, sketch.SubstreamSize);
+            var built = 106 * plan;
+            Assert.IsEmpty(shared,
+                $"{shared.Count} of the {built} sketches built drew from a stream another had drawn " +
+                $"from. The first: {(shared.Count > 0 ? shared[0] : "")}");
+            Assert.HasCount(built, drawnBy,
+                "the sketches collected are not every sketch the window built");
+            Assert.IsLessThan(built / 10, restored.SketchesHeld,
+                "the window held most of what it built, so the sketches it expired were never asked about");
+        }
     }
 }
