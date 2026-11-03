@@ -1896,6 +1896,117 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A CountSketch payload put together by hand: the width, the depth and a run of
+        /// <paramref name="cellBytes"/> zeroed bytes, wrapped in the envelope with the
+        /// default hash and a correct checksum. The run is not checked against the
+        /// dimensions here, which is the reader's work.
+        /// </summary>
+        private static byte[] CountSketchPayload(uint width, uint depth, int cellBytes)
+        {
+            var payload = new PayloadWriter();
+            payload.WriteUInt32(width);
+            payload.WriteUInt32(depth);
+            payload.WriteBytes(new byte[cellBytes]);
+
+            using var stream = new MemoryStream();
+            PersistenceFormat.Write(
+                stream, StructureId.CountSketch,
+                PersistenceFormat.Identify(Defaults.GetDefaultHashFunction()),
+                payload.WrittenSpan);
+            return stream.ToArray();
+        }
+
+        /// <summary>
+        /// The reader took any width and depth whose cells came to the bytes the payload
+        /// carried, so a sketch of more rows than any constructor builds read back: every
+        /// <c>Add</c> loops the rows, and every <c>Count</c> allocates and sorts one
+        /// estimate per row. A width of one keeps the cells few enough to carry, and the
+        /// default budget admits a depth of millions. The constructor's most is 710 rows,
+        /// and the reader now refuses one more.
+        /// </summary>
+        [TestMethod]
+        public void TestCountSketchWithMoreRowsThanAnyConstructorBuildsIsRefused()
+        {
+            foreach (var depth in new[] { CountSketch.MaxDepth + 1, 100_000u })
+            {
+                var bytes = CountSketchPayload(1, depth, checked((int)depth * sizeof(long)));
+
+                AssertRefused(
+                    () => Persistence.FromByteArray<CountSketch>(bytes),
+                    "beyond anything this library builds");
+            }
+        }
+
+        /// <summary>
+        /// A row is one array, so a width past what one holds describes no sketch. The
+        /// payload carries no cells at all: the claim is refused for its size, before it
+        /// is checked against the bytes behind it.
+        /// </summary>
+        [TestMethod]
+        public void TestCountSketchWithAWiderRowThanAnArrayHoldsIsRefused()
+        {
+            AssertRefused(
+                () => Persistence.FromByteArray<CountSketch>(
+                    CountSketchPayload(CountSketch.MaxWidth + 1, 1, 0)),
+                "beyond anything this library builds");
+        }
+
+        /// <summary>
+        /// The bytes the cells need are the width times the depth times eight, and that
+        /// product wrapped in 64 bits: a width of 2^31 and a depth of 2^30 need 2^64
+        /// bytes, which is nought, and a payload whose cell run was empty agreed with it.
+        /// A finite budget refused the result later, for its cost, which is harmless; read
+        /// without a budget it went on to allocate what it had been told and ended in an
+        /// <see cref="OutOfMemoryException"/> in place of an <see cref="InvalidDataException"/>.
+        /// </summary>
+        /// <remarks>
+        /// Reached through the check itself and through the default budget. Not through
+        /// <see cref="ReadOptions.Unlimited"/>, which is the read that would allocate.
+        /// </remarks>
+        [TestMethod]
+        public void TestCountSketchWhoseCellBytesWrapAreRefusedForTheirSize()
+        {
+            var width = 1u << 31;
+            var depth = 1u << 30;
+
+            // The product the old check formed, written to show that it is the wrap.
+            Assert.AreEqual(0L, unchecked((long)width * depth * sizeof(long)));
+
+            var ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => CountSketch.CheckCells(width, depth, 0));
+            StringAssert.Contains(ex.Message, "beyond anything this library builds");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<CountSketch>(CountSketchPayload(width, depth, 0)),
+                "beyond anything this library builds");
+        }
+
+        /// <summary>
+        /// The limits keep the cell bytes far from wrapping in 64 bits, but not the cell
+        /// count from wrapping in 32: a width of 2^26 and a depth of 64 are each within
+        /// them, and their product is 2^32, which a <c>uint</c> holds as nought. A check
+        /// that multiplied the dimensions before widening them agreed with an empty run of
+        /// cells for a sketch of 32 GiB.
+        /// </summary>
+        [TestMethod]
+        public void TestCountSketchWhoseCellCountWrapsInThirtyTwoBitsIsRefused()
+        {
+            var width = 1u << 26;
+            var depth = 64u;
+            Assert.IsLessThanOrEqualTo(CountSketch.MaxWidth, width);
+            Assert.IsLessThanOrEqualTo(CountSketch.MaxDepth, depth);
+            Assert.AreEqual(0u, unchecked(width * depth));
+
+            var ex = Assert.ThrowsExactly<InvalidDataException>(
+                () => CountSketch.CheckCells(width, depth, 0));
+            StringAssert.Contains(ex.Message, "needs 34359738368 bytes of cells");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<CountSketch>(CountSketchPayload(width, depth, 0)),
+                "needs 34359738368 bytes of cells");
+        }
+
+        /// <summary>
         /// A key occupies several cells at once, so a table with fewer cells than that
         /// cannot hold one key.
         /// </summary>

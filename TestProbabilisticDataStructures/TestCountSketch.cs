@@ -1,5 +1,8 @@
 using System;
+using System.Buffers.Binary;
 using System.IO;
+using System.IO.Hashing;
+using System.Linq;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -317,5 +320,540 @@ namespace TestProbabilisticDataStructures
             Assert.ThrowsExactly<InvalidOperationException>(() => sketch.SetHash(d => 1UL));
         }
 
+        // ---- Counts at the ends of the long range ----------------------------------------
+
+        /// <summary>The payload begins after the fixed-size envelope header.</summary>
+        private const int PayloadStart = 14;
+
+        /// <summary>
+        /// The cells follow the payload's width, its depth and the length of the run that
+        /// holds them, a u32 each.
+        /// </summary>
+        private const int CellsStart = PayloadStart + 3 * sizeof(uint);
+
+        /// <summary>
+        /// The cells of a sketch, read back out of its payload, which is the one place the
+        /// table is visible from outside.
+        /// </summary>
+        private static long[][] Cells(CountSketch sketch)
+        {
+            var bytes = sketch.ToByteArray();
+            var cells = new long[sketch.Depth()][];
+            var at = CellsStart;
+            for (var row = 0; row < cells.Length; row++)
+            {
+                cells[row] = new long[sketch.Width()];
+                for (var column = 0; column < cells[row].Length; column++)
+                {
+                    cells[row][column] = BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(at));
+                    at += sizeof(long);
+                }
+            }
+
+            return cells;
+        }
+
+        /// <summary>
+        /// A sketch of the shape of <paramref name="template"/> holding exactly these
+        /// cells: its payload with the cells replaced and the checksum repaired.
+        /// </summary>
+        private static CountSketch WithCells(CountSketch template, long[][] cells)
+        {
+            var bytes = template.ToByteArray();
+            var at = CellsStart;
+            foreach (var row in cells)
+            {
+                foreach (var cell in row)
+                {
+                    BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(at), cell);
+                    at += sizeof(long);
+                }
+            }
+
+            var crc = new Crc32();
+            crc.Append(bytes.AsSpan(4, bytes.Length - 8));
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                bytes.AsSpan(bytes.Length - 4), crc.GetCurrentHashAsUInt32());
+            return Persistence.FromByteArray<CountSketch>(bytes);
+        }
+
+        /// <summary>
+        /// The cell each row puts a key in and the sign it adds there. One add of 1 to an
+        /// empty sketch of the same shape leaves a single cell per row holding the sign.
+        /// </summary>
+        private static (int Column, long Sign)[] Placement(double epsilon, double delta, byte[] key)
+        {
+            return Cells(new CountSketch(epsilon, delta).Add(key))
+                .Select(row =>
+                {
+                    var column = Array.FindIndex(row, cell => cell != 0);
+                    return (column, row[column]);
+                })
+                .ToArray();
+        }
+
+        /// <summary>
+        /// A weighted add that took a cell past the end of the long range wrapped it. Two
+        /// adds of the largest count left a cell at -2 (and, for a row that subtracts, at
+        /// +2), so the count of an item seen 1.8e19 times came back as -2, which reads as
+        /// the ordinary noise this sketch's estimates carry. A cell now stops at the end.
+        /// </summary>
+        /// <remarks>
+        /// A single key in a fresh sketch has no collisions, so every row holds it alone.
+        /// The depths run from one row to five, odd and even, because an even depth takes
+        /// its median another way.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(0.5, 1u)]
+        [DataRow(0.2, 2u)]
+        [DataRow(0.05, 3u)]
+        [DataRow(0.03, 4u)]
+        [DataRow(0.01, 5u)]
+        public void TestWeightedAddsStopAtTheLargestCountInsteadOfWrapping(double delta, uint rows)
+        {
+            var sketch = new CountSketch(0.5, delta);
+            Assert.AreEqual(rows, sketch.Depth());
+
+            sketch.Add(Key("a"), long.MaxValue);
+            Assert.AreEqual(long.MaxValue, sketch.Count(Key("a")));
+
+            sketch.Add(Key("a"), long.MaxValue);
+            Assert.AreEqual(long.MaxValue, sketch.Count(Key("a")),
+                "two adds of the largest count wrapped the cells");
+
+            // And it stays there, rather than the next add taking it round again.
+            sketch.Add(Key("a"), 1);
+            Assert.AreEqual(long.MaxValue, sketch.Count(Key("a")));
+
+            // The other end. A row that subtracts holds +long.MaxValue, whose negation is
+            // one above the smallest count, so the estimate is one of those two.
+            var down = new CountSketch(0.5, delta);
+            down.Add(Key("a"), long.MinValue);
+            down.Add(Key("a"), long.MinValue);
+            var estimate = down.Count(Key("a"));
+            Assert.IsTrue(estimate == long.MinValue || estimate == long.MinValue + 1,
+                $"two adds of the smallest count came back as {estimate}");
+        }
+
+        /// <summary>
+        /// A row that subtracts adds <c>-count</c>, and the negation of the smallest long
+        /// does not fit: it stayed the smallest long, so a row meant to hold the largest
+        /// count held the smallest one.
+        /// </summary>
+        [TestMethod]
+        public void TestTheNegationOfTheSmallestCountSaturates()
+        {
+            // The sign each row gives a key varies with the key, so several are tried and
+            // the test is refused if none of them reached a row that subtracts.
+            var subtracting = 0;
+            for (var i = 0; i < 16; i++)
+            {
+                var key = Key($"key{i}");
+                var placement = Placement(0.5, 0.01, key);
+                var cells = Cells(new CountSketch(0.5, 0.01).Add(key, long.MinValue));
+
+                for (var row = 0; row < placement.Length; row++)
+                {
+                    var (column, sign) = placement[row];
+                    if (sign < 0)
+                    {
+                        subtracting++;
+                    }
+
+                    Assert.AreEqual(
+                        sign > 0 ? long.MinValue : long.MaxValue, cells[row][column],
+                        $"key{i}, row {row}, which adds {sign} times the count");
+                }
+            }
+
+            Assert.IsGreaterThan(0, subtracting, "no key reached a row that subtracts");
+        }
+
+        /// <summary>
+        /// A cell at the smallest long, read by a row that subtracts, estimates one past
+        /// the largest: the negation overflows, and it saturates like the sum does. Without
+        /// that the estimate kept the sign of the cell and came back as the smallest count.
+        /// </summary>
+        [TestMethod]
+        public void TestTheEstimateOfAFullNegativeCellInARowThatSubtractsSaturates()
+        {
+            var checkedARowThatSubtracts = false;
+            for (var i = 0; i < 16; i++)
+            {
+                var key = Key($"key{i}");
+                var placement = Placement(0.5, 0.01, key);
+
+                // Every row's estimate is long.MaxValue: the cells are the sign times it, and
+                // the smallest long where that is one past the end.
+                var cells = placement
+                    .Select(p => Enumerable.Repeat(0L, 4).ToArray())
+                    .ToArray();
+                for (var row = 0; row < cells.Length; row++)
+                {
+                    cells[row][placement[row].Column] =
+                        placement[row].Sign > 0 ? long.MaxValue : long.MinValue;
+                    checkedARowThatSubtracts |= placement[row].Sign < 0;
+                }
+
+                var sketch = WithCells(new CountSketch(0.5, 0.01), cells);
+                Assert.AreEqual(long.MaxValue, sketch.Count(key), $"key{i}");
+            }
+
+            Assert.IsTrue(checkedARowThatSubtracts, "no key reached a row that subtracts");
+        }
+
+        /// <summary>
+        /// An even number of rows averages the two middle estimates, and the sum of two
+        /// estimates above 2^62 wrapped before it was halved although no cell had. One add
+        /// of 5e18 to a sketch of two rows came back as -4,223,372,036,854,775,808.
+        /// </summary>
+        [TestMethod]
+        [DataRow(0.2, 2u)]
+        [DataRow(0.03, 4u)]
+        public void TestTheMedianOfAnEvenDepthDoesNotWrapItsSum(double delta, uint rows)
+        {
+            var sketch = new CountSketch(0.5, delta);
+            Assert.AreEqual(rows, sketch.Depth());
+
+            sketch.Add(Key("a"), 5_000_000_000_000_000_000L);
+            Assert.AreEqual(5_000_000_000_000_000_000L, sketch.Count(Key("a")));
+
+            var below = new CountSketch(0.5, delta).Add(Key("a"), -5_000_000_000_000_000_000L);
+            Assert.AreEqual(-5_000_000_000_000_000_000L, below.Count(Key("a")));
+        }
+
+        /// <summary>
+        /// The two middle estimates are halved by truncation toward zero, as an integer
+        /// division does, so that a result which did not overflow is the one it always was.
+        /// The estimates of one item agree in parity until a cell saturates, so odd sums
+        /// are only reached by setting the cells directly.
+        /// </summary>
+        [TestMethod]
+        public void TestTheMedianOfTwoRowsTruncatesTowardZeroAtTheEdges()
+        {
+            // A key both of whose rows add, so any estimate is a cell as it stands.
+            var key = Enumerable.Range(0, 64).Select(i => Key($"key{i}"))
+                .First(k => Placement(0.5, 0.2, k).All(p => p.Sign > 0));
+            var placement = Placement(0.5, 0.2, key);
+
+            var cases = new (long First, long Second, long Median)[]
+            {
+                (3, 4, 3),
+                (-3, -4, -3),
+                (-3, 4, 0),
+                (3, -4, 0),
+                (-4, 3, 0),
+                (long.MaxValue, long.MaxValue, long.MaxValue),
+                (long.MaxValue, long.MaxValue - 1, long.MaxValue - 1),
+                (long.MinValue, long.MinValue, long.MinValue),
+                (long.MinValue, long.MinValue + 1, long.MinValue + 1),
+                (long.MaxValue, long.MinValue, 0),
+                (long.MaxValue, long.MinValue + 1, 0),
+                (long.MaxValue, -1, long.MaxValue / 2),
+                (long.MinValue, 1, long.MinValue / 2 + 1),
+            };
+
+            foreach (var (first, second, median) in cases)
+            {
+                var cells = new[] { new long[4], new long[4] };
+                cells[0][placement[0].Column] = first;
+                cells[1][placement[1].Column] = second;
+
+                var sketch = WithCells(new CountSketch(0.5, 0.2), cells);
+                Assert.AreEqual(median, sketch.Count(key), $"the median of {first} and {second}");
+            }
+        }
+
+        /// <summary>
+        /// A merge adds cells, and wrapped them just as an add did: a sketch holding the
+        /// largest count merged into itself held -2 in every cell.
+        /// </summary>
+        [TestMethod]
+        [DataRow(0.5, 1u)]
+        [DataRow(0.2, 2u)]
+        [DataRow(0.01, 5u)]
+        public void TestMergeStopsAtTheLargestCountInsteadOfWrapping(double delta, uint rows)
+        {
+            var sketch = new CountSketch(0.5, delta);
+            Assert.AreEqual(rows, sketch.Depth());
+            sketch.Add(Key("a"), long.MaxValue);
+
+            sketch.Merge(sketch);
+            Assert.AreEqual(long.MaxValue, sketch.Count(Key("a")));
+
+            // Two sketches rather than one against itself.
+            var left = new CountSketch(0.5, delta).Add(Key("a"), -long.MaxValue);
+            var right = new CountSketch(0.5, delta).Add(Key("a"), -long.MaxValue);
+            left.Merge(right);
+            var estimate = left.Count(Key("a"));
+            Assert.IsTrue(estimate == long.MinValue || estimate == long.MinValue + 1,
+                $"two merged streams of -long.MaxValue came back as {estimate}");
+
+            // The sketch merged in is left as it was.
+            Assert.AreEqual(-long.MaxValue, right.Count(Key("a")));
+        }
+
+        /// <summary>
+        /// What saturating costs, written down so that it is a decision and not a surprise:
+        /// a cell at the end of the range no longer records how far past it the count went,
+        /// so subtracting from it is off by that much. The count above the largest long is
+        /// not recoverable, and the documentation says so.
+        /// </summary>
+        [TestMethod]
+        public void TestASaturatedCellDoesNotRecordHowFarPastTheEndItWent()
+        {
+            // One row, so the estimate is the cell as that row reads it, and the sign the
+            // row gives a key decides which end the cell stopped at.
+            var added = 0;
+            var subtracted = 0;
+            for (var i = 0; i < 16; i++)
+            {
+                var key = Key($"key{i}");
+                var sign = Placement(0.5, 0.5, key)[0].Sign;
+                var sketch = new CountSketch(0.5, 0.5);
+                Assert.AreEqual(1u, sketch.Depth());
+
+                // Seen twice the largest count, less once the largest count: the largest
+                // count. The cell stopped at the end after the second add, so the
+                // subtraction takes it to nothing where it should have left the largest
+                // count. A row that subtracts stopped at the smallest long, which is one
+                // further from nought, and so reads one over.
+                sketch.Add(key, long.MaxValue);
+                sketch.Add(key, long.MaxValue);
+                sketch.Add(key, -long.MaxValue);
+                Assert.AreEqual(sign > 0 ? 0L : 1L, sketch.Count(key), $"key{i}, which adds {sign}");
+
+                if (sign > 0)
+                {
+                    added++;
+                }
+                else
+                {
+                    subtracted++;
+                }
+            }
+
+            Assert.IsGreaterThan(0, added, "no key reached a row that adds");
+            Assert.IsGreaterThan(0, subtracted, "no key reached a row that subtracts");
+        }
+
+        /// <summary>
+        /// A row that subtracts takes the count off its cell, and when the count is the
+        /// smallest long the negation that would turn it into an addition does not fit.
+        /// The cell is held to the range after the difference is worked out and not
+        /// before: -5 less the smallest long is 9,223,372,036,854,775,803, a count that
+        /// fits and that clamping the negation first would have made one too small.
+        /// </summary>
+        [TestMethod]
+        public void TestTheSmallestCountIsTakenOffWholeAndNotNegatedFirst()
+        {
+            var subtracting = 0;
+            for (var i = 0; i < 16; i++)
+            {
+                var key = Key($"key{i}");
+                var placement = Placement(0.5, 0.01, key);
+
+                foreach (var (start, rowThatAdds, rowThatSubtracts) in new[]
+                {
+                    (-5L, long.MinValue, long.MaxValue - 4),
+                    (5L, 5L + long.MinValue, long.MaxValue),
+                })
+                {
+                    var cells = placement
+                        .Select(p => new long[4])
+                        .ToArray();
+                    for (var row = 0; row < cells.Length; row++)
+                    {
+                        cells[row][placement[row].Column] = start;
+                    }
+
+                    var sketch = WithCells(new CountSketch(0.5, 0.01), cells);
+                    sketch.Add(key, long.MinValue);
+
+                    var after = Cells(sketch);
+                    for (var row = 0; row < cells.Length; row++)
+                    {
+                        var (column, sign) = placement[row];
+                        if (sign < 0)
+                        {
+                            subtracting++;
+                        }
+
+                        Assert.AreEqual(
+                            sign > 0 ? rowThatAdds : rowThatSubtracts, after[row][column],
+                            $"key{i}, row {row}, which adds {sign} times the count, from {start}");
+                    }
+                }
+            }
+
+            Assert.IsGreaterThan(0, subtracting, "no key reached a row that subtracts");
+        }
+
+        /// <summary>
+        /// Long sequences of weighted adds and merges at the ends of the long range, held
+        /// to a model that does the arithmetic in 128 bits and clamps every cell to the
+        /// long range after every step. Every cell and every item's estimate must match
+        /// after each step, so a result that did not overflow is the one an unchecked
+        /// sum gives, and one that did is the end of the range.
+        /// </summary>
+        /// <remarks>
+        /// The sketches are one to three columns wide, so that unrelated items share
+        /// cells and a large positive count meets a large negative one. The tally fails
+        /// the run if it never saturated a cell at either end or, at an even depth, never
+        /// took a median whose sum is beyond a long.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(1.0, 0.5, 1u)]
+        [DataRow(1.0, 0.2, 2u)]
+        [DataRow(0.9, 0.05, 3u)]
+        [DataRow(0.7, 0.03, 4u)]
+        [DataRow(0.8, 0.01, 5u)]
+        public void TestSequencesAtTheEndsOfTheRangeMatchAnInt128Model(
+            double epsilon, double delta, uint rows)
+        {
+            var weights = new[]
+            {
+                long.MaxValue, long.MinValue, -long.MaxValue,
+                5_000_000_000_000_000_000L, -5_000_000_000_000_000_000L,
+                1L << 62, -(1L << 62), 1, -1, 7, -3,
+            };
+            var keys = Enumerable.Range(0, 6).Select(i => Key($"key{i}")).ToArray();
+            var placements = keys.Select(k => Placement(epsilon, delta, k)).ToArray();
+
+            var sketch = new CountSketch(epsilon, delta);
+            Assert.AreEqual(rows, sketch.Depth());
+            var width = (int)sketch.Width();
+
+            var model = new Int128[rows][];
+            var side = new Int128[rows][];
+            for (var row = 0; row < rows; row++)
+            {
+                model[row] = new Int128[width];
+                side[row] = new Int128[width];
+            }
+
+            var other = new CountSketch(epsilon, delta);
+            var random = new Random(211);
+            var high = 0;
+            var low = 0;
+            var wide = 0;
+
+            for (var step = 0; step < 400; step++)
+            {
+                var kind = random.Next(10);
+                if (kind < 6)
+                {
+                    var key = random.Next(keys.Length);
+                    var weight = weights[random.Next(weights.Length)];
+                    sketch.Add(keys[key], weight);
+                    AddToModel(model, placements[key], weight);
+                }
+                else if (kind < 8)
+                {
+                    var key = random.Next(keys.Length);
+                    var weight = weights[random.Next(weights.Length)];
+                    other.Add(keys[key], weight);
+                    AddToModel(side, placements[key], weight);
+                }
+                else if (kind == 8)
+                {
+                    sketch.Merge(other);
+                    for (var row = 0; row < rows; row++)
+                    {
+                        for (var column = 0; column < width; column++)
+                        {
+                            model[row][column] = Clamp(model[row][column] + side[row][column]);
+                        }
+                    }
+                }
+                else
+                {
+                    sketch.Merge(sketch);
+                    for (var row = 0; row < rows; row++)
+                    {
+                        for (var column = 0; column < width; column++)
+                        {
+                            model[row][column] = Clamp(model[row][column] * 2);
+                        }
+                    }
+                }
+
+                var cells = Cells(sketch);
+                for (var row = 0; row < rows; row++)
+                {
+                    for (var column = 0; column < width; column++)
+                    {
+                        Assert.AreEqual((long)model[row][column], cells[row][column],
+                            $"step {step}, row {row}, column {column}");
+                    }
+                }
+
+                for (var key = 0; key < keys.Length; key++)
+                {
+                    Assert.AreEqual(ModelCount(model, placements[key]), sketch.Count(keys[key]),
+                        $"step {step}, key{key}");
+                }
+            }
+
+            Assert.IsGreaterThan(0, high, "no cell was ever saturated at the largest count");
+            Assert.IsGreaterThan(0, low, "no cell was ever saturated at the smallest count");
+            if (rows % 2 == 0)
+            {
+                Assert.IsGreaterThan(0, wide, "no median ever summed to more than a long holds");
+            }
+
+            Int128 Clamp(Int128 value)
+            {
+                if (value > long.MaxValue)
+                {
+                    high++;
+                    return long.MaxValue;
+                }
+
+                if (value < long.MinValue)
+                {
+                    low++;
+                    return long.MinValue;
+                }
+
+                return value;
+            }
+
+            void AddToModel(Int128[][] cells, (int Column, long Sign)[] placement, long weight)
+            {
+                for (var row = 0; row < placement.Length; row++)
+                {
+                    var (column, sign) = placement[row];
+                    cells[row][column] = Clamp(cells[row][column] + (Int128)sign * weight);
+                }
+            }
+
+            long ModelCount(Int128[][] cells, (int Column, long Sign)[] placement)
+            {
+                var estimates = new Int128[placement.Length];
+                for (var row = 0; row < placement.Length; row++)
+                {
+                    var (column, sign) = placement[row];
+                    estimates[row] = (Int128)sign * cells[row][column];
+                    estimates[row] = estimates[row] > long.MaxValue
+                        ? long.MaxValue
+                        : estimates[row];
+                }
+
+                Array.Sort(estimates);
+                if (estimates.Length % 2 == 1)
+                {
+                    return (long)estimates[estimates.Length / 2];
+                }
+
+                var sum = estimates[(estimates.Length / 2) - 1] + estimates[estimates.Length / 2];
+                if (sum > long.MaxValue || sum < long.MinValue)
+                {
+                    wide++;
+                }
+
+                return (long)(sum / 2);
+            }
+        }
     }
 }
