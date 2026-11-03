@@ -158,6 +158,20 @@ namespace ProbabilisticDataStructures
         /// A 64-bit count, so that it crosses 2^32 rather than wrapping to zero, and comes
         /// back down across it as items are removed. Before the release after 6.2.0 it was
         /// a <c>uint</c>.
+        /// <para>
+        /// A removal takes one off the count only when it cleared a bit. One that is
+        /// refused, because every region of the item has collided, returns true and
+        /// leaves the item a member, and leaves the count alone: the item is still held.
+        /// </para>
+        /// <para>
+        /// The count also stops at zero. <see cref="TestAndRemove(byte[])"/> returns true
+        /// whenever every bit of the item is set, which an item that was never added can
+        /// meet by chance, and its removal clears bits that other items set. After
+        /// removing items that were never added the count can therefore be lower than the
+        /// number of items the filter holds: an undercount, where before it wrapped to
+        /// 2^64 - 1. A wrapped count saved by an earlier release is read back as it was
+        /// stored.
+        /// </para>
         /// </remarks>
         public ulong Count()
         {
@@ -302,15 +316,27 @@ namespace ProbabilisticDataStructures
 
             if (member)
             {
+                var cleared = false;
                 foreach (var idx in this.IndexBuffer)
                 {
                     if (this.Collisions.Get(idx / this.RegionSize) == 0)
                     {
                         // Clear only bits located in collision-free zones.
                         this.Buckets.Set(idx, 0);
+                        cleared = true;
                     }
                 }
-                this.count--;
+
+                // A deletion that cleared nothing, every one of the item's regions having
+                // collided, removed nothing: the item is still a member and is still
+                // counted. One that cleared a bit has taken the item out of the filter,
+                // as far as this filter can, and the answer above is only "every bit is
+                // set", which a false positive meets too, so the count stops at zero
+                // rather than taking a ulong to 2^64 - 1.
+                if (cleared && this.count > 0)
+                {
+                    this.count--;
+                }
             }
 
             return member;
