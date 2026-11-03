@@ -421,12 +421,77 @@ namespace TestProbabilisticDataStructures
         /// A Grafite payload for the tests below to corrupt. Its scalar prefix is
         /// fixed, so field offsets are too: the reduced universe at 0, the hash
         /// multiplier at 8, its addend at 16, the key count at 24, the largest
-        /// promised range at 32, and the low-bit split at 40.
+        /// promised range at 32, the low-bit split at 40, the number of hash codes
+        /// at 44, the bits of high parts in use at 48, and the count of words of low
+        /// bits at 68, which the low words follow.
         /// </summary>
         private static byte[] GrafitePayload()
         {
             var keys = Enumerable.Range(0, 60).Select(i => (ulong)(i * 37));
             return Grafite.Build(keys, 0.05, 8, seed: 11).ToByteArray();
+        }
+
+        private const int GrafiteLowBitsOffset = 40;
+        private const int GrafiteCodeCountOffset = 44;
+        private const int GrafiteHighBitCountOffset = 48;
+        private const int GrafiteLowWordsOffset = 68;
+
+        /// <summary>
+        /// A Grafite payload of no keys, which Build leaves without a split, without bits of
+        /// high parts and without a word of either array.
+        /// </summary>
+        private static byte[] EmptyGrafitePayload() =>
+            Grafite.Build(Array.Empty<ulong>(), 0.01, 16).ToByteArray();
+
+        /// <summary>
+        /// The payload with the number of words in its low bits and in its high bits
+        /// changed, each array cut short or padded with zero words to match its new count,
+        /// and sealed. Of everything the payload says, only those counts then disagree with
+        /// the codes it holds.
+        /// </summary>
+        private static byte[] GrafiteWithWords(byte[] original, int lowWordsDelta, int highWordsDelta)
+        {
+            var payload = original.AsSpan(PayloadStart, original.Length - PayloadStart - 4);
+            var lowWords = (int)BinaryPrimitives.ReadUInt32LittleEndian(
+                payload.Slice(GrafiteLowWordsOffset));
+            var lows = payload.Slice(GrafiteLowWordsOffset + 4, lowWords * 8);
+            var highWordsOffset = GrafiteLowWordsOffset + 4 + (lowWords * 8);
+            var highWords = (int)BinaryPrimitives.ReadUInt32LittleEndian(
+                payload.Slice(highWordsOffset));
+            var highs = payload.Slice(highWordsOffset + 4, highWords * 8);
+
+            using var rewritten = new MemoryStream();
+            rewritten.Write(payload.Slice(0, GrafiteLowWordsOffset));
+            WriteWords(rewritten, lows, lowWords + lowWordsDelta);
+            WriteWords(rewritten, highs, highWords + highWordsDelta);
+
+            using var sealedPayload = new MemoryStream();
+            PersistenceFormat.Write(
+                sealedPayload, StructureId.Grafite, HashId.None, rewritten.ToArray());
+            return sealedPayload.ToArray();
+        }
+
+        /// <summary>A count of words, and that many of them: the given ones, cut or padded with zeros.</summary>
+        private static void WriteWords(Stream to, ReadOnlySpan<byte> words, int count)
+        {
+            var header = new byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(header, (uint)count);
+            to.Write(header);
+
+            var kept = Math.Min(words.Length, count * 8);
+            to.Write(words.Slice(0, kept));
+            to.Write(new byte[(count * 8) - kept]);
+        }
+
+        /// <summary>
+        /// Asserts that the payload as written reads and that the edited one is refused for
+        /// the stated reason, so that the edit is what is refused and not the payload.
+        /// </summary>
+        private static void AssertGrafiteEditRefused(byte[] original, byte[] edited, string expected)
+        {
+            Assert.IsNotNull(Persistence.FromByteArray<Grafite>(original),
+                "the payload before the edit should read");
+            AssertRefused(() => Persistence.FromByteArray<Grafite>(edited), expected);
         }
 
         /// <summary>
@@ -469,6 +534,156 @@ namespace TestProbabilisticDataStructures
             AssertRefused(
                 () => Persistence.FromByteArray<Grafite>(bytes),
                 "sixty-four bits wide");
+        }
+
+        /// <summary>
+        /// The split is a u32 in the payload and an int in the filter, and a u32 from 2^31
+        /// up is negative once it is cast. The reader cast first and then checked that the
+        /// split is no wider than a code, which a negative number is not, so the payload
+        /// loaded and the filter answered false for keys it holds.
+        /// </summary>
+        [TestMethod]
+        [DataRow(0x8000_0000u)]
+        [DataRow(0xFFFF_FFFFu)]
+        public void TestGrafiteWithALowBitCountPastAnIntIsRefused(uint lowBits)
+        {
+            var bytes = PokeUInt32(GrafitePayload(), GrafiteLowBitsOffset, lowBits);
+            AssertGrafiteEditRefused(GrafitePayload(), bytes, "sixty-four bits wide");
+        }
+
+        /// <summary>
+        /// The count of bits of high parts is cast the same way, and the check that it
+        /// fits the words behind it was a comparison a negative number passes.
+        /// </summary>
+        [TestMethod]
+        [DataRow(0x8000_0000u)]
+        [DataRow(0xFFFF_FFFFu)]
+        public void TestGrafiteWithAHighBitCountPastAnIntIsRefused(uint highBitCount)
+        {
+            var bytes = PokeUInt32(GrafitePayload(), GrafiteHighBitCountOffset, highBitCount);
+            AssertGrafiteEditRefused(GrafitePayload(), bytes, "a filter can address");
+        }
+
+        /// <summary>
+        /// A count of bits of high parts that is possible, and that the words behind it can
+        /// hold, but that the codes do not give: the builder sets it to the largest high
+        /// part, plus the number of codes, plus one, and nothing else is the right number.
+        /// The claim stays within the words the payload carries, so it is the codes that
+        /// refuse it and not the words.
+        /// </summary>
+        [TestMethod]
+        [DataRow(-1)]
+        [DataRow(1)]
+        public void TestGrafiteWhoseHighBitCountDisagreesWithItsCodesIsRefused(int offBy)
+        {
+            var original = GrafitePayload();
+            var filter = Persistence.FromByteArray<Grafite>(original);
+            var claimed = filter.HighBitCount + offBy;
+            Assert.IsTrue(
+                claimed > (filter.Highs.Length - 1) * 64 && claimed <= filter.Highs.Length * 64,
+                $"{claimed} bits should fit the {filter.Highs.Length} words the payload has, " +
+                "and not the one fewer");
+
+            var bytes = PokeUInt32(original, GrafiteHighBitCountOffset, (uint)claimed);
+            AssertGrafiteEditRefused(original, bytes, "take exactly");
+        }
+
+        /// <summary>
+        /// A split that is possible and that the codes do not give. The payload is one of
+        /// seven bits: one fewer and one more are as plausible as it, and 64 is the widest
+        /// the bound on the split allows, which no filter is built with. None of them was
+        /// refused, and probed against the keys the filter holds, one more and 64 answered
+        /// false for every one.
+        /// </summary>
+        [TestMethod]
+        [DataRow(6u)]
+        [DataRow(8u)]
+        [DataRow(64u)]
+        public void TestGrafiteWhoseSplitDisagreesWithItsCodesIsRefused(uint lowBits)
+        {
+            var original = GrafitePayload();
+            Assert.AreEqual(7, Persistence.FromByteArray<Grafite>(original).LowBits,
+                "the rows above are the neighbours of this payload's split");
+
+            var bytes = PokeUInt32(original, GrafiteLowBitsOffset, lowBits);
+            AssertGrafiteEditRefused(original, bytes, "take exactly");
+        }
+
+        /// <summary>
+        /// One code fewer than the filter holds is a count the keys allow, and it leaves a
+        /// code at the end of the encoding that the filter no longer knows is there: a key
+        /// the filter holds is answered false.
+        /// </summary>
+        [TestMethod]
+        public void TestGrafiteClaimingOneCodeFewerThanItHoldsIsRefused()
+        {
+            var original = GrafitePayload();
+            var codes = Persistence.FromByteArray<Grafite>(original).CodeCount;
+
+            var bytes = PokeUInt32(original, GrafiteCodeCountOffset, (uint)(codes - 1));
+            AssertGrafiteEditRefused(original, bytes, "take exactly");
+        }
+
+        /// <summary>
+        /// The words of low bits are as many as the codes at their width need, as the
+        /// builder sizes them. A count of one more or one fewer, with the array to match,
+        /// was read as the filter it was not.
+        /// </summary>
+        [TestMethod]
+        [DataRow(-1)]
+        [DataRow(1)]
+        public void TestGrafiteWithTheWrongNumberOfWordsOfLowBitsIsRefused(int offBy)
+        {
+            var original = GrafitePayload();
+            AssertGrafiteEditRefused(
+                original, GrafiteWithWords(original, offBy, 0), "words of low bits, but");
+        }
+
+        /// <summary>
+        /// The words of high bits are as many as hold the bits in use. One more, with the
+        /// array to match, was read as the filter it was not; one fewer was refused, but
+        /// for the bits that the words then fell short of and not for the count.
+        /// </summary>
+        [TestMethod]
+        [DataRow(-1)]
+        [DataRow(1)]
+        public void TestGrafiteWithTheWrongNumberOfWordsOfHighBitsIsRefused(int offBy)
+        {
+            var original = GrafitePayload();
+            AssertGrafiteEditRefused(
+                original, GrafiteWithWords(original, 0, offBy), "words of high bits, but");
+        }
+
+        /// <summary>
+        /// A filter of no keys has nothing to split or to count: the builder leaves the
+        /// split and the bits of high parts at nothing, and a payload that gives either a
+        /// value describes an encoding the filter does not have. A split of five bits was
+        /// read, on a filter that holds no codes to split.
+        /// </summary>
+        [TestMethod]
+        [DataRow(GrafiteLowBitsOffset, 5u)]
+        [DataRow(GrafiteHighBitCountOffset, 1u)]
+        public void TestAnEmptyGrafiteThatClaimsAnEncodingIsRefused(int offset, uint value)
+        {
+            var original = EmptyGrafitePayload();
+            AssertGrafiteEditRefused(
+                original, PokeUInt32(original, offset, value), "holds no hash codes");
+        }
+
+        /// <summary>
+        /// And it has no words of either array. The sizes the builder gives a filter of
+        /// codes, two words of low bits at the least and one of high bits, do not apply to
+        /// a filter of none, which has neither.
+        /// </summary>
+        [TestMethod]
+        [DataRow(1, 0, "words of low bits, but")]
+        [DataRow(0, 1, "words of high bits, but")]
+        public void TestAnEmptyGrafiteThatCarriesWordsIsRefused(
+            int lowWords, int highWords, string expected)
+        {
+            var original = EmptyGrafitePayload();
+            AssertGrafiteEditRefused(
+                original, GrafiteWithWords(original, lowWords, highWords), expected);
         }
 
         /// <summary>
