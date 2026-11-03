@@ -21,15 +21,15 @@ namespace TestProbabilisticDataStructures
     public class TestDpswSketch
     {
         /// <summary>
-        /// A substream is the window raised to the substream factor, and the checkpoints
-        /// of one are a list with a slot for every item in it, so it holds at most what an
-        /// array does. A window and factor that make it more are refused, naming the
-        /// window: the size was cast to an int, which saturates, so the substream became
-        /// 2^31 - 1 items whatever it was meant to be. The hook is called directly, since
-        /// building the checkpoints of a substream this long is the failure.
+        /// A substream is the window raised to the substream factor, and it holds at most
+        /// what an array does (<see cref="DpswSketch.MaxSubstreamSize"/> says why). A window
+        /// and factor that make it more are refused, naming the window: the size was cast to
+        /// an int, which saturates, so the substream became 2^31 - 1 items whatever it was
+        /// meant to be. The hook is called directly, since the windows that reach the limit
+        /// are trillions of items.
         /// </summary>
         [TestMethod]
-        public void TestASubstreamNoListCouldHoldIsRefusedNotSaturated()
+        public void TestASubstreamPastTheLongestArrayIsRefusedNotSaturated()
         {
             // 2^40 to the 0.9 is 2^36 items.
             var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(

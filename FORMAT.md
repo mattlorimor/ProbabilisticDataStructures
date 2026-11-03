@@ -294,7 +294,7 @@ address.
 | `CountMinSketch` | depth | 710 | `ceil(ln(1 / delta))` at the smallest delta whose reciprocal is a finite double |
 | `PrivateCountMinSketch` | width | 2,147,483,591 | each row is one array |
 | `PrivateCountMinSketch` | depth | 2,147,483,591 | the rows are held in one array |
-| `DpswSketch` | items in a substream | 2,147,483,591 | the checkpoints of a substream are a list with a slot for each item, and a list holds no more than an array |
+| `DpswSketch` | items in a substream | 2,147,483,591 | the longest array: set when the checkpoints of a substream were a list with a slot for each item, and kept now that they are found without one |
 | `DpswSketch` | width | 2,147,483,591 | the sketches it holds are `PrivateCountMinSketch`es, whose rows are each one array |
 | `DpswSketch` | depth | 2,147,483,591 | as `width`: the rows of one of those sketches are held in one array |
 | `InverseBloomFilter` | capacity | 2,147,483,591 | the slots are one array of references |

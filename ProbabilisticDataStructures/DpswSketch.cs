@@ -148,8 +148,7 @@ namespace ProbabilisticDataStructures
         /// <param name="hash">The hash function to use, or null for the default.</param>
         /// <exception cref="ArgumentOutOfRangeException">
         /// A parameter is out of range, or the window raised to the substream factor is
-        /// more than 2,147,483,591 items: the checkpoints of a substream are a list with a
-        /// slot for each, and a list holds no more than an array does. This was a cast to
+        /// more than 2,147,483,591 items, the most a substream holds. This was a cast to
         /// an <c>int</c> that saturated, so a larger substream was built as that long.
         /// Or the width or the depth is more than a <see cref="PrivateCountMinSketch"/>
         /// holds, 2,147,483,591 each, which the first <c>Add</c> would have refused when
@@ -274,18 +273,23 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The most items a substream holds: the checkpoints of one are a list with a slot
-        /// for each item, and a list holds at most what an array does. The constructor
+        /// The most items a substream holds, the most an array does. The constructor
         /// refuses a window and substream factor that make more, and the reader refuses a
         /// payload that claims more.
         /// </summary>
+        /// <remarks>
+        /// It was set here because a substream's checkpoints were thinned from a list with
+        /// a slot for each item, and a list holds no more than an array. They are found by
+        /// a walk since #219, which needs no such list, and the limit has stayed where it
+        /// was, so that the sketches built and the payloads read are the ones they were.
+        /// </remarks>
         internal static int MaxSubstreamSize => Array.MaxLength;
 
         /// <summary>
         /// How many items a substream holds for a window and a substream factor: the
         /// window raised to the factor, rounded up, and at least one. A function of its
-        /// own so that a test can reach the sizes where it matters, which would otherwise
-        /// build the checkpoints of a substream of billions.
+        /// own so that a test can reach the sizes where it matters without building a
+        /// sketch over a window of trillions.
         /// </summary>
         /// <exception cref="ArgumentOutOfRangeException">
         /// The substream would hold more than <see cref="MaxSubstreamSize"/>.
@@ -301,9 +305,9 @@ namespace ProbabilisticDataStructures
             {
                 throw new ArgumentOutOfRangeException(nameof(window), window,
                     $"A window of {window} at a substream factor of {beta} makes " +
-                    $"substreams of {size:E2} items, and the checkpoints of one are a " +
-                    $"list that holds at most {MaxSubstreamSize:N0}. Use a smaller window, " +
-                    "or a smaller substream factor to shorten the substreams.");
+                    $"substreams of {size:E2} items, and a substream holds at most " +
+                    $"{MaxSubstreamSize:N0}. Use a smaller window, or a smaller substream " +
+                    "factor to shorten the substreams.");
             }
 
             return (int)size;
@@ -931,14 +935,12 @@ namespace ProbabilisticDataStructures
         {
             // The constructor's own limit. The size is a u32 in the payload and an int
             // here, so one past the int would otherwise read as negative and be refused
-            // for being less than one; and one in between would build a list no array
-            // could hold.
+            // for being less than one.
             if (claimedSubstream > MaxSubstreamSize)
             {
                 throw new InvalidDataException(
                     $"Window claims substreams of {claimedSubstream} items, beyond anything " +
-                    $"this library builds: their checkpoints are a list, of at most " +
-                    $"{MaxSubstreamSize}.");
+                    $"this library builds: a substream holds at most {MaxSubstreamSize}.");
             }
 
             var substreamSize = (int)claimedSubstream;
