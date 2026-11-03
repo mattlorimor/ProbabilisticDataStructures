@@ -52,7 +52,8 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// The largest precision this builds. 2^18 registers gives a relative error near
-        /// 0.4%, and the register array is a quarter of a megabyte.
+        /// 0.2%, 1.04 / 512, which is the smallest <see cref="NewDefault"/> accepts, and the
+        /// register array is a quarter of a megabyte.
         /// </summary>
         internal const uint MaxPrecision = 18;
 
@@ -153,16 +154,41 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Creates an estimator whose relative error is about the one given.
         /// </summary>
+        /// <remarks>
+        /// The registers are <c>(1.04 / errorRate)^2</c>, rounded up to a power of two, and
+        /// at least 2^4. The most are 2^18, whose error is 1.04 / 512, about 0.00203, and a
+        /// smaller error is refused rather than met with a larger one. Releases up to 6.2.0
+        /// built the largest estimator for it. For a smaller error, use
+        /// <see cref="UltraLogLog"/>.
+        /// </remarks>
         /// <param name="errorRate">The relative error wanted, such as 0.01 for 1%.</param>
         /// <returns>An estimator with enough registers to deliver it.</returns>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The error is not between 0 and 1, or is smaller than the largest estimator
+        /// delivers, about 0.00203.
+        /// </exception>
         public static HyperLogLogPlus NewDefault(double errorRate)
         {
             Guard.ValidRelativeAccuracy(errorRate, nameof(errorRate));
 
             var registers = Math.Pow(1.04 / errorRate, 2);
-            var precision = (uint)Math.Ceiling(Math.Log2(registers));
+            var precision = Math.Ceiling(Math.Log2(registers));
 
-            return new HyperLogLogPlus(Math.Clamp(precision, MinPrecision, MaxPrecision));
+            // Compared before the cast to a uint, which saturates, and refused as
+            // HyperLogLog.NewDefaultHyperLogLog refuses an error it cannot honour. A
+            // precision clamped to the largest would deliver a larger error than was asked,
+            // and nothing would say so.
+            if (!(precision <= MaxPrecision))
+            {
+                var smallest = 1.04 / Math.Sqrt(1u << (int)MaxPrecision);
+                throw new ArgumentOutOfRangeException(nameof(errorRate), errorRate,
+                    $"A relative error of {errorRate} needs about {registers:E2} registers, and " +
+                    $"an estimator has at most 2^{MaxPrecision}, whose error is about " +
+                    $"{smallest:G3}: the smallest this delivers. Use a larger error, or an " +
+                    "UltraLogLog, which has more registers.");
+            }
+
+            return new HyperLogLogPlus(Math.Max((uint)precision, MinPrecision));
         }
 
         /// <summary>

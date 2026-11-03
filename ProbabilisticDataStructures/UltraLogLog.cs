@@ -158,6 +158,16 @@ namespace ProbabilisticDataStructures
         /// <param name="hash">
         /// The hash function to use, or null for the default.
         /// </param>
+        /// <remarks>
+        /// The registers are <c>V / errorRate^2</c>, rounded up to a power of two, and at
+        /// least 2^3. The most are 2^26, whose error is about 9.55e-5, and a smaller error
+        /// is refused rather than met with a larger one. Releases up to 6.2.0 built the
+        /// largest sketch for it.
+        /// </remarks>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The error is not between 0 and 1, or is smaller than the largest sketch
+        /// delivers, about 9.55e-5.
+        /// </exception>
         public static UltraLogLog NewDefault(double errorRate,
             Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
@@ -169,9 +179,22 @@ namespace ProbabilisticDataStructures
 
             // m = V / errorRate^2, rounded up to a power of two.
             var registers = V / (errorRate * errorRate);
-            var precision = (uint)Math.Ceiling(Math.Log2(Math.Max(registers, 1.0)));
-            precision = Math.Clamp(precision, MinPrecision, MaxPrecision);
-            return new UltraLogLog(precision, hash);
+            var precision = Math.Ceiling(Math.Log2(Math.Max(registers, 1.0)));
+
+            // Compared before the cast to a uint, which saturates, and refused as
+            // HyperLogLog.NewDefaultHyperLogLog refuses an error it cannot honour. A
+            // precision clamped to the largest would deliver a larger error than was asked,
+            // and nothing would say so.
+            if (!(precision <= MaxPrecision))
+            {
+                var smallest = Math.Sqrt(V / (1u << (int)MaxPrecision));
+                throw new ArgumentOutOfRangeException(nameof(errorRate), errorRate,
+                    $"A relative error of {errorRate} needs about {registers:E2} registers, and " +
+                    $"a sketch has at most 2^{MaxPrecision}, whose error is about " +
+                    $"{smallest:G3}: the smallest this delivers. Use a larger error.");
+            }
+
+            return new UltraLogLog(Math.Max((uint)precision, MinPrecision), hash);
         }
 
         /// <summary>
