@@ -100,7 +100,10 @@ namespace ProbabilisticDataStructures
         /// <exception cref="ArgumentOutOfRangeException">
         /// A value is wider than <paramref name="valueBits"/>, or the map would have more
         /// distinct keys than one array of cells holds: 954 million at values of 8 bits or
-        /// fewer, 636 million to 16 bits and 318 million to 40.
+        /// fewer, 636 million to 16 bits and 318 million to 40. The refusal comes before
+        /// the cells are allocated, though not before every pair is hashed and collected,
+        /// in a dictionary and then a list, at least 28 bytes a key: a set just too large at 8
+        /// bits is refused after some 27 GB.
         /// </exception>
         public static BloomierFilter Build(
             IEnumerable<KeyValuePair<byte[], ulong>> pairs,

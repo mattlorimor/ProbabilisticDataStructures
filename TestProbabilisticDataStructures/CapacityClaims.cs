@@ -78,6 +78,57 @@ namespace TestProbabilisticDataStructures
             return refused.InnerException is not null && inner.IsInstanceOfType(refused.InnerException);
         }
 
+        /// <summary>
+        /// The payload of a sketch whose rows are <see cref="WideFrom"/> columns wide, worked
+        /// out from the payloads of two narrow ones of the same depth: what a column of its
+        /// rows costs, from their difference, and what does not grow with the width. A
+        /// payload is exact in the width, so nothing here is rounded.
+        /// </summary>
+        /// <param name="build">A sketch about as wide as asked, its width and its bytes.</param>
+        private static long PayloadAtWideFrom(Func<uint, (uint Width, byte[] Bytes)> build)
+        {
+            var (narrow, narrowBytes) = build(1000);
+            var (wider, widerBytes) = build(3000);
+            var grown = widerBytes.Length - narrowBytes.Length;
+            var perColumn = grown / (long)(wider - narrow);
+            Assert.AreEqual(grown, perColumn * (wider - narrow), "a column of the sketch is not a whole number of bytes");
+            return narrowBytes.Length - EnvelopeBytes() + (perColumn * ((long)WideFrom - narrow));
+        }
+
+        private static long CountMinAtWideFrom(int depth) => PayloadAtWideFrom(w =>
+        {
+            // The rows are ceil(ln(1 / delta)): a delta of 0.5 is one, and of 0.2 two.
+            var sketch = new CountMinSketch(Math.E / w, depth == 1 ? 0.5 : 0.2);
+            Assert.AreEqual((uint)depth, sketch.Depth);
+            return (sketch.Width, sketch.ToByteArray());
+        });
+
+        private static long PrivateAtWideFrom(uint depth) => PayloadAtWideFrom(w =>
+            (w, new PrivateCountMinSketch(w, depth, 1.0, seed: 1).ToByteArray()));
+
+        private static long KeeperAtWideFrom(uint? depth) => PayloadAtWideFrom(w =>
+        {
+            var keeper = depth is null ? new HeavyKeeper(5, w) : new HeavyKeeper(5, w, depth.Value);
+            return (w, keeper.ToByteArray());
+        });
+
+        private static readonly MethodInfo CuckooWords = typeof(CuckooBloomFilter)
+            .GetMethod("WordsFor", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        /// <summary>The 64-bit words a cuckoo filter packs this many entries of this width in: its own sizing.</summary>
+        private static ulong WordsFor(ulong entries, uint bits) =>
+            (ulong)CuckooWords.Invoke(null, new object[] { entries, bits })!;
+
+        /// <summary>
+        /// What a step of a build allocates for each of <paramref name="items"/>, counted on
+        /// this thread, which is where the step runs.
+        /// </summary>
+        private static double AllocatedEach(int items, Action step)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            step();
+            return (GC.GetAllocatedBytesForCurrentThread() - before) / (double)items;
+        }
 
         /// <summary>
         /// The bits from which a new 32-bit filter places with 64-bit values, written out
@@ -487,6 +538,44 @@ namespace TestProbabilisticDataStructures
                 WideFrom * sizeof(ulong) == 1UL << 30
                 && Near(Slope("CountMinSketch"), 16, 0.01)
                 && Slope("CountMinSketch") * WideFrom > ReadOptions.DefaultMemoryBudget),
+            // Each worked out from two narrow sketches' payloads and carried to 2^27 columns,
+            // with one row beside it, which does fit.
+            new Claim("Two rows of it cannot be saved at all: they are a payload of 2,147,483,681 bytes, past the most a payload can be", () =>
+                CountMinAtWideFrom(2) == 2_147_483_681 && CountMinAtWideFrom(2) > MaxPayload
+                && CountMinAtWideFrom(1) <= MaxPayload),
+            new Claim("Two rows of a `PrivateCountMinSketch` that wide are 2,147,483,673 bytes", () =>
+                PrivateAtWideFrom(2) == 2_147_483_673 && PrivateAtWideFrom(2) > MaxPayload
+                && PrivateAtWideFrom(1) <= MaxPayload),
+            new Claim("and two of a `HeavyKeeper`, its default depth, 2,684,354,601", () =>
+                new HeavyKeeper(5, 64).Depth == 2
+                && KeeperAtWideFrom(null) == 2_684_354_601 && KeeperAtWideFrom(null) > MaxPayload
+                && KeeperAtWideFrom(1) <= MaxPayload),
+            new Claim("A `TopK` writes its count-min sketch inside its own payload", () =>
+                new TopK(0.001, 0.01, 10).ToByteArray().Length > new CountMinSketch(0.001, 0.01).ToByteArray().Length),
+            // A window's payload carries a body for every sketch it holds, each a private
+            // sketch's payload: two of one row at 2^27 columns already pass the most.
+            new Claim("two of the private sketches a `DpswSketch` holds are 2,147,483,698 bytes at that width before anything else it writes", () =>
+            {
+                var window = new DpswSketch(2000, 1.0, width: 64, depth: 1, seed: 1);
+                for (var i = 0; i < 3000; i++) window.Add(Key(i % 500));
+                var body = new PrivateCountMinSketch(64, 1, 1.0, seed: 1).ToByteArray().Length - EnvelopeBytes();
+                return 2 * PrivateAtWideFrom(1) == 2_147_483_698 && 2 * PrivateAtWideFrom(1) > MaxPayload
+                    && window.SketchesHeld >= 2
+                    && window.ToByteArray().Length - EnvelopeBytes() >= (long)window.SketchesHeld * body;
+            }),
+            // A sketch places with 64-bit values only from 2^27 columns, where two rows of any
+            // of them pass the most a payload holds and one does not.
+            new Claim("So a sketch placed with 64-bit values saves with one row or not at all, and a `DpswSketch` only while it holds one sketch", () =>
+                TestSketchPlacement.Kinds().Where(k => k.Name != nameof(InverseBloomFilter))
+                    .All(k => k.PlacementFor((uint)WideFrom - 1) == Placement.Narrow)
+                && new[] { CountMinAtWideFrom(2), PrivateAtWideFrom(2), KeeperAtWideFrom(2), 2 * PrivateAtWideFrom(1) }
+                    .All(two => two > MaxPayload)
+                && new[] { CountMinAtWideFrom(1), PrivateAtWideFrom(1), KeeperAtWideFrom(1) }.All(one => one <= MaxPayload)),
+            new Claim("and in a sketch's payload that byte is 1 only beside a single row", () =>
+                CountMinSketch.PlacementFor((uint)WideFrom - 1) == Placement.Narrow
+                && PrivateCountMinSketch.PlacementFor((uint)WideFrom - 1) == Placement.Narrow
+                && HeavyKeeper.PlacementFor((uint)WideFrom - 1) == Placement.Narrow
+                && CountMinAtWideFrom(2) > MaxPayload && PrivateAtWideFrom(2) > MaxPayload && KeeperAtWideFrom(2) > MaxPayload),
             new Claim("Every save of these is written at format version 9", () =>
                 TestSketchPlacement.Kinds().All(k =>
                     new Placement?[] { null, Placement.Narrow, Placement.Wide }.All(p => k.Write(k.Build(p))[4] == 9))
@@ -591,6 +680,18 @@ namespace TestProbabilisticDataStructures
 
             // ---- BloomFilter64 ------------------------------------------------------------
             new Claim("arrays of 2^30 bytes", () => Buckets64.maxArraySize == 1u << 30),
+            new Claim("so what stops the constructor is memory, or 2.3e18 bits", () =>
+                Rounds(Buckets64.MaxCount / 1e18, 2.3, 1)),
+            // The arrays are held in an array, so there are at most Array.MaxLength of them;
+            // the first item count past it is refused before anything is allocated.
+            new Claim("it refuses a filter of more than 2,305,842,948,010,409,983 bits, about 288 petabytes, naming `n`", () =>
+            {
+                var most = Largest(1, 1UL << 60, n => Utils.OptimalM64(n, 0.01) <= Buckets64.MaxCount);
+                return Buckets64.MaxCount == 2_305_842_948_010_409_983
+                    && Buckets64.MaxCount == (ulong)Array.MaxLength * Buckets64.maxArraySize - 1
+                    && Rounds(Buckets64.MaxCount / 8.0 / 1e15, 288, 0)
+                    && Assert.Throws<ArgumentOutOfRangeException>(() => new BloomFilter64(most + 1, 0.01)).ParamName == "n";
+            }),
             new Claim("about 1.2 bytes an item at 1%", () =>
                 Rounds((double)Utils.OptimalM64(1_000_000_000, 0.01) / 8 / 1_000_000_000, 1.2, 1)),
             new Claim("at most 2,147,483,573 bytes, which is about 1.79 billion items at 1%", () =>
@@ -622,6 +723,25 @@ namespace TestProbabilisticDataStructures
                 CapacityRows.CuckooBits(0.01) == 10 && CapacityRows.CuckooBits(0.001) == 13),
             new Claim("A bucket therefore costs 5.5 bytes at 1%", () => Near(Slope("CuckooBloomFilter 1%"), 5.5, 0.01)),
             new Claim("is written and read at 10 bytes", () => Near(Facts["cuckoo entry bytes 1%"], 10, 0.01)),
+            // A rate of 2^-60 is 63 bits exactly, log2(8 / 2^-60); just below it is 64.
+            new Claim("That holds up to fingerprints of 63 bits, whose 2^31 entries are 2,113,929,217 words, which one array holds", () =>
+                CapacityRows.CuckooBits(Math.ScaleB(1.0, -60)) == 63
+                && WordsFor(CuckooBloomFilter.MaxEntries, 63) == 2_113_929_217
+                && WordsFor(CuckooBloomFilter.MaxEntries, 63) <= (ulong)Array.MaxLength
+                && CuckooBloomFilter.GeometryProblem(CuckooBloomFilter.MaxEntries / 4, 4, 63) is null
+                && CapacityRows.CuckooLargest(Math.ScaleB(1.0, -60)) == CapacityRows.CuckooLargest(0.01)),
+            new Claim("A rate below about 8.7e-19 has fingerprints of 64 bits, all the hash supplies", () =>
+                CapacityRows.CuckooBits(Math.ScaleB(1.0, -60) * (1 - 1e-9)) == 64
+                && CapacityRows.CuckooBits(1e-300) == 64
+                && Rounds(Math.ScaleB(1.0, -60) * 1e19, 8.7, 1)),
+            new Claim("and then 2^31 entries are 2,147,483,649 words, more than one array holds, so the table stops at 2^30 entries " +
+                "and `n` at 1,020,054,732, half the table's figure", () =>
+                WordsFor(CuckooBloomFilter.MaxEntries, 64) == 2_147_483_649
+                && WordsFor(CuckooBloomFilter.MaxEntries, 64) > (ulong)Array.MaxLength
+                && CuckooBloomFilter.GeometryProblem(CuckooBloomFilter.MaxEntries / 4, 4, 64) is not null
+                && CuckooBloomFilter.GeometryProblem(CuckooBloomFilter.MaxEntries / 8, 4, 64) is null
+                && CapacityRows.CuckooLargest(1e-19) == 1_020_054_732
+                && CapacityRows.CuckooLargest(0.01) / 2 == 1_020_054_732),
 
             // ---- QuotientFilter -----------------------------------------------------------
             new Claim("(7 at 1%, 10 at 0.1%)", () =>
@@ -639,6 +759,41 @@ namespace TestProbabilisticDataStructures
             new Claim("about 2.25 bytes a key for 8-bit fingerprints", () =>
                 Rounds(2.0 * CapacityRows.FuseCells(100_000_000) / 100_000_000, 2.25, 2)),
             new Claim("2 bytes at `v = 8`, and 6 at `v = 40`", () => (8 + 8 + 7) / 8 == 2 && (8 + 40 + 7) / 8 == 6),
+            // What the step that hashes the items allocates, measured on distinct items and on
+            // one item repeated: a duplicate costs what a distinct item does.
+            new Claim("each hash is kept in a list and then copied to an array to find the duplicates, at least 16 bytes an item", () =>
+            {
+                var hashDistinctly = typeof(BinaryFuseFilter).GetMethod("HashDistinctly", BindingFlags.NonPublic | BindingFlags.Static)!;
+                var hash = Defaults.GetDefaultHashFunction();
+                const int Items = 200_000;
+                var distinct = Enumerable.Range(0, Items).Select(i => Key(i)).ToArray();
+                var repeated = Enumerable.Repeat(Key(1), Items).ToArray();
+                var distinctEach = AllocatedEach(Items, () => hashDistinctly.Invoke(null, new object[] { distinct, hash }));
+                var repeatedEach = AllocatedEach(Items, () => hashDistinctly.Invoke(null, new object[] { repeated, hash }));
+                return distinctEach >= 16 && repeatedEach >= 16;
+            }),
+            new Claim("so a set past 1,908,641,337 keys is refused after 30.5 GB or more", () =>
+                CapacityRows.FuseCells(1_908_641_337) <= (ulong)Array.MaxLength
+                && CapacityRows.FuseCells(1_908_641_338) > (ulong)Array.MaxLength
+                && Rounds(16.0 * 1_908_641_338 / 1e9, 30.5, 1)),
+            new Claim("the build stops at 2,147,483,591 items, the most a list holds, where adding the next throws `OutOfMemoryException`", () =>
+                Array.MaxLength == 2_147_483_591
+                && Assert.Throws<OutOfMemoryException>(() => new List<ulong>(Array.MaxLength + 1)) is not null),
+            new Claim("after every pair is hashed and collected, in a dictionary and then a list, at least 28 bytes a key", () =>
+            {
+                var collect = typeof(BloomierFilter).GetMethod("Collect", BindingFlags.NonPublic | BindingFlags.Static)!;
+                var hash = Defaults.GetDefaultHashFunction();
+                const int Pairs = 200_000;
+                var pairs = Enumerable.Range(0, Pairs).Select(i => new KeyValuePair<byte[], ulong>(Key(i), (ulong)i % 200)).ToArray();
+                var each = AllocatedEach(Pairs, () => collect.Invoke(null, new object[] { pairs, hash, 255UL, 8 }));
+                // A dictionary of these keys alone is 28 bytes an entry: its entries and its buckets.
+                var dictionaryEach = AllocatedEach(Pairs, () => GC.KeepAlive(new Dictionary<ulong, ulong>(Pairs)));
+                return each >= 28 && dictionaryEach >= 28;
+            }),
+            new Claim("so a set past 954,204,160 keys is refused after 26.7 GB or more", () =>
+                CapacityRows.FuseCells(954_204_160) * 2 <= (ulong)Array.MaxLength
+                && CapacityRows.FuseCells(954_204_161) * 2 > (ulong)Array.MaxLength
+                && Rounds(28.0 * 954_204_161 / 1e9, 26.7, 1)),
 
             // ---- Grafite ------------------------------------------------------------------
             new Claim("and between 2 and 3 for the high parts", () =>
@@ -648,6 +803,29 @@ namespace TestProbabilisticDataStructures
                     return perKey >= 2 && perKey < 3;
                 })),
             new Claim("at most 2,147,483,647 bits of them", () => Grafite.MaxHighBits == 2_147_483_647),
+            // Built at two settings, the second the finer of the sentence after this one.
+            new Claim("The low parts are `⌊log2(L/fp)⌋` bits a key and are saved beside the high ones, eight bytes a word", () =>
+                new[] { (0.01, 64UL), (1e-5, 1024UL) }.All(s =>
+                {
+                    var filter = Grafite.Build(Enumerable.Range(0, 50_000).Select(i => (ulong)i * 1009), s.Item1, s.Item2, seed: 7);
+                    var payload = filter.ToByteArray().Length - EnvelopeBytes();
+                    return filter.LowBits == (int)Math.Floor(Math.Log2(s.Item2 / s.Item1))
+                        && payload >= 8L * (filter.Lows.Length + filter.Highs.Length);
+                })),
+            new Claim("800 million keys over ranges up to 1,024 at a rate of 1e-5 are 26 low bits a key, 325,000,002 words and 2.6 GB of them", () =>
+            {
+                const ulong Keys = 800_000_000;
+                CapacityRows.GrafiteMostHighBits(Keys, 1e-5, 1024, out var low);
+                var words = (Keys * (ulong)low / 64) + 2;
+                return low == 26 && words == 325_000_002
+                    && (long)words * 8 > MaxPayload && Rounds(words * 8 / 1e9, 2.6, 1)
+                    && Grafite.UniverseFits(Grafite.UniverseWanted(Keys, 1024, 1e-5));
+            }),
+            new Claim("while their high parts, about 2.02e9 bits, are within what an `int` addresses", () =>
+            {
+                var high = CapacityRows.GrafiteMostHighBits(800_000_000, 1e-5, 1024, out _);
+                return Rounds(high / 1e9, 2.02, 2) && high <= Grafite.MaxHighBits;
+            }),
 
             // ---- InvertibleBloomLookupTable -----------------------------------------------
             new Claim("It has 1.5 cells for each", () => InvertibleBloomLookupTable.CellsPerDifference == 1.5),
@@ -655,6 +833,14 @@ namespace TestProbabilisticDataStructures
             // ---- ScalableBloomFilter -------------------------------------------------------
             new Claim("A growth factor of 2 is what a filter built without one takes", () =>
                 ScalableBloomFilter.DefaultGrowth == 2),
+            new Claim("so a `hint` of more items than one can be sized for at the rate, 448,089,842 at 1%, is refused by the " +
+                "constructor with an `ArgumentOutOfRangeException` naming `hint` and the largest that builds", () =>
+            {
+                var refused = Assert.Throws<ArgumentOutOfRangeException>(() => new ScalableBloomFilter(448_089_843, 0.01, 0.8));
+                return CapacityRows.LargestSized(0.01) == 448_089_842
+                    && refused.ParamName == "hint"
+                    && refused.Message.Contains("448,089,842", StringComparison.Ordinal);
+            }),
             new Claim("a payload written before the factor existed reads back with a growth factor of 1", () =>
             {
                 // A filter that does not grow its filters writes the layout from before the factor,
@@ -882,8 +1068,24 @@ namespace TestProbabilisticDataStructures
             }),
             new Claim("The largest is about half a megabyte", () =>
                 Rounds(ChargeLine.Known["HyperLogLogPlus"].At(1 << 18) / 1_000_000, 0.5, 1)),
+            // The largest estimator's error, and NewDefault either side of it.
+            new Claim("Its error is `1.04 / √m`, about 0.00203 at the largest, and `NewDefault` refuses a smaller error with an " +
+                "`ArgumentOutOfRangeException` naming it, where it used to build the largest", () =>
+            {
+                var smallest = 1.04 / Math.Sqrt(new HyperLogLogPlus(HyperLogLogPlus.MaxPrecision).M());
+                return Rounds(smallest, 0.00203, 5)
+                    && HyperLogLogPlus.NewDefault(smallest * (1 + 1e-9)).Precision() == HyperLogLogPlus.MaxPrecision
+                    && Assert.Throws<ArgumentOutOfRangeException>(() => HyperLogLogPlus.NewDefault(smallest * (1 - 1e-9))).ParamName == "errorRate";
+            }),
             new Claim("a read is charged three times the registers", () =>
                 Near(Slope("UltraLogLog"), 3, 0.01)),
+            new Claim("The largest has an error of about 9.55e-5, and `NewDefault` refuses a smaller one, naming it", () =>
+            {
+                var smallest = new UltraLogLog(UltraLogLog.MaxPrecision).RelativeError();
+                return Rounds(smallest * 1e5, 9.55, 2)
+                    && UltraLogLog.NewDefault(smallest * (1 + 1e-9)).Precision() == UltraLogLog.MaxPrecision
+                    && Assert.Throws<ArgumentOutOfRangeException>(() => UltraLogLog.NewDefault(smallest * (1 - 1e-9))).ParamName == "errorRate";
+            }),
             new Claim("12 bytes a register", () => Near(Slope("SetSketch"), 12, 0.01)),
             // The defect is there: a sketch sends an element's first value where the 32-bit
             // draw says, at a size and for an element where a 64-bit one would not. When the
@@ -950,6 +1152,32 @@ namespace TestProbabilisticDataStructures
                 new CountMinSketch(0.01, 0.01).Depth == 5 && Near(Slope("CountMinSketch"), 16, 0.01)),
             new Claim("A read charges 24 bytes a counter.", () => Near(Slope("CountSketch"), 24, 0.01)),
             new Claim("A read charges 16 bytes a counter.", () => Near(Slope("PrivateCountMinSketch"), 16, 0.01)),
+            // The defaults the measurements were made with, as the constructor declares them.
+            new Claim("for the default α of 0.5 and β of 0.7 at a ρ of 1", () =>
+            {
+                var parameters = typeof(DpswSketch).GetConstructor(new[]
+                {
+                    typeof(long), typeof(double), typeof(double), typeof(double), typeof(uint), typeof(uint),
+                    typeof(ulong?), typeof(Func<ReadOnlySpan<byte>, ulong>),
+                })!.GetParameters();
+                return (double)parameters.Single(p => p.Name == "alpha").DefaultValue! == 0.5
+                    && (double)parameters.Single(p => p.Name == "beta").DefaultValue! == 0.7;
+            }),
+            // One window filled the same way at two values of α, with all else equal.
+            new Claim("A smaller α keeps more checkpoints in each substream, so more sketches and a larger payload for the same window", () =>
+            {
+                DpswSketch Filled(double alpha)
+                {
+                    var window = new DpswSketch(4000, 1.0, alpha: alpha, width: 64, depth: 2, seed: 1);
+                    for (var i = 0; i < 6000; i++) window.Add(Key(i % 500));
+                    return window;
+                }
+
+                var finer = Filled(0.5);
+                var coarser = Filled(0.75);
+                return finer.SketchesHeld > coarser.SketchesHeld
+                    && finer.ToByteArray().Length > coarser.ToByteArray().Length;
+            }),
             new Claim("sketches of a window are at most as wide and as deep as a `PrivateCountMinSketch` is, 2,147,483,591", () =>
                 PrivateCountMinSketch.MaxWidth == 2_147_483_591 && PrivateCountMinSketch.MaxDepth == 2_147_483_591
                 && Assert.Throws<ArgumentOutOfRangeException>(
@@ -965,6 +1193,38 @@ namespace TestProbabilisticDataStructures
             }),
             new Claim("a width of 2^22 at 10,568,984 items", () =>
                 DoublesAt(new SublimeCountMinSketch(0.01, 0.9, 1.0), 1 << 21) == 10_568_984),
+            // The sketch's own limit is the rule at its settings, and at the widest row an add
+            // that brings the count to it is refused, with nothing changed.
+            new Claim("So the sketch stops when its count reaches `(2^30 · s)^(1/g)`", () =>
+                new[] { (0.5, 1.0), (0.9, 1.0), (0.95, 4.0), (0.7, 0.25) }.All(s =>
+                {
+                    var sketch = new SublimeCountMinSketch(0.01, s.Item1, s.Item2);
+                    var limit = SublimeCountMinSketch.LimitFor(SublimeCountMinSketch.MaxWidth, s.Item2, s.Item1);
+                    var fields = BindingFlags.NonPublic | BindingFlags.Instance;
+                    typeof(SublimeCountMinSketch).GetField("width", fields)!.SetValue(sketch, SublimeCountMinSketch.MaxWidth);
+                    typeof(SublimeCountMinSketch).GetField("expansionLimit", fields)!.SetValue(sketch, limit);
+                    typeof(SublimeCountMinSketch).GetField("count", fields)!.SetValue(sketch, limit - 1);
+                    return DoublesAt(sketch, 1 << 12) == SublimeCountMinSketch.LimitFor(1 << 12, s.Item2, s.Item1)
+                        && Assert.Throws<InvalidOperationException>(() => sketch.Add(Key(1))) is not null
+                        && sketch.TotalCount() == limit - 1;
+                })
+                && Math.Abs(SublimeCountMinSketch.LimitFor(1 << 30, 2.0, 0.9) / Math.Pow(Math.ScaleB(2.0, 30), 1 / 0.9) - 1) < 1e-9),
+            new Claim("At the defaults that is 2^60 keys, and at `g` of 0.9 about ten billion", () =>
+            {
+                var defaults = new SublimeCountMinSketch(0.01);
+                var fields = BindingFlags.NonPublic | BindingFlags.Instance;
+                var g = (double)typeof(SublimeCountMinSketch).GetField("growthExponent", fields)!.GetValue(defaults)!;
+                var s = (double)typeof(SublimeCountMinSketch).GetField("sizeFactor", fields)!.GetValue(defaults)!;
+                return SublimeCountMinSketch.LimitFor(SublimeCountMinSketch.MaxWidth, s, g) == 1UL << 60
+                    && Rounds(SublimeCountMinSketch.LimitFor(SublimeCountMinSketch.MaxWidth, 1.0, 0.9) / 1e10, 1, 0);
+            }),
+            new Claim("At a size factor of one it is below 2^32 keys, 4,294,967,296, once `g` passes 0.9375", () =>
+                1UL << 32 == 4_294_967_296
+                && SublimeCountMinSketch.LimitFor(SublimeCountMinSketch.MaxWidth, 1.0, 0.9376) < 1UL << 32
+                && SublimeCountMinSketch.LimitFor(SublimeCountMinSketch.MaxWidth, 1.0, 0.9374) > 1UL << 32),
+            new Claim("about 3.2 billion at 0.95 and 1.3 billion at 0.99, so a growth exponent near one stops at a few billion keys", () =>
+                Rounds(SublimeCountMinSketch.LimitFor(SublimeCountMinSketch.MaxWidth, 1.0, 0.95) / 1e9, 3.2, 1)
+                && Rounds(SublimeCountMinSketch.LimitFor(SublimeCountMinSketch.MaxWidth, 1.0, 0.99) / 1e9, 1.3, 1)),
 
             // ---- DDSketch ---------------------------------------------------------------------
             new Claim("A read charges 24 bytes a bucket of span", () => Near(Slope("DDSketch"), 24, 0.01)),

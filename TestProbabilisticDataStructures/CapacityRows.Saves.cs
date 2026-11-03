@@ -283,7 +283,7 @@ namespace TestProbabilisticDataStructures
             var windows = new[] { 2_000L, 8_000L, DpswLargestWindow };
             var payloads = windows.Select(w =>
             {
-                var sketch = new DpswSketch(w, 1.0, width: 512, depth: 5, seed: 1);
+                var sketch = new DpswSketch(w, 1.0, alpha: 0.5, beta: 0.7, width: 512, depth: 5, seed: 1);
                 for (var i = 0L; i < w + w / 2; i++) sketch.Add(Key(i % 5000));
                 return (double)PayloadOf(sketch);
             }).ToArray();

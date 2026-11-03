@@ -38,9 +38,12 @@ namespace ProbabilisticDataStructures
     /// and why the counts already gathered survive it.
     /// </para>
     /// <para>
-    /// A row holds at most 2^30 counters, the largest power of two an int holds. At the
-    /// default growth the rows reach it after 2^60 keys, and at a growth exponent of 0.9
-    /// after about 10^10. An <see cref="Add(ReadOnlySpan{byte})"/> that would double the
+    /// A row holds at most 2^30 counters, the largest power of two an int holds, and the
+    /// rows reach it when the count reaches <c>(2^30 · s)^(1/g)</c> for the growth exponent
+    /// g and size factor s. At the defaults that is 2^60 keys, and at a growth exponent of
+    /// 0.9 about 10^10. A larger exponent stops much sooner: at a size factor of one, an
+    /// exponent past 0.9375 stops below 2^32 keys, about 3.2 billion at 0.95 and 1.3
+    /// billion at 0.99. An <see cref="Add(ReadOnlySpan{byte})"/> that would double the
     /// rows past it throws an <see cref="InvalidOperationException"/> before it changes
     /// anything: the sketch goes on answering queries and can be written, and keys can be
     /// removed. A size factor that would start a row past it is refused by the
@@ -949,9 +952,11 @@ namespace ProbabilisticDataStructures
         /// A number of keys of 2^64 or more is held as <c>ulong.MaxValue</c>, which stands
         /// for a doubling no count reaches, and <see cref="Add(ReadOnlySpan{byte})"/> never
         /// doubles at it. The width is a double so that the reader can ask about rows twice
-        /// the widest; at any width a row has, it is the same arithmetic.
+        /// the widest; at any width a row has, it is the same arithmetic. Internal so that
+        /// the count at which a sketch stops, this at the widest row, is asked of the rule
+        /// itself by the tests of what the documentation says about it.
         /// </remarks>
-        private static ulong LimitFor(double forWidth, double sizeFactor, double growthExponent)
+        internal static ulong LimitFor(double forWidth, double sizeFactor, double growthExponent)
         {
             var keys = Math.Pow(forWidth * sizeFactor, 1 / growthExponent);
             return keys >= ulong.MaxValue ? ulong.MaxValue : (ulong)Math.Ceiling(keys);

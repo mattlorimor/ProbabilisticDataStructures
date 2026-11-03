@@ -211,7 +211,13 @@ namespace ProbabilisticDataStructures
         /// array of fingerprints holds: 2,147,483,591 bytes, which is about 1.9 billion
         /// keys at eight bits and 954 million at sixteen. The refusal comes before the
         /// fingerprints or anything of the build is allocated, though not before the items
-        /// are hashed.
+        /// are hashed: every item's hash is held in a list and then copied to an array to
+        /// find the duplicates, at least 16 bytes an item, so a set just too large is refused
+        /// after some 30 GB.
+        /// </exception>
+        /// <exception cref="OutOfMemoryException">
+        /// More than 2,147,483,591 items were given, the most a list holds, however few of
+        /// them are distinct: the hashes are listed before the duplicates are removed.
         /// </exception>
         public static BinaryFuseFilter Build(
             IEnumerable<byte[]> items,
