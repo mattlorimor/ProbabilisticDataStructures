@@ -159,8 +159,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds. A `ScalableBloomFilter` keeps its own version, 1 or 7, and its contained filters,
   each in its own envelope, are version 8.
 
-- **`BloomFilter64`, and the structures placed with 64-bit values, are faster, and every
-  bit is where it was.** The 64-bit placement hashes the first value's eight little-endian
+- **`BloomFilter64` is faster, the structures placed with 64-bit values test faster, and
+  every bit is where it was.** The 64-bit placement hashes the first value's eight little-endian
   bytes for the second value, and both places that do it wrote those bytes into a
   `stackalloc`: `Utils.HashKernel128`, which `BloomFilter64` goes through on every `Add`,
   `Test` and `TestAndAdd`, and the placement step the structures placed with 64-bit values
@@ -180,25 +180,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache. `Benchmarks/` gains the suites that took these, and one that takes the placement
   kernel apart. The sketches go through the same step and are not timed by them.
 
-  **TODO before merge (#220):** re-measure on a quiet machine, master b29d881 (before)
-  against the branch (after), the two `BloomFilter` rows and the 32-bit figures under the
-  table. Those that stood here were taken on a tree where the 32-bit filters still went
-  through `HashKernel128`, before the placement step had its own copy of the derivation.
-  The `BloomFilter64` rows are that earlier measurement of the `HashKernel128` change,
-  which is the code `BloomFilter64` runs on master and on the branch alike; how quiet its
-  machine was is not recorded.
+  The `BloomFilter` rows are the mean of two alternating runs of master (before) and this
+  change (after) on an idle machine, pinned to the cache die with the large L3. The
+  `BloomFilter64` rows are the earlier measurement of the `HashKernel128` change; the same
+  runs timed `BloomFilter64` at 49.5, 27.1 and 12.1 against their after column, before and
+  after alike, since it runs the same code on both.
 
   | | Add | Test, member | Test, not a member |
   | --- | --- | --- | --- |
-  | `BloomFilter` placed with 64-bit values, 16-byte items | TODO → TODO | TODO → TODO | TODO → TODO |
+  | `BloomFilter` placed with 64-bit values, 16-byte items | 31.1 → 31.6 | 24.3 → 22.8 | 12.3 → 11.4 |
   | `BloomFilter64`, 16-byte items | 77 → 50.1 | 44.6 → 27.8 | 29.9 → 12.4 |
-  | `BloomFilter` placed with 64-bit values, 1,024-byte items | TODO → TODO | TODO → TODO | TODO → TODO |
+  | `BloomFilter` placed with 64-bit values, 1,024-byte items | 66.0 → 64.7 | 58.8 → 55.3 | 50.2 → 47.5 |
   | `BloomFilter64`, 1,024-byte items | 106 → 92.4 | 72.5 → 61 | 61.4 → 49.9 |
 
-  A `BloomFilter` just below 2^27 positions, which places with 32-bit values, takes TODO,
-  TODO and TODO with 16-byte items, so what 64-bit placement adds is now about TODO
-  nanoseconds with short items and TODO with long ones, the second hash and the wider
-  arithmetic.
+  So for `BloomFilter` the gain is in tests, 6 to 8%, and an add is unchanged with short
+  items and 2% faster with long ones. A `BloomFilter` just below 2^27 positions, which
+  places with 32-bit values, takes 25.9, 19.1 and 7.6 with 16-byte items, so what 64-bit
+  placement adds is now about 4 to 6 nanoseconds with short items and 6 to 9 with long
+  ones, the second hash and the wider arithmetic.
 
 - **`CuckooBloomFilter` is faster, and every fingerprint, bucket and payload is where it
   was.** `GetComponents`, which every `Add`, `Test`, `TestAndAdd` and `TestAndRemove` goes
