@@ -149,5 +149,54 @@ namespace TestProbabilisticDataStructures
                 return keeper;
             }
         }
+
+        // ---- Buckets: Reset ----------------------------------------------------------------
+
+        /// <summary>
+        /// A bucket array of 16 MiB, so that a reset that allocated a second one would show
+        /// as megabytes, far past the slack.
+        /// </summary>
+        private const uint ResetBuckets = 16 * 1024 * 1024;
+
+        /// <summary>
+        /// Resetting a bucket array clears it where it is. A reset that allocated the new
+        /// array before the old one was released needed both at once, twice the filter, which
+        /// at the largest 8-bit counting or stable filter is 4 GiB. Each measured reset clears
+        /// buckets set just before it, from the first to the last, and the array is then
+        /// asked to be every byte zero and the length it was.
+        /// </summary>
+        [TestMethod]
+        public void TestResettingBucketsAllocatesNothing()
+        {
+            var buckets = new Buckets(ResetBuckets, 8);
+            var length = buckets.RawData.Length;
+
+            var allocated = Allocated(() =>
+            {
+                Dirty(buckets);
+                return buckets.Reset();
+            });
+
+            Assert.AreEqual(length, buckets.RawData.Length, "the reset array is not the length it was");
+            Assert.IsTrue(buckets.RawData.IndexOfAnyExcept((byte)0) < 0, "the reset left a bucket set");
+            Assert.IsLessThan(1024L, allocated,
+                $"resetting {length:N0} bytes of buckets allocated {allocated:N0} bytes: the " +
+                "reset built a new array rather than clearing the one it had");
+
+            // Not vacuous: the buckets each reset cleared were set.
+            Dirty(buckets);
+            Assert.AreEqual(255u, buckets.Get(0));
+            Assert.AreEqual(255u, buckets.Get(ResetBuckets - 1));
+
+            static void Dirty(Buckets buckets)
+            {
+                for (var i = 0u; i < ResetBuckets; i += 4099)
+                {
+                    buckets.Set(i, 255);
+                }
+
+                buckets.Set(ResetBuckets - 1, 255);
+            }
+        }
     }
 }
