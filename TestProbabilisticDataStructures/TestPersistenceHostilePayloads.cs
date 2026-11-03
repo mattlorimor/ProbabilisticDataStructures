@@ -345,6 +345,91 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A Memento filter holding the given keys and nothing else, all in block 0 of a range
+        /// of 64 with 8-bit fingerprints, so its one table holds one box, in the only run there
+        /// is, starting at the box's own quotient. Returns the payload, and the slots of that
+        /// run in order, for a test to edit one of.
+        /// </summary>
+        private static (byte[] Payload, uint[] Run) OneMementoBox(params ulong[] keys)
+        {
+            var filter = new MementoFilter(64, 8, initialCapacity: 8);
+            foreach (var key in keys)
+            {
+                filter.Add(key);
+            }
+
+            Assert.HasCount(1, filter.Segments);
+            var table = filter.Segments[0];
+            var (quotient, _) = table.Split(MementoFilter.HashPrefix(0));
+            var fields = table.ReadRun(quotient);
+            var boxes = table.Codec.Decode(fields);
+            Assert.HasCount(1, boxes, "the keys are not one box");
+            CollectionAssert.AreEqual(keys, boxes[0].Mementos.ToArray(), "the box does not hold the keys");
+            Assert.AreEqual(fields[0], table.ReadField(quotient), "the run does not start at its quotient");
+
+            var run = Enumerable.Range(0, fields.Count).Select(k => (quotient + (uint)k) & (table.Slots - 1)).ToArray();
+            return (filter.ToByteArray(), run);
+        }
+
+        /// <summary>
+        /// Overwrites bits of one slot's field in the first table of a Memento payload with a
+        /// range of 64 and 8-bit fingerprints, and repairs the checksum. A slot there is 18
+        /// bits, the three of metadata below the field, and the table's words follow the
+        /// filter's 20 bytes and the table's 16, laid end to end from the low bit up.
+        /// </summary>
+        private static byte[] PokeMementoField(byte[] original, uint slot, int fromBit, int bits, ulong value)
+        {
+            var bytes = (byte[])original.Clone();
+            var start = ((long)slot * MementoSegment.SlotBits(8, 6)) + 3 + fromBit;
+            for (var i = 0; i < bits; i++)
+            {
+                var at = start + i;
+                var index = PayloadStart + 36 + (int)(at / 8);
+                var mask = (byte)(1 << (int)(at % 8));
+                bytes[index] = ((value >> i) & 1) == 1 ? (byte)(bytes[index] | mask) : (byte)(bytes[index] & ~mask);
+            }
+            RepairChecksum(bytes);
+            return bytes;
+        }
+
+        /// <summary>
+        /// A box of three keys whose count, the low six bits of its third slot, claims 62 keys
+        /// between its first and last where its run has bits for one. The reader handed the
+        /// table over without decoding a run, so the payload read, and the first query to
+        /// decode the box read zeros past the end of the run for the keys it lacked. It is
+        /// refused when read, for the box.
+        /// </summary>
+        [TestMethod]
+        public void TestMementoFilterBoxClaimingMoreKeysThanItsRunHoldsIsRefused()
+        {
+            var (payload, run) = OneMementoBox(0, 1, 2);
+            Assert.HasCount(3, run);
+            Assert.IsTrue(Persistence.FromByteArray<MementoFilter>(payload).TestRange(0, 2), "the unedited payload does not read");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<MementoFilter>(PokeMementoField(payload, run[2], 0, 6, 62)),
+                "more keys than its run holds");
+        }
+
+        /// <summary>
+        /// A box of two keys whose second slot's fingerprint is edited to zero, the marker of a
+        /// box of more than two, in a run that ends there. Its count would be read from past
+        /// the end of the run, which gave zeros, so the payload read and the box decoded as two
+        /// keys, silently. It is refused when read.
+        /// </summary>
+        [TestMethod]
+        public void TestMementoFilterBoxWhoseCountRunsPastItsRunIsRefused()
+        {
+            var (payload, run) = OneMementoBox(0, 1);
+            Assert.HasCount(2, run);
+            Assert.IsTrue(Persistence.FromByteArray<MementoFilter>(payload).TestRange(1, 1), "the unedited payload does not read");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<MementoFilter>(PokeMementoField(payload, run[1], 6, 9, 0)),
+                "past the end of its run");
+        }
+
+        /// <summary>
         /// An InfiniFilter payload for the tests below to corrupt. Its prefix is
         /// fixed, so field offsets are too: the item count at 0, the expansion count
         /// at 8, the number of tables at 12, and then per table its address bits,

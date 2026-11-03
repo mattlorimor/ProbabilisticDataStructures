@@ -165,6 +165,11 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Refuses a run that does not decode, as <see cref="Decode"/> would.
+        /// </summary>
+        internal void Check(IReadOnlyList<ulong> fields) => Decode(fields);
+
+        /// <summary>
         /// How many slots a set of boxes will occupy once packed.
         /// </summary>
         internal int SlotsNeeded(IReadOnlyList<KeepsakeBox> boxes) => Encode(boxes).Count;
