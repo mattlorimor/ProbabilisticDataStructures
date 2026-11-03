@@ -159,31 +159,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds. A `ScalableBloomFilter` keeps its own version, 1 or 7, and its contained filters,
   each in its own envelope, are version 8.
 
-- **`BloomFilter64`, and the filters placed with 64-bit values, are faster, and every bit
-  is where it was.** `Utils.HashKernel128`, which each of them goes through on every `Add`,
-  `Test` and `TestAndAdd`, wrote the first hash into a `stackalloc`ed eight bytes and
-  hashed those for the second value. A method that does that cannot be inlined and carries
-  a zeroed frame with a stack check, and the call cost several times what the second hash
-  does. The eight bytes are now an inline array in an ordinary local. The bytes hashed are
-  the same, so the second value, the positions and every payload are the same, and
-  FORMAT.md's description of the derivation stands. The `byte[]` overload now calls the
-  `ReadOnlySpan<byte>` one, which cost it nothing.
+- **`BloomFilter64`, and the structures placed with 64-bit values, are faster, and every
+  bit is where it was.** The 64-bit placement hashes the first value's eight little-endian
+  bytes for the second value, and both places that do it wrote those bytes into a
+  `stackalloc`: `Utils.HashKernel128`, which `BloomFilter64` goes through on every `Add`,
+  `Test` and `TestAndAdd`, and the placement step the structures placed with 64-bit values
+  go through on every add and query: `BloomFilter`, `CountingBloomFilter`,
+  `DeletableBloomFilter`, `PartitionedBloomFilter` and `StableBloomFilter` from 2^27
+  positions, and `CountMinSketch`, `PrivateCountMinSketch` and `HeavyKeeper` from 2^27
+  columns. A method that does that cannot be inlined and carries a zeroed frame with a
+  stack check, and the call cost several times what the second hash does. The eight bytes
+  are now an inline array in an ordinary local in both. The bytes hashed are the same, so
+  the second value, the positions and every payload are the same, and FORMAT.md's
+  description of the derivation stands. The `byte[]` overload of `HashKernel128` now calls
+  the `ReadOnlySpan<byte>` one, which cost it nothing. `InverseBloomFilter` takes one
+  position an item and so no second value, and is unchanged. (#220)
   <br><br>
   Measured on an AMD Ryzen 9 7950X3D under .NET 10 with the default hash, on filters of 2^27
   positions sized for 1%, so k is 7, in nanoseconds per operation, with the filter held in
   cache. `Benchmarks/` gains the suites that took these, and one that takes the placement
-  kernel apart:
+  kernel apart. The sketches go through the same step and are not timed by them.
+
+  **TODO before merge (#220):** re-measure on a quiet machine, master b29d881 (before)
+  against the branch (after), the two `BloomFilter` rows and the 32-bit figures under the
+  table. Those that stood here were taken on a tree where the 32-bit filters still went
+  through `HashKernel128`, before the placement step had its own copy of the derivation.
+  The `BloomFilter64` rows are that earlier measurement of the `HashKernel128` change,
+  which is the code `BloomFilter64` runs on master and on the branch alike; how quiet its
+  machine was is not recorded.
 
   | | Add | Test, member | Test, not a member |
   | --- | --- | --- | --- |
-  | `BloomFilter` placed with 64-bit values, 16-byte items | 45.5 → 31.8 | 42.5 → 23.4 | 28.7 → 11.6 |
+  | `BloomFilter` placed with 64-bit values, 16-byte items | TODO → TODO | TODO → TODO | TODO → TODO |
   | `BloomFilter64`, 16-byte items | 77 → 50.1 | 44.6 → 27.8 | 29.9 → 12.4 |
-  | `BloomFilter` placed with 64-bit values, 1,024-byte items | 72 → 64.2 | 66.5 → 56.3 | 61.2 → 46.9 |
+  | `BloomFilter` placed with 64-bit values, 1,024-byte items | TODO → TODO | TODO → TODO | TODO → TODO |
   | `BloomFilter64`, 1,024-byte items | 106 → 92.4 | 72.5 → 61 | 61.4 → 49.9 |
 
-  A `BloomFilter` just below 2^27 positions, which places with 32-bit values, takes 27, 19.6
-  and 7.5 with 16-byte items, so what 64-bit placement adds is now about 4 to 5 nanoseconds
-  with short items and 5 to 8 with long ones, the second hash and the wider arithmetic.
+  A `BloomFilter` just below 2^27 positions, which places with 32-bit values, takes TODO,
+  TODO and TODO with 16-byte items, so what 64-bit placement adds is now about TODO
+  nanoseconds with short items and TODO with long ones, the second hash and the wider
+  arithmetic.
 
 - **`CuckooBloomFilter` is faster, and every fingerprint, bucket and payload is where it
   was.** `GetComponents`, which every `Add`, `Test`, `TestAndAdd` and `TestAndRemove` goes
