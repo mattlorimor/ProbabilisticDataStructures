@@ -1,4 +1,6 @@
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -249,6 +251,61 @@ namespace TestProbabilisticDataStructures
             Assert.IsLessThan(4096L, least,
                 $"the add that doubled a table of {entries:N0} entries allocated {least:N0} " +
                 "bytes past the doubled table: the entries were listed before they were moved");
+        }
+
+        // ---- BloomierFilter: the key limit ---------------------------------------------------
+
+        /// <summary>
+        /// A Bloomier build refuses a set with more distinct keys than it is built for as soon
+        /// as the pairs pass the limit, so what it holds to say so is the limit's worth of
+        /// keys and no more. It used to collect every pair into a dictionary and then a list,
+        /// about 44 bytes a key, before comparing the count with the limit: 42 GB at the most
+        /// a map of 8-bit values holds. The limit is lowered through the build the public one
+        /// calls, and the pairs, a hundred times the limit, count how many were read.
+        /// </summary>
+        [TestMethod]
+        public void TestABloomierBuildStopsReadingAtTheFirstKeyPastItsLimit()
+        {
+            const uint limit = 1_000;
+            var pairs = new CountedPairs(100 * (int)limit);
+
+            var allocated = Allocated(() =>
+            {
+                pairs.Read = 0;
+                return Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => BloomierFilter.Build(pairs, 8, null, limit));
+            });
+
+            Assert.IsLessThanOrEqualTo(limit + 1, (uint)pairs.Read,
+                $"the build read {pairs.Read:N0} pairs, and allocated {allocated:N0} bytes, to " +
+                $"refuse more than {limit:N0} keys");
+            Assert.IsLessThan(128L * limit, allocated,
+                $"refusing more than {limit:N0} keys allocated {allocated:N0} bytes: every pair " +
+                "was collected before the count was compared with the limit");
+        }
+
+        /// <summary>
+        /// Distinct pairs, as many as asked for, counting how many have been read. Each key is
+        /// written into one buffer, which a build may do because it hashes a key when it
+        /// reads it and keeps only the hash, so that the pairs allocate nothing per pair and
+        /// what is measured is the build's.
+        /// </summary>
+        private sealed class CountedPairs(int count) : IEnumerable<KeyValuePair<byte[], ulong>>
+        {
+            internal int Read { get; set; }
+
+            public IEnumerator<KeyValuePair<byte[], ulong>> GetEnumerator()
+            {
+                var key = new byte[sizeof(int)];
+                for (var i = 0; i < count; i++)
+                {
+                    BitConverter.TryWriteBytes(key, i);
+                    this.Read++;
+                    yield return new KeyValuePair<byte[], ulong>(key, (ulong)(i & 0xFF));
+                }
+            }
+
+            IEnumerator IEnumerable.GetEnumerator() => this.GetEnumerator();
         }
     }
 }

@@ -117,6 +117,28 @@ namespace ProbabilisticDataStructures
                     "plus its fingerprint fits in a long.");
             }
 
+            return Build(pairs, valueBits, hash, MaxKeys(valueBits));
+        }
+
+        /// <summary>
+        /// Builds a map as <see cref="Build(IEnumerable{KeyValuePair{byte[], ulong}}, int, Func{ReadOnlySpan{byte}, ulong}?)"/>
+        /// does, which calls this, refusing a set of more than <paramref name="keyLimit"/>
+        /// distinct keys.
+        /// </summary>
+        /// <param name="pairs">The keys and their values.</param>
+        /// <param name="valueBits">How many bits each value takes, from 1 to 40.</param>
+        /// <param name="hash">The hash function to use, or null for the default.</param>
+        /// <param name="keyLimit">
+        /// The most distinct keys to build for. The public build passes
+        /// <see cref="MaxKeys"/>; a test lowers it, as it lowers the quotient-bit limit of
+        /// <see cref="InfiniFilter"/>, to reach the refusal without gigabytes of keys.
+        /// </param>
+        internal static BloomierFilter Build(
+            IEnumerable<KeyValuePair<byte[], ulong>> pairs,
+            int valueBits,
+            Func<ReadOnlySpan<byte>, ulong>? hash,
+            uint keyLimit)
+        {
             var hashFunction = hash ?? Defaults.GetDefaultHashFunction();
             var filter = new BloomierFilter
             {
@@ -126,6 +148,11 @@ namespace ProbabilisticDataStructures
             };
 
             var entries = Collect(pairs, hashFunction, filter.valueMask, valueBits);
+            if (entries.Count > keyLimit)
+            {
+                throw TooManyKeys(keyLimit, valueBits);
+            }
+
             filter.Shape((uint)entries.Count);
             filter.Populate(entries);
 
@@ -188,6 +215,18 @@ namespace ProbabilisticDataStructures
             }
 
             return entries;
+        }
+
+        /// <summary>
+        /// The refusal of a set with more distinct keys than a map is built for.
+        /// </summary>
+        private static ArgumentOutOfRangeException TooManyKeys(uint keyLimit, int valueBits)
+        {
+            return new ArgumentOutOfRangeException("pairs", keyLimit + 1L,
+                $"The pairs hold more than {keyLimit:N0} distinct keys, the most a map of " +
+                $"{valueBits}-bit values is built for: the cells of more are more than one " +
+                $"array holds, {Array.MaxLength:N0} bytes. " +
+                "Build several maps over parts of the set instead.");
         }
 
         /// <summary>
