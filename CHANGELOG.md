@@ -1408,6 +1408,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both rows. `HyperLogLog`'s reader needs no check: a payload carries every register it
   claims, and cannot carry 2^31 of them. No size that built before stops building.
 
+- **Two sketches of one `DpswSketch` could draw some of the same noise, and now cannot.**
+  A window seeds each private sketch it builds from one generator, and each sketch drew
+  its noise from a SplitMix64 generator stepping by the same increment as every other's,
+  so any two were one sequence read from two places. Two whose seeds lay within their
+  draws of each other drew the same values, shifted, and where those made the same
+  normals an observer holding both matrices, which `WriteTo` writes, could subtract the
+  shared noise away and read exact differences of the counts beneath it. The seeds are
+  mixed, so this was a matter of chance, about one pair in 2^64 ÷ (2 × the draws a sketch
+  makes): for sketches of 512 × 5, a 59% chance of one such pair among fifty million
+  built. The argument that the window is private assumes the noise of its sketches is
+  independent.
+  <br><br>
+  Each sketch now draws from a stream of its own: SplitMix's splittable form, with an
+  increment for each sketch that no other sketch of the window has, numbered by how many
+  the window built before it, so a window read back goes on numbering from where the one
+  that wrote it stopped. Two streams with different increments never pass through two
+  consecutive states in common, and each normal is drawn from two consecutive draws, so no
+  two sketches share any of their noise. The increments are odd, as SplitMix needs, and
+  have the 24 changes between adjacent bits Java's `SplittableRandom` asks of one, mended
+  as it mends them but without letting two coincide. This changes the noise a seeded
+  window draws, which a deployment does not do, since the seed is for tests only. A
+  `PrivateCountMinSketch` on its own, and every other structure's random choices, draw
+  exactly as before. Stored payloads hold noise already drawn, so every one reads and
+  answers as it did, and the format is unchanged; a window read from one goes on to build
+  sketches with streams of their own.
+
 - **`BinaryFuseFilter.Build` and `BloomierFilter.Build` failed inside the allocation of
   their array when the set was too large for one.** The fingerprints, or the cells, are one
   array of bytes, which holds 2,147,483,591: from one byte too many the build failed with

@@ -163,6 +163,82 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The sketches of a <see cref="DpswSketch"/> draw their noise from streams that
+        /// step by increments of their own rather than SplitMix's usual one, and the noise
+        /// they draw is held to the same distribution as above: the variance the mechanism
+        /// requires, no mean, a Gaussian's skewness and kurtosis, and its tails.
+        /// </summary>
+        /// <remarks>
+        /// Three streams: the first a window builds, the first whose increment was mended
+        /// for having too few changes between adjacent bits, and the last before the
+        /// numbering wraps. The bounds are the ones the tests above use.
+        /// </remarks>
+        [TestMethod]
+        public void TestNoiseFromASplitStreamIsTheSameGaussian()
+        {
+            Assert.AreEqual(2UL, SeededRandom.SplitIncrement(30) & 2,
+                "ordinal 30 is no longer the first mended increment, so the mended kind is not sampled here");
+
+            var measured = new List<string>();
+            foreach (var ordinal in new ulong[] { 0, 30, (1UL << 62) - 1 })
+            {
+                var noise = new SeededRandom(21, SeededRandom.SplitIncrement(ordinal));
+                var sketch = new PrivateCountMinSketch(4000, 10, 1.0, noise, null, null);
+                var values = NoiseOf(sketch);
+                var (mean, variance) = MomentsOf(values);
+                var deviation = Math.Sqrt(variance);
+                var skewness = values.Sum(v => Math.Pow((v - mean) / deviation, 3)) / values.Length;
+                var kurtosis = values.Sum(v => Math.Pow((v - mean) / deviation, 4)) / values.Length;
+                measured.Add($"ordinal {ordinal}: variance {variance / 10:F4} of required, mean {mean:F4}, " +
+                    $"skewness {skewness:F4}, kurtosis {kurtosis:F4}");
+
+                var name = $"the noise of the stream at ordinal {ordinal}";
+                Assert.AreEqual(10.0, variance, 10.0 * 0.05, $"{name} has a variance of {variance:F4}, not 10");
+                Assert.IsLessThan(3 * Math.Sqrt(variance / values.Length), Math.Abs(mean),
+                    $"{name} averages {mean:F4}");
+                Assert.IsLessThan(0.1, Math.Abs(skewness), $"{name} has a skewness of {skewness:F4}");
+                Assert.IsLessThan(0.2, Math.Abs(kurtosis - 3), $"{name} has a kurtosis of {kurtosis:F4}");
+
+                foreach (var (multiple, share) in new[] { (1.0, 0.6827), (2.0, 0.9545), (3.0, 0.9973) })
+                {
+                    var within = values.Count(v => Math.Abs(v - mean) < multiple * deviation)
+                        / (double)values.Length;
+                    Assert.AreEqual(share, within, 0.01,
+                        $"{within:P2} of {name} lies within {multiple} deviations, where a Gaussian puts {share:P2}");
+                }
+            }
+
+            Console.WriteLine("[SPLIT] " + string.Join(Environment.NewLine + "[SPLIT] ", measured));
+        }
+
+        /// <summary>
+        /// A sketch given a stream draws its noise from that stream, and reports the
+        /// increment it stepped by. Two sketches given the same stream draw the same noise;
+        /// one given the same seed and SplitMix's usual increment, as a seed alone gives,
+        /// shares none of it. Without the second, a sketch could report the stream it was
+        /// handed while drawing from another, and the test that a window's sketches each
+        /// have one of their own would be reading the label and not the noise.
+        /// </summary>
+        [TestMethod]
+        public void TestASketchDrawsItsNoiseFromTheStreamItIsGiven()
+        {
+            var increment = SeededRandom.SplitIncrement(7);
+            var given = new PrivateCountMinSketch(64, 3, 1.0, new SeededRandom(21, increment), null, null);
+            var again = new PrivateCountMinSketch(64, 3, 1.0, new SeededRandom(21, increment), null, null);
+            var seeded = new PrivateCountMinSketch(64, 3, 1.0, seed: 21);
+
+            Assert.AreEqual(increment, given.NoiseIncrement);
+            Assert.AreEqual(new SeededRandom(21).Increment, seeded.NoiseIncrement);
+            CollectionAssert.AreEqual(NoiseOf(again), NoiseOf(given),
+                "two sketches given one stream drew different noise");
+
+            var shared = NoiseOf(given).Zip(NoiseOf(seeded)).Count(pair => pair.First == pair.Second);
+            Assert.AreEqual(0, shared,
+                $"{shared} of the {64 * 3} counters of a sketch given a stream of its own are the " +
+                "counters of one given only its seed");
+        }
+
+        /// <summary>
         /// The noise grows as the budget shrinks, in the proportion the mechanism sets.
         /// </summary>
         /// <remarks>

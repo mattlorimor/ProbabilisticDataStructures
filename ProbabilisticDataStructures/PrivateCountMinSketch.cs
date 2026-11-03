@@ -120,6 +120,22 @@ namespace ProbabilisticDataStructures
             ulong? seed,
             Func<ReadOnlySpan<byte>, ulong>? hash,
             Placement? placement)
+            : this(width, depth, rho,
+                seed.HasValue ? new SeededRandom(seed.Value) : SeededRandom.Unpredictable(),
+                hash, placement)
+        {
+        }
+
+        /// <summary>
+        /// Builds a sketch as the public constructor does, drawing its noise from
+        /// <paramref name="noise"/>: a <see cref="DpswSketch"/> gives each of its sketches a
+        /// stream of its own, which a seed alone cannot say.
+        /// </summary>
+        internal PrivateCountMinSketch(
+            uint width, uint depth, double rho,
+            SeededRandom noise,
+            Func<ReadOnlySpan<byte>, ulong>? hash,
+            Placement? placement)
         {
             if (width == 0)
             {
@@ -164,9 +180,7 @@ namespace ProbabilisticDataStructures
             // the budget, which is depth over the budget.
             var deviation = Math.Sqrt(depth / rho);
 
-            var random = seed.HasValue
-                ? new SeededRandom(seed.Value)
-                : SeededRandom.Unpredictable();
+            this.NoiseIncrement = noise.Increment;
 
             this.matrix = new double[depth][];
             for (var i = 0; i < depth; i++)
@@ -174,7 +188,7 @@ namespace ProbabilisticDataStructures
                 this.matrix[i] = new double[width];
                 for (var j = 0; j < width; j++)
                 {
-                    this.matrix[i][j] = deviation * StandardNormal(ref random);
+                    this.matrix[i][j] = deviation * StandardNormal(ref noise);
                 }
             }
         }
@@ -200,6 +214,13 @@ namespace ProbabilisticDataStructures
         /// The counters themselves, for tests that check the noise is what it claims.
         /// </summary>
         internal double[][] Counters => this.matrix;
+
+        /// <summary>
+        /// What the generator the noise was drawn from stepped by, for a test to see which
+        /// stream each sketch drew from; nought for a sketch read back, which was given its
+        /// noise and drew none.
+        /// </summary>
+        internal ulong NoiseIncrement { get; }
 
         /// <summary>
         /// The epsilon of the (epsilon, delta)-differential privacy that a given

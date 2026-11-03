@@ -561,17 +561,38 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Starts a substream and builds the sketches over its ranges.
         /// </summary>
+        /// <remarks>
+        /// Each sketch draws its noise from a stream of its own: seeded from the window's
+        /// generator, and stepping by an increment no other sketch of the window steps by,
+        /// so that no two sketches can draw the same noise. With one increment for all of
+        /// them, as before, two whose seeds lay close along the one sequence drew some of
+        /// the same noise, shifted; that was unlikely, and is now impossible.
+        /// <para>
+        /// The increments are numbered by how many sketches the window built before this
+        /// one. A substream begins every <see cref="SubstreamSize"/> items, from the first,
+        /// and each lays out the same plan, so the number follows from where the substream
+        /// starts. It is worked out from that rather than counted, so that a window read
+        /// back numbers the sketches it goes on to build from where the window that wrote
+        /// it stopped, and none takes the stream of a sketch built before the write.
+        /// </para>
+        /// </remarks>
         private Substream Begin(long start)
         {
             var substream = new Substream(start);
+            var plan = PlanFor(start);
+            var builtBefore = (ulong)((start - 1) / this.substreamSize) * (ulong)plan.Count;
 
-            foreach (var planned in PlanFor(start))
+            for (var i = 0; i < plan.Count; i++)
             {
+                var planned = plan[i];
+                var noise = new SeededRandom(
+                    this.seeds.Next(), SeededRandom.SplitIncrement(builtBefore + (ulong)i));
+
                 substream.Segments.Add(new Segment(
                     planned.From, planned.To,
                     new PrivateCountMinSketch(
                         this.width, this.depth, planned.Budget,
-                        this.seeds.Next(), this.hash, this.placement),
+                        noise, this.hash, this.placement),
                     planned.Budget));
             }
 

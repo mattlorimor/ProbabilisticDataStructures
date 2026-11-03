@@ -30,10 +30,28 @@ namespace ProbabilisticDataStructures
     /// and this asks little in return; how evenly an index is picked is decided by
     /// <see cref="NextBelow"/>, not by the generator.
     /// </para>
+    /// <para>
+    /// <b>Streams.</b> The state steps by an odd increment at every draw, and that is
+    /// SplitMix's splittable form: a stream is its state and its increment, and two
+    /// streams with the same increment are one sequence read from two places. Every
+    /// generator here steps by <see cref="Gamma"/> unless it is built with another, and
+    /// only the private sketches of a <see cref="DpswSketch"/> are, each with one of
+    /// <see cref="SplitIncrement"/>'s, so that no two of a window's sketches draw the
+    /// same noise.
+    /// </para>
     /// </remarks>
     internal struct SeededRandom
     {
         private const ulong Gamma = 0x9E3779B97F4A7C15;
+
+        /// <summary>The low 62 bits, which <see cref="SplitIncrement"/> spreads an ordinal over.</summary>
+        private const ulong Low62 = (1UL << 62) - 1;
+
+        /// <summary>
+        /// Alternating bits across the low 62, the remedy for an increment with too few
+        /// changes between adjacent bits.
+        /// </summary>
+        private const ulong Alternating62 = 0x2AAA_AAAA_AAAA_AAAA;
 
         /// <summary>
         /// The generator's entire position in its sequence. Persisted, and restored on
@@ -41,7 +59,88 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal ulong State;
 
+        /// <summary>
+        /// The increment, held as its exclusive or with <see cref="Gamma"/>, so that a
+        /// generator given none -- the struct's default included -- steps by Gamma, as
+        /// every generator here always has, rather than by nought, which never moves.
+        /// </summary>
+        private readonly ulong split;
+
         internal SeededRandom(ulong state) => this.State = state;
+
+        /// <summary>
+        /// A generator whose state steps by <paramref name="increment"/> instead of
+        /// <see cref="Gamma"/>: one stream of those <see cref="SplitIncrement"/> numbers.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The increment is even, so its stream would not visit every state.
+        /// </exception>
+        internal SeededRandom(ulong state, ulong increment)
+        {
+            if ((increment & 1) == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(increment), increment,
+                    "A stream's increment is odd, so that it visits every state before it repeats.");
+            }
+
+            this.State = state;
+            this.split = increment ^ Gamma;
+        }
+
+        /// <summary>What the state steps by at every draw.</summary>
+        internal ulong Increment => this.split ^ Gamma;
+
+        /// <summary>
+        /// The increment of the <paramref name="ordinal"/>-th stream split from one
+        /// parent: odd, and different for every ordinal below 2^62.
+        /// </summary>
+        /// <remarks>
+        /// The paper gives each stream split from another an increment of its own, mixed
+        /// from a draw of the parent, so two streams share one only by chance. These are
+        /// numbered instead, so that they cannot. Two streams stepping by different
+        /// increments never pass through two consecutive states in common -- the steps
+        /// between them differ -- so what two can share is single draws, scattered, by
+        /// chance, as any two generators can; with the same increment they share every draw
+        /// from where one meets the other.
+        /// <para>
+        /// The ordinal is spread over 62 bits by a bijection, a Weyl step by Gamma and this
+        /// generator's own mix, each step invertible modulo 2^62, then shifted up two bits
+        /// with the lowest set, so that every increment is odd. Spread rather than used as
+        /// it stands, because increments that are small multiples of one another give
+        /// streams that meet at a stride: one stepping by three times another's passes
+        /// through every third state of it. The paper's implementation,
+        /// Java's SplittableRandom, also asks an increment for at least 24 changes between
+        /// adjacent bits, which a mixed one lacks about once in 67 ordinals, and mends one
+        /// that has fewer by an exclusive or with alternating bits, which gives it at least
+        /// 41, since the two counts sum to 64.
+        /// That is done here to the 62 bits, and the second bit is set to say so. A mended
+        /// increment then differs from every unmended one in that bit and from every other
+        /// mended one in the rest, so the increments stay distinct. Java's mending can
+        /// map two values to one, which costs it nothing, since its increments are distinct
+        /// only by chance anyway.
+        /// </para>
+        /// <para>
+        /// An ordinal of 2^62 or more is reduced modulo 2^62 and can repeat one below it.
+        /// A window builds fewer sketches for a substream than twice the items the substream
+        /// holds, so the ordinals it numbers them by reach that only as its position nears
+        /// 2^61.
+        /// </para>
+        /// </remarks>
+        internal static ulong SplitIncrement(ulong ordinal)
+        {
+            var z = ((ordinal + 1) * Gamma) & Low62;
+            z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & Low62;
+            z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & Low62;
+            z ^= z >> 31;
+
+            var increment = (z << 2) | 1;
+            if (ulong.PopCount(increment ^ (increment >> 1)) < 24)
+            {
+                increment = ((z ^ Alternating62) << 2) | 3;
+            }
+
+            return increment;
+        }
 
         /// <summary>
         /// Seeds unpredictably, for a filter that was not given a seed.
@@ -58,7 +157,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal ulong Next()
         {
-            var z = this.State += Gamma;
+            var z = this.State += this.split ^ Gamma;
             z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9;
             z = (z ^ (z >> 27)) * 0x94D049BB133111EB;
             return z ^ (z >> 31);
