@@ -1014,6 +1014,20 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A cuckoo bucket count that is not a power of two, on a table larger than the
+        /// payload's own: the price refuses it for that, before it prices a table, which is
+        /// what keeps a read from allocating one.
+        /// </summary>
+        [TestMethod]
+        public void TestACuckooBucketCountThatIsNotAPowerOfTwoIsRefusedForThat()
+        {
+            var bytes = Filled(new CuckooBloomFilter(1000, 0.01, seed: 1), (f, k) => f.Add(k), 10).ToByteArray();
+
+            // u32 m at 0, which is 512 unedited; 1,000 buckets is the larger table.
+            AssertRefusedForItsShape<CuckooBloomFilter>(bytes, Poke(bytes, 0, 1000), "is not a power of two");
+        }
+
+        /// <summary>
         /// A quotient filter claiming a remainder wider than its hash, a table that would
         /// be priced well past the budget. Not a quotient too wide: the slot count is a
         /// 32-bit shift, which wraps a quotient past 32 to a small table.
