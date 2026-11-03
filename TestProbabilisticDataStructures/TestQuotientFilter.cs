@@ -270,6 +270,82 @@ namespace TestProbabilisticDataStructures
             Assert.IsFalse(b.Test(Key("a0")), "the merge wrote into the wrong filter");
         }
 
+        /// <summary>
+        /// A filter merged into itself holds everything twice: exactly what a twin that
+        /// was given every item twice holds, to the byte.
+        /// </summary>
+        /// <remarks>
+        /// This is the behaviour <c>Merge</c> keeps a snapshot of the entries for. Every
+        /// insert shifts the entries after it along their cluster, so a merge that read
+        /// the table lazily while writing into the same table would meet entries it had
+        /// already moved. A filter holding 600 is sparse, and one holding half the slots
+        /// leaves clusters long enough for the shifting to reach far; the byte
+        /// comparison covers every slot either way, which a count and a handful of
+        /// lookups would not.
+        /// </remarks>
+        [TestMethod]
+        public void TestAFilterMergedIntoItselfHoldsEverythingTwice()
+        {
+            var slots = new QuotientFilter(2000, 0.01).SlotCount;
+
+            foreach (var held in new[] { 600u, slots / 2 })
+            {
+                var filter = new QuotientFilter(2000, 0.01);
+                var twin = new QuotientFilter(2000, 0.01);
+
+                for (var i = 0; i < held; i++)
+                {
+                    filter.Add(Key($"item{i}"));
+                    twin.Add(Key($"item{i}"));
+                    twin.Add(Key($"item{i}"));
+                }
+
+                var returned = filter.Merge(filter);
+
+                Assert.AreSame(filter, returned, "the merge did not return the filter it was called on");
+                Assert.AreEqual(2 * held, filter.Count(), $"{held} entries merged into themselves");
+                CollectionAssert.AreEqual(twin.ToByteArray(), filter.ToByteArray(),
+                    $"{held} entries merged into themselves did not leave what adding each twice does");
+
+                for (var i = 0; i < held; i++)
+                {
+                    Assert.IsTrue(filter.Test(Key($"item{i}")), $"item{i} was lost by the self-merge");
+                }
+            }
+        }
+
+        /// <summary>
+        /// The most a filter can merge into itself is the half of its slots it can hold
+        /// twice over. That leaves a table with no empty slot, and the next entry over
+        /// the half is refused before anything is written.
+        /// </summary>
+        [TestMethod]
+        public void TestAFilterMergedIntoItselfIsRefusedPastHalfItsSlots()
+        {
+            var filter = new QuotientFilter(2000, 0.01);
+            var slots = filter.SlotCount;
+
+            for (var i = 0; i < slots / 2; i++)
+            {
+                filter.Add(Key($"item{i}"));
+            }
+
+            filter.Merge(filter);
+
+            Assert.AreEqual(slots, filter.Count(), "half the slots, merged into themselves, did not fill the table");
+            Assert.ThrowsExactly<InvalidOperationException>(() => filter.Add(Key("one more")));
+
+            var small = new QuotientFilter(2000, 0.01);
+            for (var i = 0; i <= slots / 2; i++)
+            {
+                small.Add(Key($"item{i}"));
+            }
+
+            var before = small.ToByteArray();
+            Assert.ThrowsExactly<InvalidOperationException>(() => small.Merge(small));
+            CollectionAssert.AreEqual(before, small.ToByteArray(), "a refused self-merge changed the filter");
+        }
+
         [TestMethod]
         public void TestMergeRejectsFiltersItCannotCombine()
         {
