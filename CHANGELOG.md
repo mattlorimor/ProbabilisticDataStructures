@@ -1379,6 +1379,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removals have brought it back within its pool, until its next repacking, where before
   the next add took it off. (#188)
 
+- **`CuckooBloomFilter` read a payload whose bucket count was not a power of two, or whose
+  item count disagreed with its entries, and went on to answer wrongly.** The constructor
+  always rounds the bucket count up to a power of two, because an item's other bucket is
+  found by reducing a hash by that count, and finds the first again from the other end
+  only when it is one. A payload with any other count was read all the same, and an
+  insert that had to relocate an entry could then move it to a bucket no lookup visits:
+  the filter lost items it had accepted. Read back with its bucket count changed and
+  filled to about nine tenths, a filter of 100 buckets lost 56 of 360 items, one of 7
+  buckets 5 of 25, and one of 5 buckets 1 of 18, where one of 128 lost none. The item
+  count was never compared with the entries the payload lists. A count below them let
+  `TestAndRemove` take it under zero, where it wraps and `Count()` reports 4,294,967,295,
+  and a count of zero let `SetHash` replace the hash under entries it had placed. A
+  payload that listed the same bucket and entry twice was accepted too, its two
+  fingerprints OR-ed into one cell.
+  <br><br>
+  Reading now refuses a bucket count that is not a power of two, before the table is
+  allocated, a count that differs from the entries in the table, counted from the table
+  and not from the list, and a bucket and entry named twice. `TestAndRemove` also never
+  takes the count below zero. The library has never written such a payload, so none it
+  wrote is refused, and the stored payloads of every format version still read. The
+  format does not change. No release from 3.2.0, when a cuckoo filter first could be read
+  back, through 6.2.0 made these checks.
+
 ## [6.2.0] - 2026-08-19
 
 ### Added
