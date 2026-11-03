@@ -478,6 +478,10 @@ namespace ProbabilisticDataStructures
 
         private static void CheckPartitions(uint partitionCount, uint k)
         {
+            // First, so that a count no filter has is refused as that, and not as whatever
+            // it does to the partition count that is held to it below.
+            PersistenceFormat.CheckHashCount(k);
+
             if (partitionCount == 0 || partitionCount > PersistenceFormat.MaxNestedCount)
             {
                 throw new InvalidDataException(

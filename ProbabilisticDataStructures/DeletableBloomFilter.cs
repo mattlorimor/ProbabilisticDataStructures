@@ -438,6 +438,7 @@ namespace ProbabilisticDataStructures
             var collisions = PersistenceFormat.ReadBuckets(ref reader);
             reader.ExpectEnd();
             CheckRegions(m, buckets.count, collisions.count);
+            PersistenceFormat.CheckHashCount(k);
 
             // The scratch buffer below is sized by the hash count the payload claims.
             budget.Charge(ScratchCost(k));
@@ -474,6 +475,7 @@ namespace ProbabilisticDataStructures
             var collisions = PersistenceFormat.PriceBuckets(ref reader);
             reader.ExpectEnd();
             CheckRegions(m, buckets, collisions);
+            PersistenceFormat.CheckHashCount(k);
             reader.Budget.Price(ScratchCost(k));
         }
 

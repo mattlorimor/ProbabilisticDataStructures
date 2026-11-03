@@ -369,6 +369,8 @@ namespace ProbabilisticDataStructures
                     "hold them, which do not describe the same filter.");
             }
 
+            PersistenceFormat.CheckHashCount(k);
+
             return new BloomFilter
             {
                 Buckets = Buckets.Restore(bucketCount, bucketSize, data),
