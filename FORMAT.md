@@ -718,7 +718,10 @@ The counts run contiguously from the first occupied bucket, so the store's bound
 its total follow from the run itself rather than being written alongside it and given
 the chance to disagree with it. A payload whose buckets do not add up to the recorded
 total is refused: every quantile would land at the wrong rank while each individual
-bucket still looked reasonable.
+bucket still looked reasonable. The sum is of the counts themselves, not of what they
+come to modulo 2^64: a store whose counts come to more than 2^64 − 1, or the two stores
+and the zero count together, is refused even where the wrapped sum is the recorded
+total. No sketch the writer wrote has more than a total can hold.
 
 `gamma`, which is `(1+a)/(1-a)`, is derived from the accuracy rather than stored. So is
 the log of it. See [What is not stored](#what-is-not-stored).

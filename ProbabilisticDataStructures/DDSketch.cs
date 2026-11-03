@@ -282,7 +282,9 @@ namespace ProbabilisticDataStructures
         /// <exception cref="ArgumentException">
         /// The sketches have different relative accuracies, so their buckets do not
         /// describe the same ranges and their counts cannot be added. Or the merged
-        /// buckets would span more than one array holds. Either way this sketch is
+        /// buckets would span more than one array holds. Or the two hold more values
+        /// between them than a count can, 2^64 - 1, which no stream of adds reaches but
+        /// a sketch read from a payload can be near. In every case this sketch is
         /// unchanged.
         /// </exception>
         public DDSketch Merge(DDSketch other)
@@ -303,6 +305,18 @@ namespace ProbabilisticDataStructures
             if (other.count == 0)
             {
                 return this;
+            }
+
+            // The total is the sum of both stores and the zero count, so nothing it holds
+            // is above it: if the totals fit, no bucket, store or zero count wraps in the
+            // merge below, and this one comparison is the whole of the check.
+            if (other.count > ulong.MaxValue - this.count)
+            {
+                throw new ArgumentException(
+                    $"The two sketches hold {(UInt128)this.count + other.count} values " +
+                    $"between them, more than the {ulong.MaxValue} a sketch can count, " +
+                    "and a total that wrapped would put every quantile at the wrong rank.",
+                    nameof(other));
             }
 
             // Both stores are checked before either is changed, so a merge that cannot
@@ -523,7 +537,19 @@ namespace ProbabilisticDataStructures
             // The stores and the zero count are the whole of what was added, so a total
             // that disagrees with them would put every quantile at the wrong rank while
             // each individual bucket still looked reasonable.
-            var held = positive.Total + negative.Total + zeroCount;
+            //
+            // Summed wide, because the sum is compared and a sum that wrapped past 2^64
+            // would be compared as the small number it wrapped to: counts that add up to
+            // the claimed total only because they went round it are not a sketch.
+            var held = (UInt128)positive.Total + negative.Total + zeroCount;
+            if (held > ulong.MaxValue)
+            {
+                throw new InvalidDataException(
+                    "The positive buckets, the negative buckets and the zero count hold " +
+                    $"more than {ulong.MaxValue} values between them, which is more than a " +
+                    "sketch can count.");
+            }
+
             if (held != count)
             {
                 throw new InvalidDataException(
@@ -785,6 +811,16 @@ namespace ProbabilisticDataStructures
 
                     if (amount != 0)
                     {
+                        // A run whose counts pass what one count holds wraps the store's
+                        // total, and a store whose total wrapped to zero reports itself
+                        // empty with its bounds and counts still set.
+                        if (amount > ulong.MaxValue - store.Total)
+                        {
+                            throw new InvalidDataException(
+                                $"The {which} buckets hold more than {ulong.MaxValue} " +
+                                "values on their own, which is more than a sketch can count.");
+                        }
+
                         store.Add(minIndex + i, amount);
                     }
                 }
