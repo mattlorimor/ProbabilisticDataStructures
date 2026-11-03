@@ -1276,6 +1276,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removals have brought it back within its pool, until its next repacking, where before
   the next add took it off. (#188)
 
+- **FORMAT.md's table of structure ids now lists every structure.** It stopped at
+  `MementoFilter` (28), though `SublimeCountMinSketch` (29), `SetSketch` (30),
+  `TupleSketch` (31), `PrivateCountMinSketch` (32) and `DpswSketch` (33) each have a payload
+  section headed with their id, so someone who found one of those ids in an envelope found
+  it in no table. `TestFormatDocumentation` now reads the table and holds it to
+  `StructureId`, so a structure added to the enum and not to the table fails by name. Only
+  the document and its tests change; no payload does. (#221)
+
 ## [6.2.0] - 2026-08-19
 
 ### Added
