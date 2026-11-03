@@ -727,6 +727,34 @@ namespace TestProbabilisticDataStructures
                 $"a {typeof(T).Name} refused for its budget had already allocated {allocated} bytes");
         }
 
+        /// <summary>
+        /// A small payload whose header names a hash count no filter has is refused for the
+        /// count and not for the budget, and before the scratch array of that many is priced
+        /// or allocated: the refusal carries no budget exception, and the refused read
+        /// allocated less than the budget. The count is held to what a constructor gives,
+        /// so the array is never more than a few kilobytes and no count can ask a budget for
+        /// much; what a read is charged for it is held to what it allocates, for the count a
+        /// payload may carry, by <c>TestEveryStructureReadsWithinAnHonestBudget</c>.
+        /// </summary>
+        private static void AssertRefusedForItsHashCountBeforeAllocating<T>(byte[] poked)
+            where T : IBinaryPersistable<T>
+        {
+            var options = new ReadOptions(SmallBudget);
+            InvalidDataException refused = null;
+            var allocated = Allocated(() =>
+            {
+                refused = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<T>(poked, options));
+                return new object();
+            });
+
+            StringAssert.Contains(refused.Message, "hash functions, more than");
+            Assert.IsNull(refused.InnerException,
+                $"a {typeof(T).Name} naming too many hash functions was refused for its budget");
+            Assert.IsLessThan(SmallBudget, allocated,
+                $"a {typeof(T).Name} refused for its hash count had already allocated {allocated} bytes");
+        }
+
         /// <summary>A cuckoo filter's table is allocated whole, whatever it holds.</summary>
         [TestMethod]
         public void TestACuckooTableLargerThanTheBudgetIsRefused()
@@ -757,13 +785,16 @@ namespace TestProbabilisticDataStructures
             AssertRefusedBeforeAllocating<QuotientFilter>(Poke(bytes, 0, 24), (1L << 24) * 10 / 8);
         }
 
-        /// <summary>The counting filter's scratch buffer is sized by its hash count.</summary>
+        /// <summary>
+        /// The counting filter's scratch buffer is sized by its hash count, which was once
+        /// the way a few bytes asked a budget for 64 MiB and is now refused first.
+        /// </summary>
         [TestMethod]
         public void TestACountingFilterHashCountLargerThanTheBudgetIsRefused()
         {
             // u32 m, then u32 k at 4: 2^24 four-byte indexes, 64 MiB.
             var bytes = new CountingBloomFilter(1000, 4, 0.01).ToByteArray();
-            AssertRefusedBeforeAllocating<CountingBloomFilter>(Poke(bytes, 4, 1u << 24), 4L << 24);
+            AssertRefusedForItsHashCountBeforeAllocating<CountingBloomFilter>(Poke(bytes, 4, 1u << 24));
         }
 
         /// <summary>The deletable filter's scratch buffer, likewise.</summary>
@@ -771,7 +802,7 @@ namespace TestProbabilisticDataStructures
         public void TestADeletableFilterHashCountLargerThanTheBudgetIsRefused()
         {
             var bytes = new DeletableBloomFilter(1000, 100, 0.01).ToByteArray();
-            AssertRefusedBeforeAllocating<DeletableBloomFilter>(Poke(bytes, 4, 1u << 24), 4L << 24);
+            AssertRefusedForItsHashCountBeforeAllocating<DeletableBloomFilter>(Poke(bytes, 4, 1u << 24));
         }
 
         /// <summary>The stable filter's scratch buffer, likewise.</summary>
@@ -779,7 +810,7 @@ namespace TestProbabilisticDataStructures
         public void TestAStableFilterHashCountLargerThanTheBudgetIsRefused()
         {
             var bytes = new StableBloomFilter(1000, 3, 0.01, seed: 1).ToByteArray();
-            AssertRefusedBeforeAllocating<StableBloomFilter>(Poke(bytes, 4, 1u << 24), 4L << 24);
+            AssertRefusedForItsHashCountBeforeAllocating<StableBloomFilter>(Poke(bytes, 4, 1u << 24));
         }
 
         /// <summary>An inverse filter's slots are allocated whole, occupied or not.</summary>
