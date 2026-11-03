@@ -1102,6 +1102,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuse the size. FORMAT.md's table of sizes has the two new rows. No size that built
   before stops building: the limit is the sketch's own.
 
+- **A `DpswSketch` payload with a substream starting near the largest position loaded,
+  and the window then lost that substream without a word.** The reader refuses a substream
+  that ends past the items the window says it has seen, and it worked out the end as
+  start + held − 1 in a `long`. For a start within held − 1 of `long.MaxValue` that sum
+  wraps negative, so the check passed and the window loaded holding a substream from its
+  future. `Count` passed over it, since its last item came out before the window, and once
+  the substreams before it expired it went with them, every counter in it, so the window
+  undercounted with no error: a window of 64 items whose newest substream's start was
+  edited so, fed 50 more items, estimated the 49 copies of one of them at 44, where the
+  unedited payload read back and fed the same said about 50. The check is now made without the sum, as start > position − held + 1,
+  which cannot wrap, and so are the same sums where a query chooses its sketches and where
+  old substreams expire. It needs a payload edited on purpose with its checksum repaired,
+  since the writer never writes a substream past the position. No payload this library
+  wrote is refused that was not before, no window answers differently, and the format is
+  unchanged.
+
 - **`DDSketch.WriteTo` failed with an `OverflowException`, or ran off the end of an array,
   for a sign of 2^28 buckets or more.** A sign's run of buckets was copied into a byte array
   sized `buckets * 8` in an `int`, which is negative from 268,435,456 buckets (two gibibytes
