@@ -310,6 +310,12 @@ address.
 | `ScalableBloomFilter` | filter count | 2,147,483,591 | the filters are a list; a filter stops growing sooner, when its next filter would have no finite rate to be sized from, or would be built for more items or bits than a contained filter addresses, which is a limit on growing and not on reading |
 | `CountingBloomFilter` | bytes of counters, `m` × `b` bits, rounded up | 2,147,483,591 | the counters are one array; from four-bit counters up that is fewer counters than a `u32` counts |
 | `StableBloomFilter` | bytes of cells, `m` × `d` bits, rounded up | 2,147,483,591 | the cells are one array, as the counters are |
+| `BloomFilter` | hash functions, `k` | 1,024 | `ceil(log2(1 / rate))` at the smallest false positive rate whose reciprocal is a finite double; the constructor refuses a smaller rate. A reader also refuses none, which sets no bit and tests none |
+| `BloomFilter64` | hash functions, `k` | 1,024 | as `BloomFilter` |
+| `CountingBloomFilter` | hash functions, `k` | 1,024 | as `BloomFilter`; a scratch buffer of four bytes per hash function is allocated for it |
+| `DeletableBloomFilter` | hash functions, `k` | 1,024 | as `CountingBloomFilter` |
+| `PartitionedBloomFilter` | hash functions, `k` | 1,024 | as `BloomFilter`; it is also the number of partitions, and the reader checks it first |
+| `StableBloomFilter` | hash functions, `k` | 1,024 | as `CountingBloomFilter`; the constructor halves the count, and the factory that builds a plain Bloom filter of cells does not, so the reader accepts the whole of it |
 | `InfiniFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; a filter stops expanding there |
 | `MementoFilter` | quotient bits | 31 | as `InfiniFilter` |
 | `MementoFilter` | bits of a slot | 64 | a slot is held in a 64-bit word: three bits of metadata, and a field of the fingerprint, one bit for its age counter and the memento |

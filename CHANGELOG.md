@@ -576,6 +576,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   versions is held to. Adding a version to a structure is one new constant and one more
   entry in that table, and the highest supported version follows from it.
 
+- **A Bloom-family payload could name any number of hash functions, from none to
+  4,294,967,295, and was read.** Every constructor gets its count from `Utils.OptimalK`,
+  which is at least 1 and at most 1,024: it takes the base-2 logarithm of the reciprocal of
+  the false positive rate, and a rate below about 5.6e-309 has an infinite reciprocal and
+  is refused before a filter exists. The readers of `BloomFilter`, `BloomFilter64`,
+  `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter` and
+  `StableBloomFilter` took the count from the payload as it stood, and a payload needs only
+  a valid checksum to carry one. Two things followed. A count of zero sets no bit and tests
+  none, so the filter answered present to every item; the stable filter's reader refused
+  it, and the partitioned filter's only as a count of no partitions. A huge count is a cost
+  on every call: an `Add` runs that many position computations, and so does a `Test` of a
+  member or of a filter dense enough that every bit is set. Nothing the read budget prices
+  depends on it for `BloomFilter` and `BloomFilter64`. The counting, deletable and stable
+  filters also allocate a `uint[k]` scratch array, which under the default budget is capped
+  near 268 million counts, a gibibyte from a payload of a few hundred bytes, and under
+  `ReadOptions.Unlimited` is bounded by nothing but the runtime. A partitioned filter's
+  count is its partition count, which was held only to a million.
+  <br><br>
+  Each reader now refuses a count of none, and a count above the most `OptimalK` can
+  return, in its shape check, which the read budget's pricing shares: before anything is
+  allocated from the count or priced for it. The ceiling is not written down. It is
+  `OptimalK` at the smallest rate whose reciprocal is a finite double, found by the same
+  arithmetic, and a test finds the smallest rate that builds by trying the constructors and
+  holds the ceiling to what they give there. No payload this library wrote is refused: a
+  filter built at that rate writes and reads back. [FORMAT.md](FORMAT.md#sizes) states the
+  limit for each filter. The format does not change.
+
 - **`CuckooBloomFilter.Reset` now puts the random generator back where it began.** It had
   the same gap `StableBloomFilter.Reset` had, with the same documentation promising the
   filter's original state: the entries cleared and the generator stayed wherever the adds

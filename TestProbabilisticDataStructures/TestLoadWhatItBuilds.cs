@@ -1605,6 +1605,13 @@ namespace TestProbabilisticDataStructures
                 [("QuotientFilter", "remainder bits")] = QuotientFilter.MaxRemainderBits,
             };
 
+            // The hash count a reader accepts, which every filter that stores one shares:
+            // the most Utils.OptimalK can return.
+            foreach (var structure in TestHashCountLimit.StructuresThatStoreAHashCount())
+            {
+                expected[(structure, "hash functions, `k`")] = Utils.MaxHashCount;
+            }
+
             using var resource = typeof(TestLoadWhatItBuilds).Assembly
                 .GetManifestResourceStream("TestProbabilisticDataStructures.FORMAT.md");
             Assert.IsNotNull(resource, "FORMAT.md is not embedded in the test assembly");
@@ -1637,7 +1644,8 @@ namespace TestProbabilisticDataStructures
             }
 
             CollectionAssert.AreEquivalent(
-                Declared.Select(d => d.Id.ToString()).ToArray(),
+                Declared.Select(d => d.Id.ToString())
+                    .Union(TestHashCountLimit.StructuresThatStoreAHashCount()).ToArray(),
                 expected.Keys.Select(k => k.Structure).Distinct().ToArray(),
                 "the structures with a documented limit are not the ones that declare one");
         }

@@ -437,6 +437,7 @@ namespace ProbabilisticDataStructures
             var buckets = PersistenceFormat.ReadBuckets(ref reader);
             reader.ExpectEnd();
             CheckBuckets(m, buckets.count);
+            PersistenceFormat.CheckHashCount(k);
 
             // The scratch buffer below is sized by the hash count the payload claims.
             budget.Charge(ScratchCost(k));
@@ -468,6 +469,7 @@ namespace ProbabilisticDataStructures
             var buckets = PersistenceFormat.PriceBuckets(ref reader);
             reader.ExpectEnd();
             CheckBuckets(m, buckets);
+            PersistenceFormat.CheckHashCount(k);
             reader.Budget.Price(ScratchCost(k));
         }
 
