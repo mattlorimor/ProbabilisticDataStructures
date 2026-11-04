@@ -325,6 +325,16 @@ floating-point fixed-point with the one divergent input guarded and
 anchor-pinned. Memento and Infini segment counters reset when expansion
 rebuilds a segment, so work is only ever measured on expansion-free spans.
 
+A spin can be held to a count as well. A walk that circles never returns, so a
+test that calls it hangs the run on exactly the regression it was written for,
+and a mutation run with it. `TestQuotientTableMetadata` runs each run-start
+walk on a thread of its own and watches the table's slot reads: once the walk
+ends, the test checks what it threw, and the reads passing a budget with the
+walk still going is a failure by count. The spinning thread cannot be stopped from outside, so it is a
+background thread and goes with the test host. That is how the walks' lap
+bound was shown red without a hang, and each of its checks dropped fails one
+row by count while the rest of the run goes on.
+
 ### Sequences find what scenarios cannot
 
 Many of the defects this library has shipped needed a particular *sequence* to appear: a

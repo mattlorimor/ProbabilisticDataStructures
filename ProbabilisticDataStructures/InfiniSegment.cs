@@ -453,6 +453,13 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Refuses a table whose metadata is inconsistent, or whose entries are not its
+        /// count, before any run in it is walked. See <see cref="QuotientTable.CheckMetadata"/>.
+        /// </summary>
+        internal void CheckMetadata(int table) =>
+            QuotientTable.CheckMetadata(this.Data, this.bitsPerSlot, this.Slots, this.Count, table);
+
+        /// <summary>
         /// Every entry the segment holds, paired with the quotient that owns it, read from
         /// the table as the walk reaches it.
         /// </summary>
@@ -509,26 +516,47 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Where the run belonging to a quotient begins.
         /// </summary>
-        private uint FindRunStart(uint quotient)
+        /// <remarks>
+        /// Each walk stops after one lap of the table, and throws, as the quotient filter's
+        /// does. See <see cref="QuotientTable.Lapped"/>.
+        /// <para>
+        /// Internal so that the tests can run it on a table they have broken on purpose,
+        /// and ask it for a quotient no run belongs to.
+        /// </para>
+        /// </remarks>
+        internal uint FindRunStart(uint quotient)
         {
             var slot = quotient;
             while (IsShifted(slot))
             {
                 slot = Prev(slot);
+                if (slot == quotient)
+                {
+                    throw QuotientTable.Lapped(quotient, this.Slots);
+                }
             }
 
+            var start = slot;
             var runner = slot;
             while (runner != quotient)
             {
                 do
                 {
                     slot = Next(slot);
+                    if (slot == start)
+                    {
+                        throw QuotientTable.Lapped(quotient, this.Slots);
+                    }
                 }
                 while (IsContinuation(slot));
 
                 do
                 {
                     runner = Next(runner);
+                    if (runner == start)
+                    {
+                        throw QuotientTable.Lapped(quotient, this.Slots);
+                    }
                 }
                 while (!IsOccupied(runner));
             }
@@ -555,7 +583,11 @@ namespace ProbabilisticDataStructures
             return value & this.slotMask;
         }
 
-        private void WriteSlot(uint index, ulong value)
+        /// <summary>
+        /// Writes one slot, metadata in the low three bits. Internal so that a test can
+        /// break a table on purpose, which nothing else does.
+        /// </summary>
+        internal void WriteSlot(uint index, ulong value)
         {
             value &= this.slotMask;
 

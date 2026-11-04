@@ -811,11 +811,13 @@ namespace ProbabilisticDataStructures
                         "keys and denies them all. Build the filter again from the keys.");
                 }
 
-                // The words above are only the table's shape. What a run says about its own
-                // boxes is checked here, once for each occupied run, so that a box the codec
-                // cannot decode is refused now rather than by the first query that reads it.
+                // The words above are only the table's shape. Its metadata is checked first,
+                // since decoding a run walks it, and then what a run says about its own boxes,
+                // once for each occupied run, so that a box the codec cannot decode is refused
+                // now rather than by the first query that reads it.
                 var segment = MementoSegment.Restore(
                     quotientBits, fingerprintBits, mementoBits, count, data);
+                segment.CheckMetadata(i);
                 segment.CheckRuns(i);
                 filter.Segments.Add(segment);
             }

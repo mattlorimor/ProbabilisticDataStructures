@@ -536,6 +536,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer reads past the end of a run. The stored format does not change, and every
   payload a release wrote reads as before.
 
+- **A `QuotientFilter`, `InfiniFilter` or `MementoFilter` payload whose metadata did not
+  agree with itself was read, and a walk of it could go round the table for ever.** These
+  filters find a quotient's run by walking back to the start of its cluster and forward
+  again, as Bender et al. describe, and the walks end only because each slot's occupied,
+  continuation and shifted bits agree with one another. No reader looked at them. With one
+  metadata bit edited and the checksum repaired, every such payload tried was read, of a
+  quotient filter's table and of both tables of an Infini filter, and 377 of 384 of a
+  Memento table, the rest refused by the box check for a box the edit had re-paired. The
+  run-start search went round without end on a table with no unshifted slot or with every
+  slot a continuation, and when asked for a quotient no run belongs to; a query walks
+  it, and so does `MementoFilter`'s reader, for every occupied run. A stored count lower
+  than a table's entries was read too, and a full `QuotientFilter` read that way would take
+  another `Add`, whose insert looks for a free slot with nothing to stop it.
+  <br><br>
+  Every reader in the family now checks each table it reads, in one pass before any run is
+  walked, and refuses with an `InvalidDataException` naming the table and the slot a table
+  whose metadata is inconsistent, or whose entries are not its stored count. As a backstop
+  the run-start search stops after one lap of the table and throws an
+  `InvalidOperationException`. And `MementoFilter`'s run rewrite, which `Add` and
+  `TestAndRemove` use, refuses a rewrite the table has no room for before it writes a slot,
+  where it used to find out part way through and leave the table half rewritten. Reading
+  costs the pass: measured on tables of 2,097,152 slots, 9 to 10 ms at load 0.33 and 15 ms
+  at 0.72 for a `QuotientFilter` or `InfiniFilter` table, whose reads took under 1 ms
+  before, and 3 to 17 ms more for a `MementoFilter` table. The stored format does not
+  change; the stored payloads read as before, and so does every state the exhaustive
+  sequence tests reach.
+
 - **A `ThetaSketch` or `TupleSketch` read back from storage, or built by `Union`,
   `Intersect` or `Difference`, now goes on exactly as the sketch it stands for would.**
   Below a nominal size of 8 it did not. A sketch may hold twice its nominal size before
