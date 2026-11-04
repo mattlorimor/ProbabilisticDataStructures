@@ -50,7 +50,7 @@ namespace ProbabilisticDataStructures
     /// the input rather than with the luck.
     /// </para>
     /// </remarks>
-    public class BinaryFuseFilter : IBinaryPersistable<BinaryFuseFilter>
+    public class BinaryFuseFilter : IBinaryPersistable<BinaryFuseFilter>, IPayloadBody
     {
         /// <summary>
         /// The number of positions each key occupies, and so the number of memory
@@ -694,11 +694,10 @@ namespace ProbabilisticDataStructures
         /// and count, and deriving them on read means a payload cannot disagree with
         /// itself about them.
         /// </remarks>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.size);
             payload.WriteUInt32(this.segmentLength);
             payload.WriteUInt32(this.segmentCount);
@@ -706,11 +705,7 @@ namespace ProbabilisticDataStructures
             payload.WriteByte((byte)this.width);
             payload.WriteBytes(this.fingerprints);
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.BinaryFuseFilter,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+            return new(StructureId.BinaryFuseFilter, PersistenceFormat.Identify(this.Hash));
         }
 
         /// <summary>

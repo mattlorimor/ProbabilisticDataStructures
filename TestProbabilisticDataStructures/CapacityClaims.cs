@@ -730,8 +730,8 @@ namespace TestProbabilisticDataStructures
             // past the ceiling, is refused naming the whole payload and the ceiling before
             // anything is built for it, and writes what it wrote before once the shape is put
             // back; TestPayloadCount holds every structure with a body to being counted by its
-            // WriteTo. The quotient filter sizes its own, and the buffer's growth is what
-            // refuses a payload of a writer that does not count yet.
+            // WriteTo. The buffer's growth is what refuses a payload of a writer that does not
+            // count yet.
             new Claim("`WriteTo` of one throws an `InvalidOperationException` naming the size it would be and the size one can be, with the structure unchanged", () =>
             {
                 var countSketch = new CountSketch(0.5, 0.5);
@@ -742,12 +742,13 @@ namespace TestProbabilisticDataStructures
                 var setSketch = new SetSketch(8);
                 TestPayloadCount.AssertRefusedWhileClaiming(setSketch, 4_294_967_206, (setSketch, "m", Array.MaxLength));
 
-                var ex = Assert.Throws<InvalidOperationException>(
-                    () => QuotientFilter.CheckWritable((int)((MaxPayload - 16) / 8) + 1));
-                return ex.Message.Contains(MaxPayload.ToString("N0"), StringComparison.Ordinal)
-                    && ex.Message.Contains((MaxPayload + 3).ToString("N0"), StringComparison.Ordinal)
-                    && Assert.Throws<InvalidOperationException>(
-                        () => PayloadWriter.GrownCapacity(1000, int.MaxValue - 1, 10)) is not null;
+                // 2^31 slots of five bits, what a filter for 1.6 billion items at 4% is.
+                var quotient = new QuotientFilter(100, 0.01);
+                TestPayloadCount.AssertRefusedWhileClaiming(quotient, 2_147_483_680,
+                    (quotient, "quotientBits", 31u), (quotient, "remainderBits", 5u));
+
+                return Assert.Throws<InvalidOperationException>(
+                    () => PayloadWriter.GrownCapacity(1000, int.MaxValue - 1, 10)) is not null;
             }),
 
             // ---- BloomFilter -------------------------------------------------------------

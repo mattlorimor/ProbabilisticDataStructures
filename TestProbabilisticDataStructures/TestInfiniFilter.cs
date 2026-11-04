@@ -28,6 +28,29 @@ namespace TestProbabilisticDataStructures
         private static byte[] Absent(int i) => Encoding.ASCII.GetBytes($"absent-{i}");
 
         /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: each
+        /// segment's widths size its table, so two fingerprints, each empty and expanded: in
+        /// place at thirteen bits, and at two into the chain of segments that fingerprints
+        /// spent by expanding leave.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            foreach (var (fingerprintBits, keys, chained) in new[] { (2, 2_000, true), (13, 400, false) })
+            {
+                var segments = chained ? "several segments" : "one segment";
+                yield return PayloadState.Of($"{fingerprintBits} bits, empty",
+                    new InfiniFilter(initialCapacity: 32, fingerprintBits: fingerprintBits));
+
+                var expanded = new InfiniFilter(initialCapacity: 32, fingerprintBits: fingerprintBits);
+                for (var i = 0; i < keys; i++) expanded.Add(Key(i));
+                Assert.IsGreaterThan(0u, expanded.Expansions, "Premise: the filter expanded.");
+                Assert.AreEqual(chained, expanded.Segments.Count > 1,
+                    $"Premise: the filter expanded into {segments}.");
+                yield return PayloadState.Of($"{fingerprintBits} bits, expanded into {segments}", expanded);
+            }
+        }
+
+        /// <summary>
         /// A fingerprint too short leaves nothing to be accurate with and sends
         /// entries down the chain almost at once; one too long cannot fit beside the
         /// address in a 64-bit hash once the filter has grown.
@@ -620,6 +643,32 @@ namespace TestProbabilisticDataStructures
                 "j was never removed and now tests absent. Removing k took j's only " +
                 "record from the second table instead of k's own entry in the first, " +
                 "which remembers five bits of hash to the second table's four.");
+        }
+
+        /// <summary>
+        /// A filter whose payload would pass the longest an envelope holds is refused by its
+        /// <c>WriteTo</c> before anything is built for it, naming the size it would be
+        /// (#216). Its payload is the count, the expansions and the segment count, sixteen
+        /// bytes, then for each segment its two widths, its count and its word count, and
+        /// eight bytes a word. One segment of 2^31 slots, the most a table is addressed by and
+        /// a size expansion reaches, is past the ceiling at any fingerprint. At thirty-two
+        /// bits its words times eight are past 2^33, a few bytes in 32 bits. Too large to
+        /// build here, so the segment of a small filter claims the shape.
+        /// </summary>
+        [TestMethod]
+        [DataRow(8, 402_653_186L)]
+        [DataRow(32, 1_207_959_554L)]
+        public void TestAFilterTooLargeToWriteIsRefusedNamingItsWholeSize(int fingerprintBits, long words)
+        {
+            Assert.AreEqual(words, (((1L << InfiniFilter.MaxQuotientBits) * (fingerprintBits + 4)) >> 6) + 2,
+                "the row's table is miscounted");
+
+            var filter = new InfiniFilter(initialCapacity: 64, fingerprintBits: fingerprintBits);
+            for (var i = 0; i < 40; i++) filter.Add(Key(i));
+            Assert.HasCount(1, filter.Segments, "Premise: the filter has not expanded.");
+
+            TestPayloadCount.AssertRefusedWhileClaiming(filter, 16 + 16 + 8 * words,
+                (filter.Segments[0], "QuotientBits", InfiniFilter.MaxQuotientBits));
         }
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 
@@ -15,9 +16,10 @@ namespace TestProbabilisticDataStructures
     /// words, and so is 2^30 slots at thirteen. They are what a filter for 1.6 billion items
     /// at 3% is, or for 805 million at 0.012%. Such a filter can be built and used and
     /// cannot be written, since its payload would not fit an envelope, and that is a thing
-    /// the writer says clearly (see <see cref="TestPayloadWriterGrowth"/>) rather than as an
-    /// overflow. The table is too large to build in a test, so the arithmetic that sizes it
-    /// is reached directly.
+    /// the writer says clearly rather than as an overflow: its <c>WriteTo</c> counts the
+    /// payload from the two widths before anything is built (#216). The table is too large
+    /// to build in a test, so a small filter claims the widths and the count is reached
+    /// through them.
     /// </remarks>
     [TestClass]
     public class TestQuotientFilterPayloadSize
@@ -27,12 +29,6 @@ namespace TestProbabilisticDataStructures
         /// header and checksum.
         /// </summary>
         private const long LargestPayload = 2_147_483_591L - 14 - 4;
-
-        /// <summary>
-        /// The payload of a table is three counts, the byte run's length, and the words:
-        /// sixteen bytes and eight a word. This is the most words that fits.
-        /// </summary>
-        private const int LargestTable = (int)((LargestPayload - 16) / 8);
 
         /// <summary>
         /// A table's bytes are its words times eight, in 64 bits. The rows past 2^28
@@ -51,36 +47,46 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A table whose payload would pass the longest an envelope holds is refused
-        /// before anything is allocated for it, with the writer's exception: the size it
-        /// would have been and the size one can be. The largest table that fits is not.
+        /// A filter whose payload would pass the longest an envelope holds is refused by its
+        /// <c>WriteTo</c> before anything is allocated for it, with the writer's exception:
+        /// the size it would have been and the size one can be (#216). The rows are filters
+        /// the constructor builds (<see cref="TestWhichConstructedFiltersCanBeWritten"/>), too
+        /// large to build here, so a small filter claims the two widths that size its table.
+        /// The payload is three counts and the run's length, sixteen bytes, and eight a word;
+        /// the table's bytes are past <c>int.MaxValue</c> in each, which is where the count
+        /// wrapped when it was an <c>int</c>. At 2^31 slots of thirteen bits they are 2^32 and
+        /// sixteen, which is sixteen in 32 bits: a run's length worked out in a <c>uint</c>
+        /// would call that table nearly empty.
         /// </summary>
         [TestMethod]
-        public void TestATableTooLargeToWriteIsRefusedNamingTheSize()
+        [DataRow(31u, 5u, 268_435_458L)]
+        [DataRow(30u, 13u, 268_435_458L)]
+        [DataRow(30u, 15u, 301_989_890L)]
+        [DataRow(31u, 13u, 536_870_914L)]
+        public void TestATableTooLargeToWriteIsRefusedNamingTheSize(
+            uint quotientBits, uint remainderBits, long words)
         {
-            QuotientFilter.CheckWritable(LargestTable);
-            QuotientFilter.CheckWritable(1);
+            Assert.AreEqual(words, (((1L << (int)quotientBits) * (remainderBits + 3)) >> 6) + 2,
+                "the row's table is miscounted");
 
-            var ex = Assert.ThrowsExactly<InvalidOperationException>(
-                () => QuotientFilter.CheckWritable(LargestTable + 1));
-            StringAssert.Contains(ex.Message, (16 + 8L * (LargestTable + 1)).ToString("N0"),
-                "the refusal should say how large the payload would have been");
-            StringAssert.Contains(ex.Message, LargestPayload.ToString("N0"),
-                "the refusal should say how large a payload can be");
+            var filter = new QuotientFilter(100, 0.01);
+            for (var i = 0; i < 40; i++) filter.Add(System.Text.Encoding.ASCII.GetBytes($"k{i}"));
 
-            Assert.ThrowsExactly<InvalidOperationException>(
-                () => QuotientFilter.CheckWritable(int.MaxValue));
+            TestPayloadCount.AssertRefusedWhileClaiming(filter, 16 + 8 * words,
+                (filter, "quotientBits", quotientBits), (filter, "remainderBits", remainderBits));
         }
 
         /// <summary>
-        /// Which filters the constructor builds are affected, worked out from its own
-        /// sizing and not by building them: a filter is a table of 2^q slots of r + 3 bits
-        /// and two spare words, and the first row of each pair fits an envelope and the
-        /// second does not. This passes before the fix as well; it says who the fix is for.
+        /// Which filters the constructor builds can be written, worked out from its own
+        /// sizing and the writer's own count, and not by building them: a small filter claims
+        /// each split, and its payload is counted as <c>WriteTo</c> counts it. The first row of
+        /// each pair fits an envelope and the second does not. The table's arithmetic is
+        /// restated here as well, as a table of 2^q slots of r + 3 bits and two spare words.
         /// </summary>
         [TestMethod]
         [DataRow(1_610_612_736u, 0.07, 31, 4, true)]
         [DataRow(1_610_612_736u, 0.04, 31, 5, false)]
+        [DataRow(1_610_612_736u, 0.0002, 31, 13, false)]
         [DataRow(805_306_368u, 0.0003, 30, 12, true)]
         [DataRow(805_306_368u, 0.0002, 30, 13, false)]
         [DataRow(805_306_368u, 0.00005, 30, 15, false)]
@@ -93,7 +99,25 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual((uint)remainderBits, r);
 
             var words = (((1L << quotientBits) * (remainderBits + 3)) >> 6) + 2;
-            Assert.AreEqual(writable, words <= LargestTable);
+            var counted = CountedWhileClaiming(q, r);
+            Assert.AreEqual(16 + 8 * words, counted, "the count is not the table's bytes and sixteen");
+            Assert.AreEqual(writable, counted <= LargestPayload);
+        }
+
+        /// <summary>
+        /// The payload a filter of this split counts, from a small filter claiming it. The
+        /// count builds nothing, so no table of that size is allocated.
+        /// </summary>
+        private static long CountedWhileClaiming(uint quotientBits, uint remainderBits)
+        {
+            const BindingFlags Fields = BindingFlags.NonPublic | BindingFlags.Instance;
+            var filter = new QuotientFilter(100, 0.01);
+            typeof(QuotientFilter).GetField("quotientBits", Fields)!.SetValue(filter, quotientBits);
+            typeof(QuotientFilter).GetField("remainderBits", Fields)!.SetValue(filter, remainderBits);
+
+            var counter = PayloadWriter.Counter();
+            ((IPayloadBody)filter).WritePayload(counter);
+            return counter.Length;
         }
     }
 }

@@ -41,7 +41,7 @@ namespace ProbabilisticDataStructures
     /// with.
     /// </para>
     /// </remarks>
-    public class Grafite : IBinaryPersistable<Grafite>
+    public class Grafite : IBinaryPersistable<Grafite>, IPayloadBody
     {
         /// <summary>
         /// The Mersenne prime 2^61 - 1, the modulus of the pairwise-independent hash.
@@ -849,11 +849,10 @@ namespace ProbabilisticDataStructures
         /// Writes the filter to a stream in the library's persistence format.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt64(this.R);
             payload.WriteUInt64(this.C1);
             payload.WriteUInt64(this.C2);
@@ -865,19 +864,26 @@ namespace ProbabilisticDataStructures
             payload.WriteUInt64(this.FirstCode);
             payload.WriteUInt64(this.LastCode);
 
-            payload.WriteUInt32((uint)this.Lows.Length);
-            foreach (var word in this.Lows)
+            // Both arrays' words, counted from the codes as the reader expects them.
+            var layout = LayoutOf(this.CodeCount, this.LowBits, this.LastCode);
+            payload.WriteUInt32((uint)layout.LowWords);
+            if (payload.BeginBlock(layout.LowWords * sizeof(ulong)))
             {
-                payload.WriteUInt64(word);
+                foreach (var word in this.Lows)
+                {
+                    payload.WriteUInt64(word);
+                }
             }
-            payload.WriteUInt32((uint)this.Highs.Length);
-            foreach (var word in this.Highs)
+            payload.WriteUInt32((uint)layout.HighWords);
+            if (payload.BeginBlock(layout.HighWords * sizeof(ulong)))
             {
-                payload.WriteUInt64(word);
+                foreach (var word in this.Highs)
+                {
+                    payload.WriteUInt64(word);
+                }
             }
 
-            PersistenceFormat.Write(
-                stream, StructureId.Grafite, HashId.None, payload.WrittenSpan);
+            return new(StructureId.Grafite, HashId.None);
         }
 
         /// <summary>

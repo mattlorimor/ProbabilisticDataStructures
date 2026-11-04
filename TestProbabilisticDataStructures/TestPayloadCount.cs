@@ -241,24 +241,18 @@ namespace TestProbabilisticDataStructures
 
 
 
-            (StructureId.BinaryFuseFilter, NoBody),
-
-
-
-            (StructureId.QuotientFilter, NoBody),
-
-
-
-            (StructureId.BloomierFilter, NoBody),
 
 
 
 
-            (StructureId.Grafite, NoBody),
 
-            (StructureId.InfiniFilter, NoBody),
 
-            (StructureId.MementoFilter, NoBody),
+
+
+
+
+
+
 
 
 

@@ -25,7 +25,7 @@ namespace ProbabilisticDataStructures
     /// per cell.
     /// </para>
     /// </remarks>
-    public class BloomierFilter : IBinaryPersistable<BloomierFilter>
+    public class BloomierFilter : IBinaryPersistable<BloomierFilter>, IPayloadBody
     {
         private const int Arity = 3;
         private const int FingerprintBits = 8;
@@ -633,11 +633,10 @@ namespace ProbabilisticDataStructures
         /// Writes the map to a stream.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.size);
             payload.WriteUInt32(this.segmentLength);
             payload.WriteUInt32(this.segmentCount);
@@ -645,9 +644,7 @@ namespace ProbabilisticDataStructures
             payload.WriteUInt32((uint)this.valueBits);
             payload.WriteBytes(this.cells);
 
-            PersistenceFormat.Write(
-                stream, StructureId.BloomierFilter, PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+            return new(StructureId.BloomierFilter, PersistenceFormat.Identify(this.Hash));
         }
 
         /// <summary>

@@ -18,6 +18,23 @@ namespace TestProbabilisticDataStructures
                 .Select(i => new KeyValuePair<byte[], ulong>(Key($"key{i}"), (ulong)(i % 200)))
                 .ToArray();
 
+        /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: the cells
+        /// are one run, sized by the pairs and the value's width, so no pairs and two counts
+        /// of them, at two widths.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            foreach (var valueBits in new[] { 8, 13 })
+            {
+                foreach (var count in new[] { 0, 10, 1_000 })
+                {
+                    yield return PayloadState.Of($"{valueBits} bits, {count} pairs",
+                        BloomierFilter.Build(Pairs(count), valueBits));
+                }
+            }
+        }
+
         [TestMethod]
         public void TestEveryKeyGivesBackItsValue()
         {

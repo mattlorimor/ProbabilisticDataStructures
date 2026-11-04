@@ -79,6 +79,10 @@ namespace ProbabilisticDataStructures
         internal static long Words(uint slots, int slotBits) =>
             (((long)slots * slotBits) >> 6) + 2;
 
+        /// <summary>The words of this segment's table, from its widths.</summary>
+        internal long TableWords =>
+            Words(1u << this.QuotientBits, SlotBits(this.FingerprintBits, this.MementoBits));
+
         private uint slotMaskIndex;
         private int bitsPerSlot;
         private ulong slotMask;

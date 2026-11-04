@@ -21,6 +21,23 @@ namespace TestProbabilisticDataStructures
             Enumerable.Range(0, count).Select(i => Key($"{prefix}{i}")).ToArray();
 
         /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: the
+        /// fingerprints are one run, sized by the keys and the width, so no keys and two
+        /// counts of them, at each width.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            foreach (var width in new[] { BinaryFuseWidth.Eight, BinaryFuseWidth.Sixteen })
+            {
+                foreach (var count in new[] { 0, 10, 1_000 })
+                {
+                    yield return PayloadState.Of($"{width}, {count} keys",
+                        BinaryFuseFilter.Build(Keys(count), width));
+                }
+            }
+        }
+
+        /// <summary>
         /// The one absolute promise. A false positive is allowed and a false negative is
         /// not: the structure would be unusable as a filter if a member could answer no.
         /// <para>
