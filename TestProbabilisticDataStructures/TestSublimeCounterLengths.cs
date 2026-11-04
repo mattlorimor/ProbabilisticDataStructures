@@ -674,6 +674,11 @@ namespace TestProbabilisticDataStructures
         /// an add to a few milliseconds, on rows of 64 to 16,384 counters, against a tenth of
         /// a microsecond for an ordinary add.
         /// <para>
+        /// An add whose increments all stop at a stub with room never asks the question, so
+        /// one value has every stub full: 2^40 - 1, whose low bits are all set, takes every add
+        /// past its stub, to a row that has to be asked whether it moves a chunk.
+        /// </para>
+        /// <para>
         /// What is counted is the work and not the time: how many of the adds replaced the
         /// row. None should, because no add can put on tails a chunk that is already there.
         /// The guards say the scenario is the one meant -- the fallback tuning, every chunk
@@ -684,6 +689,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         [DataRow(1UL << 27)]
         [DataRow(1UL << 40)]
+        [DataRow((1UL << 40) - 1)]
         [DataRow(1UL << 63)]
         public void TestAddingToARowOfNothingButLargeCountsDoesNotLayItOutAgain(ulong value)
         {
