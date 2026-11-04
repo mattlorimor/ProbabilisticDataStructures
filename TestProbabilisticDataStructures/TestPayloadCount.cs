@@ -165,11 +165,15 @@ namespace TestProbabilisticDataStructures
         /// size was checked, which past 268,435,448 cells is an array no runtime holds, so
         /// with keys under eight bytes, the only tables the constructor builds that large,
         /// the write failed in the allocation. <c>new InvertibleBloomLookupTable(200_000_000,
-        /// 4)</c> is 300,000,000 cells.
+        /// 4)</c> is 300,000,000 cells. At 2^29 cells, which one-byte keys reach, a run of
+        /// eight bytes a cell is 2^32 bytes, nought in 32 bits: a cell count times
+        /// <c>sizeof(long)</c> is worked out in 32 bits unless one side is widened first,
+        /// because the constant converts to the cell count's <c>uint</c>.
         /// </summary>
         [TestMethod]
         [DataRow(1, 268_435_449u, 4_563_402_653L)]
         [DataRow(4, 300_000_000u, 6_000_000_020L)]
+        [DataRow(1, 536_870_912u, 9_126_805_524L)]
         public void TestAnInvertibleBloomLookupTableTooLargeToWriteIsRefusedBeforeItsCellsAreStaged(
             int keySize, uint cells, long payload)
         {
