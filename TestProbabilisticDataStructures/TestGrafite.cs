@@ -979,5 +979,32 @@ namespace TestProbabilisticDataStructures
             var filter = Grafite.Build(RandomKeys(500, 1_000_000, seed: 7), 0.01, 64, seed: 9);
             Assert.AreEqual((ulong)(filter.Lows.Length + filter.Highs.Length) * 8, filter.SizeInBytes());
         }
+
+        /// <summary>
+        /// A filter whose payload would pass the longest an envelope holds is refused by its
+        /// <c>WriteTo</c> before anything is built for it, naming the size it would be
+        /// (#216). Its payload is sixty-eight bytes of fields, then each array's word count
+        /// and its words, both sized by the codes, the split and the last code: n x split / 64
+        /// + 2 words of low bits, and (n + 1) / 64 + 1 of high, when the last code has no high
+        /// part. 2^30 codes split at sixteen bits, what a universe of about 2^46 gives, are
+        /// past the ceiling by their low bits alone. 1.2 billion split at thirty, what a
+        /// universe near the largest gives, are 4,500,000,016 bytes of low bits, which is
+        /// 205,032,720 in 32 bits. Too large to build here, so a small filter claims the code
+        /// count and the split.
+        /// </summary>
+        [TestMethod]
+        [DataRow(1 << 30, 16, 268_435_458L, 16_777_217L)]
+        [DataRow(1_200_000_000, 30, 562_500_002L, 18_750_001L)]
+        public void TestAFilterTooLargeToWriteIsRefusedNamingItsWholeSize(
+            int codes, int lowBits, long lowWords, long highWords)
+        {
+            var filter = Grafite.Build(new ulong[] { 1, 2, 3 }, 0.01, 16);
+            Assert.AreEqual(0UL, filter.LastCode >> lowBits, "Premise: the last code has no high part at this split.");
+            Assert.AreEqual((codes + 1L, lowWords, highWords), Grafite.LayoutOf(codes, lowBits, filter.LastCode),
+                "the row's layout is miscounted");
+
+            TestPayloadCount.AssertRefusedWhileClaiming(filter, 68 + 4 + 8 * lowWords + 4 + 8 * highWords,
+                (filter, "CodeCount", codes), (filter, "LowBits", lowBits));
+        }
     }
 }
