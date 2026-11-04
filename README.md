@@ -1473,7 +1473,9 @@ else's fingerprint decays the incumbent with probability b⁻ᶜ — easy while 
 small, nearly impossible once it is large — so frequent elements entrench and rare ones
 pass through without leaving a mark. The error this buys is one-sided in the *opposite*
 direction from Count-Min's: absent fingerprint collisions an estimate never exceeds the
-truth, and the estimates of the tracked heavy hitters are very close to exact.
+truth, and the estimates of the tracked heavy hitters are very close to exact. A
+fingerprint is 16 bits, as in the paper, so two different elements share one 2⁻¹⁶ of the
+time, whatever the width.
 
 **Reach for it when** the ranking is the product and accuracy is the point: a single
 stream whose top-k should be right, with counts you can take nearly at face value.
