@@ -438,7 +438,7 @@ namespace TestProbabilisticDataStructures
             new Claim("Such a payload is built in one `byte[]`", () =>
                 typeof(PayloadWriter).GetField("buffer", BindingFlags.NonPublic | BindingFlags.Instance)!.FieldType == typeof(byte[])
                 && PersistenceFormat.LargeFormThreshold == MaxPayload),
-            new Claim("A read is charged at least twice the payload", () =>
+            new Claim("A read of a payload in the ordinary envelope is charged at least twice the payload", () =>
             {
                 // Every payload line the rows fitted, against the charge line it was fitted with.
                 var pairs = ChargeLine.Known
@@ -611,7 +611,7 @@ namespace TestProbabilisticDataStructures
             // that length, and its payload.
             new Claim("a `TopK` over two rows that wide cannot be written at all yet, since its sketch is a run longer than any payload holds", () =>
                 CountMinAtWideFrom(2) + PersistenceFormat.LargeEnvelopeLength > PayloadWriter.LongestRun
-                && PayloadWriter.LongestRun == int.MaxValue),
+                && PayloadWriter.LongestRun == Array.MaxLength),
             new Claim("Two rows of a `PrivateCountMinSketch` that wide are 2,147,483,673 bytes", () =>
                 PrivateAtWideFrom(2) == 2_147_483_673 && PrivateAtWideFrom(2) > MaxPayload
                 && PrivateAtWideFrom(1) <= MaxPayload),
@@ -749,10 +749,10 @@ namespace TestProbabilisticDataStructures
             new Claim("`ToByteArray` of a structure built larger than that throws an `InvalidOperationException` naming the size it would be and the size one can be, with the structure unchanged, and says to write it with `WriteTo` instead", () =>
             {
                 var countSketch = new CountSketch(0.5, 0.5);
-                TestPayloadCount.AssertRefusedWhileClaiming(countSketch, 2_147_483_604,
-                    (countSketch, "width", 268_435_449u), (countSketch, "depth", 1u));
+                TestPayloadCount.AssertRefusedWhileClaiming(countSketch, 2_147_483_596,
+                    (countSketch, "width", 268_435_448u), (countSketch, "depth", 1u));
                 var table = new InvertibleBloomLookupTable(4, 4);
-                TestPayloadCount.AssertRefusedWhileClaiming(table, 5_368_709_000, (table, "cells", 268_435_449u));
+                TestPayloadCount.AssertRefusedWhileClaiming(table, 5_368_708_980, (table, "cells", 268_435_448u));
                 var setSketch = new SetSketch(8);
                 TestPayloadCount.AssertRefusedWhileClaiming(setSketch, 4_294_967_206, (setSketch, "m", Array.MaxLength));
 
@@ -763,7 +763,7 @@ namespace TestProbabilisticDataStructures
             // with nothing written: a count sketch's cells and an invertible table's counts,
             // each one run, and 2^31 slots of five bits, what a quotient filter for 1.6
             // billion items at 4% is.
-            new Claim("What neither writes yet is a single run longer than `int.MaxValue` bytes, the most a reader takes into one array", () =>
+            new Claim("What neither writes yet is a single run longer than `Array.MaxLength` bytes, the most a reader takes into one array", () =>
             {
                 var countSketch = new CountSketch(0.5, 0.5);
                 TestPayloadCount.AssertRunRefusedWhileClaiming(countSketch, 4_000_000_000,
@@ -774,7 +774,7 @@ namespace TestProbabilisticDataStructures
                 TestPayloadCount.AssertRunRefusedWhileClaiming(quotient, 2_147_483_664,
                     (quotient, "quotientBits", 31u), (quotient, "remainderBits", 5u));
 
-                return PayloadWriter.LongestRun == int.MaxValue;
+                return PayloadWriter.LongestRun == Array.MaxLength;
             }),
 
             // ---- BloomFilter -------------------------------------------------------------

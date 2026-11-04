@@ -58,13 +58,15 @@ namespace TestProbabilisticDataStructures
         /// it failed with an <c>OverflowException</c>. Five rows of 100,000,000 is what
         /// ε = 0.0001 and δ = 1% build. At 2^32 cells the product of the two 32-bit
         /// dimensions is nought in 32 bits, so a count that multiplied them there would
-        /// call the table empty. None of these is a byte array's; the first two are written
-        /// to a stream in the large form (#225), and from 268,435,456 cells the cells are a
-        /// run longer than <c>int.MaxValue</c> bytes, the longest a payload holds, so the
-        /// last two are refused for that, by <c>WriteTo</c> as well.
+        /// call the table empty. None of these is a byte array's; the first two are written to
+        /// a stream in the large form (#225), and from 268,435,449 cells the cells are a run
+        /// longer than one array, the longest a payload holds since a reader reads a run into
+        /// one, so the last three are refused for that, by <c>WriteTo</c> as well. The second
+        /// and third straddle that bound.
         /// </summary>
         [TestMethod]
         [DataRow(1u, 268_435_446u, 2_147_483_580L)]
+        [DataRow(1u, 268_435_448u, 2_147_483_596L)]
         [DataRow(1u, 268_435_449u, 2_147_483_604L)]
         [DataRow(5u, 100_000_000u, 4_000_000_012L)]
         [DataRow(4u, 1_073_741_824u, 34_359_738_380L)]
@@ -77,7 +79,7 @@ namespace TestProbabilisticDataStructures
             for (var i = 0; i < 40; i++) sketch.Add(Key(i), i % 5 - 2);
 
             var run = 8L * depth * width;
-            if (run > int.MaxValue)
+            if (run > PayloadWriter.LongestRun)
             {
                 AssertRunRefusedWhileClaiming(sketch, run, (sketch, "width", width), (sketch, "depth", depth));
             }
@@ -114,10 +116,12 @@ namespace TestProbabilisticDataStructures
         /// own and does not fit inside the top-k: 268,435,442 cells is a sketch payload of
         /// 2,147,483,569 bytes, four under the ceiling, and the top-k around it adds its own
         /// eight, the run's prefix, the sketch's envelope and its heap. A top-k past the
-        /// ceiling by its sketch alone is refused by its own whole size too, and that sketch,
-        /// 2,147,483,577 bytes, four past the ceiling, is counted in the large form's
-        /// envelope, eight bytes longer than the ordinary one, as its own write would frame
-        /// it. The two rows straddle that choice.
+        /// ceiling by its sketch alone holds that sketch, 2,147,483,577 bytes, four past the
+        /// ceiling, in the large form's envelope, eight bytes longer than the ordinary one,
+        /// as its own write would frame it, and that envelope is a run of 2,147,483,603 bytes,
+        /// longer than one array: no reader could read it, so it is refused for the run, by
+        /// <c>WriteTo</c> too. The two rows straddle that choice; a sketch nested in the large
+        /// form is written once runs are widened (#228).
         /// </summary>
         [TestMethod]
         [DataRow(268_435_442u, 2_147_483_630L)]
@@ -139,7 +143,15 @@ namespace TestProbabilisticDataStructures
             foreach (var element in elements) topK.Add(System.Text.Encoding.ASCII.GetBytes(element));
             var sketch = (CountMinSketch)typeof(TopK).GetProperty("Cms", Fields)!.GetValue(topK)!;
 
-            AssertRefusedWhileClaiming(topK, payload, (sketch, "Width", width), (sketch, "Depth", 1u));
+            var nested = envelope + sketchPayload;
+            if (nested > PayloadWriter.LongestRun)
+            {
+                AssertRunRefusedWhileClaiming(topK, nested, (sketch, "Width", width), (sketch, "Depth", 1u));
+            }
+            else
+            {
+                AssertRefusedWhileClaiming(topK, payload, (sketch, "Width", width), (sketch, "Depth", 1u));
+            }
         }
 
         /// <summary>
@@ -192,11 +204,12 @@ namespace TestProbabilisticDataStructures
         /// eight bytes a cell is 2^32 bytes, nought in 32 bits: a cell count times
         /// <c>sizeof(long)</c> is worked out in 32 bits unless one side is widened first,
         /// because the constant converts to the cell count's <c>uint</c>. The first row's
-        /// runs are each within the longest a payload holds, so only a byte array refuses
-        /// it; in the others the counts, the first run, pass <c>int.MaxValue</c> bytes, and
-        /// <c>WriteTo</c> refuses them for that too.
+        /// runs are each within the longest a payload holds, one array, so only a byte array
+        /// refuses it; in the others the counts, the first run, are longer than one array, and
+        /// <c>WriteTo</c> refuses them for that too. The first two straddle that bound.
         /// </summary>
         [TestMethod]
+        [DataRow(1, 268_435_448u, 4_563_402_636L)]
         [DataRow(1, 268_435_449u, 4_563_402_653L)]
         [DataRow(4, 300_000_000u, 6_000_000_020L)]
         [DataRow(1, 536_870_912u, 9_126_805_524L)]
@@ -214,7 +227,7 @@ namespace TestProbabilisticDataStructures
             }
 
             var counts = 8L * cells;
-            if (counts > int.MaxValue)
+            if (counts > PayloadWriter.LongestRun)
             {
                 AssertRunRefusedWhileClaiming(table, counts, (table, "cells", cells));
             }
@@ -599,7 +612,7 @@ namespace TestProbabilisticDataStructures
             T structure, long run, params (object Owner, string Member, object Claimed)[] shape)
             where T : IBinaryPersistable<T>
         {
-            Assert.IsGreaterThan((long)int.MaxValue, run, "the row's run is not past the longest");
+            Assert.IsGreaterThan(PayloadWriter.LongestRun, run, "the row's run is not past the longest");
 
             WhileClaiming(structure, shape, () =>
             {
@@ -617,7 +630,7 @@ namespace TestProbabilisticDataStructures
 
                     StringAssert.Contains(ex.Message, $"a run of {run:N0} bytes",
                         $"{how}'s refusal should name the run: {ex.Message}");
-                    StringAssert.Contains(ex.Message, int.MaxValue.ToString("N0"),
+                    StringAssert.Contains(ex.Message, PayloadWriter.LongestRun.ToString("N0"),
                         $"{how}'s refusal should name the longest run: {ex.Message}");
                     Assert.AreEqual(0L, stream.Length, $"{how} wrote to the stream before refusing");
                     Assert.IsLessThan(RefusalAllocates, allocated,

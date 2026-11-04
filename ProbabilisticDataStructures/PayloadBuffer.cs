@@ -58,8 +58,8 @@ namespace ProbabilisticDataStructures
         internal static long? LoweredLongestRun;
 
         /// <summary>
-        /// The longest run a payload can hold: <c>int.MaxValue</c> bytes, the most a reader
-        /// of a run takes (<see cref="PayloadReader.ReadBytes"/>), unless the suite has
+        /// The longest run a payload can hold: <see cref="PayloadReader.LongestRun"/>, the
+        /// largest array, which is the most a reader of a run takes, unless the suite has
         /// lowered it on this thread.
         /// </summary>
         /// <remarks>
@@ -71,7 +71,7 @@ namespace ProbabilisticDataStructures
         /// faithfully as the right one. So a run past it is refused where it is counted,
         /// before anything is written. Widening runs is #228.
         /// </remarks>
-        internal static long LongestRun => LoweredLongestRun ?? int.MaxValue;
+        internal static long LongestRun => LoweredLongestRun ?? PayloadReader.LongestRun;
 
         private byte[] buffer;
         private int length;
@@ -432,14 +432,26 @@ namespace ProbabilisticDataStructures
     /// payload is data from outside the process even when the envelope's checksum
     /// matched: a well-formed file can still hold a length that does not describe what
     /// follows it.
+    /// <para>
+    /// The payload is either held, a span over the array it was read into, or read from its
+    /// stream through a <see cref="PayloadSource"/>: by a price of a payload too large for
+    /// its budget to be held, and by both passes over a payload in the large form, which is
+    /// never held (#226). Read from its stream, the offsets and what remains are 64-bit,
+    /// since such a payload can be longer than any array.
+    /// </para>
     /// </remarks>
     internal ref struct PayloadReader
     {
+        /// <summary>
+        /// The longest run a payload can hold, which is the largest array, since a run is
+        /// read into one. <see cref="PayloadWriter.LongestRun"/> is held to it.
+        /// </summary>
+        internal static int LongestRun => Array.MaxLength;
+
         private readonly ReadOnlySpan<byte> payload;
         private int offset;
 
-        // Set when the payload is read from the stream instead of from memory, which only
-        // pricing does, for a payload too large for its budget to be held. The span is
+        // Set when the payload is read from the stream instead of from memory. The span is
         // then empty, the source's position stands for the offset, and this reader's
         // payload ends at the source position given.
         private readonly PayloadSource? source;
@@ -458,7 +470,8 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// A reader of the next <paramref name="length"/> bytes of a payload that is not
-        /// held, for pricing it. It reads fields and skips runs; it cannot copy one.
+        /// held: one that prices it, reading fields and skipping runs, or one that reads it,
+        /// reading each run from the stream into the array it is returned in.
         /// </summary>
         internal PayloadReader(PayloadSource source, long length, ReadBudget budget)
         {
@@ -503,23 +516,51 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Reads a length-prefixed run of bytes, copied out so the caller can keep it.
+        /// Reads a length-prefixed run of bytes into an array of its own, which the caller
+        /// keeps: copied out of a held payload, and from a payload read from its stream, read
+        /// into it straight from the stream, so that nothing holds the run twice.
         /// </summary>
         internal byte[] ReadBytes()
         {
+            var count = ReadRunLength();
+
+            // Bounds-checked first, so a run the payload does not hold is refused as
+            // truncated; then the array is charged before it is made.
+            if (this.source is null)
+            {
+                var run = Take(count);
+                this.Budget.Charge(ReadBudget.ArrayOf((ulong)count, 1));
+                return run.ToArray();
+            }
+
+            RequireAhead(count);
+            this.Budget.Charge(ReadBudget.ArrayOf((ulong)count, 1));
+            var bytes = new byte[count];
+            this.source.ReadRun(bytes);
+            return bytes;
+        }
+
+        /// <summary>
+        /// Reads a run's length prefix, refusing a length no array holds, which is what a
+        /// run is read into: the one place a run's length is read, by a read and by a price.
+        /// </summary>
+        /// <remarks>
+        /// Past the largest array, not past the largest <c>int</c>. Between them, a held
+        /// payload could never hold the run, so the bounds check refused it; a payload read
+        /// from its stream can, and the run would then have passed both checks and asked
+        /// for an array no runtime makes.
+        /// </remarks>
+        private int ReadRunLength()
+        {
             var count = ReadUInt32();
-            if (count > int.MaxValue)
+            if (count > LongestRun)
             {
                 throw new InvalidDataException(
                     $"Payload holds a {count}-byte run, which cannot be read into a " +
                     "single array.");
             }
 
-            // Bounds-checked first, so a run the payload does not hold is refused as
-            // truncated; then the copy is charged before it is made.
-            var run = Take((int)count);
-            this.Budget.Charge(ReadBudget.ArrayOf(count, 1));
-            return run.ToArray();
+            return (int)count;
         }
 
         /// <summary>
@@ -529,17 +570,10 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal int PriceBytes()
         {
-            var count = ReadUInt32();
-            if (count > int.MaxValue)
-            {
-                throw new InvalidDataException(
-                    $"Payload holds a {count}-byte run, which cannot be read into a " +
-                    "single array.");
-            }
-
-            RequireAhead((int)count);
-            this.Budget.Price(ReadBudget.ArrayOf(count, 1));
-            return (int)count;
+            var count = ReadRunLength();
+            RequireAhead(count);
+            this.Budget.Price(ReadBudget.ArrayOf((ulong)count, 1));
+            return count;
         }
 
         /// <summary>
@@ -616,11 +650,12 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The bytes not yet read.
+        /// The bytes not yet read: in 64 bits, as a payload read from its stream can be longer
+        /// than an <c>int</c> counts.
         /// </summary>
-        internal int Remaining => this.source is null
+        internal long Remaining => this.source is null
             ? this.payload.Length - this.offset
-            : (int)(this.end - this.source.Position);
+            : this.end - this.source.Position;
 
         /// <summary>How far into its payload the reader is.</summary>
         private long Offset => this.source is null ? this.offset : this.source.Position - this.start;
@@ -724,15 +759,20 @@ namespace ProbabilisticDataStructures
     }
 
     /// <summary>
-    /// A payload read from its stream a field at a time rather than held, so that one
-    /// too large for its read's budget can still be priced.
+    /// A payload read from its stream rather than held: a field at a time, its runs skipped
+    /// or read straight into the arrays that keep them.
     /// </summary>
     /// <remarks>
-    /// Only pricing reads this way, and only to name the total in a refusal: the read it
-    /// prices is refused whatever the total comes to, so how far into the stream it is
-    /// left does not matter. Runs are skipped, by seeking where the stream can and by
-    /// reading through a small buffer where it cannot, so the price of a payload of
-    /// gigabytes costs a few hundred bytes to work out.
+    /// Read this way by a price, to name the total of a payload too large for its read's
+    /// budget to be held, which is refused whatever the total comes to, so how far into the
+    /// stream it is left does not matter. And read this way twice over a payload in the
+    /// large form, which is never held (#226): once by its price, which reads the fields the
+    /// price depends on and seeks over the rest, and, after <see cref="Restart"/> has taken
+    /// it back to the payload's first byte, once by its reader, which takes every byte in
+    /// order and appends each to the payload's running checksum as it goes (#227). Runs are
+    /// skipped by seeking where the stream can and by reading through a small buffer where
+    /// it cannot, so the price of a payload of gigabytes costs a few hundred bytes to work
+    /// out wherever its bulk is in runs.
     /// </remarks>
     internal sealed class PayloadSource
     {
@@ -743,6 +783,10 @@ namespace ProbabilisticDataStructures
         private readonly byte[] field = new byte[WidestField];
         private byte[]? skipped;
 
+        // Set once the read that follows a price has begun, and then every byte the source
+        // takes is appended to it.
+        private Crc32? checksum;
+
         internal PayloadSource(Stream stream)
         {
             this.stream = stream;
@@ -750,6 +794,18 @@ namespace ProbabilisticDataStructures
 
         /// <summary>How many of the payload's bytes have been read or skipped.</summary>
         internal long Position { get; private set; }
+
+        /// <summary>
+        /// Takes the source back to the payload's first byte, at <paramref name="start"/> in
+        /// a stream that can seek, once a price has walked it, and from then on appends every
+        /// byte it reads to <paramref name="crc"/>: the second of the large form's two passes.
+        /// </summary>
+        internal void Restart(long start, Crc32 crc)
+        {
+            this.stream.Position = start;
+            this.Position = 0;
+            this.checksum = crc;
+        }
 
         /// <summary>
         /// The next <paramref name="count"/> bytes, at most <see cref="WidestField"/>,
@@ -762,20 +818,57 @@ namespace ProbabilisticDataStructures
             {
                 throw new InvalidOperationException(
                     $"A payload that is not held is read a field at a time, of at most " +
-                    $"{WidestField} bytes, and {count} were asked for. Only a price reads " +
-                    "a payload this way, and a price skips runs rather than copying them.");
+                    $"{WidestField} bytes, and {count} were asked for. A run is skipped, or " +
+                    "read into an array of its own.");
             }
 
             var span = this.field.AsSpan(0, count);
             this.Fill(span);
+            this.checksum?.Append(span);
             this.Position += count;
             return span;
         }
 
+        /// <summary>
+        /// Reads the next <c>run.Length</c> bytes into <paramref name="run"/>, the array that
+        /// keeps them, through the stream's array overload of <c>Read</c>.
+        /// </summary>
+        /// <exception cref="InvalidDataException">The stream ends first.</exception>
+        /// <remarks>
+        /// The array overload, because a stream that implements only that one is handed a
+        /// rented copy as long as the span by the other, which for a run is as long as the
+        /// run.
+        /// </remarks>
+        internal void ReadRun(byte[] run)
+        {
+            for (var read = 0; read < run.Length;)
+            {
+                var n = this.stream.Read(run, read, run.Length - read);
+                if (n == 0)
+                {
+                    throw Truncated();
+                }
+                read += n;
+            }
+
+            this.checksum?.Append(run);
+            this.Position += run.Length;
+        }
+
         /// <summary>Moves past the next <paramref name="count"/> bytes.</summary>
         /// <exception cref="InvalidDataException">The stream ends first.</exception>
+        /// <exception cref="InvalidOperationException">
+        /// The source is being read for its checksum, which every byte has to reach.
+        /// </exception>
         internal void Skip(long count)
         {
+            if (this.checksum is not null)
+            {
+                throw new InvalidOperationException(
+                    "A payload read for its checksum takes every byte in turn, and a reader " +
+                    $"asked to move past {count} of them. Only a price moves past bytes.");
+            }
+
             if (this.stream.CanSeek)
             {
                 if (this.stream.Length - this.stream.Position < count)

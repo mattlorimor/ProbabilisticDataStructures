@@ -55,9 +55,9 @@ namespace TestProbabilisticDataStructures
         /// large to build here, so a small filter claims the two widths that size its table.
         /// The payload is three counts and the run's length, sixteen bytes, and eight a word;
         /// the table's bytes are past <c>int.MaxValue</c> in each, which is where the count
-        /// wrapped when it was an <c>int</c>, and is the longest a run can be. At 2^31 slots of
-        /// thirteen bits they are 2^32 and sixteen, which is sixteen in 32 bits: a run's
-        /// length worked out in a <c>uint</c> would call that table nearly empty.
+        /// wrapped when it was an <c>int</c>, and so past one array, the longest a run can be.
+        /// At 2^31 slots of thirteen bits they are 2^32 and sixteen, which is sixteen in 32
+        /// bits: a run's length worked out in a <c>uint</c> would call that table nearly empty.
         /// </summary>
         [TestMethod]
         [DataRow(31u, 5u, 268_435_458L)]
@@ -101,10 +101,10 @@ namespace TestProbabilisticDataStructures
 
             var words = (((1L << quotientBits) * (remainderBits + 3)) >> 6) + 2;
             var run = 8 * words;
-            Assert.AreEqual(writable, run <= int.MaxValue,
+            Assert.AreEqual(writable, run <= PayloadWriter.LongestRun,
                 "the row says the table can be written, and it is a run longer than any payload holds, or the reverse");
 
-            // The table is one run, and a count refuses a run past int.MaxValue bytes; every
+            // The table is one run, and a count refuses a run longer than one array; every
             // split the constructor makes that is within it also fits one array.
             if (writable)
             {

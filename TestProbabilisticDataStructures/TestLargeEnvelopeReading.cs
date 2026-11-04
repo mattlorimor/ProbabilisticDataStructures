@@ -143,6 +143,12 @@ namespace TestProbabilisticDataStructures
             /// <summary>The furthest byte any read has reached, the end of the last it took.</summary>
             internal long Furthest { get; private set; }
 
+            /// <summary>
+            /// Whether reads end with the bytes given, while the length claimed stays what it
+            /// is: a stream that reports more than it gives.
+            /// </summary>
+            internal bool GivesOnlyWhatItHolds { get; init; }
+
             public override bool CanRead => true;
             public override bool CanSeek => true;
             public override bool CanWrite => false;
@@ -157,7 +163,8 @@ namespace TestProbabilisticDataStructures
 
             public override int Read(Span<byte> buffer)
             {
-                var n = (int)Math.Min(buffer.Length, Math.Max(0, length - this.position));
+                var end = this.GivesOnlyWhatItHolds ? start.Length : length;
+                var n = (int)Math.Min(buffer.Length, Math.Max(0, end - this.position));
                 for (var i = 0; i < n; i++)
                 {
                     var at = this.position + i;
@@ -421,6 +428,8 @@ namespace TestProbabilisticDataStructures
             }
 
             // Vacuity: the sweep held something to the claims about runs.
+            Console.WriteLine(
+                $"[TWO-PASS] all: payloads {payloadBytes:N0}, runs {runBytes:N0}, moved past by the prices {movedOver:N0}");
             Assert.IsGreaterThan(0L, runBytes, "no sample held a run, so nothing was shown to be moved past");
             Assert.IsGreaterThan(payloadBytes / 2, movedOver,
                 $"the prices moved past {movedOver:N0} of the {payloadBytes:N0} payload bytes, so they mostly read rather than seeked");
@@ -529,13 +538,16 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// A payload in the large form refused for its shape is read no further than where it
-        /// was refused, and its checksum is never read: the Bloom filter's count of hash
-        /// functions, set to none, its checksums repaired, is refused before its bit array.
+        /// was refused, and its checksum is never read: a Bloom filter whose bit array's run
+        /// claims more than the payload holds, its checksums repaired, is refused at the run's
+        /// length prefix, and none of the run is read.
         /// </summary>
         /// <remarks>
         /// #227: if parsing fails before the end, the error names the shape problem and says
         /// the checksum was not reached; the reader does not read on. A reader that held the
-        /// payload had read all of it before parsing.
+        /// payload had read all of it before parsing. The run's prefix is the field to break
+        /// because a Bloom filter's reader checks its other fields only once it has read them
+        /// all, its bit array included.
         /// </remarks>
         [TestMethod]
         public void TestAPayloadRefusedForItsShapeIsReadNoFurther()
@@ -544,21 +556,127 @@ namespace TestProbabilisticDataStructures
             for (var i = 0; i < 40; i++) filter.Add(Key($"w{i}"));
             var bytes = (byte[])LargeForm.WriteLarge(filter).Clone();
             var start = PersistenceFormat.LargeHeaderLength;
+            var payload = bytes.Length - PersistenceFormat.LargeEnvelopeLength;
 
-            // m, then k: the count of hash functions, four bytes in.
-            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(start + 4), 0);
+            // m, k, the placement and the count, then the bucket table's count and width, then
+            // the length prefix of its run.
+            const int prefix = 4 + 4 + 1 + 8 + 4 + 1;
+            Assert.AreEqual((uint)(payload - prefix - 4), BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(start + prefix)),
+                "the bit array's run is not where the layout puts it");
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(start + prefix), (uint)payload);
             var stream = new Recording(LargeForm.Reseal(bytes));
 
             var refused = Assert.ThrowsExactly<InvalidDataException>(() => BloomFilter.ReadFrom(stream));
-            StringAssert.Contains(refused.Message, "no hash functions", refused.Message);
+            StringAssert.Contains(refused.Message, $"while reading {payload} more at offset {prefix + 4}.", refused.Message);
             StringAssert.Contains(refused.Message, NotReached, refused.Message);
 
-            // The fields come before the bit array's run: m, k, the placement, the count, and
-            // the bucket table's count and width.
-            const int fields = 4 + 4 + 1 + 8 + 4 + 1;
             var furthest = stream.Log.Where(a => !a.IsMove).Max(a => a.To);
-            Assert.IsLessThanOrEqualTo((long)start + fields, furthest,
-                $"the filter refused for its count of hash functions was read to byte {furthest:N0} of {bytes.Length:N0}");
+            Assert.IsLessThanOrEqualTo((long)start + prefix + 4, furthest,
+                $"the filter refused at its run's prefix was read to byte {furthest:N0} of {bytes.Length:N0}");
+        }
+
+        /// <summary>
+        /// A stream that reports more than it gives, ending inside a run of the payload while
+        /// its length says the whole envelope is there, is refused for ending before the end of
+        /// the payload, and the run is not returned half read.
+        /// </summary>
+        /// <remarks>
+        /// The length a stream reports is what the large form is held to before it is priced,
+        /// so only a stream whose length is wrong gets past that and runs out in the middle of
+        /// a run. Read straight from the stream into the array that keeps it, the run is
+        /// refused there; a read that stopped at the stream's end and went on would hand back
+        /// an array with its tail never written.
+        /// </remarks>
+        [TestMethod]
+        public void TestAStreamThatEndsInsideARunIsRefusedForEndingThere()
+        {
+            var filter = new BloomFilter(20_000, 0.01);
+            for (var i = 0; i < 40; i++) filter.Add(Key($"w{i}"));
+            var bytes = LargeForm.WriteLarge(filter);
+
+            // The fields and the bit array's prefix, and ten bytes of the bit array.
+            var cut = PersistenceFormat.LargeHeaderLength + 26 + 10;
+            var stream = new Sparse(bytes[..cut], bytes.Length) { GivesOnlyWhatItHolds = true };
+
+            var refused = Assert.ThrowsExactly<InvalidDataException>(() => BloomFilter.ReadFrom(stream));
+            StringAssert.Contains(refused.Message, "before the end of the payload its header claims", refused.Message);
+            StringAssert.Contains(refused.Message, NotReached, refused.Message);
+        }
+
+        /// <summary>
+        /// A source read for its checksum appends every byte it takes, fields and runs alike,
+        /// from the first byte of its payload once it is taken back there, and refuses to move
+        /// past any: what the checksum covers is exactly what was read.
+        /// </summary>
+        /// <remarks>
+        /// The price before it moves past runs, and may; nothing reading the payload for its
+        /// checksum does. A seek there would leave bytes out of the checksum, so it is refused
+        /// as a defect rather than made.
+        /// </remarks>
+        [TestMethod]
+        public void TestASourceReadForItsChecksumTakesEveryByteInTurn()
+        {
+            var bytes = Enumerable.Range(0, 64).Select(i => (byte)(i * 7 + 3)).ToArray();
+            using var stream = new MemoryStream(bytes, writable: false);
+            var source = new PayloadSource(stream);
+
+            source.Take(4);
+            source.Skip(8);
+            Assert.AreEqual(12L, source.Position, "a price's field and skip did not move the source");
+
+            var crc = new Crc32();
+            source.Restart(0, crc);
+            Assert.AreEqual(0L, source.Position, "the source was not taken back to its payload's first byte");
+            CollectionAssert.AreEqual(bytes[..4], source.Take(4).ToArray(), "the source did not start again at its first byte");
+            var run = new byte[12];
+            source.ReadRun(run);
+            CollectionAssert.AreEqual(bytes[4..16], run, "the run was not the bytes after the field");
+            Assert.AreEqual(16L, source.Position);
+            Assert.AreEqual(Crc32.HashToUInt32(bytes.AsSpan(0, 16)), crc.GetCurrentHashAsUInt32(),
+                "the checksum does not cover exactly the bytes taken, a field and a run");
+
+            var refused = Assert.ThrowsExactly<InvalidOperationException>(() => source.Skip(8),
+                "a source read for its checksum moved past bytes");
+            StringAssert.Contains(refused.Message, "checksum", refused.Message);
+            Assert.AreEqual(16L, source.Position, "a refused skip moved the source");
+        }
+
+        /// <summary>
+        /// A large header followed by fewer bytes than the checksum after a payload needs is
+        /// refused as past the stream, whatever length it claims, nothing included: at a
+        /// length of nothing, three bytes after the header are refused for that and four go on
+        /// to the payload, which then has nothing in it for its reader.
+        /// </summary>
+        /// <remarks>
+        /// The bytes after the header less the checksum's four is negative there, and the
+        /// comparison of what remains with the length is unsigned, so the first test is what
+        /// keeps a stream that ends inside its checksum from passing it.
+        /// </remarks>
+        [TestMethod]
+        public void TestAStreamEndingWithinTheChecksumAfterTheHeaderIsRefusedAsPastIt()
+        {
+            var filter = new BloomFilter(200, 0.01);
+            for (var i = 0; i < 40; i++) filter.Add(Key($"w{i}"));
+            var claimed = (byte[])LargeForm.WriteLarge(filter).Clone();
+            BinaryPrimitives.WriteUInt64LittleEndian(claimed.AsSpan(10), 0);
+            var header = SealHeader(claimed)[..PersistenceFormat.LargeHeaderLength];
+
+            for (var after = 0; after <= 4; after++)
+            {
+                var bytes = header.Concat(new byte[after]).ToArray();
+                var refused = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<BloomFilter>(bytes),
+                    $"a large header claiming nothing, and {after} bytes after it, was read");
+                if (after < 4)
+                {
+                    StringAssert.Contains(refused.Message, TestLargeEnvelope.PastTheStream,
+                        $"{after} bytes after the header: {refused.Message}");
+                }
+                else
+                {
+                    Assert.DoesNotContain(TestLargeEnvelope.PastTheStream, refused.Message,
+                        $"the checksum's four bytes after the header were refused as too few: {refused.Message}");
+                }
+            }
         }
 
         /// <summary>
@@ -646,6 +764,45 @@ namespace TestProbabilisticDataStructures
             Assert.IsInstanceOfType<ReadBudgetExceededException>(largest?.InnerException,
                 $"a run of the largest array, which the payload holds, was not refused for its budget: {largest?.Message}");
             Assert.IsLessThan(64L * 1024, allocated, $"refusing a run of the largest array allocated {allocated:N0}");
+        }
+
+        /// <summary>
+        /// A streamed payload whose stream holds a run longer than one array is refused for
+        /// that, under the default budget, and not for its cost: the price stops at the run,
+        /// as the read does, rather than pricing an array no read could make and naming a
+        /// total that no budget would load.
+        /// </summary>
+        /// <remarks>
+        /// A Bloom filter's fields with its bit array's prefix claiming a byte more than the
+        /// largest array, under a header claiming exactly the payload that makes, on a stream
+        /// that claims it all and holds zeros past the fields. Priced as a run, the array
+        /// would be a little over 2 GiB, twice the default budget.
+        /// </remarks>
+        [TestMethod]
+        public void TestARunPastOneArrayInAStreamedPayloadIsRefusedForThatNotPriced()
+        {
+            var filter = new BloomFilter(200, 0.01);
+            for (var i = 0; i < 40; i++) filter.Add(Key($"w{i}"));
+            var bytes = LargeForm.WriteLarge(filter);
+
+            // m, k, the placement and the count, then the bucket table's count and width, then
+            // the length prefix of its run.
+            const int prefix = 4 + 4 + 1 + 8 + 4 + 1;
+            var start = PersistenceFormat.LargeHeaderLength;
+            var run = (ulong)Array.MaxLength + 1;
+            var claimed = (ulong)prefix + 4 + run;
+
+            var head = bytes[..(start + prefix + 4)];
+            BinaryPrimitives.WriteUInt32LittleEndian(head.AsSpan(start + prefix), (uint)run);
+            BinaryPrimitives.WriteUInt64LittleEndian(head.AsSpan(10), claimed);
+            head = SealHeader(head);
+            var stream = new Sparse(head, PersistenceFormat.LargeEnvelopeLength + (long)claimed);
+
+            var refused = Assert.ThrowsExactly<InvalidDataException>(() => BloomFilter.ReadFrom(stream),
+                "a Bloom filter whose bit array claims more than one array holds was read");
+            Assert.IsNotInstanceOfType<ReadBudgetExceededException>(refused.InnerException,
+                $"a run no array holds was priced, and refused for its cost: {refused.Message}");
+            StringAssert.Contains(refused.Message, "cannot be read into a single array", refused.Message);
         }
 
         private static InvalidDataException RunOver(long length, uint claim, ReadBudget budget)

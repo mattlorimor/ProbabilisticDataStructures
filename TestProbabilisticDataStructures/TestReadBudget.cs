@@ -118,8 +118,10 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A sample of every structure, sized so its read allocates well past the slack.
-        /// Built once per run, on first use.
+        /// A sample of every structure, sized so its read allocates well past the slack in
+        /// either form of the envelope: in the large form, whose payload is read from the
+        /// stream rather than held, a read allocates only what the structure keeps. Built
+        /// once per run, on first use.
         /// </summary>
         internal static readonly Lazy<Dictionary<StructureId, Sample>> Samples = new(() =>
             new Dictionary<StructureId, Sample>
@@ -151,7 +153,7 @@ namespace TestProbabilisticDataStructures
                 [StructureId.MinHashSignature] = Of("MinHashSignature",
                     MinHash.Signature(new[] { "alpha", "beta", "gamma" }, 20_000)),
                 [StructureId.BinaryFuseFilter] = Of("BinaryFuseFilter",
-                    BinaryFuseFilter.Build(Enumerable.Range(0, 50_000).Select(i => Key(i)))),
+                    BinaryFuseFilter.Build(Enumerable.Range(0, 60_000).Select(i => Key(i)))),
                 [StructureId.DDSketch] = Of("DDSketch", DenseDDSketch(),
                     refusesAHashBecause: "it holds values rather than bytes, and hashes nothing"),
                 [StructureId.HyperLogLogPlus] = Of("HyperLogLogPlus",
@@ -159,7 +161,7 @@ namespace TestProbabilisticDataStructures
                 [StructureId.QuotientFilter] = Of("QuotientFilter",
                     Filled(new QuotientFilter(50_000, 0.001), (f, k) => f.Add(k), 5000)),
                 [StructureId.ThetaSketch] = Of("ThetaSketch",
-                    Filled(new ThetaSketch(4096), (s, k) => s.Add(k), 100_000)),
+                    Filled(new ThetaSketch(8192), (s, k) => s.Add(k), 100_000)),
                 [StructureId.SimHashSignature] = Of("SimHashSignature", new SimHashSignature(42),
                     smallBecause: "it is one 64-bit value, and its payload is all it allocates"),
                 [StructureId.CountSketch] = Of("CountSketch",
@@ -177,14 +179,14 @@ namespace TestProbabilisticDataStructures
                 [StructureId.UltraLogLog] = Of("UltraLogLog",
                     Filled(new UltraLogLog(16), (s, k) => s.Add(k), 5000)),
                 [StructureId.Grafite] = Of("Grafite",
-                    Grafite.Build(Enumerable.Range(0, 20_000).Select(i => (ulong)i * 1009), 0.01, 64, seed: 7),
+                    Grafite.Build(Enumerable.Range(0, 40_000).Select(i => (ulong)i * 1009), 0.01, 64, seed: 7),
                     refusesAHashBecause: "it holds numbers rather than bytes, and hashes nothing"),
                 [StructureId.InfiniFilter] = Of("InfiniFilter",
                     Filled(new InfiniFilter(10_000), (f, k) => f.Add(k), 20_000)),
                 [StructureId.MementoFilter] = Of("MementoFilter", FilledMemento(),
                     refusesAHashBecause: "it holds numbers rather than bytes, and hashes nothing"),
                 [StructureId.SublimeCountMinSketch] = Of("SublimeCountMinSketch",
-                    Filled(new SublimeCountMinSketch(0.01), (s, k) => s.Add(k), 200_000)),
+                    Filled(new SublimeCountMinSketch(0.01), (s, k) => s.Add(k), 400_000)),
                 [StructureId.SetSketch] = Of("SetSketch",
                     Filled(new SetSketch(16_384), (s, k) => s.Add(k), 5000)),
                 [StructureId.TupleSketch] = Of("TupleSketch",
@@ -464,7 +466,10 @@ namespace TestProbabilisticDataStructures
         /// are in the large form too, so the price of a nested large envelope, worked out
         /// where it lies in the outer payload, is held to what reading it charges. A price
         /// that did not recognise the flag would stop at the first nested envelope and
-        /// leave the rest to be charged unpriced.
+        /// leave the rest to be charged unpriced. The further samples are held to it too:
+        /// what reading an envelope in the large form allocates around its payload is
+        /// charged once per envelope and is a few hundred bytes, which only a read of
+        /// thousands of them, a scalable filter's, carries past the slack.
         /// </remarks>
         [TestMethod]
         [DynamicData(nameof(Structures))]
@@ -477,6 +482,16 @@ namespace TestProbabilisticDataStructures
             var large = InTheLargeForm(sample);
             AssertHonest(id, large);
             AssertOneTotal(id, large);
+
+            if (Further.Value.TryGetValue(id, out var further))
+            {
+                foreach (var (_, more) in further)
+                {
+                    var largeMore = InTheLargeForm(more);
+                    AssertHonest(id, largeMore);
+                    AssertOneTotal(id, largeMore);
+                }
+            }
         }
 
         /// <summary>

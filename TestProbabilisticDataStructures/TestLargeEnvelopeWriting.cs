@@ -250,7 +250,7 @@ namespace TestProbabilisticDataStructures
             const uint width = 268_435_446;
             const long claimed = 12 + 8L * width;
             Assert.IsGreaterThan((long)PersistenceFormat.MaxPayloadLength, claimed);
-            Assert.IsLessThanOrEqualTo((long)int.MaxValue, 8L * width, "the claimed run is past the longest");
+            Assert.IsLessThanOrEqualTo(PayloadWriter.LongestRun, 8L * width, "the claimed run is past the longest");
 
             var sketch = new CountSketch(0.5, 0.5);
             for (var i = 0; i < 40; i++) sketch.Add(Key($"c{i}"), i % 5 - 2);

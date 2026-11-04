@@ -105,7 +105,9 @@ namespace ProbabilisticDataStructures
     /// what came before, as it did when every charge was made as the read went.
     /// <para>
     /// The reader may be over a held payload or over one read from its stream; a price
-    /// reads fields and skips runs, which both allow, and never copies one.
+    /// reads fields and skips runs, which both allow, and never copies one. Over a payload
+    /// in the large form it is the first of two passes over the stream, so the fields it
+    /// reads are read twice, and what it skips is sought over, never read.
     /// </para>
     /// </remarks>
     internal delegate void PayloadPrice(ref PayloadReader reader, ushort version);
@@ -726,6 +728,9 @@ namespace ProbabilisticDataStructures
         /// structure, or has been corrupted; or the structure's reader refused the
         /// payload.
         /// </exception>
+        /// <exception cref="NotSupportedException">
+        /// The envelope is in the large form and the stream cannot seek.
+        /// </exception>
         /// <remarks>
         /// <paramref name="price"/>, <paramref name="supplied"/> and
         /// <paramref name="checkHash"/> are as
@@ -749,9 +754,10 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Reads an envelope in the large form, whose first <see cref="HeaderLength"/> bytes
-        /// have been read, and the structure in it, and returns the structure only once the
-        /// checksum at the end of its payload has matched.
+        /// have been read, and the structure in it, from a stream that can seek, and returns
+        /// the structure only once the checksum at the end of its payload has matched.
         /// </summary>
+        /// <exception cref="NotSupportedException">The stream cannot seek.</exception>
         /// <remarks>
         /// The header's own checksum is checked before any field it covers is used, so a
         /// damaged structure id or length is refused as damaged, never acted on, as the
@@ -764,10 +770,16 @@ namespace ProbabilisticDataStructures
         /// that the checksum was not reached, and nothing past the point of refusal is
         /// read.
         /// <para>
-        /// The payload is held here, read into one array as the ordinary envelope's is, so
-        /// one longer than an array is refused for that before it is priced, as an
-        /// ordinary header's length is; a reader that streams the large form lifts that
-        /// (#226).
+        /// The payload is never held (#226). It is read from the stream twice. First the
+        /// structure's price walks it, reading the fields the price depends on and seeking
+        /// over the rest, so that the read is priced whole before anything the payload
+        /// claims is allocated, and a refusal names a total that loads. Then the reader
+        /// reads it from its first byte again, taking every byte in order, each run straight
+        /// into the array that keeps it, and appending each to the running checksum. A
+        /// stream that cannot seek back between the two is refused for that, once the
+        /// header's checksum has held and before the hash is checked, since no hash would
+        /// make it readable. A length past what the stream holds is refused before it is
+        /// priced, so that no refusal names a budget for bytes that are not there.
         /// </para>
         /// </remarks>
         private static T ReadLarge<T>(
@@ -778,15 +790,14 @@ namespace ProbabilisticDataStructures
             first.CopyTo(header);
             ReadExactly(stream, header[HeaderLength..], "rest of the large header");
             var length = CheckLargeHeader(header, expected, out var version, out var hash);
-            var envelope = EnvelopeCost(length);
 
-            // Held, so refused past one array for that, as the ordinary header's length
-            // is, before it is priced as though it could be read.
-            if (length > (ulong)Array.MaxLength)
+            if (!stream.CanSeek)
             {
-                throw new InvalidDataException(
-                    $"Payload claims a length of {length} bytes, which cannot be read " +
-                    "into a single array.");
+                throw new NotSupportedException(
+                    $"The {expected} is in the large form, whose payload of {length:N0} bytes is " +
+                    "priced in one pass over the stream and read in a second, and this stream " +
+                    "cannot seek back between them. Copy it to a file, or to another stream " +
+                    "that can seek, and read it from there.");
             }
 
             // The header is vouched for by its own checksum, so the hash it names is
@@ -794,34 +805,38 @@ namespace ProbabilisticDataStructures
             // checksum has vouched for it.
             checkHash(hash, supplied);
 
-            var pricing = !budget.IsSettled;
-            if (pricing)
+            var start = stream.Position;
+            var held = stream.Length - start;
+            if (held < ChecksumLength || (ulong)(held - ChecksumLength) < length)
             {
-                budget.Price(envelope);
-                if (budget.Charged > budget.Limit)
-                {
-                    PriceUnheld(stream, length, version, budget, price);
-                    throw ChecksumNotReached(budget.Refusal(budget.Charged), expected);
-                }
-            }
-            else
-            {
-                budget.Charge(envelope);
+                throw new InvalidDataException(
+                    $"The stream ended {Math.Max(held, 0):N0} bytes after the large form's header, " +
+                    $"too few for the {length:N0}-byte payload it claims and the checksum after " +
+                    "it. The data has been truncated.");
             }
 
-            var payload = ReadExactly(stream, (int)length, "payload");
+            var envelope = LargeEnvelopeCost;
             var crc = new Crc32();
             crc.Append(header[MagicLength..LargeFieldsLength]);
+            var source = new PayloadSource(stream);
 
             T structure;
             try
             {
-                if (pricing)
+                if (budget.IsSettled)
                 {
-                    PriceHeld(payload, version, budget, price, envelope);
+                    budget.Charge(envelope);
+                }
+                else
+                {
+                    budget.Price(envelope);
+                    PriceUnheld(source, length, version, budget, price);
+                    budget.Settle();
+                    budget.Charge(envelope);
                 }
 
-                var reader = new PayloadReader(payload, budget);
+                source.Restart(start, crc);
+                var reader = new PayloadReader(source, (long)length, budget);
                 structure = parse(ref reader, version, hash, supplied);
                 reader.ExpectEnd();
             }
@@ -831,7 +846,6 @@ namespace ProbabilisticDataStructures
             }
 
             var checksum = ReadExactly(stream, ChecksumLength, "checksum");
-            crc.Append(payload);
 
             var expectedCrc = crc.GetCurrentHashAsUInt32();
             var actualCrc = BinaryPrimitives.ReadUInt32LittleEndian(checksum);
@@ -916,7 +930,7 @@ namespace ProbabilisticDataStructures
                 if (budget.Charged > budget.Limit)
                 {
                     checkHash(hash, supplied);
-                    PriceUnheld(stream, length, version, budget, price);
+                    PriceUnheld(new PayloadSource(stream), length, version, budget, price);
                     throw budget.Refusal(budget.Charged);
                 }
             }
@@ -976,8 +990,10 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Prices a payload too large for its budget to be held, reading it from the
-        /// stream, so that the refusal can name the whole of the read.
+        /// Prices a payload that is not held, reading it from its stream through
+        /// <paramref name="source"/>: an ordinary one too large for its budget to be held, so
+        /// that the refusal can name the whole of the read, and one in the large form, which
+        /// is priced this way before it is read.
         /// </summary>
         /// <remarks>
         /// Its checksum cannot be checked without reading it all, so the price rests on
@@ -986,9 +1002,9 @@ namespace ProbabilisticDataStructures
         /// priced as far as it goes.
         /// </remarks>
         private static void PriceUnheld(
-            Stream stream, ulong length, ushort version, ReadBudget budget, PayloadPrice price)
+            PayloadSource source, ulong length, ushort version, ReadBudget budget, PayloadPrice price)
         {
-            var reader = new PayloadReader(new PayloadSource(stream), (long)length, budget);
+            var reader = new PayloadReader(source, (long)length, budget);
             try
             {
                 price(ref reader, version);
@@ -1465,13 +1481,13 @@ namespace ProbabilisticDataStructures
             {
                 envelope.ReadSpan(LargeHeaderLength - HeaderLength).CopyTo(header[HeaderLength..]);
                 length = CheckLargeHeader(header, nested, out version, out _);
+                envelope.Budget.Price(LargeEnvelopeCost);
             }
             else
             {
                 length = CheckHeader(header, nested, out version, out _);
+                envelope.Budget.Price(EnvelopeCost(length));
             }
-
-            envelope.Budget.Price(EnvelopeCost(length));
 
             var payload = envelope.Slice((long)length);
             price(ref payload, version);
@@ -1506,19 +1522,33 @@ namespace ProbabilisticDataStructures
         internal const int MinNestedLength = sizeof(uint) + HeaderLength + ChecksumLength;
 
         /// <summary>
-        /// What reading an envelope with a payload of <paramref name="length"/> bytes
-        /// allocates: the payload, the header and checksum buffers, and the checksum's
-        /// state.
+        /// What reading an ordinary envelope with a payload of <paramref name="length"/>
+        /// bytes allocates: the payload, the header and checksum buffers, and the
+        /// checksum's state.
         /// </summary>
-        /// <remarks>
-        /// The same for either form, while both hold the payload: the rest of a large
-        /// header is read onto the stack, beside the ordinary header's buffer.
-        /// </remarks>
         internal static long EnvelopeCost(ulong length) => ReadBudget.Sum(
             ReadBudget.ArrayOf(length, 1),
             ReadBudget.ArrayOf(HeaderLength, 1),
             ReadBudget.ArrayOf(ChecksumLength, 1),
             ReadBudget.SmallObject);
+
+        /// <summary>
+        /// What reading an envelope in the large form allocates around its payload, which is
+        /// read from the stream rather than held (#226): the header and checksum buffers,
+        /// the checksum's state, and the source the payload is read through, with its
+        /// buffer for a field. The same whatever the payload's length, and the same whether
+        /// the read is priced first or not, since both passes read through one source.
+        /// </summary>
+        /// <remarks>
+        /// The rest of the large header is read onto the stack, beside the ordinary
+        /// header's buffer.
+        /// </remarks>
+        internal static long LargeEnvelopeCost => ReadBudget.Sum(
+            ReadBudget.ArrayOf(HeaderLength, 1),
+            ReadBudget.ArrayOf(ChecksumLength, 1),
+            ReadBudget.SmallObject,
+            ReadBudget.SmallObject,
+            ReadBudget.ArrayOf(PayloadSource.WidestField, 1));
 
         /// <summary>
         /// What a nested read allocates around the run it reads from: a stream over it
