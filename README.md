@@ -178,11 +178,14 @@ default up to** is the largest that reads back under the default budget of 1,073
 bytes (see [loading files you didn't write](#loading-files-you-didnt-write)); a larger one
 reads back with `ReadFrom(stream, new ReadOptions(bytes))` or `ReadOptions.Unlimited`, and
 `any` means every size that can be built reads back by default. **Saves up to** is the
-largest that can be written at all. A structure is written into one array, wrapped in
-a frame in another and read back from a third, so a payload is at most 2,147,483,573
-bytes, whatever the structure was built at, and one built larger works but cannot be
-saved. `as built` means the largest build is under that. Reading a payload takes at least
-twice its size in budget, so the default reads payloads of up to about half a gigabyte.
+largest that can be saved as one array, with `ToByteArray`, and in the envelope every
+release that reads its format version reads. That array holds the payload and a frame
+around it, so a payload is at most 2,147,483,573 bytes, whatever the structure was built
+at. Past 2 GiB the `Stream` overloads are the way: `WriteTo` writes a structure built
+larger in the large form of the envelope, unless one run in its payload, such as a table
+written whole, would pass `int.MaxValue` bytes, which nothing writes yet. `as built` means
+the largest build is under that. Reading a payload takes at least twice its size in
+budget, so the default reads payloads of up to about half a gigabyte.
 
 The numbers are for the settings in the second column, and settings move them:
 [CAPACITY.md](CAPACITY.md) gives, for each structure, the rule that does. A `≈` is a

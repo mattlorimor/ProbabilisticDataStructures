@@ -380,15 +380,16 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
         /// <exception cref="InvalidOperationException">
-        /// The payload would be longer than <see cref="PersistenceFormat.MaxPayloadLength"/>,
-        /// which a sketch holding enough buckets, between its two signs, can be: the counts
-        /// are eight bytes a bucket. The sketch is intact and can still be used, and nothing
-        /// is written.
+        /// One sign's buckets would be a run longer than
+        /// <see cref="PayloadWriter.LongestRun"/>, which a sketch holding enough buckets of
+        /// that sign can be: the counts are eight bytes a bucket, and each sign's are one
+        /// run. The sketch is intact and can still be used, and nothing is written.
         /// </exception>
         /// <remarks>
         /// The payload is counted first, by the writes that write it. The two signs share
-        /// the one payload, so it is the length of both runs together that is held to the
-        /// limit.
+        /// the one payload, and a payload past what the ordinary envelope holds is written in
+        /// the large form, so it is each sign's run that is held to a limit, and the two
+        /// together only by <see cref="Persistence.ToByteArray{T}"/>, which returns one array.
         /// </remarks>
         public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
@@ -748,8 +749,8 @@ namespace ProbabilisticDataStructures
                 payload.WriteUInt32(unchecked((uint)this.MinIndex));
 
                 // A counter counts the run whole here, however long. A writer is given it
-                // only once the count has refused a run too long for a payload, which is far
-                // fewer buckets than an int holds, so the cast and the offsets below cannot
+                // only once the count has refused a run longer than a payload holds, which is
+                // far fewer buckets than an int holds, so the cast and the offsets below cannot
                 // overflow; the checked cast is there so that a write that had not been
                 // counted would fail rather than write a short run.
                 if (payload.BeginRun(BytesOf(this.Span)))

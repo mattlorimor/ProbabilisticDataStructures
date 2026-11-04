@@ -74,9 +74,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   On a mismatch the structure read is discarded, and a refusal before the end says the
   checksum was not reached. Releases up to 6.2.0 refuse such a payload as written by a
   later version. Every reader here reads it, nested envelopes included, holding the
-  payload as it holds an ordinary one. Nothing written changes: a payload that fits the
-  ordinary envelope is written in it, byte for byte as before, and one past the ordinary
-  ceiling is still refused until the writer streams its payload. (#222, #223, #224, #227)
+  payload as it holds an ordinary one. Nothing written changes for a payload that fits the
+  ordinary envelope: it is written in it, byte for byte as before. One past it is written in
+  the large form, streamed (#225). (#222, #223, #224, #227)
+
+- **`WriteTo` saves a structure past 2 GiB, in the large form, streamed.** A payload longer
+  than the ordinary envelope holds, 2,147,483,573 bytes, was refused by `WriteTo`. It is now
+  written in the large form of the envelope as it is produced: the header, with the length
+  counted beforehand, then the payload through a 64 KiB buffer, the checksum carried on over
+  each piece as it goes, then the checksum. Nothing the size of the payload is held: written
+  in the large form, payloads of 1.1 to 2.4 MB each allocated the buffer and 240 bytes more,
+  where the ordinary envelope allocates the payload twice. A payload that fits the ordinary
+  envelope is written as before, byte for byte, built in memory and written in one call, so
+  a write refused before then still writes nothing. A write in the large form that fails
+  part-way can leave the beginning of an envelope in the stream, which a reader refuses by
+  its length or its checksum; `WriteTo`'s documentation says so. `ToByteArray` of such a
+  structure throws an `InvalidOperationException` before writing anything, naming the
+  payload's size and saying to write it with `WriteTo(Stream)` instead. One limit stays: no
+  single run in a payload, such as a table written whole or a structure held inside another,
+  can be longer than `int.MaxValue` bytes yet, the most a reader takes into one array. A
+  structure that would need one is refused by `WriteTo` and `ToByteArray` alike, naming the
+  run, before anything is written. (#225, #229)
 
 ### Changed
 
@@ -391,7 +409,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   4,294,967,206 bytes, is now refused by that figure. A `TopK`
   counts the sketch inside it through the sketch's own layout. The bytes written are
   unchanged, and a payload that fits is now built into a buffer allocated once, at its
-  counted size. (#216)
+  counted size. Past that size `WriteTo` now writes the large form instead, and the refusal
+  by size is `ToByteArray`'s (#225, #229). (#216)
 
 - **A `CountMinSketch` counter, and its total, wrapped to nought at 2^64 instead of
   stopping at `ulong.MaxValue`, so `Merge` could take an estimate to 0.** A wrapped counter
