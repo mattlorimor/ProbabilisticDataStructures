@@ -309,13 +309,8 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         internal void Increment(int index)
         {
-            var chunk = ChunkOf(index, out var i);
-            var stubAt = ChunkStart(chunk) + _stubBase + i * _stubBits;
-
-            var stub = ReadBits(_words, stubAt, _stubBits);
-            if (stub != _stubMask)
+            if (IncrementInStub(index))
             {
-                WriteBits(_words, stubAt, _stubBits, stub + 1);
                 return;
             }
 
@@ -324,6 +319,41 @@ namespace ProbabilisticDataStructures
             {
                 Set(index, value + 1);
             }
+        }
+
+        /// <summary>
+        /// Adds one to a counter where its stub lies, if the stub has room for it, and says
+        /// whether it did; a counter whose stub is full is left as it is.
+        /// </summary>
+        /// <remarks>
+        /// This is <see cref="Increment"/>'s short cut, which most increments stop at. It
+        /// touches the stub and nothing else, so it cannot allocate, and
+        /// <see cref="TakeBackFromStub"/> undoes it exactly.
+        /// </remarks>
+        internal bool IncrementInStub(int index)
+        {
+            var chunk = ChunkOf(index, out var i);
+            var stubAt = ChunkStart(chunk) + _stubBase + i * _stubBits;
+
+            var stub = ReadBits(_words, stubAt, _stubBits);
+            if (stub == _stubMask)
+            {
+                return false;
+            }
+
+            WriteBits(_words, stubAt, _stubBits, stub + 1);
+            return true;
+        }
+
+        /// <summary>
+        /// Takes back an add that <see cref="IncrementInStub"/> took, leaving the stub as it
+        /// was before.
+        /// </summary>
+        internal void TakeBackFromStub(int index)
+        {
+            var chunk = ChunkOf(index, out var i);
+            var stubAt = ChunkStart(chunk) + _stubBase + i * _stubBits;
+            WriteBits(_words, stubAt, _stubBits, ReadBits(_words, stubAt, _stubBits) - 1);
         }
 
         /// <summary>

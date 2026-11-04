@@ -441,25 +441,22 @@ namespace ProbabilisticDataStructures
             }
 
             // So does the add that crowds the rows into being laid out again, by moving their
-            // chunks to tails arrays: it is told by asking each row before any is changed.
-            var moving = 0;
+            // chunks to tails arrays. Most of an add's increments stop at a stub with room,
+            // which can neither allocate nor move a chunk, so those are taken at once, and
+            // only a row whose stub is full is asked whether its increment would move its
+            // chunk. An add that would crowd the rows takes the others back, exactly, before
+            // it builds anything, so that the rows are built from the sketch as it was.
             for (var i = 0; i < this.rows.Length; i++)
             {
-                if (this.rows[i].IncrementMovesToTails(ColumnOf(kernel, i)))
+                if (!this.rows[i].IncrementInStub(ColumnOf(kernel, i)))
                 {
-                    moving++;
+                    if (TakeFullStubsOrRepack(kernel, i))
+                    {
+                        return this;
+                    }
+
+                    break;
                 }
-            }
-
-            if (moving > 0 && Crowded(ChunksOnTails() + moving))
-            {
-                Repack(kernel);
-                return this;
-            }
-
-            for (var i = 0; i < this.rows.Length; i++)
-            {
-                this.rows[i].Increment(ColumnOf(kernel, i));
             }
 
             // The count stops at the largest a ulong holds, as a counter does. It wrapped
@@ -467,6 +464,61 @@ namespace ProbabilisticDataStructures
             // doublings back to their start with it.
             this.count = OneMore(this.count);
             return this;
+        }
+
+        /// <summary>
+        /// Takes the rest of an add whose increment in row <paramref name="first"/> found its
+        /// stub full, the rows before it having taken theirs in their stubs: the remaining rows'
+        /// increments, or, if the increments past a full stub would crowd the rows, none of
+        /// them, taking back those already taken in their stubs and laying the rows out again
+        /// with the key counted. Returns whether it laid them out, which counts the key;
+        /// otherwise the add counts it.
+        /// </summary>
+        /// <remarks>
+        /// Apart from <see cref="Add(ReadOnlySpan{byte})"/> so that an add whose increments
+        /// all stop at a stub, which is most of them, pays for none of it.
+        /// </remarks>
+        private bool TakeFullStubsOrRepack(in HashKernelReturnValue kernel, int first)
+        {
+            // The row that found its stub full finds it full again, and changes nothing.
+            Span<bool> full = stackalloc bool[this.rows.Length];
+            for (var i = first; i < this.rows.Length; i++)
+            {
+                full[i] = !this.rows[i].IncrementInStub(ColumnOf(kernel, i));
+            }
+
+            var moving = 0;
+            for (var i = 0; i < this.rows.Length; i++)
+            {
+                if (full[i] && this.rows[i].IncrementMovesToTails(ColumnOf(kernel, i)))
+                {
+                    moving++;
+                }
+            }
+
+            if (moving > 0 && Crowded(ChunksOnTails() + moving))
+            {
+                for (var i = 0; i < this.rows.Length; i++)
+                {
+                    if (!full[i])
+                    {
+                        this.rows[i].TakeBackFromStub(ColumnOf(kernel, i));
+                    }
+                }
+
+                Repack(kernel);
+                return true;
+            }
+
+            for (var i = 0; i < this.rows.Length; i++)
+            {
+                if (full[i])
+                {
+                    this.rows[i].Increment(ColumnOf(kernel, i));
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -1363,10 +1415,12 @@ namespace ProbabilisticDataStructures
         /// an add can take the sketch past it only by putting a chunk on tails, so the
         /// counters are laid out again at exactly the adds they always were.
         /// <para>
-        /// The add asks each row whether its increment would put a chunk on tails, and asks
-        /// this of the count it would leave, before it changes anything. It used to take the
-        /// increments, count again and then ask, and the answer is the same: each row's
-        /// increment moves at most its own chunk, and moves it exactly when the row says so.
+        /// The add asks each row whose stub is full whether its increment would put a chunk on
+        /// tails, and asks this of the count that would leave, before it takes any increment
+        /// it could not take back. It used to take the increments, count again and then ask,
+        /// and the answer is the same: each row's increment moves at most its own chunk, an
+        /// increment that stops at a stub moves none, and the others move it exactly when the
+        /// row says so.
         /// </para>
         /// </remarks>
         private bool Crowded(int onTails)

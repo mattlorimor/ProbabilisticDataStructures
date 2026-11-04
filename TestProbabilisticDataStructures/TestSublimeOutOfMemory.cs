@@ -377,21 +377,44 @@ namespace TestProbabilisticDataStructures
         /// arrays as it went, and count the key, and only then lay the rows out again, so a
         /// failure there left the key counted though the add threw. At rows of 64 every row is
         /// one chunk, so the add that spills the first chunk crowds them.
+        /// <para>
+        /// The add takes at once the increments that stop at a stub with room, and takes them
+        /// back if the others crowd the rows. So one row may be given room, by setting its
+        /// counter one lower by hand: the first, which takes its increment before any row finds
+        /// a full stub, a middle one or the last, which take theirs after, or none. Each is laid
+        /// out with the key counted once.
+        /// </para>
         /// </remarks>
         [TestMethod]
-        public void TestACrowdedAddThatRunsOutOfMemoryLayingTheRowsOutLeavesTheSketchAsItWas()
+        [DataRow(-1, DisplayName = "no row with room")]
+        [DataRow(0, DisplayName = "room in the first row")]
+        [DataRow(1, DisplayName = "room in the middle row")]
+        [DataRow(2, DisplayName = "room in the last row")]
+        public void TestACrowdedAddThatRunsOutOfMemoryLayingTheRowsOutLeavesTheSketchAsItWas(int roomy)
         {
-            SublimeCountMinSketch Make() => OneAddFromSpilling(1.0);
+            SublimeCountMinSketch Make()
+            {
+                var sketch = OneAddFromSpilling(1.0);
+                if (roomy >= 0)
+                {
+                    var row = RowsOf(sketch)[roomy];
+                    row.Set(Spiller, row.Get(Spiller) - 1);
+                }
+                return sketch;
+            }
 
             var twin = Make();
             Assert.AreEqual(64, twin.Width);
             var rows = RowsOf(twin).ToArray();
+            var before = rows.Select(row => row.Get(Spiller)).ToArray();
             twin.Add(At(Spiller));
             Assert.AreEqual(64, twin.Width, "the add doubled the rows");
             for (var i = 0; i < rows.Length; i++)
             {
                 Assert.AreNotSame(rows[i], RowsOf(twin)[i],
-                    $"row {i} was not laid out again by the add that spilled its only chunk");
+                    $"row {i} was not laid out again by the add that spilled the others' chunks");
+                Assert.AreEqual(before[i] + 1, RowsOf(twin)[i].Get(Spiller),
+                    $"row {i} did not count the key once");
             }
 
             var wrong = new List<string>();
