@@ -347,6 +347,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behaviour. It is not written with the filter, so the stored format does not change and a
   filter read back has the default. `MementoFilter` shipped in 6.2.0, so 6.2.0 is affected.
 
+- **`StableBloomFilter` and `CuckooBloomFilter` take a `ulong?` seed, and that is a breaking
+  change.** They took an `int?` and widened it to the generator's 64 bits, so only 2^32 of
+  its starting states could be chosen; every other seeded structure already took a
+  `ulong?`. Code compiled against 6.2.0 has to be rebuilt. A non-negative constant such as
+  `seed: 42` compiles unchanged and gives the same sequence as before. An `int` variable
+  needs a cast, and a negative seed needs the conversion the filters used to make: pass
+  `unchecked((ulong)seed)`, which is 2^64 + seed, so `-1` becomes `ulong.MaxValue`, for the
+  sequence the `int` gave. Stored filters are unaffected: they record where their generator
+  is and where it began as 64-bit values, and resume from those however they were seeded.
+  (#235)
+
 ### Fixed
 
 - **`WriteTo` of any structure too large to write now refuses it, by its whole

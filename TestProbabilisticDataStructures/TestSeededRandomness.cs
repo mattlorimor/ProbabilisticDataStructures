@@ -26,9 +26,18 @@ namespace TestProbabilisticDataStructures
                 System.IO.Hashing.XxHash3.Hash(structure.ToByteArray()));
         }
 
+        /// <summary>
+        /// An <c>int</c> seed as the filters took it before their seeds were 64-bit: widened
+        /// with sign extension, the conversion the CHANGELOG gives a caller with a negative
+        /// one. The helpers here keep <c>int</c> rows, and so their pinned sequences, by
+        /// passing each through it.
+        /// </summary>
+        private static ulong? AsTheIntSeedWas(int? seed) =>
+            seed is null ? null : unchecked((ulong)seed.Value);
+
         private static StableBloomFilter FilledStable(int? seed)
         {
-            var f = new StableBloomFilter(1000, 2, 0.01, seed: seed);
+            var f = new StableBloomFilter(1000, 2, 0.01, seed: AsTheIntSeedWas(seed));
             Feed(f);
 
             return f;
@@ -54,7 +63,7 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         private static CuckooBloomFilter FilledCuckoo(int? seed)
         {
-            var f = new CuckooBloomFilter(100, 0.01, seed: seed);
+            var f = new CuckooBloomFilter(100, 0.01, seed: AsTheIntSeedWas(seed));
             FeedCuckoo(f);
 
             return f;
@@ -337,7 +346,7 @@ namespace TestProbabilisticDataStructures
         /// A new filter of the shape FilledStable builds: what a reset one has to equal.
         /// </summary>
         private static byte[] NewStable(int seed) =>
-            new StableBloomFilter(1000, 2, 0.01, seed: seed).ToByteArray();
+            new StableBloomFilter(1000, 2, 0.01, seed: AsTheIntSeedWas(seed)).ToByteArray();
 
         private static void AddMore(StableBloomFilter f, string prefix, int count)
         {
@@ -583,7 +592,7 @@ namespace TestProbabilisticDataStructures
         /// A new filter of the shape FilledCuckoo builds: what a reset one has to equal.
         /// </summary>
         private static byte[] NewCuckoo(int seed) =>
-            new CuckooBloomFilter(100, 0.01, seed: seed).ToByteArray();
+            new CuckooBloomFilter(100, 0.01, seed: AsTheIntSeedWas(seed)).ToByteArray();
 
         private static void AddMore(CuckooBloomFilter f, string prefix, int count)
         {
