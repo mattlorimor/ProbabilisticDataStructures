@@ -17,9 +17,10 @@ namespace TestProbabilisticDataStructures
     /// <see cref="OverflowException"/> from the allocation; from 2^29 the product wrapped to
     /// something small and positive, and the loop that filled it ran off the end instead.
     /// Such a sketch can be built and used: the constructor allows a run of
-    /// <see cref="Array.MaxLength"/> buckets, 16 GiB of counts. It cannot be written,
-    /// since its payload would not fit an envelope, and that is a thing the payload writer
-    /// says clearly (see <see cref="TestPayloadWriterGrowth"/>) rather than as an overflow.
+    /// <see cref="Array.MaxLength"/> buckets, 16 GiB of counts. It cannot be made a byte
+    /// array, since its payload would not fit one, and from 2^28 buckets of one sign it
+    /// cannot be written at all yet, since that sign's run is longer than any run a payload
+    /// holds; both are things the payload writer says clearly rather than as an overflow.
     /// A run that long is not something a test builds -- the smallest unwritable one is
     /// two gibibytes of counts, and holding it in memory is the cost of building it -- so the
     /// write path is run on a sketch whose store has been told it spans more than it holds,
@@ -162,6 +163,9 @@ namespace TestProbabilisticDataStructures
                 PersistenceFormat.CheckPayloadLength(counter.Length);
             }
 
+            // A sign's run past int.MaxValue bytes, the longest a payload holds, is refused
+            // for that by the count, before the payload's whole size is known, and by
+            // WriteTo too; the positive sign's is counted first.
             foreach (var (positive, negative) in new[]
             {
                 (LargestRun + 1, 0L),
@@ -174,8 +178,16 @@ namespace TestProbabilisticDataStructures
             })
             {
                 var sketch = Claiming(positive, negative, out var shape);
-                TestPayloadCount.AssertRefusedWhileClaiming(
-                    sketch, Fixed + 8 * (positive + negative), shape);
+                var longest = 8 * Math.Max(positive, negative);
+                if (longest > int.MaxValue)
+                {
+                    TestPayloadCount.AssertRunRefusedWhileClaiming(sketch, longest, shape);
+                }
+                else
+                {
+                    TestPayloadCount.AssertRefusedWhileClaiming(
+                        sketch, Fixed + 8 * (positive + negative), shape);
+                }
             }
         }
 
@@ -203,11 +215,14 @@ namespace TestProbabilisticDataStructures
             // Index 0 is the only bucket the value has, so this makes the run [0, span).
             SetMaxIndex(sketch, side, span - 1);
 
+            // Each row's run is past int.MaxValue bytes, the longest a payload holds, which is
+            // what refuses it, in the count; the payload as a whole would go to the stream in
+            // the large form.
             using var stream = new MemoryStream();
             var ex = Assert.ThrowsExactly<InvalidOperationException>(() => sketch.WriteTo(stream));
-            var would = Fixed + 8L * span;
-            StringAssert.Contains(ex.Message, would.ToString("N0"));
-            StringAssert.Contains(ex.Message, LargestPayload.ToString("N0"));
+            var run = 8L * span;
+            StringAssert.Contains(ex.Message, $"a run of {run:N0} bytes", ex.Message);
+            StringAssert.Contains(ex.Message, int.MaxValue.ToString("N0"), ex.Message);
             Assert.AreEqual(0L, stream.Length, "nothing should have been written");
 
             // The sketch is as it was: told its real run again, it writes what it wrote.
