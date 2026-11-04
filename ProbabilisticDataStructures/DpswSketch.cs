@@ -396,6 +396,11 @@ namespace ProbabilisticDataStructures
         /// Adds an item to the stream.
         /// </summary>
         /// <param name="data">The item.</param>
+        /// <exception cref="InvalidOperationException">
+        /// The window has already seen <c>long.MaxValue</c> items, the most its position
+        /// holds, which no stream of adds reaches but a window read from a payload can. The
+        /// window is unchanged.
+        /// </exception>
         public DpswSketch Add(byte[] data)
         {
             ArgumentNullException.ThrowIfNull(data);
@@ -405,6 +410,16 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Add(byte[])"/>
         public DpswSketch Add(ReadOnlySpan<byte> data)
         {
+            // Before anything is touched. The position numbers every item and places every
+            // substream; one that wrapped went negative, and the window's own payload was then
+            // refused by its reader as having seen fewer than no items.
+            if (this.position == long.MaxValue)
+            {
+                throw new InvalidOperationException(
+                    $"The window has already seen {long.MaxValue} items, the most its position " +
+                    "holds, and one more would wrap the position negative.");
+            }
+
             this.position++;
 
             if (this.substreams.Count == 0

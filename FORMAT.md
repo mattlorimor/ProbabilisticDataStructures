@@ -467,6 +467,10 @@ what the sketch indexes by, and recomputing them from the parameters would silen
 relocate every cell if the sizing were ever adjusted. `epsilon` and `delta` are stored
 because `Epsilon()` and `Delta()` report them.
 
+A reader rejects a matrix with no rows or no columns, one past the limits the constructor
+builds to (see [Sizes](#sizes)), and more cells than the rest of the payload could hold,
+which it checks before allocating a row.
+
 ### `BloomFilter64` (id 2)
 
 ```
@@ -1211,9 +1215,10 @@ that follow it do not require is refused.
 A reader also rejects a delta outside nought to one, a growth exponent outside the same
 range, a size factor that is not positive, a row count of zero or past the deepest sketch
 the constructor builds (see [Sizes](#sizes)), a width that is not a power of two — the
-low bits of a hash pick the counter — and more than thirty records, which would be more
-counters than a row may hold. Readers before this limit was shared refused more than
-sixty-four rows, which a delta of `1e-28` already needs.
+low bits of a hash pick the counter — current rows with more counters than the rest of
+the payload could hold, which it checks before allocating any, and more than thirty
+records, which would be more counters than a row may hold. Readers before this limit was
+shared refused more than sixty-four rows, which a delta of `1e-28` already needs.
 
 The total count and the count at which the arrays next double are held to the rest. The
 arrays double once the total reaches (width × size factor)^(1 / growth exponent), rounded
