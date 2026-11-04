@@ -30,6 +30,36 @@ namespace TestProbabilisticDataStructures
         private static byte[] Key(string s) => Encoding.ASCII.GetBytes(s);
 
         /// <summary>
+        /// A HeavyKeeper's payload is its parameters, placement byte, generator and count,
+        /// thirty-seven bytes, then two bytes of fingerprint and eight of counter a bucket
+        /// with no run around them, then its tracked elements (#216). The writer wrote the
+        /// buckets one at a time, so only the buffer's growth checked a size. Two rows of 2^27
+        /// buckets, its default depth at the width it places with 64-bit values from, are
+        /// the payload CAPACITY.md names, here with two elements beside it; at 2^32 buckets
+        /// the product of the two 32-bit dimensions is nought in 32 bits.
+        /// </summary>
+        [TestMethod]
+        [DataRow(2u, 134_217_728u, 2_684_354_628L)]
+        [DataRow(4u, 1_073_741_824u, 42_949_673_028L)]
+        public void TestAStructureTooLargeToWriteIsRefusedNamingItsWholeSize(
+            uint depth, uint width, long payload)
+        {
+            // The heap's count, and each element's prefix, bytes and frequency.
+            var elements = new[] { "a", "bb" };
+            Assert.AreEqual(37 + 10L * depth * width + 4 + elements.Sum(e => 4 + e.Length + 8), payload,
+                "the row's payload is miscomputed");
+
+            var keeper = new HeavyKeeper(3, 16, 2, seed: 1);
+            foreach (var element in elements) keeper.Add(Key(element));
+            CollectionAssert.AreEquivalent(elements,
+                keeper.Elements().Select(e => Encoding.ASCII.GetString(e.Data.Span)).ToArray(),
+                "the elements the row counts are not the ones held");
+
+            TestPayloadCount.AssertRefusedWhileClaiming(
+                keeper, payload, (keeper, "Width", width), (keeper, "Depth", depth));
+        }
+
+        /// <summary>
         /// A structure with no room for tracked flows answers nothing, and the heap
         /// would index its empty root on the first admission decision.
         /// </summary>

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -21,9 +22,10 @@ namespace TestProbabilisticDataStructures
     /// says clearly (see <see cref="TestPayloadWriterGrowth"/>) rather than as an overflow.
     /// A run that long is not something a test builds -- the smallest unwritable one is
     /// two gibibytes of counts, and holding it in memory is the cost of building it -- so the
-    /// arithmetic that sizes it is reached directly, and the write path through it is run
-    /// on a sketch whose store has been told it spans more than it holds, which the write
-    /// must refuse before it looks at what is there.
+    /// write path is run on a sketch whose store has been told it spans more than it holds,
+    /// which the write must refuse before it looks at what is there. The size it refuses
+    /// by is the count its own <c>WriteTo</c> makes of the payload (#216), not a formula
+    /// kept beside the layout.
     /// </remarks>
     [TestClass]
     public class TestDDSketchPayloadSize
@@ -67,13 +69,14 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The length the hook gives a payload is the length a sketch really writes. The
-        /// sketches are small enough to write, and the hook is the arithmetic the large
-        /// ones are refused by, so this is what ties its constants to the layout rather
-        /// than to each other. It passes before the fix as well.
+        /// The length a write counts its payload at is the length it then writes, and the
+        /// layout FORMAT.md gives. The sketches are small enough to write, and the count is
+        /// what the large ones are refused by, so this is what ties the refusal to the
+        /// layout. It is watched as <c>WriteTo</c> makes it, so a count the write did not
+        /// make would not vouch for it.
         /// </summary>
         [TestMethod]
-        public void TestThePayloadLengthIsWhatASketchWrites()
+        public void TestThePayloadCountedIsWhatASketchWrites()
         {
             const double accuracy = 0.01;
             var logGamma = Math.Log((1 + accuracy) / (1 - accuracy));
@@ -105,35 +108,53 @@ namespace TestProbabilisticDataStructures
             both.Add(-0.001);
             both.Add(-1e9);
 
-            Assert.AreEqual(Fixed, WrittenPayload(nothing));
-            Assert.AreEqual(DDSketch.PayloadLength(0, 0), WrittenPayload(nothing));
-            Assert.AreEqual(DDSketch.PayloadLength(0, 0), WrittenPayload(zeros));
-            Assert.AreEqual(DDSketch.PayloadLength(1, 0), WrittenPayload(oneSide));
-            Assert.AreEqual(Fixed + 8, WrittenPayload(oneSide));
-            Assert.AreEqual(DDSketch.PayloadLength(thousand, 0), WrittenPayload(run));
-            Assert.AreEqual(Fixed + 8 * thousand, WrittenPayload(run));
-            Assert.AreEqual(DDSketch.PayloadLength(thousand, huge - tiny + 1), WrittenPayload(both));
-            Assert.AreEqual(Fixed + 8 * (thousand + huge - tiny + 1), WrittenPayload(both));
+            foreach (var (sketch, buckets) in new[]
+            {
+                (nothing, 0L), (zeros, 0L), (oneSide, 1L), (run, thousand),
+                (both, thousand + huge - tiny + 1),
+            })
+            {
+                var (counted, written) = CountedAndWritten(sketch);
+                Assert.AreEqual(Fixed + 8 * buckets, written, $"{buckets} buckets written");
+                Assert.AreEqual(written, counted, $"{buckets} buckets counted");
+            }
         }
 
         /// <summary>
         /// A sketch whose payload would pass the longest an envelope holds is refused
         /// before anything is allocated for it, with the writer's exception: the size it
-        /// would have been and the size one can be. The largest run that fits is not, and
-        /// the two signs share the one payload, so it is the sum of their runs that
-        /// counts: each of two halves of a run that fits is no reason to refuse, and each
-        /// of two halves of a run that does not is no reason to accept.
+        /// would have been and the size one can be. The largest run that fits is counted
+        /// within the ceiling, and the two signs share the one payload, so it is the sum of
+        /// their runs that counts: each of two halves of a run that fits is no reason to
+        /// refuse, and each of two halves of a run that does not is no reason to accept.
         /// </summary>
+        /// <remarks>
+        /// Each sketch holds a value of each sign its row needs and is told that value's run
+        /// is as long as the row says. A run that fits is two gibibytes, which a write would
+        /// build, so it is counted, as the write counts it, and held to the ceiling the write
+        /// holds the count to; a run that does not is written, and refused.
+        /// </remarks>
         [TestMethod]
         public void TestASketchTooLargeToWriteIsRefusedNamingTheSize()
         {
             Assert.AreEqual(268_435_439L, LargestRun, "the figure the rows below are built on");
 
-            DDSketch.CheckWritable(LargestRun, 0);
-            DDSketch.CheckWritable(0, LargestRun);
-            DDSketch.CheckWritable(LargestRun / 2, LargestRun - LargestRun / 2);
-            DDSketch.CheckWritable(0, 0);
-            DDSketch.CheckWritable(1, 1);
+            foreach (var (positive, negative) in new[]
+            {
+                (LargestRun, 0L),
+                (0L, LargestRun),
+                (LargestRun / 2, LargestRun - LargestRun / 2),
+                (0L, 0L),
+                (1L, 1L),
+            })
+            {
+                var sketch = Claiming(positive, negative, out _);
+                var counter = PayloadWriter.Counter();
+                ((IPayloadBody)sketch).WritePayload(counter);
+                Assert.AreEqual(Fixed + 8 * (positive + negative), counter.Length,
+                    $"runs of {positive} and {negative} buckets counted");
+                PersistenceFormat.CheckPayloadLength(counter.Length);
+            }
 
             foreach (var (positive, negative) in new[]
             {
@@ -146,14 +167,9 @@ namespace TestProbabilisticDataStructures
                 ((long)Array.MaxLength, (long)Array.MaxLength),
             })
             {
-                var would = Fixed + 8 * (positive + negative);
-                var ex = Assert.ThrowsExactly<InvalidOperationException>(
-                    () => DDSketch.CheckWritable(positive, negative),
-                    $"runs of {positive} and {negative} buckets");
-                StringAssert.Contains(ex.Message, would.ToString("N0"),
-                    "the refusal should say how large the payload would have been");
-                StringAssert.Contains(ex.Message, LargestPayload.ToString("N0"),
-                    "the refusal should say how large a payload can be");
+                var sketch = Claiming(positive, negative, out var shape);
+                TestPayloadCount.AssertRefusedWhileClaiming(
+                    sketch, Fixed + 8 * (positive + negative), shape);
             }
         }
 
@@ -232,7 +248,59 @@ namespace TestProbabilisticDataStructures
             return stream.ToArray();
         }
 
-        private static long WrittenPayload(DDSketch sketch) => Written(sketch).Length - 18;
+        /// <summary>
+        /// The length the sketch's <c>WriteTo</c> counts its payload at, and the length of
+        /// the payload it writes.
+        /// </summary>
+        private static (long Counted, long Written) CountedAndWritten(DDSketch sketch)
+        {
+            var counted = new List<long>();
+            byte[] bytes;
+            PersistenceFormat.Counted = (body, length) =>
+            {
+                if (ReferenceEquals(body, sketch)) counted.Add(length);
+            };
+            try
+            {
+                bytes = Written(sketch);
+            }
+            finally
+            {
+                PersistenceFormat.Counted = null;
+            }
+
+            Assert.HasCount(1, counted, "the write did not count its payload, once");
+            return (counted[0], bytes.Length - 18);
+        }
+
+        /// <summary>
+        /// A sketch with a value at index 0 of each sign whose run is to be longer than
+        /// nothing, and the last index of each such run to tell its store, for the
+        /// sketch to claim runs of these lengths. With no shape claimed, a store holding a
+        /// value spans the one bucket.
+        /// </summary>
+        private static DDSketch Claiming(
+            long positive, long negative, out (object Owner, string Member, object Claimed)[] shape)
+        {
+            var sketch = new DDSketch(0.01);
+            var claimed = new List<(object, string, object)>();
+            foreach (var (side, span, value) in new[] { ("positive", positive, 1.0), ("negative", negative, -1.0) })
+            {
+                if (span == 0)
+                {
+                    continue;
+                }
+
+                sketch.Add(value);
+                claimed.Add((StoreOf(sketch, side), "MaxIndex", checked((int)(span - 1))));
+            }
+
+            shape = claimed.ToArray();
+            return sketch;
+        }
+
+        private static object StoreOf(DDSketch sketch, string side) =>
+            typeof(DDSketch).GetField(side, BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(sketch)!;
 
         /// <summary>
         /// Tells one of the sketch's stores that its last bucket is a different one.

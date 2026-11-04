@@ -38,6 +38,29 @@ namespace TestProbabilisticDataStructures
 
         private static byte[] Key(string s) => Encoding.UTF8.GetBytes(s);
 
+        /// <summary>
+        /// A private sketch's payload is its dimensions, a placement byte, its budget and
+        /// its count, twenty-five bytes, then its counters at eight bytes each with no run
+        /// around them (#216). The writer wrote them a counter at a time, so only the
+        /// buffer's growth checked a size. Two rows of 2^27 columns, the width it places with
+        /// 64-bit values from, are the payload CAPACITY.md names; at 2^32 cells the product
+        /// of the two 32-bit dimensions is nought in 32 bits.
+        /// </summary>
+        [TestMethod]
+        [DataRow(2u, 134_217_728u, 2_147_483_673L)]
+        [DataRow(4u, 1_073_741_824u, 34_359_738_393L)]
+        public void TestASketchTooLargeToWriteIsRefusedNamingItsWholeSize(
+            uint depth, uint width, long payload)
+        {
+            Assert.AreEqual(25 + 8L * depth * width, payload, "the row's payload is miscomputed");
+
+            var sketch = new PrivateCountMinSketch(16, 2, 1.0, seed: 1);
+            for (var i = 0; i < 40; i++) sketch.Add(Key(i));
+
+            TestPayloadCount.AssertRefusedWhileClaiming(
+                sketch, payload, (sketch, "width", width), (sketch, "depth", depth));
+        }
+
         private static double[] NoiseOf(PrivateCountMinSketch sketch) =>
             sketch.Counters.SelectMany(row => row).ToArray();
 

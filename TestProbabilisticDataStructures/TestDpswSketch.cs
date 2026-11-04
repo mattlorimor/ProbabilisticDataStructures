@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -20,6 +21,33 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestDpswSketch
     {
+        /// <summary>
+        /// A window's payload holds a private sketch's body for every sketch it keeps, so
+        /// it is counted through those bodies, by the same writes as a private sketch's own
+        /// payload (#216). The bodies were written a counter at a time, so only the buffer's
+        /// growth checked a size. A window whose sketches are one row of 2^27 columns, the
+        /// width they place with 64-bit values from, passes the ceiling by its second
+        /// sketch, as CAPACITY.md says; this one keeps more than two.
+        /// </summary>
+        [TestMethod]
+        public void TestAWindowTooLargeToWriteIsRefusedNamingItsWholeSize()
+        {
+            const uint width = 64, wide = 1u << 27;
+            var window = new DpswSketch(2000, 1.0, width: width, depth: 1, seed: 1);
+            for (var i = 0; i < 3000; i++) window.Add(Encoding.ASCII.GetBytes($"k{i % 500}"));
+
+            var sketches = window.Sketches().ToArray();
+            Assert.IsGreaterThan(2, sketches.Length, "the window keeps too few sketches to pass the ceiling");
+
+            // Each body grows by a row of the columns it is told it has, eight bytes each.
+            var payload = window.ToByteArray().Length - 18
+                + sketches.Length * 8L * (wide - width);
+
+            TestPayloadCount.AssertRefusedWhileClaiming(window, payload,
+                sketches.Select(s => ((object)s, "width", (object)wide))
+                    .Prepend((window, "width", wide)).ToArray());
+        }
+
         /// <summary>
         /// A substream is the window raised to the substream factor, and it holds at most
         /// what an array does (<see cref="DpswSketch.MaxSubstreamSize"/> says why). A window
