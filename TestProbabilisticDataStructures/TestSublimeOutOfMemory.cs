@@ -317,6 +317,55 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A doubling of rows whose every counter is too large for any tuning to keep in the
+        /// pools: the doubled rows are packed at the tuning the sketch falls back to, with
+        /// every chunk on a tails array, and each of those arrays is allocated while the rows
+        /// are built. A doubling that runs out of memory at any of them, or anywhere else,
+        /// leaves the sketch exactly as it was.
+        /// </summary>
+        /// <remarks>
+        /// The other sweeps' rows are packed with nothing on tails, so this is the one that
+        /// fails the allocations the packing itself makes. The counters are set by hand, as
+        /// the stream that would raise every counter to 2^40 is not one a test can add.
+        /// </remarks>
+        [TestMethod]
+        public void TestADoublingThatRunsOutOfMemoryPackingItsRowsOntoTailsLeavesTheSketchAsItWas()
+        {
+            static SublimeCountMinSketch Make()
+            {
+                var sketch = OneShortOfDoubling();
+                foreach (var row in RowsOf(sketch))
+                {
+                    for (var j = 0; j < row.Count; j++)
+                    {
+                        row.Set(j, 1UL << 40);
+                    }
+                }
+                return sketch;
+            }
+
+            var copied = OnTails(RowsOf(Make()));
+            var twin = Make();
+            twin.Add(Doubler);
+            Assert.AreEqual(128, twin.Width, "the 4,096th key did not double the rows");
+            var rows = RowsOf(twin);
+            Assert.IsTrue(rows.All(row => row.ChunksWithTails == row.ChunkCount),
+                "the doubled rows were not packed with every chunk on tails");
+
+            var wrong = new List<string>();
+            var failures = FailEachAllocation(wrong, Make, sketch => sketch.Add(Doubler), twin);
+            Assert.AreEqual(0, wrong.Count, string.Join(Environment.NewLine, wrong));
+
+            // Each row three times, as above, and every chunk of the packed rows. The record's
+            // chunks were on tails before the doubling, so it copies those arrays rather than
+            // allocating new ones, and the key's increment in it needs none.
+            var record = RecordRowsOf(twin)[0];
+            Assert.AreEqual(copied, OnTails(record), "the key's increment spilled a chunk of the record");
+            Assert.AreEqual(3 * twin.Depth + OnTails(rows), failures,
+                "the sweep did not fail every allocation the doubling makes");
+        }
+
+        /// <summary>
         /// An add that does not double the rows but crowds them, by moving more of their chunks
         /// to tails arrays than three in a hundred, lays them out again. One that runs out of
         /// memory doing so leaves the sketch exactly as it was: the key not counted, and the
@@ -372,8 +421,12 @@ namespace TestProbabilisticDataStructures
         {
             var twin = OneShortOfFolding();
             twin.Reset();
-            CollectionAssert.AreEqual(new SublimeCountMinSketch(0.01).ToByteArray(),
-                twin.ToByteArray(), "a reset sketch writes what a new one does not");
+            var fresh = new SublimeCountMinSketch(0.01);
+            CollectionAssert.AreEqual(fresh.ToByteArray(), twin.ToByteArray(),
+                "a reset sketch writes what a new one does not");
+            var unlike = new List<string>();
+            PackedAlike(unlike, "A reset sketch", fresh, twin);
+            Assert.AreEqual(0, unlike.Count, string.Join(Environment.NewLine, unlike));
 
             var wrong = new List<string>();
             var failures = FailEachAllocation(
