@@ -36,7 +36,7 @@ namespace ProbabilisticDataStructures
     /// was placed with. The fingerprint is the hash's top sixteen bits either way.
     /// </para>
     /// </remarks>
-    public class HeavyKeeper : IBinaryPersistable<HeavyKeeper>
+    public class HeavyKeeper : IBinaryPersistable<HeavyKeeper>, IPayloadBody
     {
         /// <summary>
         /// Fingerprint fields, one array per row: who holds each bucket.
@@ -451,11 +451,10 @@ namespace ProbabilisticDataStructures
         /// Writes this structure to a stream, in the format documented in FORMAT.md.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.k);
             payload.WriteUInt32(this.Width);
             payload.WriteUInt32(this.Depth);
@@ -464,18 +463,26 @@ namespace ProbabilisticDataStructures
             payload.WriteUInt64(this.random.State);
             payload.WriteUInt64(this.N);
 
-            for (var j = 0; j < this.Depth; j++)
+            // The fingerprints and then the counters, row by row, each with no run around
+            // it and sized by the shape.
+            if (payload.BeginBlock((long)this.Depth * this.Width * sizeof(ushort)))
             {
-                for (var i = 0; i < this.Width; i++)
+                for (var j = 0; j < this.Depth; j++)
                 {
-                    payload.WriteUInt16(this.Fingerprints[j][i]);
+                    for (var i = 0; i < this.Width; i++)
+                    {
+                        payload.WriteUInt16(this.Fingerprints[j][i]);
+                    }
                 }
             }
-            for (var j = 0; j < this.Depth; j++)
+            if (payload.BeginBlock((long)this.Depth * this.Width * sizeof(ulong)))
             {
-                for (var i = 0; i < this.Width; i++)
+                for (var j = 0; j < this.Depth; j++)
                 {
-                    payload.WriteUInt64(this.Counters[j][i]);
+                    for (var i = 0; i < this.Width; i++)
+                    {
+                        payload.WriteUInt64(this.Counters[j][i]);
+                    }
                 }
             }
 
@@ -487,11 +494,7 @@ namespace ProbabilisticDataStructures
                 payload.WriteUInt64(element.Freq);
             }
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.HeavyKeeper,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan,
+            return new(StructureId.HeavyKeeper, PersistenceFormat.Identify(this.Hash),
                 PersistenceFormat.ColumnPlacementVersion);
         }
 

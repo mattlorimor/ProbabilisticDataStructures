@@ -243,7 +243,6 @@ namespace TestProbabilisticDataStructures
 
             (StructureId.BinaryFuseFilter, NoBody),
 
-            (StructureId.DDSketch, NoBody),
 
 
             (StructureId.QuotientFilter, NoBody),
@@ -252,7 +251,6 @@ namespace TestProbabilisticDataStructures
 
             (StructureId.BloomierFilter, NoBody),
 
-            (StructureId.HeavyKeeper, NoBody),
 
 
 
@@ -262,12 +260,9 @@ namespace TestProbabilisticDataStructures
 
             (StructureId.MementoFilter, NoBody),
 
-            (StructureId.SublimeCountMinSketch, NoBody),
 
 
-            (StructureId.PrivateCountMinSketch, NoBody),
 
-            (StructureId.DpswSketch, NoBody),
         };
 
         private const string NoBody =

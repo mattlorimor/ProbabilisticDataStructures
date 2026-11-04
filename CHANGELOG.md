@@ -351,7 +351,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`WriteTo` of a structure too large to write now refuses it, by its whole size, before
   allocating anything for the payload: `CountSketch`, `InvertibleBloomLookupTable`,
-  `SetSketch`, `BloomFilter64`, `CountMinSketch`, `TopK`, `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter`, `ScalableBloomFilter`, `StableBloomFilter`, `InverseBloomFilter`, `CuckooBloomFilter`, `HyperLogLog`, `HyperLogLogPlus`, `UltraLogLog`, `ThetaSketch`, `TupleSketch`, `MinHashSignature`, `SimHashSignature` and `VarOpt` so far.** Each runs its own
+  `SetSketch`, `BloomFilter64`, `CountMinSketch`, `TopK`, `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter`, `ScalableBloomFilter`, `StableBloomFilter`, `InverseBloomFilter`, `CuckooBloomFilter`, `HyperLogLog`, `HyperLogLogPlus`, `UltraLogLog`, `ThetaSketch`, `TupleSketch`, `MinHashSignature`, `SimHashSignature`, `VarOpt`, `PrivateCountMinSketch`, `HeavyKeeper`, `SublimeCountMinSketch`, `DpswSketch` and `DDSketch` so far.** Each runs its own
   payload layout through a counting writer first, which builds nothing, and a payload past
   2,147,483,573 bytes is refused with the `InvalidOperationException` that names the size
   it would have been. A `CountSketch` staged its cells in one array before any size was

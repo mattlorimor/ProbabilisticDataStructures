@@ -50,7 +50,7 @@ namespace ProbabilisticDataStructures
     /// constructor.
     /// </para>
     /// </remarks>
-    public class SublimeCountMinSketch : IBinaryPersistable<SublimeCountMinSketch>
+    public class SublimeCountMinSketch : IBinaryPersistable<SublimeCountMinSketch>, IPayloadBody
     {
         /// <summary>
         /// One counter array per row, all of the same width.
@@ -547,11 +547,10 @@ namespace ProbabilisticDataStructures
         /// them.
         /// </remarks>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteDouble(this.delta);
             payload.WriteDouble(this.growthExponent);
             payload.WriteDouble(this.sizeFactor);
@@ -567,20 +566,25 @@ namespace ProbabilisticDataStructures
             foreach (var record in this.records)
             {
                 payload.WriteUInt32((uint)record[0].Count);
-                WriteCounters(payload, record);
+                WriteCounters(payload, record, record[0].Count);
             }
 
-            WriteCounters(payload, this.rows);
+            WriteCounters(payload, this.rows, this.width);
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.SublimeCountMinSketch,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+            return new(StructureId.SublimeCountMinSketch, PersistenceFormat.Identify(this.Hash));
         }
 
-        private static void WriteCounters(PayloadWriter payload, ValeCounterArray[] rows)
+        /// <summary>
+        /// Writes rows of counts, eight bytes each with no run around them, sized by the
+        /// width written for them, so that a counter counts them without unpacking any.
+        /// </summary>
+        private static void WriteCounters(PayloadWriter payload, ValeCounterArray[] rows, int width)
         {
+            if (!payload.BeginBlock((long)rows.Length * width * sizeof(ulong)))
+            {
+                return;
+            }
+
             foreach (var row in rows)
             {
                 for (var j = 0; j < row.Count; j++)
