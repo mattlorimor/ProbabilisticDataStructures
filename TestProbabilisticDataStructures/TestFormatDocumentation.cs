@@ -1,6 +1,8 @@
 ﻿using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Hashing;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -95,11 +97,18 @@ namespace TestProbabilisticDataStructures
                 .ToDictionary(id => id, _ => new List<ushort>());
             var seenVersions = new HashSet<ushort>();
 
+            // The version field's high bit is the large form's flag, not part of a version,
+            // and the section says so where someone reading the table will see it.
+            StringAssert.Contains(section, $"`0x{PersistenceFormat.LargeFormFlag:X4}`",
+                "FORMAT.md's table of format versions does not say which bit of the field is the large form's flag");
+
             foreach (Match row in rows)
             {
                 var version = ushort.Parse(row.Groups["version"].Value);
                 Assert.IsTrue(seenVersions.Add(version),
                     $"FORMAT.md lists format version {version} on more than one row");
+                Assert.IsLessThan(PersistenceFormat.LargeFormFlag, version,
+                    $"FORMAT.md lists format version {version}, which has the large form's flag in it");
 
                 var who = row.Groups["who"].Value.Trim();
                 var named = who == "every structure"
@@ -129,6 +138,126 @@ namespace TestProbabilisticDataStructures
                     versions.OrderBy(v => v).ToArray(),
                     $"FORMAT.md and the reader of {id} disagree about which format " +
                     "versions it has");
+            }
+        }
+
+        // One row of an envelope's table: offset, size and field, where an offset or a
+        // size may be in terms of the payload's length, *n*.
+        private static readonly Regex EnvelopeRow =
+            new(@"^\| (?<offset>\d[^|]*?) \| (?<size>[^|]+?) \| (?<field>[^|]+?) \|\r?$", RegexOptions.Multiline);
+
+        // "bytes 4 through 17", or "bytes 22 through 21 + *n*".
+        private static readonly Regex ByteRange =
+            new(@"bytes (?<from>\d+) through (?<to>\d+)(?<plus> \+ \*n\*)?");
+
+        /// <summary>An offset or a size from an envelope's table, at a payload of <paramref name="n"/> bytes.</summary>
+        private static long Evaluate(string term, long n)
+        {
+            var match = Regex.Match(term.Trim(), @"^(?:(?<k>\d+)(?<plus> \+ \*n\*)?|(?<only>\*n\*))$");
+            Assert.IsTrue(match.Success, $"'{term}' is not an offset or size this test can read");
+            return match.Groups["only"].Success
+                ? n
+                : long.Parse(match.Groups["k"].Value) + (match.Groups["plus"].Success ? n : 0);
+        }
+
+        /// <summary>
+        /// The large form is laid out as FORMAT.md's table of it says: a payload the library
+        /// writes in the large form, decoded field by field at the offsets and sizes the
+        /// table gives, holds the magic, the flagged version, the structure and hash ids
+        /// and its length there, and each checksum is the CRC-32 of exactly the bytes the
+        /// table says it covers.
+        /// </summary>
+        /// <remarks>
+        /// The large form is what a reader without this library meets past 2 GiB, and it
+        /// differs from the ordinary envelope in the length's width, the header's own
+        /// checksum, and what the final checksum covers -- each a place a document can be
+        /// wrong while every round trip passes. The payload is written small, under a
+        /// lowered threshold, and decoded with nothing but the table.
+        /// </remarks>
+        [TestMethod]
+        public void TestTheLargeFormIsLaidOutAsDocumented()
+        {
+            var spec = Specification();
+            var start = spec.IndexOf("### The large form", StringComparison.Ordinal);
+            Assert.IsGreaterThanOrEqualTo(0, start, "FORMAT.md has no section on the large form");
+            var end = spec.IndexOf("\n#", start + 1, StringComparison.Ordinal);
+            var section = spec[start..(end < 0 ? spec.Length : end)];
+
+            var rows = EnvelopeRow.Matches(section).Cast<Match>()
+                .Select(m => (Offset: m.Groups["offset"].Value, Size: m.Groups["size"].Value, Field: m.Groups["field"].Value))
+                .ToArray();
+            Assert.IsGreaterThan(0, rows.Length,
+                "no rows were found in the large form's table, so every assertion made about it below is vacuous");
+
+            var filter = new BloomFilter(200, 0.01);
+            for (var i = 0; i < 40; i++) filter.Add(System.Text.Encoding.ASCII.GetBytes($"w{i}"));
+            var bytes = LargeForm.WriteLarge(filter);
+            long n = bytes.Length - PersistenceFormat.LargeEnvelopeLength;
+            Assert.IsGreaterThan(0L, n);
+
+            // The rows run one after another from the start to the end of the envelope.
+            long at = 0;
+            foreach (var (offset, size, name) in rows)
+            {
+                Assert.AreEqual(at, Evaluate(offset, n), $"the large form's row '{name}' does not start where the one before it ends");
+                at += Evaluate(size, n);
+            }
+            Assert.AreEqual(bytes.LongLength, at, "the large form's rows do not add up to the envelope the library writes");
+
+            (long Offset, long Size, string Field) Row(Func<string, bool> which, string what)
+            {
+                var found = rows.Where(r => which(r.Field)).ToArray();
+                Assert.HasCount(1, found, $"the large form's table has no single row for {what}");
+                return (Evaluate(found[0].Offset, n), Evaluate(found[0].Size, n), found[0].Field);
+            }
+
+            var magic = Row(f => f.StartsWith("Magic", StringComparison.Ordinal), "the magic");
+            Assert.IsTrue(bytes.AsSpan((int)magic.Offset, (int)magic.Size).SequenceEqual(PersistenceFormat.Magic));
+
+            var version = Row(f => f.StartsWith("Format version", StringComparison.Ordinal), "the version");
+            var flagText = Regex.Match(version.Field, @"`0x(?<flag>[0-9A-Fa-f]{4})`");
+            Assert.IsTrue(flagText.Success, "the large form's version row does not name the flag");
+            var flag = Convert.ToUInt16(flagText.Groups["flag"].Value, 16);
+            Assert.AreEqual(PersistenceFormat.LargeFormFlag, flag, "FORMAT.md names another flag than the library sets");
+            Assert.AreEqual(2L, version.Size);
+            var field = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan((int)version.Offset));
+            Assert.AreEqual(flag, (ushort)(field & flag), "the documented flag is not set in the version the library writes");
+            Assert.AreEqual(PersistenceFormat.PlacementVersion, (ushort)(field & ~flag),
+                "the version without the documented flag is not the filter's format version");
+
+            var structure = Row(f => f.StartsWith("Structure id", StringComparison.Ordinal), "the structure id");
+            Assert.AreEqual((ushort)StructureId.BloomFilter, BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan((int)structure.Offset)));
+
+            var hash = Row(f => f.StartsWith("Hash id", StringComparison.Ordinal), "the hash id");
+            Assert.AreEqual((ushort)HashId.XxHash3_64, BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan((int)hash.Offset)));
+
+            var length = Row(f => f.StartsWith("Payload length", StringComparison.Ordinal), "the payload length");
+            Assert.AreEqual(8L, length.Size, "the large form's length is a u64");
+            Assert.AreEqual((ulong)n, BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan((int)length.Offset)));
+
+            var payload = Row(f => f.Trim() == "Payload", "the payload");
+            Assert.AreEqual((long)PersistenceFormat.LargeHeaderLength, payload.Offset,
+                "the large form's payload does not start where the library's large header ends");
+            Assert.AreEqual(n, payload.Size);
+
+            var checksums = rows.Where(r => r.Field.StartsWith("CRC-32", StringComparison.Ordinal)).ToArray();
+            Assert.HasCount(2, checksums, "the large form's table does not have two checksums, the header's and the payload's");
+            foreach (var checksum in checksums)
+            {
+                var crc = new Crc32();
+                var ranges = ByteRange.Matches(checksum.Field);
+                Assert.IsGreaterThan(0, ranges.Count, $"'{checksum.Field}' does not say which bytes it covers");
+                foreach (Match range in ranges)
+                {
+                    var from = long.Parse(range.Groups["from"].Value);
+                    var to = long.Parse(range.Groups["to"].Value) + (range.Groups["plus"].Success ? n : 0);
+                    crc.Append(bytes.AsSpan((int)from, (int)(to - from + 1)));
+                }
+
+                Assert.AreEqual(
+                    BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan((int)Evaluate(checksum.Offset, n))),
+                    crc.GetCurrentHashAsUInt32(),
+                    $"the checksum at {checksum.Offset} is not the CRC-32 of what FORMAT.md says it covers, '{checksum.Field}'");
             }
         }
 

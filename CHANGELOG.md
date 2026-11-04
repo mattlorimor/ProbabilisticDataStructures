@@ -63,6 +63,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   such member: they use the whole 64-bit hash, and a register reaches its cap only around
   2^64 items, more than a `ulong` count holds. Nothing stored changes. (#194)
 
+- **The large form of the envelope, for payloads past 2 GiB, and its reader.** FORMAT.md
+  now specifies a second form of the envelope for a payload longer than the ordinary one
+  holds, 2,147,483,573 bytes:
+  - the version field's high bit, `0x8000`, set, with the format version in the other
+    fifteen bits;
+  - a `u64` payload length;
+  - a checksum over the header, checked before any field in it is used;
+  - the payload's checksum after the payload, compared once the structure has read it.
+  On a mismatch the structure read is discarded, and a refusal before the end says the
+  checksum was not reached. Releases up to 6.2.0 refuse such a payload as written by a
+  later version. Every reader here reads it, nested envelopes included, holding the
+  payload as it holds an ordinary one. Nothing written changes for a payload that fits the
+  ordinary envelope: it is written in it, byte for byte as before. One past it is written in
+  the large form, streamed (#225). (#222, #223, #224, #227)
+
+- **`WriteTo` saves a structure past 2 GiB, in the large form, streamed.** A payload longer
+  than the ordinary envelope holds, 2,147,483,573 bytes, was refused by `WriteTo`. It is now
+  written in the large form of the envelope as it is produced: the header, with the length
+  counted beforehand, then the payload through a 64 KiB buffer, the checksum carried on over
+  each piece as it goes, then the checksum. Nothing the size of the payload is held: written
+  in the large form, payloads of 1.1 to 2.4 MB each allocated the buffer and 240 bytes more,
+  where the ordinary envelope allocates the payload twice. A payload that fits the ordinary
+  envelope is written as before, byte for byte, built in memory and written in one call, so
+  a write refused before then still writes nothing. A write in the large form that fails
+  part-way can leave the beginning of an envelope in the stream, which a reader refuses by
+  its length or its checksum; `WriteTo`'s documentation says so. `ToByteArray` of such a
+  structure throws an `InvalidOperationException` before writing anything, naming the
+  payload's size and saying to write it with `WriteTo(Stream)` instead. One limit stays: no
+  single run in a payload, such as a table written whole or a structure held inside another,
+  can be longer than `int.MaxValue` bytes yet, the most a reader takes into one array. A
+  structure that would need one is refused by `WriteTo` and `ToByteArray` alike, naming the
+  run, before anything is written. (#225, #229)
+
 ### Changed
 
 - **The package's minimum `System.IO.Hashing` rises from 10.0.11 to 10.0.14.** A project
@@ -347,7 +380,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behaviour. It is not written with the filter, so the stored format does not change and a
   filter read back has the default. `MementoFilter` shipped in 6.2.0, so 6.2.0 is affected.
 
+- **The 32-bit hash helpers in `Utils` are internal, and that is a breaking change.**
+  `Utils.HashKernel`, `Utils.HashKernelFromSum`, `Utils.HashKernelFromHashBytes`,
+  `Utils.HashBytesToUInt32` and the `HashKernelReturnValue` they return split a hash into
+  32-bit halves. Inside the library only `SublimeCountMinSketch` uses the 32-bit kernel,
+  and it still does. Code that called them switches to `Utils.HashKernel128`, which
+  returns two 64-bit values in a `HashKernel128ReturnValue`, and `Utils.HashBytesToUInt64`.
+  `HashKernel128`'s second value is not the hash's upper half, so code that needs the old
+  values exactly computes them: `(uint)h` and `(uint)(h >> 32)` of the 64-bit hash, and
+  `BinaryPrimitives.ReadUInt32LittleEndian` for what `HashBytesToUInt32` read. Nothing a
+  structure computes or stores changes. (#234)
+
+- **`StableBloomFilter` and `CuckooBloomFilter` take a `ulong?` seed, and that is a breaking
+  change.** They took an `int?` and widened it to the generator's 64 bits, so only 2^32 of
+  its starting states could be chosen; every other seeded structure already took a
+  `ulong?`. Code compiled against 6.2.0 has to be rebuilt. A non-negative constant such as
+  `seed: 42` compiles unchanged and gives the same sequence as before. An `int` variable
+  needs a cast, and a negative seed needs the conversion the filters used to make: pass
+  `unchecked((ulong)seed)`, which is 2^64 + seed, so `-1` becomes `ulong.MaxValue`, for the
+  sequence the `int` gave. Stored filters are unaffected: they record where their generator
+  is and where it began as 64-bit values, and resume from those however they were seeded.
+  (#235)
+
 ### Fixed
+
+- **A payload naming a bucket width no bucket has is refused as the payload's.** A
+  stored width of 0, or more than 8 bits, in the bucket table of a `BloomFilter`,
+  `BloomFilter64`, `CountingBloomFilter`, `DeletableBloomFilter`,
+  `PartitionedBloomFilter` (and so a `ScalableBloomFilter`) or `StableBloomFilter` was
+  refused with the constructor's `ArgumentOutOfRangeException`, about a `bucketSize`
+  parameter no caller had passed. It is now an `InvalidDataException`, as every payload the
+  library will not read is. A flipped bit could not reach it in the ordinary envelope,
+  whose checksum is checked first, and only an edited payload with a repaired checksum
+  did; the large form checks its checksum at the end, and its corruption sweep found it.
 
 - **`WriteTo` of any structure too large to write now refuses it, by its whole
   size, before allocating anything for the payload.** Each runs its own
@@ -366,7 +431,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   4,294,967,206 bytes, is now refused by that figure. A `TopK`
   counts the sketch inside it through the sketch's own layout. The bytes written are
   unchanged, and a payload that fits is now built into a buffer allocated once, at its
-  counted size. (#216)
+  counted size. Past that size `WriteTo` now writes the large form instead, and the refusal
+  by size is `ToByteArray`'s (#225, #229). (#216)
 
 - **A `CountMinSketch` counter, and its total, wrapped to nought at 2^64 instead of
   stopping at `ulong.MaxValue`, so `Merge` could take an estimate to 0.** A wrapped counter
@@ -1428,6 +1494,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every payload this library wrote holds its counters and reads as before, and the format
   is unchanged.
 
+- **A `CountMinSketch` or `SublimeCountMinSketch` payload claiming counters it did not
+  hold had a row allocated before it was refused, or was refused for a budget that would
+  not have loaded it.** Both readers allocated each row before reading it, and neither
+  they nor their prices checked that the counters the shape claims are in the payload. A
+  count-min sketch of 275 bytes with its width edited to ten million allocated 80 MB,
+  under the default budget or under none, before failing at the first missing counter,
+  and a Sublime sketch of 590 bytes with its width edited to 2^23 allocated 67 MB the same
+  way; edited to 2^22 and read under a budget just short of what the unedited payload
+  needs, each was refused for that budget instead. Both now check the counters against the
+  bytes remaining in the shape check their read and price share, before a row is priced or
+  allocated, as the `PrivateCountMinSketch` and `HeavyKeeper` readers do, and refuse a
+  payload that lacks them for that, under any budget. It needs a payload edited on purpose
+  with its checksum repaired; every payload this library wrote holds its counters and
+  reads as before, and the format is unchanged.
+
+- **`DpswSketch.Add` on a window at the largest position wrapped the position to
+  `long.MinValue`.** The reader accepts any position that is not negative, `long.MaxValue`
+  included, since the format can hold it, and `Add` incremented it unchecked. A window
+  read at `long.MaxValue` took the next item at `long.MinValue`, and its own payload was
+  then refused by its reader as having seen a negative number of items. Adds alone would
+  take 2^63 − 1 items to get there; a payload edited on purpose, with its checksum
+  repaired, gets there at once. `Add` now refuses it with an `InvalidOperationException`
+  and leaves the window unchanged, as `DDSketch.Add` refuses a sketch already holding
+  2^64 − 1 values, and such a window still reads. No format change.
+
 - **`InverseBloomFilter`, `HyperLogLog` and `DpswSketch` failed inside an allocation, or
   saturated, instead of refusing a size they could not build.** `InverseBloomFilter`'s
   slots are one array of references, which holds 2,147,483,591: a capacity past that was
@@ -1585,6 +1676,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   touched, as it already did for buckets no array could hold, where it used to let the
   count wrap. Nothing but a payload gets a sketch within reach of that, since `Add` takes
   one value at a time. No format change.
+
+- **`DDSketch.Add` on a sketch already holding 2^64 − 1 values wrapped its total to
+  nought.** It added one to the total, to a store's total and to the value's bucket without
+  checking any of them. `Add` alone would take 2^64 calls to get there, but a sketch read
+  from a payload can be full, since the reader accepts a total of exactly 2^64 − 1, and so
+  can one merged from such sketches. Given one more value, a full sketch answered `Count()`
+  with 0 and `Quantile` with "The sketch holds nothing", and unless the value fell in the
+  bucket or zero count already holding everything, its own payload was then refused by its
+  reader. `Add` now refuses it with an `InvalidOperationException` and leaves the sketch
+  unchanged, as `Merge` refuses a merge past the same total. The check is one comparison
+  per add, and there is no format change.
 
 - **A payload whose byte run claimed almost `int.MaxValue` bytes was refused with an
   `ArgumentOutOfRangeException`, not the `InvalidDataException` every other payload the

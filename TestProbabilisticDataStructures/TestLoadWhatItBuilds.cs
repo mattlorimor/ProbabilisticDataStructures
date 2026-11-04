@@ -665,24 +665,24 @@ namespace TestProbabilisticDataStructures
             // The width of a row is the largest power of two an int holds. The
             // constructor starts a row there and no wider, and the reader takes it and no
             // wider: past it, the payload is refused as past the limit, and at it only for
-            // what a row of a billion counters costs to read. TestSublimeWidth holds the
-            // sketch's own refusal to widen past it.
+            // the counters it does not hold, which its reader checks are there before it
+            // prices or allocates a row. TestSublimeWidth holds the sketch's own refusal to
+            // widen past it.
             var widthOffset = 24 + sizeof(uint);
             AssertRefused<SublimeCountMinSketch>(
                 PokeUInt32(deepest.ToByteArray(), widthOffset, (uint)SublimeCountMinSketch.MaxWidth * 2),
                 "no larger than");
-            var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() =>
-                Persistence.FromByteArray<SublimeCountMinSketch>(
-                    PokeUInt32(deepest.ToByteArray(), widthOffset, (uint)SublimeCountMinSketch.MaxWidth)));
-            Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
-                "a payload at the widest row should be refused for what it costs, not its size");
+            AssertRefusedOnlyForMissingBytes<SublimeCountMinSketch>(
+                PokeUInt32(deepest.ToByteArray(), widthOffset, (uint)SublimeCountMinSketch.MaxWidth));
         }
 
         /// <summary>
         /// A row is one array, and the depth is the rows the smallest delta with a
         /// reciprocal gives. The deepest sketch is small, so it is built and read back;
         /// the widest is gigabytes a row, so its side is the constructor's refusal one
-        /// past, the reader's refusals, and at the limit the cost it is refused for.
+        /// past, the reader's refusals, and a payload at the limit refused only for the
+        /// counters it does not hold, which its reader checks are there before it prices
+        /// or allocates a row.
         /// </summary>
         [TestMethod]
         public void TestCountMinSketchLimitsAreShared()
@@ -706,15 +706,10 @@ namespace TestProbabilisticDataStructures
             AssertRefused<CountMinSketch>(PokeUInt32(bytes, 16, CountMinSketch.MaxWidth + 1), PastTheLimit);
             AssertRefused<CountMinSketch>(PokeUInt32(bytes, 20, CountMinSketch.MaxDepth + 1), PastTheLimit);
 
-            var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() =>
-                Persistence.FromByteArray<CountMinSketch>(
-                    PokeUInt32(bytes, 16, CountMinSketch.MaxWidth)));
-            Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
-                "a payload at the widest row should be refused for what it costs, not its size");
-
-            // At the deepest, the size is accepted and the rows it claims are not there.
-            AssertRefused<CountMinSketch>(
-                PokeUInt32(bytes, 20, CountMinSketch.MaxDepth), "Payload ended");
+            // At the widest and the deepest, the size is accepted and the rows it claims
+            // are not there.
+            AssertRefusedOnlyForMissingBytes<CountMinSketch>(PokeUInt32(bytes, 16, CountMinSketch.MaxWidth));
+            AssertRefusedOnlyForMissingBytes<CountMinSketch>(PokeUInt32(bytes, 20, CountMinSketch.MaxDepth));
 
             // The edges of what the constructor's two checks accept, which are reached
             // here without the arrays: the widest row is the largest array, and the

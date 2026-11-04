@@ -35,6 +35,12 @@ namespace ProbabilisticDataStructures
     /// 9, which records the placement; a structure read back keeps the scheme its payload
     /// was placed with. The fingerprint is the hash's top sixteen bits either way.
     /// </para>
+    /// <para>
+    /// Sixteen bits is the paper's design, and it is what the fingerprint collisions above
+    /// cost: two different elements share a fingerprint 2^-16 of the time, at any width,
+    /// and an element that finds its fingerprint in a bucket another holds counts as that
+    /// holder there. Widening it would change the stored format.
+    /// </para>
     /// </remarks>
     public class HeavyKeeper : IBinaryPersistable<HeavyKeeper>, IPayloadBody
     {
@@ -568,10 +574,20 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.HeavyKeeper);
-            var payload = PersistenceFormat.Read(
-                stream, StructureId.HeavyKeeper, out var hashId, out var version, budget, Price,
-                hash, PersistenceFormat.CheckResolvable);
-            var reader = new PayloadReader(payload, budget);
+            return PersistenceFormat.Read(
+                stream, StructureId.HeavyKeeper, budget, Price, hash, PersistenceFormat.CheckResolvable,
+                ReadPayload);
+        }
+
+        /// <summary>
+        /// Reads the payload of the envelope <c>Read</c> opened, once the envelope has
+        /// been checked. See <see cref="PayloadParse{T}"/>.
+        /// </summary>
+        private static HeavyKeeper ReadPayload(
+            ref PayloadReader reader, ushort version, HashId hashId,
+            Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            var budget = reader.Budget;
 
             var k = reader.ReadUInt32();
             var width = reader.ReadUInt32();

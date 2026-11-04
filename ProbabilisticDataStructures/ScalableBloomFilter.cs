@@ -557,10 +557,20 @@ namespace ProbabilisticDataStructures
             // checked here as well, so that a filter written with a hash it is not read
             // with is refused before the read is priced rather than once its budget has
             // been raised to read it.
-            var payload = PersistenceFormat.Read(
-                stream, StructureId.ScalableBloomFilter, out _, out var version, budget, Price,
-                hash, PersistenceFormat.CheckResolvable);
-            var reader = new PayloadReader(payload, budget);
+            return PersistenceFormat.Read(
+                stream, StructureId.ScalableBloomFilter, budget, Price, hash, PersistenceFormat.CheckResolvable,
+                ReadPayload);
+        }
+
+        /// <summary>
+        /// Reads the payload of the envelope <c>Read</c> opened, once the envelope has
+        /// been checked. See <see cref="PayloadParse{T}"/>.
+        /// </summary>
+        private static ScalableBloomFilter ReadPayload(
+            ref PayloadReader reader, ushort version, HashId hashId,
+            Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            var budget = reader.Budget;
 
             var r = reader.ReadDouble();
             var fp = reader.ReadDouble();

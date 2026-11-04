@@ -146,10 +146,20 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.MinHashSignature);
-            var payload = PersistenceFormat.Read(
-                stream, StructureId.MinHashSignature, out _, budget, Price, null, CheckHash);
+            return PersistenceFormat.Read(
+                stream, StructureId.MinHashSignature, budget, Price, null, CheckHash,
+                ReadPayload);
+        }
 
-            var reader = new PayloadReader(payload, budget);
+        /// <summary>
+        /// Reads the payload of the envelope <c>Read</c> opened, once the envelope has
+        /// been checked. See <see cref="PayloadParse{T}"/>.
+        /// </summary>
+        private static MinHashSignature ReadPayload(
+            ref PayloadReader reader, ushort version, HashId hashId,
+            Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            var budget = reader.Budget;
 
             var length = reader.ReadUInt32();
             CheckLength(length);
