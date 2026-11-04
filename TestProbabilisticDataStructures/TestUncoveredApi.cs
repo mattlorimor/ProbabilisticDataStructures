@@ -35,32 +35,6 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// HashKernelFromSum splits a 64-bit hash into the lower and upper halves the
-        /// filters derive their k probes from. It is the seam every filter's hashing
-        /// runs through, so its bit layout is pinned explicitly.
-        /// </summary>
-        [TestMethod]
-        public void TestHashKernelFromSumSplitsTheValue()
-        {
-            var kernel = Utils.HashKernelFromSum(0xAABBCCDD_11223344UL);
-
-            Assert.AreEqual(0x11223344u, kernel.LowerBaseHash, "lower half is the low 32 bits");
-            Assert.AreEqual(0xAABBCCDDu, kernel.UpperBaseHash, "upper half is the high 32 bits");
-        }
-
-        [TestMethod]
-        public void TestHashKernelFromSumHandlesBoundaryValues()
-        {
-            var zero = Utils.HashKernelFromSum(0UL);
-            Assert.AreEqual(0u, zero.LowerBaseHash);
-            Assert.AreEqual(0u, zero.UpperBaseHash);
-
-            var max = Utils.HashKernelFromSum(ulong.MaxValue);
-            Assert.AreEqual(uint.MaxValue, max.LowerBaseHash);
-            Assert.AreEqual(uint.MaxValue, max.UpperBaseHash);
-        }
-
-        /// <summary>
         /// Top-K retains only the k most frequent elements. This adds more distinct
         /// elements than k so that the heap has to evict, which the existing Top-K
         /// test never forced.

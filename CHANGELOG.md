@@ -347,6 +347,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behaviour. It is not written with the filter, so the stored format does not change and a
   filter read back has the default. `MementoFilter` shipped in 6.2.0, so 6.2.0 is affected.
 
+- **The 32-bit hash helpers in `Utils` are internal, and that is a breaking change.**
+  `Utils.HashKernel`, `Utils.HashKernelFromSum`, `Utils.HashKernelFromHashBytes`,
+  `Utils.HashBytesToUInt32` and the `HashKernelReturnValue` they return split a hash into
+  32-bit halves. Inside the library only `SublimeCountMinSketch` uses the 32-bit kernel,
+  and it still does. Code that called them switches to `Utils.HashKernel128`, which
+  returns two 64-bit values in a `HashKernel128ReturnValue`, and `Utils.HashBytesToUInt64`.
+  `HashKernel128`'s second value is not the hash's upper half, so code that needs the old
+  values exactly computes them: `(uint)h` and `(uint)(h >> 32)` of the 64-bit hash, and
+  `BinaryPrimitives.ReadUInt32LittleEndian` for what `HashBytesToUInt32` read. Nothing a
+  structure computes or stores changes. (#234)
+
 ### Fixed
 
 - **`WriteTo` of any structure too large to write now refuses it, by its whole

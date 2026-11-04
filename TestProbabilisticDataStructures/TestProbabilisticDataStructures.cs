@@ -151,6 +151,31 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// HashKernelFromSum splits a 64-bit hash into the lower and upper halves the
+        /// 32-bit kernel derives its probes from, so its bit layout is pinned explicitly.
+        /// </summary>
+        [TestMethod]
+        public void TestHashKernelFromSumSplitsTheValue()
+        {
+            var kernel = Utils.HashKernelFromSum(0xAABBCCDD_11223344UL);
+
+            Assert.AreEqual(0x11223344u, kernel.LowerBaseHash, "lower half is the low 32 bits");
+            Assert.AreEqual(0xAABBCCDDu, kernel.UpperBaseHash, "upper half is the high 32 bits");
+        }
+
+        [TestMethod]
+        public void TestHashKernelFromSumHandlesBoundaryValues()
+        {
+            var zero = Utils.HashKernelFromSum(0UL);
+            Assert.AreEqual(0u, zero.LowerBaseHash);
+            Assert.AreEqual(0u, zero.UpperBaseHash);
+
+            var max = Utils.HashKernelFromSum(ulong.MaxValue);
+            Assert.AreEqual(uint.MaxValue, max.LowerBaseHash);
+            Assert.AreEqual(uint.MaxValue, max.UpperBaseHash);
+        }
+
+        /// <summary>
         /// Pins the 128-bit kernel for the library's default hash function.
         /// </summary>
         [TestMethod]

@@ -34,8 +34,17 @@ namespace Benchmarks
             }
         }
 
+        /// <summary>
+        /// The 32-bit kernel: the hash split into its halves, as <c>SublimeCountMinSketch</c>
+        /// and placement below 2^27 positions do. The library's helper for it is internal,
+        /// so the split is written out here; it is two casts.
+        /// </summary>
         [Benchmark(Baseline = true)]
-        public HashKernelReturnValue HashKernel() => Utils.HashKernel(_data, _hash);
+        public (uint Lower, uint Upper) HashKernel()
+        {
+            var sum = _hash(_data);
+            return ((uint)sum, (uint)(sum >> 32));
+        }
 
         [Benchmark]
         public HashKernel128ReturnValue HashKernel128() => Utils.HashKernel128(_data, _hash);
