@@ -347,6 +347,78 @@ namespace TestProbabilisticDataStructures
                 "bytes past the doubled table: the entries were listed before they were moved");
         }
 
+        /// <summary>
+        /// A doubling that voids entries moves them down the chain without listing them
+        /// first. It used to collect the void entries' quotients in a list, 4 bytes an entry
+        /// with the list's growth, and nothing bounds how many there are: about a seventh of
+        /// a table of 2-bit fingerprints at its doubling.
+        /// </summary>
+        /// <remarks>
+        /// Two-bit fingerprints are the narrowest the constructor takes, and so where entries
+        /// go void soonest. Grown from 16 slots, the filter's active table reaches 2^16
+        /// slots with three tables behind it, and the add that doubles it voids 7,032 of its
+        /// entries; every table in the chain doubles once with it and a fifth is made. Each
+        /// of several filters, built alike, is given that add, and the least that any of
+        /// them allocated past the tables it made is held to the slack: the tables' objects
+        /// and the walks. Every table made is held after the add, since each one in the chain
+        /// is asked to have doubled once and no more, so no table is missing from the sum.
+        /// </remarks>
+        [TestMethod]
+        public void TestAnInfiniFilterDoublingMovesTheEntriesItVoidsWithoutListingThem()
+        {
+            const int quotientBits = 16;
+            const int fingerprintBits = 2;
+            var least = long.MaxValue;
+            var voided = 0;
+
+            for (var run = 0; run < 5; run++)
+            {
+                var filter = new InfiniFilter(initialCapacity: 16, fingerprintBits: fingerprintBits);
+                var added = 0;
+                while (filter.Segments[0].QuotientBits < quotientBits || filter.Segments[0].Load < 0.75)
+                {
+                    filter.Add(Key(added++));
+                }
+
+                var active = filter.Segments[0];
+                Assert.AreEqual(quotientBits, active.QuotientBits, "premise: the table's size");
+                voided = active.Entries().Count(entry => active.IsVoid(entry.Field));
+                var before = filter.Segments.ToArray();
+                var held = before.Sum(segment => (long)segment.Count);
+                var last = Key(added);
+
+                var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+                filter.Add(last);
+                var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+                var after = filter.Segments.ToArray();
+                Assert.AreEqual(quotientBits + 1, after[0].QuotientBits, "premise: that add doubled the table");
+                Assert.HasCount(before.Length + 1, after, "premise: the voided entries made a table");
+                for (var i = 0; i < before.Length; i++)
+                {
+                    Assert.AreEqual(before[i].QuotientBits + 1, after[i].QuotientBits,
+                        $"premise: table {i} of the chain doubled once with the active one");
+                }
+
+                Assert.AreEqual(Math.Max(2, before[^1].QuotientBits - fingerprintBits), after[^1].QuotientBits,
+                    "premise: the table made is the size it was made at");
+
+                Assert.AreEqual(held + 1, after.Sum(segment => (long)segment.Count),
+                    "the doubling lost or duplicated an entry");
+
+                var tables = after.Sum(segment => (long)segment.Data.Length * sizeof(ulong));
+                least = Math.Min(least, allocated - tables);
+            }
+
+            // Not vacuous: the doubling voided enough entries that a list of them, 4 bytes an
+            // entry, is at least four times the slack.
+            Assert.IsGreaterThan(4096, voided, "premise: the doubling voids entries");
+            Assert.IsLessThan(4096L, least,
+                $"the add that doubled a table of 2^{quotientBits} slots and voided {voided:N0} " +
+                $"entries allocated {least:N0} bytes past the tables it made: the void entries " +
+                "were listed before they were moved");
+        }
+
         // ---- BloomierFilter: the key limit ---------------------------------------------------
 
         /// <summary>
