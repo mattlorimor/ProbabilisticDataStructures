@@ -14,6 +14,36 @@ namespace TestProbabilisticDataStructures
         private static byte[] X_BYTES = Encoding.ASCII.GetBytes("x");
 
         /// <summary>
+        /// An inverse filter stores the items themselves, so its payload is as long as what
+        /// it holds: nine bytes, then each occupied slot's index, length and bytes. A filter
+        /// of 523,266 slots, each holding an item of four kibibytes, is the first past the
+        /// most a payload can be. The slots are claimed by reflection on a small filter, all
+        /// holding one item, which writes the bytes as many items of its length would.
+        /// </summary>
+        [TestMethod]
+        public void TestAnInverseFilterTooLargeToWriteIsRefusedNamingItsWholeSize()
+        {
+            const int slots = 523_266;
+            const int length = 4_096;
+            const long each = 2 * sizeof(uint) + length;
+            var payload = 9 + slots * each;
+
+            Assert.AreEqual(2_147_483_673L, payload, "the row's payload is miscomputed");
+            Assert.IsGreaterThan(PersistenceFormat.MaxPayloadLength, payload,
+                "the claimed slots fit a payload, so there is nothing to refuse");
+            Assert.IsLessThanOrEqualTo(PersistenceFormat.MaxPayloadLength, payload - each,
+                "one slot fewer is past the ceiling too, so the row is not the first past it");
+
+            var f = new InverseBloomFilter(10);
+            f.Add(A_BYTES);
+            var array = new byte[slots][];
+            System.Array.Fill(array, new byte[length]);
+
+            TestPayloadCount.AssertRefusedWhileClaiming(
+                f, payload, (f, "capacity", (uint)slots), (f, "Array", array));
+        }
+
+        /// <summary>
         /// The slots are one array of references, which holds at most
         /// <c>Array.MaxLength</c> of them. A capacity past that is refused, naming the
         /// parameter, before the array is asked for: until now it failed in the

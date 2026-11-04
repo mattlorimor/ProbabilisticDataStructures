@@ -14,6 +14,36 @@ namespace TestProbabilisticDataStructures
         private static byte[] C_BYTES = Encoding.ASCII.GetBytes("c");
         private static byte[] X_BYTES = Encoding.ASCII.GetBytes("x");
 
+        /// <summary>
+        /// A filter at a growth factor of 1 builds every contained filter for its hint, and
+        /// holds as many of them as its rate tightens to before its ceiling, so a large hint
+        /// passes the most a payload can be in filters it is allowed to hold. Its payload is
+        /// its own thirty-two bytes, then each filter whole in a run: a prefix, an envelope
+        /// and the filter's own payload. The filters are claimed as one built filter many
+        /// times over, which writes the same bytes as that many filters of its size and
+        /// builds one: 1,793 of a filter for a million items at 1%, each 1,198,222 bytes, is
+        /// the first count past the ceiling, well short of the 3,161 filters a tightening
+        /// ratio of 0.8 allows.
+        /// </summary>
+        [TestMethod]
+        public void TestAFilterAtGrowthOneTooLargeToWriteIsRefusedNamingItsWholeSize()
+        {
+            const int filters = 1_793;
+            var f = new ScalableBloomFilter(1_000_000, 0.01, 0.8, 1);
+            var inner = f.Filters[0].ToByteArray().Length - (long)PersistenceFormat.EnvelopeLength;
+            var payload = 32 + filters * (sizeof(uint) + PersistenceFormat.EnvelopeLength + inner);
+
+            Assert.AreEqual(2_148_451_524L, payload, "the filter is not the size the row assumes");
+            Assert.IsGreaterThan(PersistenceFormat.MaxPayloadLength, payload,
+                "the claimed filters fit a payload, so there is nothing to refuse");
+            Assert.IsLessThanOrEqualTo(PersistenceFormat.MaxPayloadLength,
+                payload - (sizeof(uint) + PersistenceFormat.EnvelopeLength + inner),
+                "one filter fewer is past the ceiling too, so the row is not the first past it");
+
+            var claimed = Enumerable.Repeat(f.Filters[0], filters).ToList();
+            TestPayloadCount.AssertRefusedWhileClaiming(f, payload, (f, "Filters", claimed));
+        }
+
         [TestMethod]
         public void TestNewDefaultScalableBloomFilter()
         {

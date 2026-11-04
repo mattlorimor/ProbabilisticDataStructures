@@ -14,6 +14,33 @@ namespace TestProbabilisticDataStructures
         private static byte[] X_BYTES = Encoding.ASCII.GetBytes("x");
 
         /// <summary>
+        /// A stable filter's payload is its twenty-two bytes, its cell table whole in a run,
+        /// and its two random states. The table is as long as one array can be, and at five
+        /// bits a cell or more, a table that long takes the payload past the most one can
+        /// be: 2,147,483,536 cells of eight bits is the first past it. The cells are claimed
+        /// by reflection on a small filter, since the run is counted from the table's count
+        /// and width, as its reader checks it.
+        /// </summary>
+        [TestMethod]
+        [DataRow((byte)8, 2_147_483_536u, 2_147_483_574L)]
+        [DataRow((byte)8, 2_147_483_591u, 2_147_483_629L)]
+        [DataRow((byte)5, 3_435_973_745u, 2_147_483_629L)]
+        public void TestAStableFilterTooLargeToWriteIsRefusedNamingItsWholeSize(
+            byte d, uint m, long payload)
+        {
+            Assert.IsLessThanOrEqualTo(Buckets.MaxCount(d), m,
+                "no filter holds this many cells of this width");
+            Assert.AreEqual(38 + Buckets.DataLength(m, d), payload, "the row's payload is miscomputed");
+            Assert.AreEqual(PersistenceFormat.MaxPayloadLength, 38 + Buckets.DataLength(2_147_483_535u, 8),
+                "one cell fewer than the first row does not fill a payload exactly");
+
+            var f = new StableBloomFilter(10, d, 0.5, null, 7);
+            f.Add(A_BYTES);
+
+            TestPayloadCount.AssertRefusedWhileClaiming(f, payload, (f, "M", m), (f.cells, "count", m));
+        }
+
+        /// <summary>
         /// Ensures that NewUnstableBloomFilter creates a Stable Bloom Filter with p=0,
         /// max=1 and k hash functions.
         /// </summary>

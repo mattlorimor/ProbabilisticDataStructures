@@ -13,6 +13,33 @@ namespace TestProbabilisticDataStructures
         private static byte[] X_BYTES = Encoding.ASCII.GetBytes("x");
 
         /// <summary>
+        /// A counting filter's payload is its twenty-six bytes, then its bucket table whole in
+        /// a run. The table is as long as one array can be, and at eight bits a bucket, or
+        /// four, a table that long takes the payload past the most one can be:
+        /// 2,147,483,548 buckets of eight bits is the first past it. The buckets are claimed
+        /// by reflection on a small filter, since the run is counted from the table's count
+        /// and width, as its reader checks it.
+        /// </summary>
+        [TestMethod]
+        [DataRow((byte)8, 2_147_483_548u, 2_147_483_574L)]
+        [DataRow((byte)8, 2_147_483_591u, 2_147_483_617L)]
+        [DataRow((byte)4, 4_294_967_182u, 2_147_483_617L)]
+        public void TestACountingFilterTooLargeToWriteIsRefusedNamingItsWholeSize(
+            byte b, uint m, long payload)
+        {
+            Assert.IsLessThanOrEqualTo(Buckets.MaxCount(b), m,
+                "no filter holds this many buckets of this width");
+            Assert.AreEqual(26 + Buckets.DataLength(m, b), payload, "the row's payload is miscomputed");
+            Assert.AreEqual(PersistenceFormat.MaxPayloadLength, 26 + Buckets.DataLength(2_147_483_547u, 8),
+                "one bucket fewer than the first row does not fill a payload exactly");
+
+            var f = new CountingBloomFilter(10, b, 0.5);
+            f.Add(A_BYTES);
+
+            TestPayloadCount.AssertRefusedWhileClaiming(f, payload, (f, "m", m), (f.Buckets, "count", m));
+        }
+
+        /// <summary>
         /// Ensures that Capacity() returns the number of bits, m, in the Bloom filter.
         /// </summary>
         [TestMethod]
