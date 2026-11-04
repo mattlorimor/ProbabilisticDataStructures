@@ -333,6 +333,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   however few are distinct; and `Grafite.Build` holds the keys in two sorted sets, about
   96 bytes a key, before it can refuse.
 
+- **A count-min sketch's reset, an `InfiniFilter`'s doubling and a Bloomier build hold
+  less at once.** No answer and no stored byte changes. (#238)
+  <br><br>
+  `CountMinSketch.Reset`, and `TopK.Reset` through it, clears the sketch's rows where they
+  are. It allocated a new matrix while the old one was still held, so a reset needed twice
+  the sketch at once: 16 GiB more for each row at the widest row a sketch has.
+  <br><br>
+  `InfiniFilter` moves each entry that a doubling voids down the chain as its walk of the
+  old table reaches it. It listed them first and moved them after, in a list that nothing
+  bounded: measured, 14% of the table's entries at a doubling with 2-bit fingerprints, and
+  0.2% with 8-bit ones.
+  <br><br>
+  `BloomierFilter.Build` holds the distinct pairs once, in the arrays its peel reads, with
+  an index beside them to find a key given again. It held them in a dictionary, copied
+  them into a list once every pair was read, and copied them again for the peel; at the
+  954,204,160 keys of the 8-bit limit, the dictionary and the list were at least 42 GB.
+  Measured on builds of 12 million and 2^24 keys, its peak memory falls from 139 and 130
+  bytes a key to 67 and 73, and the time a build takes is as it was, within the noise of
+  a shared machine. It refuses what it refused, in the same order, and builds every map to
+  the same bytes.
+
 - **`VarOpt` now says what is exact about its total weight, and keeps the arithmetic.**
   The documentation said the sampled weights sum to *exactly* the stream's total weight.
   What holds is that no weight is lost when an item is dropped, because the survivors

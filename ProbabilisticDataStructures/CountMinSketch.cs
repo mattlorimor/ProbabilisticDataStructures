@@ -357,10 +357,11 @@ namespace ProbabilisticDataStructures
         /// <returns>The CountMinSketch</returns>
         public CountMinSketch Reset()
         {
-            this.Matrix = new UInt64[this.Depth][];
-            for (uint i = 0; i < this.Depth; i++)
+            // Cleared where they are. A new matrix allocated while this one was still held
+            // needed both at once, twice the sketch.
+            foreach (var row in this.Matrix)
             {
-                this.Matrix[i] = new UInt64[this.Width];
+                Array.Clear(row);
             }
 
             this.count = 0;

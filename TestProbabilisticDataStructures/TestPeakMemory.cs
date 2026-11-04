@@ -201,6 +201,100 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        // ---- CountMinSketch and TopK: Reset --------------------------------------------------
+
+        /// <summary>
+        /// A count-min sketch of two rows of about a million counters, 16 MiB, so that a reset
+        /// that allocated a second matrix would show as megabytes, far past the slack.
+        /// </summary>
+        private const double ResetEpsilon = Math.E / (1 << 20);
+        private const double ResetDelta = 0.2;
+
+        /// <summary>
+        /// Resetting a count-min sketch clears its rows where they are. A reset that allocated
+        /// a new matrix while the old one was still held needed both at once, twice the
+        /// sketch: 16 GiB more for each row at the widest row the constructor takes. Each
+        /// measured reset clears counters set just before it, in the first row and the last,
+        /// and the sketch is then asked to have every counter nought, the shape it had, and a
+        /// total of nought.
+        /// </summary>
+        [TestMethod]
+        public void TestResettingACountMinSketchAllocatesNothing()
+        {
+            var sketch = new CountMinSketch(ResetEpsilon, ResetDelta);
+            Assert.AreEqual(2u, sketch.Depth, "premise: the sketch's rows");
+            for (var i = 0; i < 100; i++)
+            {
+                sketch.Add(Key(i));
+            }
+
+            var matrix = (long)sketch.Width * sketch.Depth * sizeof(ulong);
+            var allocated = Allocated(() =>
+            {
+                DirtySketch(sketch);
+                return sketch.Reset();
+            });
+
+            AssertCleared(sketch);
+            Assert.IsLessThan(1024L, allocated,
+                $"resetting a sketch of {matrix:N0} bytes of counters allocated {allocated:N0} " +
+                "bytes: the reset built a new matrix rather than clearing the one it had");
+
+            // Not vacuous: the counters each reset cleared were set.
+            DirtySketch(sketch);
+            Assert.AreEqual(1UL, sketch.Matrix[0][0]);
+            Assert.AreEqual(1UL, sketch.Matrix[sketch.Depth - 1][sketch.Width - 1]);
+        }
+
+        /// <summary>
+        /// A top-k's reset resets its sketch, so it is held to the same: a reset of a top-k
+        /// over the 16 MiB sketch above allocates its empty heap and nothing for the sketch.
+        /// The heap starts empty and is not sized by k, which
+        /// <see cref="TestATopKAllocatesNothingForKUntilElementsArrive"/> holds.
+        /// </summary>
+        [TestMethod]
+        public void TestResettingATopKAllocatesNothingForItsSketch()
+        {
+            var topK = new TopK(ResetEpsilon, ResetDelta, 10);
+            for (var i = 0; i < 20; i++)
+            {
+                topK.Add(Key(i));
+            }
+
+            Assert.IsNotEmpty(topK.Elements(), "premise: there is a heap to reset");
+            var sketch = topK.Sketch;
+            var matrix = (long)sketch.Width * sketch.Depth * sizeof(ulong);
+            var allocated = Allocated(() =>
+            {
+                DirtySketch(topK.Sketch);
+                return topK.Reset();
+            });
+
+            Assert.IsEmpty(topK.Elements(), "the reset kept an element");
+            AssertCleared(topK.Sketch);
+            Assert.IsLessThan(1024L, allocated,
+                $"resetting a top-k over {matrix:N0} bytes of counters allocated {allocated:N0} " +
+                "bytes: its sketch's reset built a new matrix rather than clearing the one it had");
+        }
+
+        /// <summary>Sets a counter at each end of a sketch, without allocating.</summary>
+        private static void DirtySketch(CountMinSketch sketch)
+        {
+            sketch.Matrix[0][0] = 1;
+            sketch.Matrix[sketch.Depth - 1][sketch.Width - 1] = 1;
+        }
+
+        private static void AssertCleared(CountMinSketch sketch)
+        {
+            Assert.AreEqual(0UL, sketch.TotalCount(), "the reset kept the total");
+            Assert.HasCount((int)sketch.Depth, sketch.Matrix, "the reset sketch has another depth");
+            foreach (var row in sketch.Matrix)
+            {
+                Assert.AreEqual((int)sketch.Width, row.Length, "a reset row is not the width it was");
+                Assert.IsTrue(row.AsSpan().IndexOfAnyExcept(0UL) < 0, "the reset left a counter set");
+            }
+        }
+
         // ---- InfiniFilter: doubling ----------------------------------------------------------
 
         /// <summary>
@@ -253,6 +347,78 @@ namespace TestProbabilisticDataStructures
                 "bytes past the doubled table: the entries were listed before they were moved");
         }
 
+        /// <summary>
+        /// A doubling that voids entries moves them down the chain without listing them
+        /// first. It used to collect the void entries' quotients in a list, 4 bytes an entry
+        /// with the list's growth, and nothing bounds how many there are: about a seventh of
+        /// a table of 2-bit fingerprints at its doubling.
+        /// </summary>
+        /// <remarks>
+        /// Two-bit fingerprints are the narrowest the constructor takes, and so where entries
+        /// go void soonest. Grown from 16 slots, the filter's active table reaches 2^16
+        /// slots with three tables behind it, and the add that doubles it voids 7,032 of its
+        /// entries; every table in the chain doubles once with it and a fifth is made. Each
+        /// of several filters, built alike, is given that add, and the least that any of
+        /// them allocated past the tables it made is held to the slack: the tables' objects
+        /// and the walks. Every table made is held after the add, since each one in the chain
+        /// is asked to have doubled once and no more, so no table is missing from the sum.
+        /// </remarks>
+        [TestMethod]
+        public void TestAnInfiniFilterDoublingMovesTheEntriesItVoidsWithoutListingThem()
+        {
+            const int quotientBits = 16;
+            const int fingerprintBits = 2;
+            var least = long.MaxValue;
+            var voided = 0;
+
+            for (var run = 0; run < 5; run++)
+            {
+                var filter = new InfiniFilter(initialCapacity: 16, fingerprintBits: fingerprintBits);
+                var added = 0;
+                while (filter.Segments[0].QuotientBits < quotientBits || filter.Segments[0].Load < 0.75)
+                {
+                    filter.Add(Key(added++));
+                }
+
+                var active = filter.Segments[0];
+                Assert.AreEqual(quotientBits, active.QuotientBits, "premise: the table's size");
+                voided = active.Entries().Count(entry => active.IsVoid(entry.Field));
+                var before = filter.Segments.ToArray();
+                var held = before.Sum(segment => (long)segment.Count);
+                var last = Key(added);
+
+                var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+                filter.Add(last);
+                var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+                var after = filter.Segments.ToArray();
+                Assert.AreEqual(quotientBits + 1, after[0].QuotientBits, "premise: that add doubled the table");
+                Assert.HasCount(before.Length + 1, after, "premise: the voided entries made a table");
+                for (var i = 0; i < before.Length; i++)
+                {
+                    Assert.AreEqual(before[i].QuotientBits + 1, after[i].QuotientBits,
+                        $"premise: table {i} of the chain doubled once with the active one");
+                }
+
+                Assert.AreEqual(Math.Max(2, before[^1].QuotientBits - fingerprintBits), after[^1].QuotientBits,
+                    "premise: the table made is the size it was made at");
+
+                Assert.AreEqual(held + 1, after.Sum(segment => (long)segment.Count),
+                    "the doubling lost or duplicated an entry");
+
+                var tables = after.Sum(segment => (long)segment.Data.Length * sizeof(ulong));
+                least = Math.Min(least, allocated - tables);
+            }
+
+            // Not vacuous: the doubling voided enough entries that a list of them, 4 bytes an
+            // entry, is at least four times the slack.
+            Assert.IsGreaterThan(4096, voided, "premise: the doubling voids entries");
+            Assert.IsLessThan(4096L, least,
+                $"the add that doubled a table of 2^{quotientBits} slots and voided {voided:N0} " +
+                $"entries allocated {least:N0} bytes past the tables it made: the void entries " +
+                "were listed before they were moved");
+        }
+
         // ---- BloomierFilter: the key limit ---------------------------------------------------
 
         /// <summary>
@@ -280,13 +446,127 @@ namespace TestProbabilisticDataStructures
             Assert.IsLessThanOrEqualTo(limit + 1, (uint)pairs.Read,
                 $"the build read {pairs.Read:N0} pairs, and allocated {allocated:N0} bytes, to " +
                 $"refuse more than {limit:N0} keys");
-            // A dictionary of the limit's keys is 28 bytes an entry, in tables that double as
-            // they fill, so under 128 bytes a key of the limit with the refusal; measured, 104.
-            // The bound is twice that. Collecting all the pairs first allocated 10 MB, about
-            // forty times the bound.
+            // The limit's keys are held in two arrays, 16 bytes a key, with an index of them of
+            // 4 bytes a slot kept no more than three quarters full, each doubling as it fills:
+            // measured with the refusal, 51 bytes a key of the limit, where the dictionary that
+            // held them before was 104. The bound was set at twice the dictionary's and stands.
+            // Collecting all the pairs first allocated 10 MB, about forty times the bound.
             Assert.IsLessThan(256L * limit, allocated,
                 $"refusing more than {limit:N0} keys allocated {allocated:N0} bytes: every pair " +
                 "was collected before the count was compared with the limit");
+        }
+
+        // ---- BloomierFilter: the pairs -------------------------------------------------------
+
+        /// <summary>
+        /// The keys a Bloomier build is measured at: a power of two, so that arrays which grow
+        /// by doubling end exactly the size of what they hold and the measurement is of what
+        /// the build keeps, not of where the count fell between two doublings.
+        /// </summary>
+        private const int BuildKeys = 1 << 16;
+
+        /// <summary>
+        /// A Bloomier build holds the distinct pairs once. It used to collect them into a
+        /// dictionary and then copy them into a list, 28 bytes a key at the least for the one
+        /// and 16 for the other, before the peel copied them again into the arrays it reads:
+        /// about 42 GB for the two at the most keys a map of 8-bit values holds.
+        /// </summary>
+        /// <remarks>
+        /// What is measured is everything a build of 2^16 distinct keys allocates, the least
+        /// of five: the cells it keeps, the peel's arrays and the pairs. The pairs allocate
+        /// nothing themselves (<see cref="CountedPairs"/>).
+        /// </remarks>
+        [TestMethod]
+        public void TestABloomierBuildHoldsItsPairsOnce()
+        {
+            var pairs = new CountedPairs(BuildKeys);
+            BloomierFilter map = null;
+            var allocated = Allocated(() => map = BloomierFilter.Build(pairs, 8));
+            var perKey = (double)allocated / BuildKeys;
+
+            Assert.AreEqual((uint)BuildKeys, map.Count(), "premise: every key was built");
+            for (var i = 0; i < BuildKeys; i += 997)
+            {
+                Assert.IsTrue(map.TryGetValue(Key(i), out var value), $"key {i} is missing");
+                Assert.AreEqual((ulong)(i & 0xFF), value, $"key {i} came back with the wrong value");
+            }
+
+            // Not vacuous: the build allocated at least the cells it keeps.
+            var cells = BloomierFilter.CellBytes(BuildKeys, 8);
+            Assert.IsGreaterThan(cells, allocated, "premise: the measurement is of a build");
+            // Measured with the pairs in a dictionary and then a list, 138.5 bytes a key. Held
+            // once, in the two arrays the peel reads with an index of them beside, 92.3: the
+            // arrays and the index as they double, the peel's arrays and the cells. The bound
+            // is a quarter more than that.
+            Assert.IsLessThan(115.0, perKey,
+                $"a build of {BuildKeys:N0} keys allocated {allocated:N0} bytes, {perKey:F1} a " +
+                "key: the pairs were held in more than one collection of every pair");
+        }
+
+        /// <summary>What collecting <paramref name="keys"/> distinct pairs allocates, under a limit.</summary>
+        private static long Collected(int keys, uint limit)
+        {
+            var pairs = new CountedPairs(keys);
+            var hash = Defaults.GetDefaultHashFunction();
+            return Allocated(() => BloomierFilter.Collect(pairs, hash, 0xFF, 8, limit));
+        }
+
+        /// <summary>
+        /// The index a build finds repeated keys by is kept no more than three quarters full:
+        /// it doubles when a key would take it past. Its length is a power of two, which
+        /// absorbs the fraction almost everywhere, so the test straddles the one step that
+        /// shows it: 3 · 2^15 keys fill an index of 2^17 slots to exactly three quarters, and
+        /// one more key doubles it to 2^18. An index kept half full would be 2^18 at both,
+        /// and one kept seven eighths full 2^17 at both. The arrays of the pairs are 2^17
+        /// long at both, so the difference between the two is the doubled index, 4 bytes a
+        /// slot of 2^18, and the one more key.
+        /// </summary>
+        [TestMethod]
+        public void TestABloomierBuildKeepsItsIndexAtMostThreeQuartersFull()
+        {
+            const int full = 3 << 15;
+            var most = BloomierFilter.MaxKeys(8);
+            var difference = Collected(full + 1, most) - Collected(full, most);
+            var index = 4L << 18;
+
+            Assert.IsGreaterThanOrEqualTo(index, difference,
+                $"one key past three quarters of 2^17 added {difference:N0} bytes to the build, " +
+                $"where an index doubled to 2^18 slots is {index:N0}: the index was not doubled " +
+                "there, so it is kept fuller than three quarters, or was doubled already");
+            Assert.IsLessThan(index + 1024, difference,
+                $"one key past three quarters of 2^17 added {difference:N0} bytes to the build, " +
+                $"more than an index of 2^18 slots, {index:N0}");
+        }
+
+        /// <summary>
+        /// The arrays of a build's pairs double as keys arrive, and never past its limit,
+        /// since no more keys than that are kept: a set of exactly the limit's keys ends in
+        /// arrays of the limit's length. Under the public limit the same pairs double past
+        /// the count, to the next power of two, and are cut back to it at the end. At the
+        /// most keys a map of 8-bit values holds, 954,204,160, that is the difference between
+        /// arrays of that many keys and arrays of 2^30 cut back to it, 1.9 GB of doubling and
+        /// 15.3 GB of copy.
+        /// </summary>
+        /// <remarks>
+        /// One past a power of two, 2^16 + 1 keys, is where a doubling passes the count by the
+        /// most. Under its own limit the arrays end at 2^16 + 1; under the public one they
+        /// double to 2^17 and are cut back to 2^16 + 1. The difference is those two arrays of
+        /// 2^17 keys, 16 bytes a key, less nothing: the arrays up to 2^16 are the same in both.
+        /// </remarks>
+        [TestMethod]
+        public void TestABloomierBuildAtItsLimitGrowsItsArraysNoFurther()
+        {
+            const int keys = (1 << 16) + 1;
+            var difference = Collected(keys, BloomierFilter.MaxKeys(8)) - Collected(keys, keys);
+            var doubled = 16L << 17;
+
+            Assert.IsGreaterThanOrEqualTo(doubled, difference,
+                $"a set of {keys:N0} keys allocated {difference:N0} bytes more under the public " +
+                $"limit than under a limit of its own size, where arrays doubled past the count " +
+                $"are {doubled:N0}: the arrays grew past the limit");
+            Assert.IsLessThan(doubled + 1024, difference,
+                $"a set of {keys:N0} keys allocated {difference:N0} bytes more under the public " +
+                "limit than under a limit of its own size, more than the arrays doubled past it");
         }
 
         /// <summary>
