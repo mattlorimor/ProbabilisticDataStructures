@@ -127,7 +127,7 @@ namespace ProbabilisticDataStructures
         /// <param name="data">The data bytes to hash.</param>
         /// <param name="hash">The hash function to use.</param>
         /// <returns>A HashKernel</returns>
-        public static HashKernelReturnValue HashKernel(byte[] data, Func<ReadOnlySpan<byte>, ulong> hash)
+        internal static HashKernelReturnValue HashKernel(byte[] data, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             return HashKernelFromSum(hash(data));
         }
@@ -139,7 +139,7 @@ namespace ProbabilisticDataStructures
         /// <param name="data">The data to hash.</param>
         /// <param name="hash">The hash function to use.</param>
         /// <returns>A HashKernel</returns>
-        public static HashKernelReturnValue HashKernel(ReadOnlySpan<byte> data, Func<ReadOnlySpan<byte>, ulong> hash)
+        internal static HashKernelReturnValue HashKernel(ReadOnlySpan<byte> data, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             return HashKernelFromSum(hash(data));
         }
@@ -149,7 +149,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="sum">The 64-bit hash value.</param>
         /// <returns>A HashKernel</returns>
-        public static HashKernelReturnValue HashKernelFromSum(ulong sum)
+        internal static HashKernelReturnValue HashKernelFromSum(ulong sum)
         {
             return HashKernelReturnValue.Create(
                 (uint)(sum & 0xffffffff),
@@ -210,7 +210,7 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         /// <param name="hashBytes">The digest bytes.</param>
         /// <returns>A HashKernel</returns>
-        public static HashKernelReturnValue HashKernelFromHashBytes(byte[] hashBytes)
+        internal static HashKernelReturnValue HashKernelFromHashBytes(byte[] hashBytes)
         {
             return HashKernelFromHashBytes((ReadOnlySpan<byte>)hashBytes);
         }
@@ -220,7 +220,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="hashBytes">The digest bytes.</param>
         /// <returns>A HashKernel</returns>
-        public static HashKernelReturnValue HashKernelFromHashBytes(ReadOnlySpan<byte> hashBytes)
+        internal static HashKernelReturnValue HashKernelFromHashBytes(ReadOnlySpan<byte> hashBytes)
         {
             return HashKernelReturnValue.Create(
                 HashBytesToUInt32(hashBytes, 0),
@@ -235,7 +235,7 @@ namespace ProbabilisticDataStructures
         /// <param name="hashBytes"></param>
         /// <param name="offset"></param>
         /// <returns></returns>
-        public static uint HashBytesToUInt32(byte[] hashBytes, int offset = 0)
+        internal static uint HashBytesToUInt32(byte[] hashBytes, int offset = 0)
         {
             return HashBytesToUInt32((ReadOnlySpan<byte>)hashBytes, offset);
         }
@@ -248,7 +248,7 @@ namespace ProbabilisticDataStructures
         /// <param name="hashBytes"></param>
         /// <param name="offset"></param>
         /// <returns></returns>
-        public static uint HashBytesToUInt32(ReadOnlySpan<byte> hashBytes, int offset = 0)
+        internal static uint HashBytesToUInt32(ReadOnlySpan<byte> hashBytes, int offset = 0)
         {
             return
                 ((uint)hashBytes[offset]) |
@@ -320,7 +320,7 @@ namespace ProbabilisticDataStructures
     /// <summary>
     /// The pair of 32-bit base hash values from which a filter's k hashes are derived.
     /// </summary>
-    public struct HashKernelReturnValue
+    internal struct HashKernelReturnValue
     {
         /// <summary>
         /// The upper base hash value.

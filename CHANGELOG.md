@@ -380,6 +380,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behaviour. It is not written with the filter, so the stored format does not change and a
   filter read back has the default. `MementoFilter` shipped in 6.2.0, so 6.2.0 is affected.
 
+- **The 32-bit hash helpers in `Utils` are internal, and that is a breaking change.**
+  `Utils.HashKernel`, `Utils.HashKernelFromSum`, `Utils.HashKernelFromHashBytes`,
+  `Utils.HashBytesToUInt32` and the `HashKernelReturnValue` they return split a hash into
+  32-bit halves. Inside the library only `SublimeCountMinSketch` uses the 32-bit kernel,
+  and it still does. Code that called them switches to `Utils.HashKernel128`, which
+  returns two 64-bit values in a `HashKernel128ReturnValue`, and `Utils.HashBytesToUInt64`.
+  `HashKernel128`'s second value is not the hash's upper half, so code that needs the old
+  values exactly computes them: `(uint)h` and `(uint)(h >> 32)` of the 64-bit hash, and
+  `BinaryPrimitives.ReadUInt32LittleEndian` for what `HashBytesToUInt32` read. Nothing a
+  structure computes or stores changes. (#234)
+
+- **`StableBloomFilter` and `CuckooBloomFilter` take a `ulong?` seed, and that is a breaking
+  change.** They took an `int?` and widened it to the generator's 64 bits, so only 2^32 of
+  its starting states could be chosen; every other seeded structure already took a
+  `ulong?`. Code compiled against 6.2.0 has to be rebuilt. A non-negative constant such as
+  `seed: 42` compiles unchanged and gives the same sequence as before. An `int` variable
+  needs a cast, and a negative seed needs the conversion the filters used to make: pass
+  `unchecked((ulong)seed)`, which is 2^64 + seed, so `-1` becomes `ulong.MaxValue`, for the
+  sequence the `int` gave. Stored filters are unaffected: they record where their generator
+  is and where it began as 64-bit values, and resume from those however they were seeded.
+  (#235)
+
 ### Fixed
 
 - **A payload naming a bucket width no bucket has is refused as the payload's.** A
@@ -1472,6 +1494,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every payload this library wrote holds its counters and reads as before, and the format
   is unchanged.
 
+- **A `CountMinSketch` or `SublimeCountMinSketch` payload claiming counters it did not
+  hold had a row allocated before it was refused, or was refused for a budget that would
+  not have loaded it.** Both readers allocated each row before reading it, and neither
+  they nor their prices checked that the counters the shape claims are in the payload. A
+  count-min sketch of 275 bytes with its width edited to ten million allocated 80 MB,
+  under the default budget or under none, before failing at the first missing counter,
+  and a Sublime sketch of 590 bytes with its width edited to 2^23 allocated 67 MB the same
+  way; edited to 2^22 and read under a budget just short of what the unedited payload
+  needs, each was refused for that budget instead. Both now check the counters against the
+  bytes remaining in the shape check their read and price share, before a row is priced or
+  allocated, as the `PrivateCountMinSketch` and `HeavyKeeper` readers do, and refuse a
+  payload that lacks them for that, under any budget. It needs a payload edited on purpose
+  with its checksum repaired; every payload this library wrote holds its counters and
+  reads as before, and the format is unchanged.
+
+- **`DpswSketch.Add` on a window at the largest position wrapped the position to
+  `long.MinValue`.** The reader accepts any position that is not negative, `long.MaxValue`
+  included, since the format can hold it, and `Add` incremented it unchecked. A window
+  read at `long.MaxValue` took the next item at `long.MinValue`, and its own payload was
+  then refused by its reader as having seen a negative number of items. Adds alone would
+  take 2^63 − 1 items to get there; a payload edited on purpose, with its checksum
+  repaired, gets there at once. `Add` now refuses it with an `InvalidOperationException`
+  and leaves the window unchanged, as `DDSketch.Add` refuses a sketch already holding
+  2^64 − 1 values, and such a window still reads. No format change.
+
 - **`InverseBloomFilter`, `HyperLogLog` and `DpswSketch` failed inside an allocation, or
   saturated, instead of refusing a size they could not build.** `InverseBloomFilter`'s
   slots are one array of references, which holds 2,147,483,591: a capacity past that was
@@ -1629,6 +1676,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   touched, as it already did for buckets no array could hold, where it used to let the
   count wrap. Nothing but a payload gets a sketch within reach of that, since `Add` takes
   one value at a time. No format change.
+
+- **`DDSketch.Add` on a sketch already holding 2^64 − 1 values wrapped its total to
+  nought.** It added one to the total, to a store's total and to the value's bucket without
+  checking any of them. `Add` alone would take 2^64 calls to get there, but a sketch read
+  from a payload can be full, since the reader accepts a total of exactly 2^64 − 1, and so
+  can one merged from such sketches. Given one more value, a full sketch answered `Count()`
+  with 0 and `Quantile` with "The sketch holds nothing", and unless the value fell in the
+  bucket or zero count already holding everything, its own payload was then refused by its
+  reader. `Add` now refuses it with an `InvalidOperationException` and leaves the sketch
+  unchanged, as `Merge` refuses a merge past the same total. The check is one comparison
+  per add, and there is no format change.
 
 - **A payload whose byte run claimed almost `int.MaxValue` bytes was refused with an
   `ArgumentOutOfRangeException`, not the `InvalidDataException` every other payload the

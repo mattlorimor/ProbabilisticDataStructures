@@ -680,7 +680,7 @@ namespace ProbabilisticDataStructures
             var sizeFactor = reader.ReadDouble();
             var depth = reader.ReadUInt32();
             var width = reader.ReadUInt32();
-            CheckShape(delta, growthExponent, sizeFactor, depth, width);
+            CheckShape(ref reader, delta, growthExponent, sizeFactor, depth, width);
 
             var sketch = new SublimeCountMinSketch
             {
@@ -734,7 +734,7 @@ namespace ProbabilisticDataStructures
             var sizeFactor = reader.ReadDouble();
             var depth = reader.ReadUInt32();
             var width = reader.ReadUInt32();
-            CheckShape(delta, growthExponent, sizeFactor, depth, width);
+            CheckShape(ref reader, delta, growthExponent, sizeFactor, depth, width);
 
             var count = reader.ReadUInt64();
             var expansionLimit = reader.ReadUInt64();
@@ -823,9 +823,10 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Checks the shape a payload claims, as both the read and its price do before
-        /// any counters are allocated.
+        /// any counters are priced or allocated.
         /// </summary>
         private static void CheckShape(
+            ref PayloadReader reader,
             double delta, double growthExponent, double sizeFactor, uint depth, uint width)
         {
             if (double.IsNaN(delta) || delta <= 0 || delta >= 1)
@@ -861,6 +862,18 @@ namespace ProbabilisticDataStructures
                     "-- the low bits of a hash pick the counter -- no larger than " +
                     $"{MaxWidth:N0}, the largest an int holds, and this is not one.");
             }
+
+            // Every counter of the current rows is written, as a plain u64, so they are
+            // checked against the bytes behind them before any row is priced or allocated:
+            // a few bytes claiming millions of counters had the reader allocate a row of
+            // them before it found them missing. The rows are the last thing in the payload,
+            // after the totals and any records of earlier states, so the bytes left here
+            // hold at least their counters. Each record is half the width of the state after
+            // it, so the records together hold fewer counters than the rows, and what is
+            // allocated for them is bounded by the same bytes. The product of two u32 cannot
+            // wrap a ulong, and the check divides. The read makes it as well as the price,
+            // since a price that throws does not stop the read.
+            reader.RequireHolds((ulong)depth * width, sizeof(ulong), "counters");
         }
 
         /// <summary>

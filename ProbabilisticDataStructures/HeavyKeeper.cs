@@ -35,6 +35,12 @@ namespace ProbabilisticDataStructures
     /// 9, which records the placement; a structure read back keeps the scheme its payload
     /// was placed with. The fingerprint is the hash's top sixteen bits either way.
     /// </para>
+    /// <para>
+    /// Sixteen bits is the paper's design, and it is what the fingerprint collisions above
+    /// cost: two different elements share a fingerprint 2^-16 of the time, at any width,
+    /// and an element that finds its fingerprint in a bucket another holds counts as that
+    /// holder there. Widening it would change the stored format.
+    /// </para>
     /// </remarks>
     public class HeavyKeeper : IBinaryPersistable<HeavyKeeper>, IPayloadBody
     {
