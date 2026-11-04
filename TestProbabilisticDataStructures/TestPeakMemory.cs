@@ -446,8 +446,8 @@ namespace TestProbabilisticDataStructures
             Assert.IsLessThanOrEqualTo(limit + 1, (uint)pairs.Read,
                 $"the build read {pairs.Read:N0} pairs, and allocated {allocated:N0} bytes, to " +
                 $"refuse more than {limit:N0} keys");
-            // The limit's keys are held in two arrays, 16 bytes a key, with an index of them
-            // of 4 bytes a slot kept under three quarters full, each doubling as it fills:
+            // The limit's keys are held in two arrays, 16 bytes a key, with an index of them of
+            // 4 bytes a slot kept no more than three quarters full, each doubling as it fills:
             // measured with the refusal, 51 bytes a key of the limit, where the dictionary that
             // held them before was 104. The bound was set at twice the dictionary's and stands.
             // Collecting all the pairs first allocated 10 MB, about forty times the bound.
