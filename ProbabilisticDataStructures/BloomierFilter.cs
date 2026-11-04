@@ -47,6 +47,14 @@ namespace ProbabilisticDataStructures
 
         internal Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
 
+        /// <summary>
+        /// The most distinct keys the build that made this map would take, which is the
+        /// limit it refused past: <see cref="MaxKeys"/> of the value's width for the public
+        /// build, or the lower one a test passes. Nought for a map that was read. The tests
+        /// use this to hold the public build to its limit, which no test can reach.
+        /// </summary>
+        internal uint KeyLimit { get; private set; }
+
         private BloomierFilter()
         {
         }
@@ -147,9 +155,10 @@ namespace ProbabilisticDataStructures
                 Hash = hashFunction,
                 valueBits = valueBits,
                 valueMask = valueBits == 64 ? ulong.MaxValue : (1UL << valueBits) - 1,
+                KeyLimit = keyLimit,
             };
 
-            var (keys, values) = Collect(pairs, hashFunction, filter.valueMask, valueBits, keyLimit);
+            var (keys, values) = Collect(pairs, hashFunction, filter.valueMask, valueBits, filter.KeyLimit);
             filter.Shape((uint)keys.Length);
             filter.Populate(keys, values);
 
