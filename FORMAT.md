@@ -30,6 +30,66 @@ structure id is caught by the same check rather than being acted on first. The m
 outside it: a payload whose magic is wrong is not this format at all, and there is
 nothing to checksum.
 
+### The large form
+
+A payload longer than the ordinary envelope holds, 2,147,483,573 bytes, needs a wider
+length than a `u32` and a header laid out for it, and is in the large form of the
+envelope. No other payload is: one that fits is written in the ordinary envelope above,
+byte for byte as it always was, so every release that reads its version goes on reading
+it.
+
+| Offset | Size | Field |
+| --- | --- | --- |
+| 0 | 4 | Magic, the ASCII bytes `PDS\0` |
+| 4 | 2 | Format version, with the flag `0x8000` set |
+| 6 | 2 | Structure id |
+| 8 | 2 | Hash id |
+| 10 | 8 | Payload length in bytes, a `u64` |
+| 18 | 4 | CRC-32 of bytes 4 through 17 |
+| 22 | *n* | Payload |
+| 22 + *n* | 4 | CRC-32 of bytes 4 through 17, then of bytes 22 through 21 + *n* |
+
+The version field's high bit, `0x8000`, marks the large form, and the format version is
+the other fifteen bits: a `BloomFilter` at version 8 in the large form carries `0x8008`.
+The flag says only which envelope holds the payload. The payload inside is the one the
+ordinary envelope would hold at that version, as the sections below lay it out, and a
+structure reads the same versions in either form. A structure nested in another is in
+whichever form its own payload's length calls for.
+
+A release that does not know the large form checks the magic and then, as every release
+from 3.2.0 on does, refuses a version above its own highest before it reads anything
+else. Every format version is below `0x8000`, so such a release refuses a payload in the
+large form as written by a later version, which it was. Nothing after the version field
+is read by it, and from there the large form is laid out afresh.
+
+The header has a checksum of its own, which a reader checks before it uses any field the
+checksum covers, so that a damaged structure id or length is refused as damaged and never
+acted on, as the ordinary envelope's one checksum ensures for its own header. The flag is
+read first, unavoidably, since it says how long the header is; flipped, it has the header
+read as the other form, whose checksum covers other bytes and fails. The final checksum
+covers the header's fields and then the payload, and not the header's checksum: it is the
+header's checksum carried on over the payload. Carried on over the header's checksum
+instead, it would not depend on the header at all, because a CRC-32 taken over some bytes
+followed by their own CRC-32 is the same, `2144DF1C`, whatever the bytes were.
+
+The final checksum follows the payload, and is compared once the payload has been read
+rather than before it is used, which is the only order open to a reader that does not hold
+the payload. If it does not match, the structure read from the payload is discarded and
+the read refused, so no caller receives it. A payload refused before its end, for its
+shape or for what reading it would cost, is refused saying that its checksum was not
+reached, because what was refused may be damage the checksum would have named.
+
+This library reads the large form by holding the payload, as it holds an ordinary one, so
+it refuses one in the large form longer than one array holds, 2,147,483,591 bytes. It
+writes the large form for a payload past the ordinary envelope's ceiling, and for no
+other, as the payload is produced: the header first, with the length counted beforehand
+from the layout, then the payload a piece at a time, the final checksum carried on over
+each piece as it goes, then that checksum. Nothing the length of the payload is held, and
+the large form is written only to a stream, never returned as one array. A write that
+fails part-way can leave the beginning of an envelope in its stream, which a reader
+refuses for its length or its checksum. No single run, a `bytes` field, is written longer
+than `int.MaxValue` bytes in either form yet, as [Sizes](#sizes) describes.
+
 ### Format versions
 
 The version travels in each payload rather than being a property of the library, so a
@@ -46,6 +106,10 @@ structure whose layout changes bumps only its own.
 | 7 | the release after 6.2.0 | `ScalableBloomFilter` | the growth factor, written only by a filter that grows |
 | 8 | the release after 6.2.0 | `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter`, `StableBloomFilter` | a placement byte, and the item count as a `u64`; written by every save |
 | 9 | the release after 6.2.0 | `InverseBloomFilter`, `CountMinSketch`, `HeavyKeeper`, `PrivateCountMinSketch`, `DpswSketch` | a placement byte, in each private sketch body for `DpswSketch`; written by every save |
+
+The version field's high bit, `0x8000`, is not part of a version: it marks
+[the large form](#the-large-form) of the envelope, and the version is the other fifteen
+bits. No version in this table has that bit, and a version is never given one that does.
 
 The table is also the list of what each structure reads. A version belongs to the
 structures named against it, and a structure's reader reads those versions and no
@@ -352,10 +416,12 @@ disagrees with the count is refused as corrupt. Sizes that did not wrap are unch
 read as they always did.
 
 A quotient filter's table can be larger than a payload holds: 2^31 slots at five bits of
-remainder, or 2^30 at thirteen, is 268,435,458 words, and a payload carries at most
-268,435,444. Such a filter can be built and used and not written, and `WriteTo` says so
-with the `InvalidOperationException` of the envelope's ceiling; releases up to 6.2.0 failed
-with an `OverflowException` from computing the table's length in 32 bits.
+remainder, or 2^30 at thirteen, is 268,435,458 words, and the ordinary envelope carries at
+most 268,435,444. The table is one run, and no run is written longer than `int.MaxValue`
+bytes, which is fewer words than those, so such a filter can be built and used and not
+written, in either form: `WriteTo` says so with the `InvalidOperationException` that
+refuses the run, before anything is written. Releases up to 6.2.0 failed with an
+`OverflowException` from computing the table's length in 32 bits.
 
 A size below its limit can still be refused for not being in the payload. Where a reader
 allocates for a count, it first checks that the bytes left could hold that many, so what
@@ -368,12 +434,16 @@ regions whole because its arithmetic assumes their size, and a quotient filter's
 names its table outright. A payload can ask those for as large a structure as the
 constructor would build. What stops a small one asking is the read budget, below.
 
-The envelope bounds everything else. A payload is written as one array together with the
-envelope's eighteen bytes, so it is at most 2,147,483,573 bytes: the largest array,
-2,147,483,591, less those. A structure whose payload would be larger can be built but not
-written, and `WriteTo` throws an `InvalidOperationException` saying how large the payload
-would have been; the structure is untouched. A reader refuses a length field above
-2,147,483,591, what one array holds, before allocating for it.
+The envelope bounds everything else. A payload in the ordinary envelope is written as one
+array together with the envelope's eighteen bytes, so it is at most 2,147,483,573 bytes:
+the largest array, 2,147,483,591, less those. A larger one is written in
+[the large form](#the-large-form), to a stream: `ToByteArray` of a structure whose payload
+would be larger throws an `InvalidOperationException` saying how large the payload would
+have been, and the structure is untouched. In either form a run is written no longer than
+`int.MaxValue` bytes, the most a reader takes into one array, so a structure that would
+need a longer one can be built but not written yet, and `WriteTo` refuses it the same way,
+naming the run. A reader refuses a length field above 2,147,483,591, what one array
+holds, before allocating for it.
 
 ### Read budget
 
@@ -387,14 +457,17 @@ payload when that total is more than the budget. The refusal is an `InvalidDataE
 whose inner exception is a `ReadBudgetExceededException` naming the total and the budget;
 the total is the same whatever the budget was, and a budget of it reads the payload.
 
-A payload that fits the budget is read and its checksum checked before it is priced, so a
-corrupted one is refused as corrupted. One whose length alone is more than the budget is
-never held: its fields are read from the stream and its runs skipped, to name the total,
-before its checksum could be checked. A payload that ends early, or whose fields are not
-ones its reader accepts, is priced as far as it goes.
+A payload in the ordinary envelope that fits the budget is read and its checksum checked
+before it is priced, so a corrupted one is refused as corrupted. One in the large form is
+priced before its checksum is reached, which follows it, and a refusal of it says so. One
+whose length alone is more than the budget is never held: its fields are read from the
+stream and its runs skipped, to name the total, before its checksum could be checked. A
+payload that ends early, or whose fields are not ones its reader accepts, is priced as far
+as it goes.
 
 The hash id is checked before anything is priced: after the checksum when the payload is
-held, and as the header states it when it is not. A payload naming a hash its reader
+held, as the header states it when it is not, and in the large form after the header's own
+checksum, either way. A payload naming a hash its reader
 cannot read it with — one the caller has not supplied and the reader cannot reconstruct,
 or any hash at all for a structure that hashes nothing — is refused for that under any
 budget.
@@ -466,6 +539,10 @@ The stored `width` and `depth` are authoritative, not `epsilon` and `delta`. The
 what the sketch indexes by, and recomputing them from the parameters would silently
 relocate every cell if the sizing were ever adjusted. `epsilon` and `delta` are stored
 because `Epsilon()` and `Delta()` report them.
+
+A reader rejects a matrix with no rows or no columns, one past the limits the constructor
+builds to (see [Sizes](#sizes)), and more cells than the rest of the payload could hold,
+which it checks before allocating a row.
 
 ### `BloomFilter64` (id 2)
 
@@ -1225,9 +1302,10 @@ that follow it do not require is refused.
 A reader also rejects a delta outside nought to one, a growth exponent outside the same
 range, a size factor that is not positive, a row count of zero or past the deepest sketch
 the constructor builds (see [Sizes](#sizes)), a width that is not a power of two — the
-low bits of a hash pick the counter — and more than thirty records, which would be more
-counters than a row may hold. Readers before this limit was shared refused more than
-sixty-four rows, which a delta of `1e-28` already needs.
+low bits of a hash pick the counter — current rows with more counters than the rest of
+the payload could hold, which it checks before allocating any, and more than thirty
+records, which would be more counters than a row may hold. Readers before this limit was
+shared refused more than sixty-four rows, which a delta of `1e-28` already needs.
 
 The total count and the count at which the arrays next double are held to the rest. The
 arrays double once the total reaches (width × size factor)^(1 / growth exponent), rounded

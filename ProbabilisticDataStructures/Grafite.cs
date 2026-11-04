@@ -957,11 +957,21 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.Grafite);
-            var payload = PersistenceFormat.Read(
-                stream, StructureId.Grafite, out _, budget, Price,
-                hash, CheckHash);
+            return PersistenceFormat.Read(
+                stream, StructureId.Grafite, budget, Price, hash, CheckHash,
+                ReadPayload);
+        }
 
-            var reader = new PayloadReader(payload, budget);
+        /// <summary>
+        /// Reads the payload of the envelope <c>Read</c> opened, once the envelope has
+        /// been checked. See <see cref="PayloadParse{T}"/>.
+        /// </summary>
+        private static Grafite ReadPayload(
+            ref PayloadReader reader, ushort version, HashId hashId,
+            Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            var budget = reader.Budget;
+
             var r = reader.ReadUInt64();
             var c1 = reader.ReadUInt64();
             var c2 = reader.ReadUInt64();

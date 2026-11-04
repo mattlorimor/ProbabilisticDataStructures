@@ -447,39 +447,6 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Every entry the segment holds, paired with the quotient that owns it.
-        /// </summary>
-        internal List<(uint Quotient, ulong Field)> Entries()
-        {
-            var entries = new List<(uint Quotient, ulong Field)>((int)this.Count);
-
-            for (var quotient = 0u; quotient < this.Slots; quotient++)
-            {
-                if (!IsOccupied(quotient))
-                {
-                    continue;
-                }
-
-                var at = FindRunStart(quotient);
-
-                while (true)
-                {
-                    entries.Add((quotient, ReadField(at)));
-
-                    var next = Next(at);
-                    if (!IsContinuation(next))
-                    {
-                        break;
-                    }
-
-                    at = next;
-                }
-            }
-
-            return entries;
-        }
-
-        /// <summary>
         /// The slot values of the run belonging to a quotient, in order.
         /// </summary>
         internal List<ulong> ReadRun(uint quotient)

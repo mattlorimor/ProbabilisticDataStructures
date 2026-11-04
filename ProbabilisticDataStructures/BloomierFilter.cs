@@ -47,6 +47,14 @@ namespace ProbabilisticDataStructures
 
         internal Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
 
+        /// <summary>
+        /// The most distinct keys the build that made this map would take, which is the
+        /// limit it refused past: <see cref="MaxKeys"/> of the value's width for the public
+        /// build, or the lower one a test passes. Nought for a map that was read. The tests
+        /// use this to hold the public build to its limit, which no test can reach.
+        /// </summary>
+        internal uint KeyLimit { get; private set; }
+
         private BloomierFilter()
         {
         }
@@ -147,11 +155,12 @@ namespace ProbabilisticDataStructures
                 Hash = hashFunction,
                 valueBits = valueBits,
                 valueMask = valueBits == 64 ? ulong.MaxValue : (1UL << valueBits) - 1,
+                KeyLimit = keyLimit,
             };
 
-            var entries = Collect(pairs, hashFunction, filter.valueMask, valueBits, keyLimit);
-            filter.Shape((uint)entries.Count);
-            filter.Populate(entries);
+            var (keys, values) = Collect(pairs, hashFunction, filter.valueMask, valueBits, filter.KeyLimit);
+            filter.Shape((uint)keys.Length);
+            filter.Populate(keys, values);
 
             return filter;
         }
@@ -159,16 +168,31 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Hashes each key and checks the values fit, refusing a key that appears twice
         /// with different values, and a set of more than <paramref name="keyLimit"/>
-        /// distinct keys as soon as it passes it.
+        /// distinct keys as soon as it passes it. Returns the distinct keys' hashes and
+        /// their values, in the order the pairs first gave each key, in two arrays as long
+        /// as the count.
         /// </summary>
-        private static List<(ulong Key, ulong Value)> Collect(
+        /// <remarks>
+        /// The pairs are held once, in the two arrays the peel reads, with an index of where
+        /// each key is so that one given again is found as it arrives: 16 bytes a key, and 4
+        /// for each slot of the index, which is kept no more than three quarters full. They
+        /// were held in a dictionary, 28 bytes a key at the least, and copied into a list of
+        /// 16 when every pair had been read, then copied again into the peel's arrays. The
+        /// order is the one the dictionary gave them in, so the peel is handed the same
+        /// arrays and builds the same cells.
+        /// </remarks>
+        internal static (ulong[] Keys, ulong[] Values) Collect(
             IEnumerable<KeyValuePair<byte[], ulong>> pairs,
             Func<ReadOnlySpan<byte>, ulong> hash,
             ulong valueMask,
             int valueBits,
             uint keyLimit)
         {
-            var seen = new Dictionary<ulong, ulong>();
+            var keys = new ulong[4];
+            var values = new ulong[4];
+            var count = 0;
+            var index = new int[8];
+            var steps = 0L;
 
             foreach (var pair in pairs)
             {
@@ -183,7 +207,9 @@ namespace ProbabilisticDataStructures
                 }
 
                 var key = hash(pair.Key);
-                var known = seen.TryGetValue(key, out var existing);
+                var slot = SlotOf(index, keys, key, ref steps);
+                var known = index[slot] != 0;
+                var existing = known ? values[index[slot] - 1] : 0;
 
                 if (known && existing != pair.Value)
                 {
@@ -205,28 +231,106 @@ namespace ProbabilisticDataStructures
                         nameof(pairs));
                 }
 
+                if (known)
+                {
+                    continue;
+                }
+
                 // Refused at the first key past the limit, so that what is held to say so
                 // is the limit's worth of keys and the pairs are read no further. Collecting
-                // them all first held a set too large whole, in this and in the list below,
-                // before the count was compared: past the most a map of 8-bit values holds,
-                // more than 42 GB. A set with too many keys and a conflict is refused for
-                // whichever comes first.
-                if (!known && seen.Count == keyLimit)
+                // them all first held a set too large whole before the count was compared:
+                // past the most a map of 8-bit values holds, more than 42 GB. A set with too
+                // many keys and a conflict is refused for whichever comes first.
+                if (count == keyLimit)
                 {
                     throw TooManyKeys(keyLimit, valueBits);
                 }
 
-                seen[key] = pair.Value;
+                if (count == keys.Length)
+                {
+                    // Doubled, and never past the limit, since no more keys than that are
+                    // kept.
+                    var grown = (int)Math.Min(2L * keys.Length, Math.Min(keyLimit, (long)Array.MaxLength));
+                    Array.Resize(ref keys, grown);
+                    Array.Resize(ref values, grown);
+                }
+
+                keys[count] = key;
+                values[count] = pair.Value;
+                count++;
+                index[slot] = count;
+
+                if (count > index.Length / 4 * 3)
+                {
+                    index = Reindex(keys, count, (int)Math.Min(2L * index.Length, Array.MaxLength), ref steps);
+                }
             }
 
-            var entries = new List<(ulong, ulong)>(seen.Count);
-            foreach (var entry in seen)
+            if (count < keys.Length)
             {
-                entries.Add((entry.Key, entry.Value));
+                Array.Resize(ref keys, count);
+                Array.Resize(ref values, count);
             }
 
-            return entries;
+            CollectedSteps = steps;
+            return (keys, values);
         }
+
+        /// <summary>
+        /// How many slots past their first the last collection to finish on this thread
+        /// looked, over every key it found or placed and every key it placed again when its
+        /// index doubled: the work the index did. For the suite, which holds keys whose
+        /// hashes count up to a few steps a key.
+        /// </summary>
+        [ThreadStatic]
+        internal static long CollectedSteps;
+
+        /// <summary>
+        /// Where <paramref name="key"/> is in the index, or the empty slot where it would go:
+        /// the index holds each key's position in <paramref name="keys"/> plus one, and
+        /// nought where it holds none. Keys are placed from the high half of their mixed
+        /// hash, scaled to the index's length, and moved along to the next empty slot.
+        /// </summary>
+        private static int SlotOf(int[] index, ulong[] keys, ulong key, ref long steps)
+        {
+            var slot = HomeOf(key, index.Length);
+            while (index[slot] != 0 && keys[index[slot] - 1] != key)
+            {
+                slot = slot + 1 == index.Length ? 0 : slot + 1;
+                steps++;
+            }
+
+            return slot;
+        }
+
+        /// <summary>
+        /// An index of <paramref name="length"/> slots over the first
+        /// <paramref name="count"/> keys.
+        /// </summary>
+        private static int[] Reindex(ulong[] keys, int count, int length, ref long steps)
+        {
+            var index = new int[length];
+            for (var i = 0; i < count; i++)
+            {
+                var slot = HomeOf(keys[i], length);
+                while (index[slot] != 0)
+                {
+                    slot = slot + 1 == length ? 0 : slot + 1;
+                    steps++;
+                }
+
+                index[slot] = i + 1;
+            }
+
+            return index;
+        }
+
+        /// <summary>
+        /// The slot a key is placed from. The hash is the caller's, so it is mixed first: a
+        /// hash that counts up would otherwise fill the index in one run.
+        /// </summary>
+        private static int HomeOf(ulong key, int length) =>
+            (int)(((Murmur64(key) >> 32) * (ulong)length) >> 32);
 
         /// <summary>
         /// The refusal of a set with more distinct keys than a map is built for.
@@ -350,19 +454,11 @@ namespace ProbabilisticDataStructures
         /// Solves the system so that each key's three cells combine to its fingerprint
         /// and value, retrying with a fresh seed when the peel does not consume every key.
         /// </summary>
-        private void Populate(List<(ulong Key, ulong Value)> entries)
+        private void Populate(ulong[] keys, ulong[] values)
         {
             if (this.size == 0)
             {
                 return;
-            }
-
-            var keys = new ulong[this.size];
-            var values = new ulong[this.size];
-            for (var i = 0; i < entries.Count; i++)
-            {
-                keys[i] = entries[i].Key;
-                values[i] = entries[i].Value;
             }
 
             var order = new ulong[this.size + 1];
@@ -717,11 +813,19 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.BloomierFilter);
-            var payload = PersistenceFormat.Read(
-                stream, StructureId.BloomierFilter, out var hashId, budget, Price,
-                hash, PersistenceFormat.CheckResolvable);
-            var reader = new PayloadReader(payload, budget);
+            return PersistenceFormat.Read(
+                stream, StructureId.BloomierFilter, budget, Price, hash, PersistenceFormat.CheckResolvable,
+                ReadPayload);
+        }
 
+        /// <summary>
+        /// Reads the payload of the envelope <c>Read</c> opened, once the envelope has
+        /// been checked. See <see cref="PayloadParse{T}"/>.
+        /// </summary>
+        private static BloomierFilter ReadPayload(
+            ref PayloadReader reader, ushort version, HashId hashId,
+            Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
             var size = reader.ReadUInt32();
             var segmentLength = reader.ReadUInt32();
             var segmentCount = reader.ReadUInt32();

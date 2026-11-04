@@ -101,6 +101,8 @@ namespace ProbabilisticDataStructures
         /// </exception>
         internal static void CheckRestorable(uint count, byte bucketSize, int length)
         {
+            CheckStoredBucketSize(bucketSize);
+
             var most = MaxCount(bucketSize);
             if (count > most)
             {
@@ -231,6 +233,26 @@ namespace ProbabilisticDataStructures
             ValidBucketSize(bucketSize);
 
             return (long)(((ulong)count * bucketSize + 7) / 8);
+        }
+
+        /// <summary>
+        /// Refuses a bucket width read from a payload that no bucket has, as the payload's
+        /// fault, before the width sizes anything.
+        /// </summary>
+        /// <exception cref="InvalidDataException">The width is none, or more than a byte.</exception>
+        /// <remarks>
+        /// The constructors' guard is about a parameter, and a payload is not one: a stored
+        /// width of 0 or 9 is what a damaged or hostile payload says, and is refused as
+        /// every payload the library will not read is.
+        /// </remarks>
+        private static void CheckStoredBucketSize(byte bucketSize)
+        {
+            if (bucketSize == 0 || bucketSize > MaxBucketSizeBits)
+            {
+                throw new InvalidDataException(
+                    $"Bucket data claims buckets of {bucketSize} bits, and a bucket is 1 to " +
+                    $"{MaxBucketSizeBits} bits wide.");
+            }
         }
 
         private static void ValidBucketSize(byte bucketSize)

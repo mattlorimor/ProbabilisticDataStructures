@@ -2,8 +2,8 @@
 
 The [README](README.md#how-much-each-one-holds) has the table. This is what stands behind
 it: what each structure counts, what sets the most it can be built for, the most that
-reads back under the default budget, the most that can be saved, and how the settings you
-choose move each.
+reads back under the default budget, the most that can be saved as one array, and how
+the settings you choose move each.
 
 The figures here are held to the code by `TestCapacityDocumentation`. It works every
 number in the table out again from the library's own sizing code and from what a read of a
@@ -36,17 +36,24 @@ two numbers differ. The default's refusal of a larger one names the bytes to pas
 whole of what the read is charged, worked out before anything is allocated, and a budget
 of that reads it. `any` means every size the constructor builds reads back by default.
 
-**Saves up to** is the largest that `WriteTo` can write, and for most structures it is
-the same as what they build, which the table says as `as built`. A structure is written
-into one `byte[]`, wrapped in a frame that is another, and read back from a third, so the
-payload is at most 2,147,483,573 bytes: `Array.MaxLength` less the 18 bytes of envelope.
+**Saves up to** is the largest that `ToByteArray` returns, which is also the largest
+written in the ordinary envelope, the one every release that reads its format version
+reads. For most structures it is the same as what they build, which the table says as
+`as built`. Such a payload is built in one `byte[]`, wrapped in a frame that is another, so
+the payload is at most 2,147,483,573 bytes: `Array.MaxLength` less the 18 bytes of envelope.
 The 32-bit length in the envelope is not what limits it. A structure built larger than
-that works and cannot be saved, and `WriteTo` of one throws an `InvalidOperationException`
-naming the size it would be and the size one can be, with the structure unchanged; the
-figure in this column is for that; it is
-worked out from the payload each structure writes, so it follows the layouts in
-[FORMAT.md](FORMAT.md). A read is charged at least twice the payload, which is why the
-default budget reads payloads of up to about half a gigabyte.
+that works, and past 2 GiB the `Stream` overloads are the way to save it: `WriteTo` writes
+its payload in the large form of the envelope ([FORMAT.md](FORMAT.md#the-large-form)),
+which releases up to 6.2.0 refuse, as the payload is produced, so that nothing the size of
+the payload is held. `ToByteArray` of a structure built larger than that throws an
+`InvalidOperationException` naming the size it would be and the size one can be, with the
+structure unchanged, and says to write it with `WriteTo` instead. What neither writes yet
+is a single run longer than `int.MaxValue` bytes, the most a reader takes into one array:
+a table written as one run, or a structure held inside another. Both refuse one before
+writing anything, naming the run. The figure in this column is worked out from the payload
+each structure writes, so it follows the layouts in [FORMAT.md](FORMAT.md). A read is
+charged at least twice the payload, which is why the default budget reads payloads of up to
+about half a gigabyte.
 
 **`≈`** marks a number rounded to the digits shown. A read is charged a few bytes more or
 less according to how each array rounds up to eight, and the suite works the number out
@@ -122,14 +129,17 @@ From the release after 6.2.0 a new one 2^27 columns, buckets or slots wide or wi
 with 64-bit values, as the 32-bit filters do from there, and a narrower one is placed as
 before. A count-min sketch is that wide from an `ε` of about 2.03e-8, and a row of it is a
 gigabyte, twice that to read, so it reads back only with a budget raised to match. Two rows
-of it cannot be saved at all: they are a payload of 2,147,483,681 bytes, past the most a
-payload can be. Two rows of a `PrivateCountMinSketch` that wide are 2,147,483,673 bytes,
+of it are past what one array holds: they are a payload of 2,147,483,681 bytes, past the
+most the ordinary envelope carries, so `ToByteArray` refuses them and `WriteTo` writes them
+in the large form. Two rows of a `PrivateCountMinSketch` that wide are 2,147,483,673 bytes,
 and two of a `HeavyKeeper`, its default depth, 2,684,354,601. A `TopK` writes its count-min
-sketch inside its own payload, and two of the private sketches a `DpswSketch` holds are
-2,147,483,698 bytes at that width before anything else it writes. So a sketch placed with
-64-bit values saves with one row or not at all, and a `DpswSketch` only while it holds one
-sketch. Every save of these is written at format version 9, which records the placement in
-a byte of its own, and in a sketch's payload that byte is 1 only beside a single row. One
+sketch inside its own payload, as one run, and two of the private sketches a `DpswSketch`
+holds are 2,147,483,698 bytes at that width before anything else it writes. So a sketch
+placed with 64-bit values saves as one array with one row only, and a `DpswSketch` only
+while it holds one sketch; a `TopK` over two rows that wide cannot be written at all yet,
+since its sketch is a run longer than any payload holds. Every save of these is written at
+format version 9, which records the placement in a byte of its own, and in a sketch's
+payload that byte is 1 only beside a single row. One
 read from a payload written before keeps the 32-bit placement whatever its width, and
 records it when saved again; a count-min sketch read so does not merge with a new one of
 the same width.
@@ -160,8 +170,10 @@ in one array, so it refuses a filter of more than 2,305,842,948,010,409,983 bits
 288 petabytes, naming `n`; an allocation fails long before that. The false positive
 rate costs the same bits per item as `BloomFilter`: about 1.2 bytes an item at 1%.
 
-A filter can be built larger than it can be saved. The payload of a saved structure is
-at most 2,147,483,573 bytes, which is about 1.79 billion items at 1%.
+A filter can be built larger than can be saved as one array. Saved so, or in the ordinary
+envelope, its payload is at most 2,147,483,573 bytes, which is about 1.79 billion items at 1%.
+A larger one is written to a stream, in the large form, each of its arrays a run of its
+own.
 
 ### `CountingBloomFilter`
 
@@ -169,8 +181,8 @@ The same sizing, with `b` bits in each bucket instead of one, so `b` times the m
 the same false positive rate. Because the bucket array is `m · b` bits and is one array,
 the largest `n` falls in proportion to `b` from four bits up: the table gives 4-bit and
 8-bit counters at 1%, and a constructor asked for more refuses, naming `n`. The array is
-as large as the table, so the largest build is more than a payload holds and the
-"Saves up to" figure is lower than the "Builds up to" one. A counter that reaches its
+as large as the table, so the largest build is more than the ordinary envelope holds and
+the "Saves up to" figure is lower than the "Builds up to" one. A counter that reaches its
 maximum stays there rather than wrapping.
 
 ### `DeletableBloomFilter`

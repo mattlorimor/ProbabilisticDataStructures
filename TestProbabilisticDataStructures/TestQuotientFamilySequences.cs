@@ -468,8 +468,8 @@ namespace TestProbabilisticDataStructures
 
             foreach (var (n, rate, steps, seed) in cases)
             {
-                var filter = new CuckooBloomFilter(n, rate, seed: seed);
-                var twin = new CuckooBloomFilter(n, rate, seed: seed);
+                var filter = new CuckooBloomFilter(n, rate, seed: (ulong)seed);
+                var twin = new CuckooBloomFilter(n, rate, seed: (ulong)seed);
                 var m = filter.M;
                 var bits = (int)filter.FingerprintBits;
                 var capacity = (int)(filter.M * filter.B);
@@ -518,7 +518,7 @@ namespace TestProbabilisticDataStructures
                         // A reset filter is a new one, generator included, however
                         // many times it has been saved and loaded on the way here.
                         Assert.IsTrue(
-                            Same(new CuckooBloomFilter(n, rate, seed: seed).ToByteArray(),
+                            Same(new CuckooBloomFilter(n, rate, seed: (ulong)seed).ToByteArray(),
                                 filter.ToByteArray()),
                             $"{what}: a reset filter must be a new one, byte for byte.");
                         model.Clear();

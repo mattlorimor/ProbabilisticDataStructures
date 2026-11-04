@@ -1,6 +1,7 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 using System.IO.Hashing;
+using System.Linq;
 using System.Security.Cryptography;
 
 namespace TestProbabilisticDataStructures
@@ -48,6 +49,40 @@ namespace TestProbabilisticDataStructures
 
             optimalK = OptimalK(0.0001);
             Assert.AreEqual(14u, optimalK);
+        }
+
+        /// <summary>
+        /// The helpers that split a hash into 32-bit halves are internal (#234). Inside the
+        /// library only <c>SublimeCountMinSketch</c> uses the 32-bit kernel, and callers use
+        /// <see cref="Utils.HashKernel128(System.ReadOnlySpan{byte}, System.Func{System.ReadOnlySpan{byte}, ulong})"/>
+        /// and <see cref="Utils.HashBytesToUInt64(System.ReadOnlySpan{byte}, int)"/>, and
+        /// those are checked to be public too, so that this cannot pass on a reflection
+        /// that finds nothing.
+        /// </summary>
+        [TestMethod]
+        public void TestThe32BitHashHelpersAreNotPublic()
+        {
+            var publicMethods = typeof(Utils)
+                .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+                .Select(m => m.Name)
+                .ToHashSet();
+
+            Assert.Contains(nameof(Utils.HashKernel128), publicMethods);
+            Assert.Contains(nameof(Utils.HashBytesToUInt64), publicMethods);
+            Assert.IsTrue(typeof(HashKernel128ReturnValue).IsPublic);
+
+            foreach (var name in new[]
+            {
+                nameof(Utils.HashKernel),
+                nameof(Utils.HashKernelFromSum),
+                nameof(Utils.HashKernelFromHashBytes),
+                nameof(Utils.HashBytesToUInt32),
+            })
+            {
+                Assert.DoesNotContain(name, publicMethods, $"Utils.{name} is public");
+            }
+
+            Assert.IsFalse(typeof(HashKernelReturnValue).IsPublic, "HashKernelReturnValue is public");
         }
 
         /// <summary>
@@ -113,6 +148,31 @@ namespace TestProbabilisticDataStructures
 
             Assert.AreEqual(1146342430u, hashKernel.LowerBaseHash);
             Assert.AreEqual(4291745888u, hashKernel.UpperBaseHash);
+        }
+
+        /// <summary>
+        /// HashKernelFromSum splits a 64-bit hash into the lower and upper halves the
+        /// 32-bit kernel derives its probes from, so its bit layout is pinned explicitly.
+        /// </summary>
+        [TestMethod]
+        public void TestHashKernelFromSumSplitsTheValue()
+        {
+            var kernel = Utils.HashKernelFromSum(0xAABBCCDD_11223344UL);
+
+            Assert.AreEqual(0x11223344u, kernel.LowerBaseHash, "lower half is the low 32 bits");
+            Assert.AreEqual(0xAABBCCDDu, kernel.UpperBaseHash, "upper half is the high 32 bits");
+        }
+
+        [TestMethod]
+        public void TestHashKernelFromSumHandlesBoundaryValues()
+        {
+            var zero = Utils.HashKernelFromSum(0UL);
+            Assert.AreEqual(0u, zero.LowerBaseHash);
+            Assert.AreEqual(0u, zero.UpperBaseHash);
+
+            var max = Utils.HashKernelFromSum(ulong.MaxValue);
+            Assert.AreEqual(uint.MaxValue, max.LowerBaseHash);
+            Assert.AreEqual(uint.MaxValue, max.UpperBaseHash);
         }
 
         /// <summary>

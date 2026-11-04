@@ -139,7 +139,7 @@ namespace ProbabilisticDataStructures
         /// makes its behavior assertable rather than only describable.
         /// </param>
         public CuckooBloomFilter(uint n, double fpRate,
-            Func<ReadOnlySpan<byte>, ulong>? hash = null, int? seed = null)
+            Func<ReadOnlySpan<byte>, ulong>? hash = null, ulong? seed = null)
         {
             Guard.ValidItemCount(n, nameof(n));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
@@ -173,7 +173,7 @@ namespace ProbabilisticDataStructures
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.random = seed is null
                 ? SeededRandom.Unpredictable()
-                : new SeededRandom((ulong)seed.Value);
+                : new SeededRandom(seed.Value);
             this.originalRandomState = this.random.State;
             this.M = m;
             this.B = b;
@@ -532,10 +532,20 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.CuckooBloomFilter);
-            var payload = PersistenceFormat.Read(
-                stream, StructureId.CuckooBloomFilter, out var hashId, out var version, budget, Price,
-                hash, PersistenceFormat.CheckResolvable);
-            var reader = new PayloadReader(payload, budget);
+            return PersistenceFormat.Read(
+                stream, StructureId.CuckooBloomFilter, budget, Price, hash, PersistenceFormat.CheckResolvable,
+                ReadPayload);
+        }
+
+        /// <summary>
+        /// Reads the payload of the envelope <c>Read</c> opened, once the envelope has
+        /// been checked. See <see cref="PayloadParse{T}"/>.
+        /// </summary>
+        private static CuckooBloomFilter ReadPayload(
+            ref PayloadReader reader, ushort version, HashId hashId,
+            Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            var budget = reader.Budget;
 
             var m = reader.ReadUInt32();
             var b = reader.ReadUInt32();

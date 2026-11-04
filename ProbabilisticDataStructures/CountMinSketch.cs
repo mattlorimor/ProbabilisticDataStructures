@@ -357,10 +357,11 @@ namespace ProbabilisticDataStructures
         /// <returns>The CountMinSketch</returns>
         public CountMinSketch Reset()
         {
-            this.Matrix = new UInt64[this.Depth][];
-            for (uint i = 0; i < this.Depth; i++)
+            // Cleared where they are. A new matrix allocated while this one was still held
+            // needed both at once, twice the sketch.
+            foreach (var row in this.Matrix)
             {
-                this.Matrix[i] = new UInt64[this.Width];
+                Array.Clear(row);
             }
 
             this.count = 0;
@@ -481,10 +482,20 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.CountMinSketch);
-            var payload = PersistenceFormat.Read(
-                stream, StructureId.CountMinSketch, out var hashId, out var version, budget, Price,
-                hash, PersistenceFormat.CheckResolvable);
-            var reader = new PayloadReader(payload, budget);
+            return PersistenceFormat.Read(
+                stream, StructureId.CountMinSketch, budget, Price, hash, PersistenceFormat.CheckResolvable,
+                ReadPayload);
+        }
+
+        /// <summary>
+        /// Reads the payload of the envelope <c>Read</c> opened, once the envelope has
+        /// been checked. See <see cref="PayloadParse{T}"/>.
+        /// </summary>
+        private static CountMinSketch ReadPayload(
+            ref PayloadReader reader, ushort version, HashId hashId,
+            Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            var budget = reader.Budget;
 
             var epsilon = reader.ReadDouble();
             var delta = reader.ReadDouble();
@@ -499,7 +510,7 @@ namespace ProbabilisticDataStructures
             // what the sketch indexes by, and recomputing them would silently relocate
             // every cell if the sizing were ever adjusted. Epsilon and delta are kept
             // only because Epsilon() and Delta() report them.
-            CheckMatrix(width, depth);
+            CheckMatrix(ref reader, width, depth);
 
             // Each row is allocated before it is read.
             budget.Charge(RowsCost(width, depth));
@@ -540,11 +551,15 @@ namespace ProbabilisticDataStructures
             var depth = reader.ReadUInt32();
             BitPlacement.Read(ref reader, version, PersistenceFormat.ColumnPlacementVersion);
             reader.ReadUInt64();
-            CheckMatrix(width, depth);
+            CheckMatrix(ref reader, width, depth);
             reader.Budget.Price(RowsCost(width, depth));
         }
 
-        private static void CheckMatrix(uint width, uint depth)
+        /// <summary>
+        /// Checks the matrix a payload claims, as both the read and its price do, before
+        /// the matrix is priced or allocated.
+        /// </summary>
+        private static void CheckMatrix(ref PayloadReader reader, uint width, uint depth)
         {
             if (width == 0 || depth == 0)
             {
@@ -569,6 +584,14 @@ namespace ProbabilisticDataStructures
                     $"Sketch claims {depth} rows, beyond anything this library builds: it " +
                     $"builds at most {MaxDepth}, for the smallest delta with a finite reciprocal.");
             }
+
+            // Every cell is written, so the matrix is checked against the bytes behind it
+            // before a row is priced or allocated: a few bytes claiming millions of cells had
+            // the reader allocate a row of them before it found them missing, or the price
+            // refuse them for a budget that would not have loaded them. The product of two
+            // u32 cannot wrap a ulong, and the check divides. The read makes it as well as
+            // the price, since a price that throws does not stop the read.
+            reader.RequireHolds((ulong)width * depth, sizeof(ulong), "counters");
         }
 
         /// <summary>A matrix of <paramref name="depth"/> rows of <paramref name="width"/> counters.</summary>

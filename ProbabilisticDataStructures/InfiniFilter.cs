@@ -282,8 +282,9 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Moves entries that have run out of fingerprint into the next table down the
-        /// chain, expanding that table first if it has filled up.
+        /// Moves an entry that has run out of fingerprint into the next table down the
+        /// chain, making that table if there is none and expanding it first if it has
+        /// filled up.
         /// </summary>
         /// <remarks>
         /// A void entry is not nothing: its address in the table it came from is the
@@ -300,7 +301,7 @@ namespace ProbabilisticDataStructures
         /// </para>
         /// </remarks>
         private void ShedInto(
-            int index, List<uint> addresses, int addressBits, int fingerprintBits)
+            int index, uint address, int addressBits, int fingerprintBits)
         {
             if (this.Segments.Count == index)
             {
@@ -310,34 +311,31 @@ namespace ProbabilisticDataStructures
                     Math.Max(2, addressBits - fingerprintBits), fingerprintBits));
             }
 
-            foreach (var address in addresses)
+            if (this.Segments[index].Load >= ExpansionThreshold)
             {
-                if (this.Segments[index].Load >= ExpansionThreshold)
-                {
-                    ExpandTable(index);
-                }
-
-                var target = this.Segments[index];
-                var quotient = (uint)(address & (target.Slots - 1));
-                var carried = (ulong)address >> target.QuotientBits;
-
-                // What is left of the address after the target's own addressing is the
-                // fingerprint. A shorter one would mean the entry arrives already aged
-                // by the difference, so that it keeps matching on exactly the bits it
-                // has rather than on bits nobody stored.
-                //
-                // That branch is not currently reachable: a chain table is created
-                // with room for a full fingerprint, and it doubles more slowly than
-                // the table feeding it, so the spare only ever grows. A sweep over
-                // fingerprints of 2 to 12 bits and starting sizes of 1 to 1024, at
-                // 300,000 items each, never took it. It is kept because the
-                // alternative -- assuming a full fingerprint -- would store bits that
-                // were never there and lose the entry, and the sizing it depends on is
-                // exactly the sort of thing a later change would adjust.
-                var spare = addressBits - target.QuotientBits;
-                var age = Math.Clamp(fingerprintBits - spare, 0, fingerprintBits);
-                target.Insert(quotient, age, carried);
+                ExpandTable(index);
             }
+
+            var target = this.Segments[index];
+            var quotient = (uint)(address & (target.Slots - 1));
+            var carried = (ulong)address >> target.QuotientBits;
+
+            // What is left of the address after the target's own addressing is the
+            // fingerprint. A shorter one would mean the entry arrives already aged
+            // by the difference, so that it keeps matching on exactly the bits it
+            // has rather than on bits nobody stored.
+            //
+            // That branch is not currently reachable: a chain table is created
+            // with room for a full fingerprint, and it doubles more slowly than
+            // the table feeding it, so the spare only ever grows. A sweep over
+            // fingerprints of 2 to 12 bits and starting sizes of 1 to 1024, at
+            // 300,000 items each, never took it. It is kept because the
+            // alternative -- assuming a full fingerprint -- would store bits that
+            // were never there and lose the entry, and the sizing it depends on is
+            // exactly the sort of thing a later change would adjust.
+            var spare = addressBits - target.QuotientBits;
+            var age = Math.Clamp(fingerprintBits - spare, 0, fingerprintBits);
+            target.Insert(quotient, age, carried);
         }
 
         /// <summary>
@@ -357,17 +355,23 @@ namespace ProbabilisticDataStructures
             }
 
             var grown = new InfiniSegment(old.QuotientBits + 1, old.FingerprintBits);
-            var voided = new List<uint>();
 
             // The old table's entries are read in place as the walk reaches them, which
-            // holds because nothing here writes to it: the loop reads it and writes only to
-            // the grown table, and the old one is dropped once the walk is over.
+            // holds because nothing here writes to it: the loop writes to the grown table
+            // and to the tables after this one in the chain, and the old one is dropped
+            // once the walk is over.
+            //
+            // A void entry is moved down the chain as the walk reaches it. They were listed
+            // by the walk and moved after it, and nothing bounds how many there are. They
+            // are moved in the same order, and moving one reads and writes only the tables
+            // after this one, never the old table or the grown one, so the chain ends as it
+            // did.
             foreach (var (quotient, field) in old.Entries())
             {
                 var age = old.AgeOf(field);
                 if (age >= old.FingerprintBits)
                 {
-                    voided.Add(quotient);
+                    ShedInto(index + 1, quotient, old.QuotientBits, old.FingerprintBits);
                     continue;
                 }
 
@@ -377,11 +381,6 @@ namespace ProbabilisticDataStructures
             }
 
             this.Segments[index] = grown;
-
-            if (voided.Count > 0)
-            {
-                ShedInto(index + 1, voided, old.QuotientBits, old.FingerprintBits);
-            }
         }
 
         /// <summary>
@@ -560,10 +559,20 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.InfiniFilter);
-            var payload = PersistenceFormat.Read(
-                stream, StructureId.InfiniFilter, out var hashId, budget, Price,
-                hash, PersistenceFormat.CheckResolvable);
-            var reader = new PayloadReader(payload, budget);
+            return PersistenceFormat.Read(
+                stream, StructureId.InfiniFilter, budget, Price, hash, PersistenceFormat.CheckResolvable,
+                ReadPayload);
+        }
+
+        /// <summary>
+        /// Reads the payload of the envelope <c>Read</c> opened, once the envelope has
+        /// been checked. See <see cref="PayloadParse{T}"/>.
+        /// </summary>
+        private static InfiniFilter ReadPayload(
+            ref PayloadReader reader, ushort version, HashId hashId,
+            Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            var budget = reader.Budget;
 
             var added = reader.ReadUInt64();
             var expansions = reader.ReadUInt32();

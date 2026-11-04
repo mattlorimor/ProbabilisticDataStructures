@@ -178,11 +178,14 @@ default up to** is the largest that reads back under the default budget of 1,073
 bytes (see [loading files you didn't write](#loading-files-you-didnt-write)); a larger one
 reads back with `ReadFrom(stream, new ReadOptions(bytes))` or `ReadOptions.Unlimited`, and
 `any` means every size that can be built reads back by default. **Saves up to** is the
-largest that can be written at all. A structure is written into one array, wrapped in
-a frame in another and read back from a third, so a payload is at most 2,147,483,573
-bytes, whatever the structure was built at, and one built larger works but cannot be
-saved. `as built` means the largest build is under that. Reading a payload takes at least
-twice its size in budget, so the default reads payloads of up to about half a gigabyte.
+largest that can be saved as one array, with `ToByteArray`, and in the envelope every
+release that reads its format version reads. That array holds the payload and a frame
+around it, so a payload is at most 2,147,483,573 bytes, whatever the structure was built
+at. Past 2 GiB the `Stream` overloads are the way: `WriteTo` writes a structure built
+larger in the large form of the envelope, unless one run in its payload, such as a table
+written whole, would pass `int.MaxValue` bytes, which nothing writes yet. `as built` means
+the largest build is under that. Reading a payload takes at least twice its size in
+budget, so the default reads payloads of up to about half a gigabyte.
 
 The numbers are for the settings in the second column, and settings move them:
 [CAPACITY.md](CAPACITY.md) gives, for each structure, the rule that does. A `≈` is a
@@ -1473,7 +1476,9 @@ else's fingerprint decays the incumbent with probability b⁻ᶜ — easy while 
 small, nearly impossible once it is large — so frequent elements entrench and rare ones
 pass through without leaving a mark. The error this buys is one-sided in the *opposite*
 direction from Count-Min's: absent fingerprint collisions an estimate never exceeds the
-truth, and the estimates of the tracked heavy hitters are very close to exact.
+truth, and the estimates of the tracked heavy hitters are very close to exact. A
+fingerprint is 16 bits, as in the paper, so two different elements share one 2⁻¹⁶ of the
+time, whatever the width.
 
 **Reach for it when** the ranking is the product and accuracy is the point: a single
 stream whose top-k should be right, with counts you can take nearly at face value.
