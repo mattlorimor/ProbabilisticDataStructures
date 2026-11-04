@@ -201,6 +201,100 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        // ---- CountMinSketch and TopK: Reset --------------------------------------------------
+
+        /// <summary>
+        /// A count-min sketch of two rows of about a million counters, 16 MiB, so that a reset
+        /// that allocated a second matrix would show as megabytes, far past the slack.
+        /// </summary>
+        private const double ResetEpsilon = Math.E / (1 << 20);
+        private const double ResetDelta = 0.2;
+
+        /// <summary>
+        /// Resetting a count-min sketch clears its rows where they are. A reset that allocated
+        /// a new matrix while the old one was still held needed both at once, twice the
+        /// sketch: 16 GiB more for each row at the widest row the constructor takes. Each
+        /// measured reset clears counters set just before it, in the first row and the last,
+        /// and the sketch is then asked to have every counter nought, the shape it had, and a
+        /// total of nought.
+        /// </summary>
+        [TestMethod]
+        public void TestResettingACountMinSketchAllocatesNothing()
+        {
+            var sketch = new CountMinSketch(ResetEpsilon, ResetDelta);
+            Assert.AreEqual(2u, sketch.Depth, "premise: the sketch's rows");
+            for (var i = 0; i < 100; i++)
+            {
+                sketch.Add(Key(i));
+            }
+
+            var matrix = (long)sketch.Width * sketch.Depth * sizeof(ulong);
+            var allocated = Allocated(() =>
+            {
+                DirtySketch(sketch);
+                return sketch.Reset();
+            });
+
+            AssertCleared(sketch);
+            Assert.IsLessThan(1024L, allocated,
+                $"resetting a sketch of {matrix:N0} bytes of counters allocated {allocated:N0} " +
+                "bytes: the reset built a new matrix rather than clearing the one it had");
+
+            // Not vacuous: the counters each reset cleared were set.
+            DirtySketch(sketch);
+            Assert.AreEqual(1UL, sketch.Matrix[0][0]);
+            Assert.AreEqual(1UL, sketch.Matrix[sketch.Depth - 1][sketch.Width - 1]);
+        }
+
+        /// <summary>
+        /// A top-k's reset resets its sketch, so it is held to the same: a reset of a top-k
+        /// over the 16 MiB sketch above allocates its empty heap and nothing for the sketch.
+        /// The heap starts empty and is not sized by k, which
+        /// <see cref="TestATopKAllocatesNothingForKUntilElementsArrive"/> holds.
+        /// </summary>
+        [TestMethod]
+        public void TestResettingATopKAllocatesNothingForItsSketch()
+        {
+            var topK = new TopK(ResetEpsilon, ResetDelta, 10);
+            for (var i = 0; i < 20; i++)
+            {
+                topK.Add(Key(i));
+            }
+
+            Assert.IsNotEmpty(topK.Elements(), "premise: there is a heap to reset");
+            var sketch = topK.Sketch;
+            var matrix = (long)sketch.Width * sketch.Depth * sizeof(ulong);
+            var allocated = Allocated(() =>
+            {
+                DirtySketch(topK.Sketch);
+                return topK.Reset();
+            });
+
+            Assert.IsEmpty(topK.Elements(), "the reset kept an element");
+            AssertCleared(topK.Sketch);
+            Assert.IsLessThan(1024L, allocated,
+                $"resetting a top-k over {matrix:N0} bytes of counters allocated {allocated:N0} " +
+                "bytes: its sketch's reset built a new matrix rather than clearing the one it had");
+        }
+
+        /// <summary>Sets a counter at each end of a sketch, without allocating.</summary>
+        private static void DirtySketch(CountMinSketch sketch)
+        {
+            sketch.Matrix[0][0] = 1;
+            sketch.Matrix[sketch.Depth - 1][sketch.Width - 1] = 1;
+        }
+
+        private static void AssertCleared(CountMinSketch sketch)
+        {
+            Assert.AreEqual(0UL, sketch.TotalCount(), "the reset kept the total");
+            Assert.HasCount((int)sketch.Depth, sketch.Matrix, "the reset sketch has another depth");
+            foreach (var row in sketch.Matrix)
+            {
+                Assert.AreEqual((int)sketch.Width, row.Length, "a reset row is not the width it was");
+                Assert.IsTrue(row.AsSpan().IndexOfAnyExcept(0UL) < 0, "the reset left a counter set");
+            }
+        }
+
         // ---- InfiniFilter: doubling ----------------------------------------------------------
 
         /// <summary>
