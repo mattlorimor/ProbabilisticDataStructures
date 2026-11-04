@@ -17,6 +17,60 @@ namespace TestProbabilisticDataStructures
         private static byte[] Key(int i) => Encoding.UTF8.GetBytes("user-" + i);
 
         /// <summary>
+        /// The header, then eight bytes a key and eight a summary, for the keys held once the
+        /// write has compacted the sketch: repeats folded, and past the nominal entries the
+        /// entries kept.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of("empty", new TupleSketch(16));
+
+            foreach (var policy in new[] { SummaryPolicy.Sum, SummaryPolicy.Max })
+            {
+                // Repeats in the buffer until the write folds them.
+                var exact = new TupleSketch(4096, policy);
+                for (var i = 0; i < 300; i++) exact.Add(Key(i % 100), i);
+                var fields = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                Assert.AreNotEqual(
+                    typeof(TupleSketch).GetField("held", fields)!.GetValue(exact),
+                    typeof(TupleSketch).GetField("ordered", fields)!.GetValue(exact),
+                    "the state was compacted before the write");
+                yield return PayloadState.Of($"exact, repeats unfolded, {policy}", exact);
+            }
+
+            var estimating = new TupleSketch(16);
+            for (var i = 0; i < 1000; i++) estimating.Add(Key(i), 1.5);
+            yield return PayloadState.Of("past its nominal entries", estimating);
+        }
+
+        /// <summary>
+        /// A tuple sketch's payload is its nominal entries, policy, theta and how many keys
+        /// it holds, seventeen bytes, then eight bytes a key and eight a summary. It holds up
+        /// to twice its nominal entries less one before it trims, and the constructor takes
+        /// nominal entries up to half the largest array, so 134,217,723 keys, the first count
+        /// past the ceiling, is a sketch the constructor builds. The writer wrote the keys
+        /// and summaries one at a time and never asked how large the payload is, so a sketch
+        /// claiming more keys than its buffers have was not refused at all; the write ran
+        /// off their end. At 2^29 keys each of the two runs is 2^32 bytes, nought in 32 bits.
+        /// </summary>
+        [TestMethod]
+        [DataRow(134_217_723, 2_147_483_585L)]
+        [DataRow(536_870_912, 8_589_934_609L)]
+        public void TestASketchTooLargeToWriteIsRefusedNamingItsWholeSize(int held, long payload)
+        {
+            Assert.AreEqual(17 + 16L * held, payload, "the row's payload is miscomputed");
+            Assert.IsLessThan(2L * TupleSketch.MaxNominalEntries, (long)held,
+                "a sketch the constructor builds cannot hold this many");
+
+            var sketch = new TupleSketch(16);
+            for (var i = 0; i < 40; i++) sketch.Add(Key(i), i);
+
+            // Held and ordered alike, so that the claim reads as a sketch already compact.
+            TestPayloadCount.AssertRefusedWhileClaiming(
+                sketch, payload, (sketch, "held", held), (sketch, "ordered", held));
+        }
+
+        /// <summary>
         /// A key added several times counts once, and its values are folded rather than
         /// counted separately.
         /// </summary>

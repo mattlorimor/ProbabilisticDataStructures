@@ -42,7 +42,7 @@ namespace ProbabilisticDataStructures
     /// corrections bolted on either end. See <see cref="EstimateDense"/> for why.
     /// </para>
     /// </remarks>
-    public class HyperLogLogPlus : IBinaryPersistable<HyperLogLogPlus>
+    public class HyperLogLogPlus : IBinaryPersistable<HyperLogLogPlus>, IPayloadBody
     {
         /// <summary>
         /// The smallest precision worth having. Below 16 registers the relative error is
@@ -636,16 +636,17 @@ namespace ProbabilisticDataStructures
         /// would make a payload of a nearly-empty estimator as large as a full one,
         /// which is the thing the sparse representation exists to avoid.
         /// </remarks>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
+            // Compacted when counted, so the count and the write see the same entries;
+            // the second pass finds it compact already.
             if (this.sparse is not null && !this.sparseIsCompact)
             {
                 this.CompactSparse();
             }
 
-            var payload = new PayloadWriter();
             payload.WriteUInt32(this.precision);
 
             if (this.sparse is not null)
@@ -653,9 +654,12 @@ namespace ProbabilisticDataStructures
                 payload.WriteByte(0);
                 payload.WriteUInt32((uint)this.sparseCount);
 
-                for (var i = 0; i < this.sparseCount; i++)
+                if (payload.BeginBlock((long)this.sparseCount * sizeof(ulong)))
                 {
-                    payload.WriteUInt64(this.sparse[i]);
+                    for (var i = 0; i < this.sparseCount; i++)
+                    {
+                        payload.WriteUInt64(this.sparse[i]);
+                    }
                 }
             }
             else
@@ -664,11 +668,7 @@ namespace ProbabilisticDataStructures
                 payload.WriteBytes(this.registers!);
             }
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.HyperLogLogPlus,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+            return new(StructureId.HyperLogLogPlus, PersistenceFormat.Identify(this.Hash));
         }
 
         /// <summary>

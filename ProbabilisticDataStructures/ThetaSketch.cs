@@ -9,7 +9,7 @@ namespace ProbabilisticDataStructures
     /// Estimates how many distinct items a stream held, and supports union,
     /// intersection and difference between sketches.
     /// </summary>
-    public class ThetaSketch : IBinaryPersistable<ThetaSketch>
+    public class ThetaSketch : IBinaryPersistable<ThetaSketch>, IPayloadBody
     {
         private uint nominalEntries;
 
@@ -354,29 +354,28 @@ namespace ProbabilisticDataStructures
         /// Writes the sketch to a stream.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
+            // Compacted when counted, so the count and the write see the same values.
             this.EnsureCompact();
 
-            var payload = new PayloadWriter();
             payload.WriteUInt32(this.nominalEntries);
             payload.WriteUInt64(this.theta);
             payload.WriteUInt32((uint)this.held);
 
             // Already sorted and distinct, which makes a payload whose values are not in
             // order detectably not one of these.
-            for (var i = 0; i < this.held; i++)
+            if (payload.BeginBlock((long)this.held * sizeof(ulong)))
             {
-                payload.WriteUInt64(this.values[i]);
+                for (var i = 0; i < this.held; i++)
+                {
+                    payload.WriteUInt64(this.values[i]);
+                }
             }
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.ThetaSketch,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+            return new(StructureId.ThetaSketch, PersistenceFormat.Identify(this.Hash));
         }
 
         /// <summary>

@@ -25,6 +25,15 @@ namespace TestProbabilisticDataStructures
             Enumerable.Range(from, count).Select(i => $"w{i}").ToArray();
 
         /// <summary>
+        /// The value count and eight bytes a value, as long as the signature is.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of("one value", MinHash.Signature(Bag(0, 10), 1));
+            yield return PayloadState.Of("200 values", MinHash.Signature(Bag(0, 10), 200));
+        }
+
+        /// <summary>
         /// The estimate has to track the exact answer, and the error has to fall off as
         /// one over the square root of the signature's length, which is what choosing a
         /// length is choosing between.

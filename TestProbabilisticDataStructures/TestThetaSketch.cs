@@ -19,12 +19,62 @@ namespace TestProbabilisticDataStructures
             return key;
         }
 
+        /// <summary>
+        /// The header and eight bytes a value held, which is what the sketch holds once the
+        /// write has compacted it: one written uncompacted is counted at what it writes, and
+        /// one past its nominal entries at the entries it keeps.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of("empty", new ThetaSketch(16));
+
+            // Repeats in the buffer until the write compacts them away.
+            var exact = new ThetaSketch(4096);
+            for (var i = 0; i < 300; i++) exact.Add(Item(i % 100));
+            Assert.IsFalse((bool)typeof(ThetaSketch).GetField("compact",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(exact)!, "the state was compacted before the write");
+            yield return PayloadState.Of("exact, repeats uncompacted", exact);
+
+            var estimating = new ThetaSketch(16);
+            for (var i = 0; i < 1000; i++) estimating.Add(Item(i));
+            yield return PayloadState.Of("past its nominal entries", estimating);
+        }
+
         [TestMethod]
         public void TestANewSketchIsEmpty()
         {
             var sketch = new ThetaSketch(4096);
 
             Assert.AreEqual(0ul, sketch.Count());
+        }
+
+        /// <summary>
+        /// A theta sketch's payload is its nominal entries, theta and how many values it
+        /// holds, sixteen bytes, then eight bytes a value. A sketch holds up to twice its
+        /// nominal entries less one before it trims, and the constructor takes nominal
+        /// entries up to half the largest array, so a sketch it builds can hold far more
+        /// than a payload does: one of nominal entries 268,435,445 holds that many after
+        /// its first trim, the first count past the ceiling. The writer wrote the values
+        /// one at a time and never asked how large the payload is, so a sketch claiming
+        /// more values than its buffer has was not refused at all; the write ran off the
+        /// end of the buffer. At 2^29 values the run is 2^32 bytes, nought in 32 bits: a
+        /// count of values times <c>sizeof(ulong)</c> is worked out in 32 bits unless the
+        /// count is widened first.
+        /// </summary>
+        [TestMethod]
+        [DataRow(268_435_445, 2_147_483_576L)]
+        [DataRow(536_870_912, 4_294_967_312L)]
+        public void TestASketchTooLargeToWriteIsRefusedNamingItsWholeSize(int held, long payload)
+        {
+            Assert.AreEqual(16 + 8L * held, payload, "the row's payload is miscomputed");
+            Assert.IsLessThan(2L * ThetaSketch.MaxNominalEntries, (long)held,
+                "a sketch the constructor builds cannot hold this many");
+
+            var sketch = new ThetaSketch(16);
+            for (var i = 0; i < 40; i++) sketch.Add(Item(i));
+
+            TestPayloadCount.AssertRefusedWhileClaiming(sketch, payload, (sketch, "held", held));
         }
         /// <summary>
         /// While the sketch is holding fewer values than it is allowed to, it has kept

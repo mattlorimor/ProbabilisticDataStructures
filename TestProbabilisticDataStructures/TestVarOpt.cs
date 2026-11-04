@@ -34,6 +34,33 @@ namespace TestProbabilisticDataStructures
             VarOpt.ReadFrom(new MemoryStream(sample.ToByteArray()));
 
         /// <summary>
+        /// A header, then each item held at its own length: heavy items with their weights,
+        /// light items without. So the states hold items of different lengths, in each
+        /// region, and the count has to walk them.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of("empty", InRegions(new VarOpt(4, seed: 1), 0, 0));
+
+            var under = new VarOpt(4, seed: 1);
+            under.Add(Key("a"), 1.0);
+            under.Add(Key("a much longer item"), 2.0);
+            yield return PayloadState.Of("under k, heavy only", InRegions(under, 2, 0));
+
+            var full = new VarOpt(4, seed: 1);
+            for (var i = 0; i < 40; i++) full.Add(Key(new string('x', 1 + i % 13)), 1.0);
+            full.Add(Key("one item far heavier than the rest"), 1e6);
+            yield return PayloadState.Of("past k, heavy and light", InRegions(full, 1, 3));
+        }
+
+        private static VarOpt InRegions(VarOpt sample, int heavy, int light)
+        {
+            Assert.AreEqual(heavy, sample.HeavyCount, "the state holds other heavy items than it names");
+            Assert.AreEqual(light, sample.LightCount, "the state holds other light items than it names");
+            return sample;
+        }
+
+        /// <summary>
         /// A fixed scatter of (trial, index), for choosing weights: the same pair gives
         /// the same number on every run and every platform, and neighbouring pairs give
         /// unrelated ones.
