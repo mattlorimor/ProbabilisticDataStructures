@@ -131,7 +131,7 @@ namespace ProbabilisticDataStructures
         /// makes its behavior assertable rather than only describable.
         /// </param>
         public StableBloomFilter(uint m, byte d, double fpRate,
-            Func<ReadOnlySpan<byte>, ulong>? hash = null, int? seed = null)
+            Func<ReadOnlySpan<byte>, ulong>? hash = null, ulong? seed = null)
             : this(m, d, fpRate, hash, seed, null)
         {
         }
@@ -146,7 +146,7 @@ namespace ProbabilisticDataStructures
         /// place items the way a large one does.
         /// </remarks>
         internal StableBloomFilter(uint m, byte d, double fpRate,
-            Func<ReadOnlySpan<byte>, ulong>? hash, int? seed, Placement? placement)
+            Func<ReadOnlySpan<byte>, ulong>? hash, ulong? seed, Placement? placement)
         {
             Guard.ValidItemCount(m, nameof(m));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
@@ -169,7 +169,7 @@ namespace ProbabilisticDataStructures
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.random = seed is null
                 ? SeededRandom.Unpredictable()
-                : new SeededRandom((ulong)seed.Value);
+                : new SeededRandom(seed.Value);
             this.originalRandomState = this.random.State;
             this.M = m;
             this.k = k;
