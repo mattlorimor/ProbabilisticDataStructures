@@ -133,6 +133,10 @@ namespace ProbabilisticDataStructures
         /// in use that no array could hold the run between them: see the remarks on the
         /// constructor. The sketch is unchanged.
         /// </exception>
+        /// <exception cref="InvalidOperationException">
+        /// The sketch already holds 2^64 - 1 values, the most a count holds, which no stream
+        /// of adds reaches but a sketch read from a payload can. The sketch is unchanged.
+        /// </exception>
         public void Add(double value)
         {
             if (double.IsNaN(value) || double.IsInfinity(value))
@@ -141,6 +145,17 @@ namespace ProbabilisticDataStructures
                     nameof(value), value,
                     "A sketch holds numbers. Accepting this one would put every later " +
                     "answer beyond recovery without anything saying which value did it.");
+            }
+
+            // The total is the sum of both stores and the zero count, so while it has room
+            // for one more so does every store, bucket and the zero count, and this is the
+            // whole of the check. It comes before any of them is touched, as Merge's does.
+            if (this.count == ulong.MaxValue)
+            {
+                throw new InvalidOperationException(
+                    $"The sketch already holds {ulong.MaxValue} values, the most a sketch can " +
+                    "count, and one more would wrap its total to nought and put every quantile " +
+                    "at the wrong rank.");
             }
 
             if (value > 0)

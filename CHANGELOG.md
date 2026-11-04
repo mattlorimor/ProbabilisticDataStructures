@@ -1586,6 +1586,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   count wrap. Nothing but a payload gets a sketch within reach of that, since `Add` takes
   one value at a time. No format change.
 
+- **`DDSketch.Add` on a sketch already holding 2^64 − 1 values wrapped its total to
+  nought.** It added one to the total, to a store's total and to the value's bucket without
+  checking any of them. `Add` alone would take 2^64 calls to get there, but a sketch read
+  from a payload can be full, since the reader accepts a total of exactly 2^64 − 1, and so
+  can one merged from such sketches. Given one more value, a full sketch answered `Count()`
+  with 0 and `Quantile` with "The sketch holds nothing", and unless the value fell in the
+  bucket or zero count already holding everything, its own payload was then refused by its
+  reader. `Add` now refuses it with an `InvalidOperationException` and leaves the sketch
+  unchanged, as `Merge` refuses a merge past the same total. The check is one comparison
+  per add, and there is no format change.
+
 - **A payload whose byte run claimed almost `int.MaxValue` bytes was refused with an
   `ArgumentOutOfRangeException`, not the `InvalidDataException` every other payload the
   library will not read gets.** The reader checked a run against the payload as
