@@ -22,7 +22,7 @@ namespace ProbabilisticDataStructures
     /// in the same sense the persistence format is.
     /// </para>
     /// </remarks>
-    public sealed class MinHashSignature : IBinaryPersistable<MinHashSignature>
+    public sealed class MinHashSignature : IBinaryPersistable<MinHashSignature>, IPayloadBody
     {
         private readonly ulong[] values;
 
@@ -57,25 +57,23 @@ namespace ProbabilisticDataStructures
         /// Writes this signature to a stream, in the format documented in FORMAT.md.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32((uint)this.values.Length);
-            foreach (var value in this.values)
+            if (payload.BeginBlock((long)this.values.Length * sizeof(ulong)))
             {
-                payload.WriteUInt64(value);
+                foreach (var value in this.values)
+                {
+                    payload.WriteUInt64(value);
+                }
             }
 
             // The hash is not a caller's to choose here, so it is named rather than
             // left open: a signature is only comparable against another built the same
             // way, and there is no overload that lets one be built differently.
-            PersistenceFormat.Write(
-                stream,
-                StructureId.MinHashSignature,
-                HashId.XxHash3_64,
-                payload.WrittenSpan);
+            return new(StructureId.MinHashSignature, HashId.XxHash3_64);
         }
 
         /// <summary>

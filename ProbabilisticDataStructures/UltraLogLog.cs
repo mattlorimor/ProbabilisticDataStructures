@@ -45,7 +45,7 @@ namespace ProbabilisticDataStructures
     /// is the 24% that survives merging.
     /// </para>
     /// </remarks>
-    public class UltraLogLog : IBinaryPersistable<UltraLogLog>
+    public class UltraLogLog : IBinaryPersistable<UltraLogLog>, IPayloadBody
     {
         /// <summary>
         /// The smallest precision the structure is defined for. Below this the
@@ -633,19 +633,14 @@ namespace ProbabilisticDataStructures
         /// Writes the structure to a stream in the library's persistence format.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.P);
             payload.WriteBytes(this.Registers);
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.UltraLogLog,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+            return new(StructureId.UltraLogLog, PersistenceFormat.Identify(this.Hash));
         }
 
         /// <summary>

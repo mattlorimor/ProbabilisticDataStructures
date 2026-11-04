@@ -29,7 +29,7 @@ namespace ProbabilisticDataStructures
     /// records that it uses no hash rather than naming one.
     /// </para>
     /// </remarks>
-    public class DDSketch : IBinaryPersistable<DDSketch>
+    public class DDSketch : IBinaryPersistable<DDSketch>, IPayloadBody
     {
         private double relativeAccuracy;
         private double gamma;
@@ -122,32 +122,6 @@ namespace ProbabilisticDataStructures
         /// the end of it filling it.
         /// </summary>
         internal static long BytesOf(long span) => span * sizeof(ulong);
-
-        /// <summary>
-        /// The bytes of payload besides the counts: the five fixed fields, then an index of
-        /// the first bucket and a length for each of the two stores.
-        /// </summary>
-        private const int PayloadOverhead = 5 * sizeof(ulong) + 2 * (2 * sizeof(uint));
-
-        /// <summary>
-        /// How long the payload of a sketch with runs of these two lengths is.
-        /// </summary>
-        internal static long PayloadLength(long positiveSpan, long negativeSpan) =>
-            PayloadOverhead + BytesOf(positiveSpan) + BytesOf(negativeSpan);
-
-        /// <summary>
-        /// Refuses a sketch whose payload would not fit an envelope, with the exception the
-        /// payload writer gives for any structure too large to write, before anything is
-        /// allocated for it. The two signs share the one payload, so it is the length of
-        /// both runs together that is held to the limit.
-        /// </summary>
-        /// <exception cref="InvalidOperationException">
-        /// The payload would be longer than <see cref="PersistenceFormat.MaxPayloadLength"/>.
-        /// </exception>
-        internal static void CheckWritable(long positiveSpan, long negativeSpan)
-        {
-            PersistenceFormat.CheckPayloadLength(PayloadLength(positiveSpan, negativeSpan));
-        }
 
         /// <summary>
         /// Adds a value to the sketch.
@@ -411,13 +385,15 @@ namespace ProbabilisticDataStructures
         /// are eight bytes a bucket. The sketch is intact and can still be used, and nothing
         /// is written.
         /// </exception>
-        public void WriteTo(Stream stream)
+        /// <remarks>
+        /// The payload is counted first, by the writes that write it. The two signs share
+        /// the one payload, so it is the length of both runs together that is held to the
+        /// limit.
+        /// </remarks>
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
+
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
         {
-            ArgumentNullException.ThrowIfNull(stream);
-
-            CheckWritable(this.positive.Span, this.negative.Span);
-
-            var payload = new PayloadWriter();
             payload.WriteDouble(this.relativeAccuracy);
             payload.WriteUInt64(this.count);
             payload.WriteUInt64(this.zeroCount);
@@ -428,8 +404,7 @@ namespace ProbabilisticDataStructures
 
             // No hash to name. Gamma and the log of it follow from the accuracy, and the
             // store bounds follow from the counts, so none of them are stored.
-            PersistenceFormat.Write(
-                stream, StructureId.DDSketch, HashId.None, payload.WrittenSpan);
+            return new(StructureId.DDSketch, HashId.None);
         }
 
         /// <summary>
@@ -761,24 +736,23 @@ namespace ProbabilisticDataStructures
                     return;
                 }
 
-                // The caller has refused a run too long for a payload (CheckWritable), which
-                // is far fewer buckets than an int holds, so the cast and the offsets below
-                // cannot overflow; the checked cast is there so that a caller who had not
-                // would fail rather than write a short run.
-                var span = checked((int)this.Span);
-                var bytes = new byte[BytesOf(span)];
-
-                for (var i = 0; i < span; i++)
-                {
-                    System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
-                        bytes.AsSpan(i * sizeof(ulong)),
-                        this.counts[this.MinIndex - this.offset + i]);
-                }
-
                 // A bucket index is signed, and the low ones are ordinary for values
                 // below one.
                 payload.WriteUInt32(unchecked((uint)this.MinIndex));
-                payload.WriteBytes(bytes);
+
+                // A counter counts the run whole here, however long. A writer is given it
+                // only once the count has refused a run too long for a payload, which is far
+                // fewer buckets than an int holds, so the cast and the offsets below cannot
+                // overflow; the checked cast is there so that a write that had not been
+                // counted would fail rather than write a short run.
+                if (payload.BeginRun(BytesOf(this.Span)))
+                {
+                    var span = checked((int)this.Span);
+                    for (var i = 0; i < span; i++)
+                    {
+                        payload.WriteUInt64(this.counts[this.MinIndex - this.offset + i]);
+                    }
+                }
             }
 
             internal static Store ReadFrom(ref PayloadReader reader, string which)

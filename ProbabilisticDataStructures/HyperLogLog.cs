@@ -61,7 +61,7 @@ namespace ProbabilisticDataStructures
     /// <see cref="UltraLogLog"/> use the whole 64-bit hash and have no such limit in
     /// practice.
     /// </remarks>
-    public class HyperLogLog : IBinaryPersistable<HyperLogLog>
+    public class HyperLogLog : IBinaryPersistable<HyperLogLog>, IPayloadBody
     {
         /// <summary>
         /// Counter registers
@@ -427,19 +427,14 @@ namespace ProbabilisticDataStructures
         /// Writes this estimator to a stream, in the format documented in FORMAT.md.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.M);
             payload.WriteBytes(this.Registers);
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.HyperLogLog,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+            return new(StructureId.HyperLogLog, PersistenceFormat.Identify(this.Hash));
         }
 
         /// <summary>

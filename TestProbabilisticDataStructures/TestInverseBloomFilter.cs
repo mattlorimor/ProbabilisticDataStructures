@@ -7,11 +7,61 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestInverseBloomFilter
     {
+        /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to. Only the
+        /// occupied slots are written, each with its own length, so empty, one item, and
+        /// items of different lengths.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of(
+                "empty", new InverseBloomFilter(10), PersistenceFormat.ColumnPlacementVersion);
+
+            var one = new InverseBloomFilter(10);
+            one.Add(Encoding.ASCII.GetBytes("a"));
+            yield return PayloadState.Of("one item", one, PersistenceFormat.ColumnPlacementVersion);
+
+            var several = new InverseBloomFilter(100);
+            for (var i = 0; i < 40; i++) several.Add(Encoding.ASCII.GetBytes(new string('x', i)));
+            yield return PayloadState.Of(
+                "items of different lengths", several, PersistenceFormat.ColumnPlacementVersion);
+        }
+
         private static byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
         private static byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
         private static byte[] C_BYTES = Encoding.ASCII.GetBytes("c");
         private static byte[] D_BYTES = Encoding.ASCII.GetBytes("d");
         private static byte[] X_BYTES = Encoding.ASCII.GetBytes("x");
+
+        /// <summary>
+        /// An inverse filter stores the items themselves, so its payload is as long as what
+        /// it holds: nine bytes, then each occupied slot's index, length and bytes. A filter
+        /// of 523,266 slots, each holding an item of four kibibytes, is the first past the
+        /// most a payload can be. The slots are claimed by reflection on a small filter, all
+        /// holding one item, which writes the bytes as many items of its length would.
+        /// </summary>
+        [TestMethod]
+        public void TestAnInverseFilterTooLargeToWriteIsRefusedNamingItsWholeSize()
+        {
+            const int slots = 523_266;
+            const int length = 4_096;
+            const long each = 2 * sizeof(uint) + length;
+            var payload = 9 + slots * each;
+
+            Assert.AreEqual(2_147_483_673L, payload, "the row's payload is miscomputed");
+            Assert.IsGreaterThan(PersistenceFormat.MaxPayloadLength, payload,
+                "the claimed slots fit a payload, so there is nothing to refuse");
+            Assert.IsLessThanOrEqualTo(PersistenceFormat.MaxPayloadLength, payload - each,
+                "one slot fewer is past the ceiling too, so the row is not the first past it");
+
+            var f = new InverseBloomFilter(10);
+            f.Add(A_BYTES);
+            var array = new byte[slots][];
+            System.Array.Fill(array, new byte[length]);
+
+            TestPayloadCount.AssertRefusedWhileClaiming(
+                f, payload, (f, "capacity", (uint)slots), (f, "Array", array));
+        }
 
         /// <summary>
         /// The slots are one array of references, which holds at most

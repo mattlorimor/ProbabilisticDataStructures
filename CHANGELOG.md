@@ -349,10 +349,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`WriteTo` of a structure too large to write now refuses it, by its whole size, before
-  allocating anything for the payload: `CountSketch`, `InvertibleBloomLookupTable`,
-  `QuotientFilter`, `InfiniFilter`, `MementoFilter`, `Grafite`, `BinaryFuseFilter`, `BloomierFilter`,
-  `SetSketch`, `BloomFilter64`, `CountMinSketch` and `TopK` so far.** Each runs its own
+- **`WriteTo` of any structure too large to write now refuses it, by its whole
+  size, before allocating anything for the payload.** Each runs its own
   payload layout through a counting writer first, which builds nothing, and a payload past
   2,147,483,573 bytes is refused with the `InvalidOperationException` that names the size
   it would have been. A `CountSketch` staged its cells in one array before any size was

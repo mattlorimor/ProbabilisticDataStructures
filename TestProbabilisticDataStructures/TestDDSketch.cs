@@ -22,6 +22,30 @@ namespace TestProbabilisticDataStructures
     public class TestDDSketch
     {
         /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: each
+        /// sign's store writes the run of buckets it occupies, so an empty sketch, one
+        /// holding only zeros, one with a run of positive buckets, and one with runs of both
+        /// signs. The writer has one version.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of("empty", new DDSketch(0.01));
+
+            var zeros = new DDSketch(0.01);
+            zeros.Add(0.0);
+            yield return PayloadState.Of("zeros only", zeros);
+
+            var positive = new DDSketch(0.01);
+            positive.Add(1.0);
+            positive.Add(1000.0);
+            yield return PayloadState.Of("a positive run", positive);
+
+            var both = new DDSketch(0.02);
+            foreach (var value in new[] { 1.0, 1000.0, -0.001, -1e9, 0.0 }) both.Add(value);
+            yield return PayloadState.Of("runs of both signs", both);
+        }
+
+        /// <summary>
         /// The value at a quantile, computed exactly by sorting.
         /// </summary>
         /// <remarks>
