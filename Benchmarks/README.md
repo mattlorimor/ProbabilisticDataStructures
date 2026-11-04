@@ -24,13 +24,13 @@ Results are written to `BenchmarkDotNet.Artifacts/` (git-ignored).
 
 | Suite | What it covers |
 | --- | --- |
-| `HashKernelBenchmarks` | `Utils.HashKernel` / `HashKernel128` in isolation, across input sizes |
+| `HashKernelBenchmarks` | The 32-bit kernel (the hash split into halves) against `Utils.HashKernel128`, in isolation, across input sizes |
 | `FilterTestBenchmarks` | `Test` across every filter type — read-only, so state does not drift |
 | `FilterAddBenchmarks` | `Add` / `TestAndAdd` throughput, batched with `OperationsPerInvoke` |
 | `TupleSketchAddBenchmarks` | `TupleSketch.Add` with fractional `Sum` values across nominal sizes, so the sort in each compaction is what moves it |
 | `WidePlacementBenchmarks` | `Add` and `Test` of a `BloomFilter` just below 2^27 positions (32-bit placement) against one at 2^27 (64-bit placement, with its second hash call), and of `BloomFilter64` at that size, for short and long items |
 | `SecondValueDerivationBenchmarks` | What deriving the 64-bit placement's second value costs by hashing the first's eight bytes through the hash delegate, against SplitMix64's and Murmur3's finalizers, and the placement arithmetic that comes with 64-bit values. Inside this project only; nothing here is in the library |
-| `PlacementKernelBenchmarks` | The placement kernel in place, over a bare bit array: `Utils.HashKernel` against `Utils.HashKernel128`, the same bits from an implementation that can be inlined, and a different derivation (SplitMix64), for short and long items. It says where the cost of `WidePlacementBenchmarks` goes |
+| `PlacementKernelBenchmarks` | The placement kernel in place, over a bare bit array: the hash split into 32-bit halves against `Utils.HashKernel128`, the same bits from an implementation that can be inlined, and a different derivation (SplitMix64), for short and long items. It says where the cost of `WidePlacementBenchmarks` goes |
 | `CuckooOperationBenchmarks` | `Add`, and `Test` of a member and of a stranger, on a `CuckooBloomFilter` of about 5.7 MB (L3-resident), for short and long items. Items are made from their index as they are used, so the cache sees the table alone. `Add` goes into a filter rebuilt for each iteration |
 | `CuckooEvictionBenchmarks` | `Add` to a `CuckooBloomFilter` filled to 90% of its entries, where most inserts relocate other fingerprints |
 | `CountMinSketchBenchmarks` | `Add` to a `CountMinSketch`, and a `Merge` of two, at a width whose rows fit in L2 and at one that leaves it. It prices what a counter update does beyond adding |
