@@ -22,7 +22,7 @@ namespace ProbabilisticDataStructures
     /// For applications that store many items and target moderately low false-positive
     /// rates, cuckoo filters have lower space overhead than space-optimized Bloom filters.
     /// </summary>
-    public class CuckooBloomFilter : IBinaryPersistable<CuckooBloomFilter>
+    public class CuckooBloomFilter : IBinaryPersistable<CuckooBloomFilter>, IPayloadBody
     {
         /// <summary>
         /// Size of the stack buffer used when hashing. 64 bytes holds the largest
@@ -404,11 +404,10 @@ namespace ProbabilisticDataStructures
         /// Writes this filter to a stream, in the format documented in FORMAT.md.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.M);
             payload.WriteUInt32(this.B);
             payload.WriteUInt32(this.FingerprintBits);
@@ -429,21 +428,27 @@ namespace ProbabilisticDataStructures
                 }
             }
 
+            // Each entry is its bucket, its slot and its fingerprint's bytes, so the block's
+            // length follows from the count just written, and a counter does not walk the
+            // table a second time.
             payload.WriteUInt32(occupied);
-            for (uint i = 0; i < this.M; i++)
+            if (payload.BeginBlock((long)occupied * (2 * sizeof(uint) + this.HashWidth)))
             {
-                for (uint j = 0; j < this.B; j++)
+                for (uint i = 0; i < this.M; i++)
                 {
-                    if (IsOccupied(i, j))
+                    for (uint j = 0; j < this.B; j++)
                     {
-                        payload.WriteUInt32(i);
-                        payload.WriteUInt32(j);
-                        // Only the bytes the width needs. Writing a full 64-bit value
-                        // would undo on disk what packing just bought in memory.
-                        var stored = EntryAt(i, j);
-                        for (var shift = 0; shift < this.HashWidth; shift++)
+                        if (IsOccupied(i, j))
                         {
-                            payload.WriteByte((byte)(stored >> (shift * 8)));
+                            payload.WriteUInt32(i);
+                            payload.WriteUInt32(j);
+                            // Only the bytes the width needs. Writing a full 64-bit value
+                            // would undo on disk what packing just bought in memory.
+                            var stored = EntryAt(i, j);
+                            for (var shift = 0; shift < this.HashWidth; shift++)
+                            {
+                                payload.WriteByte((byte)(stored >> (shift * 8)));
+                            }
                         }
                     }
                 }
@@ -452,11 +457,8 @@ namespace ProbabilisticDataStructures
             payload.WriteUInt64(this.random.State);
             payload.WriteUInt64(this.originalRandomState);
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.CuckooBloomFilter,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan,
+            return new(
+                StructureId.CuckooBloomFilter, PersistenceFormat.Identify(this.Hash),
                 PersistenceFormat.CuckooOriginalStateVersion);
         }
 

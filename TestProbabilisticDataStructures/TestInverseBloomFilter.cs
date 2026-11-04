@@ -7,6 +7,26 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestInverseBloomFilter
     {
+        /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to. Only the
+        /// occupied slots are written, each with its own length, so empty, one item, and
+        /// items of different lengths.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of(
+                "empty", new InverseBloomFilter(10), PersistenceFormat.ColumnPlacementVersion);
+
+            var one = new InverseBloomFilter(10);
+            one.Add(Encoding.ASCII.GetBytes("a"));
+            yield return PayloadState.Of("one item", one, PersistenceFormat.ColumnPlacementVersion);
+
+            var several = new InverseBloomFilter(100);
+            for (var i = 0; i < 40; i++) several.Add(Encoding.ASCII.GetBytes(new string('x', i)));
+            yield return PayloadState.Of(
+                "items of different lengths", several, PersistenceFormat.ColumnPlacementVersion);
+        }
+
         private static byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
         private static byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
         private static byte[] C_BYTES = Encoding.ASCII.GetBytes("c");

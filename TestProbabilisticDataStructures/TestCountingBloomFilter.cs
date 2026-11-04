@@ -7,6 +7,29 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestCountingBloomFilter
     {
+        /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to. The length
+        /// is the bucket table's, from its count and width, so two of each, and counters
+        /// raised, which write the same length.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of(
+                "10 at 50%, 4 bits, empty", new CountingBloomFilter(10, 4, 0.5),
+                PersistenceFormat.PlacementVersion);
+
+            var filled = new CountingBloomFilter(200, 8, 0.01);
+            for (var i = 0; i < 40; i++) filled.Add(Encoding.ASCII.GetBytes($"w{i % 10}"));
+            yield return PayloadState.Of(
+                "200 at 1%, 8 bits, counted", filled, PersistenceFormat.PlacementVersion);
+
+            var odd = new CountingBloomFilter(37, 3, 0.1);
+            odd.Add(Encoding.ASCII.GetBytes("a"));
+            yield return PayloadState.Of(
+                "37 at 10%, 3 bits, a table that ends inside a byte", odd,
+                PersistenceFormat.PlacementVersion);
+        }
+
         private static byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
         private static byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
         private static byte[] C_BYTES = Encoding.ASCII.GetBytes("c");

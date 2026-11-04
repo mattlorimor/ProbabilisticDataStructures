@@ -9,6 +9,31 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestScalableBloomFilter
     {
+        /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to. Each
+        /// contained filter is written whole, counted through its own body, so one filter
+        /// and several; and a growth factor is written, at a later version, only by a
+        /// filter that grows, so both.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            foreach (var growth in new uint[] { 1, 2 })
+            {
+                var version = growth == 1
+                    ? PersistenceFormat.DefaultVersion
+                    : PersistenceFormat.ScalableGrowthVersion;
+
+                var one = new ScalableBloomFilter(10, 0.1, 0.8, growth);
+                yield return PayloadState.Of($"growth {growth}, one filter", one, version);
+
+                var several = new ScalableBloomFilter(10, 0.1, 0.8, growth);
+                for (var i = 0; i < 200; i++) several.Add(Encoding.ASCII.GetBytes($"w{i}"));
+                Assert.IsGreaterThan(2, several.Filters.Count, "the filter did not grow");
+                yield return PayloadState.Of(
+                    $"growth {growth}, {several.Filters.Count} filters", several, version);
+            }
+        }
+
         private static byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
         private static byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
         private static byte[] C_BYTES = Encoding.ASCII.GetBytes("c");

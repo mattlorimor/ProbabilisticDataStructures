@@ -44,7 +44,7 @@ namespace ProbabilisticDataStructures
     /// rate, as it does for <see cref="BloomFilter"/>, where the details are. A filter read
     /// back keeps the scheme its payload was placed with, and the two schemes do not merge.
     /// </remarks>
-    public class PartitionedBloomFilter : IFilter, IBinaryPersistable<PartitionedBloomFilter>
+    public class PartitionedBloomFilter : IFilter, IBinaryPersistable<PartitionedBloomFilter>, IPayloadBody
     {
         /// <summary>
         /// Partitioned filter data
@@ -307,11 +307,10 @@ namespace ProbabilisticDataStructures
         /// Writes this filter to a stream, in the format documented in FORMAT.md.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.M);
             payload.WriteUInt32(this.k);
             payload.WriteUInt32(this.S);
@@ -324,11 +323,8 @@ namespace ProbabilisticDataStructures
                 PersistenceFormat.WriteBuckets(payload, partition);
             }
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.PartitionedBloomFilter,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan,
+            return new(
+                StructureId.PartitionedBloomFilter, PersistenceFormat.Identify(this.Hash),
                 PersistenceFormat.PlacementVersion);
         }
 
