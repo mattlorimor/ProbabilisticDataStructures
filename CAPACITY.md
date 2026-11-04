@@ -48,12 +48,14 @@ which releases up to 6.2.0 refuse, as the payload is produced, so that nothing t
 the payload is held. `ToByteArray` of a structure built larger than that throws an
 `InvalidOperationException` naming the size it would be and the size one can be, with the
 structure unchanged, and says to write it with `WriteTo` instead. What neither writes yet
-is a single run longer than `int.MaxValue` bytes, the most a reader takes into one array:
+is a single run longer than `Array.MaxLength` bytes, the most a reader takes into one array:
 a table written as one run, or a structure held inside another. Both refuse one before
 writing anything, naming the run. The figure in this column is worked out from the payload
-each structure writes, so it follows the layouts in [FORMAT.md](FORMAT.md). A read is
-charged at least twice the payload, which is why the default budget reads payloads of up to
-about half a gigabyte.
+each structure writes, so it follows the layouts in [FORMAT.md](FORMAT.md). A read of a
+payload in the ordinary envelope is charged at least twice the payload, which is why the
+default budget reads payloads of up to about half a gigabyte. A payload in the large form is
+read from its stream rather than held, so its read is charged what the structure it builds
+keeps, and the stream has to be one that can seek.
 
 **`≈`** marks a number rounded to the digits shown. A read is charged a few bytes more or
 less according to how each array rounds up to eight, and the suite works the number out

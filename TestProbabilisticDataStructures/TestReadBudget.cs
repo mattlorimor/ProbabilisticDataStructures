@@ -63,7 +63,7 @@ namespace TestProbabilisticDataStructures
         /// One structure to read: its bytes, how to read them under options, with and
         /// without a supplied hash, and how to write what was read.
         /// </summary>
-        private sealed record Sample(
+        internal sealed record Sample(
             string Name,
             byte[] Bytes,
             Func<byte[], ReadOptions, object> Read,
@@ -118,10 +118,12 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A sample of every structure, sized so its read allocates well past the slack.
-        /// Built once per run, on first use.
+        /// A sample of every structure, sized so its read allocates well past the slack in
+        /// either form of the envelope: in the large form, whose payload is read from the
+        /// stream rather than held, a read allocates only what the structure keeps. Built
+        /// once per run, on first use.
         /// </summary>
-        private static readonly Lazy<Dictionary<StructureId, Sample>> Samples = new(() =>
+        internal static readonly Lazy<Dictionary<StructureId, Sample>> Samples = new(() =>
             new Dictionary<StructureId, Sample>
             {
                 [StructureId.BloomFilter] = Of("BloomFilter",
@@ -151,7 +153,7 @@ namespace TestProbabilisticDataStructures
                 [StructureId.MinHashSignature] = Of("MinHashSignature",
                     MinHash.Signature(new[] { "alpha", "beta", "gamma" }, 20_000)),
                 [StructureId.BinaryFuseFilter] = Of("BinaryFuseFilter",
-                    BinaryFuseFilter.Build(Enumerable.Range(0, 50_000).Select(i => Key(i)))),
+                    BinaryFuseFilter.Build(Enumerable.Range(0, 60_000).Select(i => Key(i)))),
                 [StructureId.DDSketch] = Of("DDSketch", DenseDDSketch(),
                     refusesAHashBecause: "it holds values rather than bytes, and hashes nothing"),
                 [StructureId.HyperLogLogPlus] = Of("HyperLogLogPlus",
@@ -159,7 +161,7 @@ namespace TestProbabilisticDataStructures
                 [StructureId.QuotientFilter] = Of("QuotientFilter",
                     Filled(new QuotientFilter(50_000, 0.001), (f, k) => f.Add(k), 5000)),
                 [StructureId.ThetaSketch] = Of("ThetaSketch",
-                    Filled(new ThetaSketch(4096), (s, k) => s.Add(k), 100_000)),
+                    Filled(new ThetaSketch(8192), (s, k) => s.Add(k), 100_000)),
                 [StructureId.SimHashSignature] = Of("SimHashSignature", new SimHashSignature(42),
                     smallBecause: "it is one 64-bit value, and its payload is all it allocates"),
                 [StructureId.CountSketch] = Of("CountSketch",
@@ -177,14 +179,14 @@ namespace TestProbabilisticDataStructures
                 [StructureId.UltraLogLog] = Of("UltraLogLog",
                     Filled(new UltraLogLog(16), (s, k) => s.Add(k), 5000)),
                 [StructureId.Grafite] = Of("Grafite",
-                    Grafite.Build(Enumerable.Range(0, 20_000).Select(i => (ulong)i * 1009), 0.01, 64, seed: 7),
+                    Grafite.Build(Enumerable.Range(0, 40_000).Select(i => (ulong)i * 1009), 0.01, 64, seed: 7),
                     refusesAHashBecause: "it holds numbers rather than bytes, and hashes nothing"),
                 [StructureId.InfiniFilter] = Of("InfiniFilter",
                     Filled(new InfiniFilter(10_000), (f, k) => f.Add(k), 20_000)),
                 [StructureId.MementoFilter] = Of("MementoFilter", FilledMemento(),
                     refusesAHashBecause: "it holds numbers rather than bytes, and hashes nothing"),
                 [StructureId.SublimeCountMinSketch] = Of("SublimeCountMinSketch",
-                    Filled(new SublimeCountMinSketch(0.01), (s, k) => s.Add(k), 200_000)),
+                    Filled(new SublimeCountMinSketch(0.01), (s, k) => s.Add(k), 400_000)),
                 [StructureId.SetSketch] = Of("SetSketch",
                     Filled(new SetSketch(16_384), (s, k) => s.Add(k), 5000)),
                 [StructureId.TupleSketch] = Of("TupleSketch",
@@ -267,7 +269,7 @@ namespace TestProbabilisticDataStructures
         /// 240,200 and 248,248 bytes. That noise only ever adds, so the least of a few
         /// repeats is the read's own allocation.
         /// </remarks>
-        private static long Allocated(Func<object> read, int repeats = 5)
+        internal static long Allocated(Func<object> read, int repeats = 5)
         {
             var least = long.MaxValue;
             for (var i = 0; i < repeats; i++)
@@ -464,7 +466,10 @@ namespace TestProbabilisticDataStructures
         /// are in the large form too, so the price of a nested large envelope, worked out
         /// where it lies in the outer payload, is held to what reading it charges. A price
         /// that did not recognise the flag would stop at the first nested envelope and
-        /// leave the rest to be charged unpriced.
+        /// leave the rest to be charged unpriced. The further samples are held to it too:
+        /// what reading an envelope in the large form allocates around its payload is
+        /// charged once per envelope and is a few hundred bytes, which only a read of
+        /// thousands of them, a scalable filter's, carries past the slack.
         /// </remarks>
         [TestMethod]
         [DynamicData(nameof(Structures))]
@@ -477,13 +482,23 @@ namespace TestProbabilisticDataStructures
             var large = InTheLargeForm(sample);
             AssertHonest(id, large);
             AssertOneTotal(id, large);
+
+            if (Further.Value.TryGetValue(id, out var further))
+            {
+                foreach (var (_, more) in further)
+                {
+                    var largeMore = InTheLargeForm(more);
+                    AssertHonest(id, largeMore);
+                    AssertOneTotal(id, largeMore);
+                }
+            }
         }
 
         /// <summary>
         /// A sample written again in the large form, and writing in it, so that the checks
         /// that a read writes back the bytes it was read from hold in that form.
         /// </summary>
-        private static Sample InTheLargeForm(Sample sample)
+        internal static Sample InTheLargeForm(Sample sample)
         {
             var bytes = LargeForm.Below(0, () => sample.Write(sample.Read(sample.Bytes, ReadOptions.Unlimited)));
             Assert.IsTrue(LargeForm.IsLarge(bytes), $"{sample.Name} was not written in the large form");
@@ -522,13 +537,25 @@ namespace TestProbabilisticDataStructures
                 Assert.AreEqual(budget, why.MemoryBudget);
             }
 
-            // From a stream that cannot seek, the runs are read past rather than skipped,
-            // and the total is the same.
-            Assert.IsTrue(RefusedForBudget(() => sample.ReadStream(new OneWay(bytes), new ReadOptions(0)), out var oneWay),
-                $"{sample.Name} loaded from a stream that cannot seek under a budget of nothing");
-            Assert.AreEqual(total, oneWay!.RequiredBytes,
-                $"{sample.Name} named {oneWay.RequiredBytes} bytes read from a stream that cannot seek, " +
-                $"and {total} from one that can");
+            // From a stream that cannot seek, an ordinary payload's runs are read past
+            // rather than skipped, and the total is the same. The large form is priced in
+            // a pass of its own before it is read, which has to seek back between the two,
+            // so from such a stream it is refused for the stream, under any budget (#226).
+            if (LargeForm.IsLarge(bytes))
+            {
+                var unseekable = Assert.ThrowsExactly<NotSupportedException>(
+                    () => sample.ReadStream(new OneWay(bytes), new ReadOptions(0)),
+                    $"{sample.Name} was not refused for a stream that cannot seek");
+                StringAssert.Contains(unseekable.Message, "seek", unseekable.Message);
+            }
+            else
+            {
+                Assert.IsTrue(RefusedForBudget(() => sample.ReadStream(new OneWay(bytes), new ReadOptions(0)), out var oneWay),
+                    $"{sample.Name} loaded from a stream that cannot seek under a budget of nothing");
+                Assert.AreEqual(total, oneWay!.RequiredBytes,
+                    $"{sample.Name} named {oneWay.RequiredBytes} bytes read from a stream that cannot seek, " +
+                    $"and {total} from one that can");
+            }
 
             Assert.IsFalse(RefusedForBudget(() => sample.Read(bytes, new ReadOptions(total)), out var again),
                 $"{sample.Name} was refused needing {total} bytes, and refused again under exactly that, " +

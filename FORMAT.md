@@ -79,16 +79,23 @@ the read refused, so no caller receives it. A payload refused before its end, fo
 shape or for what reading it would cost, is refused saying that its checksum was not
 reached, because what was refused may be damage the checksum would have named.
 
-This library reads the large form by holding the payload, as it holds an ordinary one, so
-it refuses one in the large form longer than one array holds, 2,147,483,591 bytes. It
-writes the large form for a payload past the ordinary envelope's ceiling, and for no
-other, as the payload is produced: the header first, with the length counted beforehand
-from the layout, then the payload a piece at a time, the final checksum carried on over
-each piece as it goes, then that checksum. Nothing the length of the payload is held, and
-the large form is written only to a stream, never returned as one array. A write that
-fails part-way can leave the beginning of an envelope in its stream, which a reader
-refuses for its length or its checksum. No single run, a `bytes` field, is written longer
-than `int.MaxValue` bytes in either form yet, as [Sizes](#sizes) describes.
+This library reads the large form without holding the payload, so it reads one longer than
+any array. It reads the payload twice. First it prices the read, reading the fields that
+the structure's price depends on and seeking over the rest. Then it goes back to the
+payload's first byte and reads it, each run straight into the array that keeps it, carrying
+the final checksum on over every byte as it goes. So a stream it reads the large form from
+has to be one that can seek: from one that cannot, the large form is refused with a
+`NotSupportedException`, once the header's checksum has held, saying to copy it to a file
+or another stream that can seek first. A length past what the stream holds is refused
+before anything is priced. It writes the large form for a payload past the ordinary
+envelope's ceiling, and for no other, as the payload is produced: the header first, with
+the length counted beforehand from the layout, then the payload a piece at a time, the
+final checksum carried on over each piece as it goes, then that checksum. Nothing the
+length of the payload is held, and the large form is written only to a stream, never
+returned as one array. A write that fails part-way can leave the beginning of an envelope
+in its stream, which a reader refuses for its length or its checksum. No single run, a
+`bytes` field, is written longer than one array holds, 2,147,483,591 bytes, in either form
+yet, as [Sizes](#sizes) describes.
 
 ### Format versions
 
@@ -425,9 +432,9 @@ read as they always did.
 
 A quotient filter's table can be larger than a payload holds: 2^31 slots at five bits of
 remainder, or 2^30 at thirteen, is 268,435,458 words, and the ordinary envelope carries at
-most 268,435,444. The table is one run, and no run is written longer than `int.MaxValue`
-bytes, which is fewer words than those, so such a filter can be built and used and not
-written, in either form: `WriteTo` says so with the `InvalidOperationException` that
+most 268,435,444. The table is one run, and no run is written longer than one array holds,
+2,147,483,591 bytes, which is fewer words than those, so such a filter can be built and used
+and not written, in either form: `WriteTo` says so with the `InvalidOperationException` that
 refuses the run, before anything is written. Releases up to 6.2.0 failed with an
 `OverflowException` from computing the table's length in 32 bits.
 
@@ -448,37 +455,43 @@ the largest array, 2,147,483,591, less those. A larger one is written in
 [the large form](#the-large-form), to a stream: `ToByteArray` of a structure whose payload
 would be larger throws an `InvalidOperationException` saying how large the payload would
 have been, and the structure is untouched. In either form a run is written no longer than
-`int.MaxValue` bytes, the most a reader takes into one array, so a structure that would
+2,147,483,591 bytes, the most a reader takes into one array, so a structure that would
 need a longer one can be built but not written yet, and `WriteTo` refuses it the same way,
-naming the run. A reader refuses a length field above 2,147,483,591, what one array
-holds, before allocating for it.
+naming the run. A structure held inside another in the large form is such a run, since its
+envelope is longer than the ordinary ceiling. A reader refuses an ordinary envelope's length
+field, or a run's, above 2,147,483,591, what one array holds, before allocating for it, and
+the large form's length past what its stream holds.
 
 ### Read budget
 
 Every read has a budget: the most memory, in bytes, reading one payload may allocate — the
-payload itself, the copies made of runs within it, the structure, and any structure nested
-inside it, all from one allowance. A reader prices the whole read before allocating
-anything a payload claims: from the envelope's length and the fields that size the
-structure, read in the order the structure's reader reads them, and for a nested structure
-from its own envelope and fields where they lie inside the outer payload. It refuses the
-payload when that total is more than the budget. The refusal is an `InvalidDataException`
-whose inner exception is a `ReadBudgetExceededException` naming the total and the budget;
-the total is the same whatever the budget was, and a budget of it reads the payload.
+payload itself where it is held, the copies made of runs within it, the structure, and any
+structure nested inside it, all from one allowance. A reader prices the whole read before
+allocating anything a payload claims: from the envelope's length where the payload is held,
+and the fields that size the structure, read in the order the structure's reader reads
+them, and for a nested structure from its own envelope and fields where they lie inside the
+outer payload. It refuses the payload when that total is more than the budget. The refusal
+is an `InvalidDataException` whose inner exception is a `ReadBudgetExceededException`
+naming the total and the budget; the total is the same whatever the budget was, and a
+budget of it reads the payload.
 
 A payload in the ordinary envelope that fits the budget is read and its checksum checked
-before it is priced, so a corrupted one is refused as corrupted. One in the large form is
-priced before its checksum is reached, which follows it, and a refusal of it says so. One
-whose length alone is more than the budget is never held: its fields are read from the
-stream and its runs skipped, to name the total, before its checksum could be checked. A
+before it is priced, so a corrupted one is refused as corrupted. One whose length alone is
+more than the budget is never held: its fields are read from the stream and its runs
+skipped, to name the total, before its checksum could be checked. One in the large form is
+never held either. It is priced in a first pass over its stream, which reads the fields
+the structure's price depends on and seeks over the rest, and then read in a second, so it
+is priced before its checksum is reached, which follows it, and a refusal of it says so. A
+structure whose price depends on every field it holds is read whole by that first pass. A
 payload that ends early, or whose fields are not ones its reader accepts, is priced as far
 as it goes.
 
 The hash id is checked before anything is priced: after the checksum when the payload is
 held, as the header states it when it is not, and in the large form after the header's own
-checksum, either way. A payload naming a hash its reader
-cannot read it with — one the caller has not supplied and the reader cannot reconstruct,
-or any hash at all for a structure that hashes nothing — is refused for that under any
-budget.
+checksum and the refusal of a stream that cannot seek, either way. A payload naming a hash
+its reader cannot read it with — one the caller has not supplied and the reader cannot
+reconstruct, or any hash at all for a structure that hashes nothing — is refused for that
+under any budget.
 
 The total is worked out from the payload's shape, its header and the fields that size what
 it holds, so a budget of it reads a payload that is well formed. One damaged past those

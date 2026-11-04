@@ -163,7 +163,7 @@ namespace TestProbabilisticDataStructures
                 PersistenceFormat.CheckPayloadLength(counter.Length);
             }
 
-            // A sign's run past int.MaxValue bytes, the longest a payload holds, is refused
+            // A sign's run longer than one array, the longest a payload holds, is refused
             // for that by the count, before the payload's whole size is known, and by
             // WriteTo too; the positive sign's is counted first.
             foreach (var (positive, negative) in new[]
@@ -179,7 +179,7 @@ namespace TestProbabilisticDataStructures
             {
                 var sketch = Claiming(positive, negative, out var shape);
                 var longest = 8 * Math.Max(positive, negative);
-                if (longest > int.MaxValue)
+                if (longest > PayloadWriter.LongestRun)
                 {
                     TestPayloadCount.AssertRunRefusedWhileClaiming(sketch, longest, shape);
                 }
@@ -215,14 +215,14 @@ namespace TestProbabilisticDataStructures
             // Index 0 is the only bucket the value has, so this makes the run [0, span).
             SetMaxIndex(sketch, side, span - 1);
 
-            // Each row's run is past int.MaxValue bytes, the longest a payload holds, which is
+            // Each row's run is longer than one array, the longest a payload holds, which is
             // what refuses it, in the count; the payload as a whole would go to the stream in
             // the large form.
             using var stream = new MemoryStream();
             var ex = Assert.ThrowsExactly<InvalidOperationException>(() => sketch.WriteTo(stream));
             var run = 8L * span;
             StringAssert.Contains(ex.Message, $"a run of {run:N0} bytes", ex.Message);
-            StringAssert.Contains(ex.Message, int.MaxValue.ToString("N0"), ex.Message);
+            StringAssert.Contains(ex.Message, PayloadWriter.LongestRun.ToString("N0"), ex.Message);
             Assert.AreEqual(0L, stream.Length, "nothing should have been written");
 
             // The sketch is as it was: told its real run again, it writes what it wrote.

@@ -73,10 +73,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - the payload's checksum after the payload, compared once the structure has read it.
   On a mismatch the structure read is discarded, and a refusal before the end says the
   checksum was not reached. Releases up to 6.2.0 refuse such a payload as written by a
-  later version. Every reader here reads it, nested envelopes included, holding the
-  payload as it holds an ordinary one. Nothing written changes for a payload that fits the
-  ordinary envelope: it is written in it, byte for byte as before. One past it is written in
-  the large form, streamed (#225). (#222, #223, #224, #227)
+  later version. Every reader here reads it, nested envelopes included, from its stream
+  without holding the payload (#226, below). Nothing written changes for a payload that
+  fits the ordinary envelope: it is written in it, byte for byte as before. One past it is
+  written in the large form, streamed (#225). (#222, #223, #224, #227)
 
 - **`WriteTo` saves a structure past 2 GiB, in the large form, streamed.** A payload longer
   than the ordinary envelope holds, 2,147,483,573 bytes, was refused by `WriteTo`. It is now
@@ -92,9 +92,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   structure throws an `InvalidOperationException` before writing anything, naming the
   payload's size and saying to write it with `WriteTo(Stream)` instead. One limit stays: no
   single run in a payload, such as a table written whole or a structure held inside another,
-  can be longer than `int.MaxValue` bytes yet, the most a reader takes into one array. A
-  structure that would need one is refused by `WriteTo` and `ToByteArray` alike, naming the
-  run, before anything is written. (#225, #229)
+  can be longer than one array, 2,147,483,591 bytes, yet, since a reader reads a run into
+  one. A structure held inside another in the large form is such a run. A structure that
+  would need one is refused by `WriteTo` and `ToByteArray` alike, naming the run, before
+  anything is written. (#225, #229)
+
+- **A payload in the large form is read from its stream, not held.** The large form was read
+  into one array, as the ordinary envelope is, so a read refused one longer than an array
+  and was charged the payload on top of the structure. It is now read from its stream twice.
+  First the structure's price walks it, reading the fields the price depends on and seeking
+  over the rest, so that the read is priced whole before anything is allocated and a budget
+  of the total a refusal names loads it. A structure whose price depends on every field it
+  holds reads all of them in that pass. Then the reader reads it from its first byte again,
+  each run straight into the array that keeps it, the checksum carried on over every byte
+  and compared at the end. In the suite, each structure read from the large form allocated
+  its payload's size less, within 96 bytes, than the same structure read from the ordinary
+  envelope, and a structure that holds others about twice that, since the envelopes it holds
+  are streamed too. The stream has to be one that can seek. From one that cannot, the large form
+  is refused with a `NotSupportedException`, once the header's checksum has held and before
+  the hash is checked, saying to copy it to a file or another stream that can seek first. A
+  length past what the stream holds is refused as truncated before it is priced. A run whose
+  length prefix claims more than one array holds is refused for that, in either form, where
+  a claim between the largest array and `int.MaxValue` was refused as the payload ending. A
+  payload that fits the ordinary envelope is read as before: held, and its checksum checked
+  before it is parsed. (#226, #227)
 
 ### Changed
 
