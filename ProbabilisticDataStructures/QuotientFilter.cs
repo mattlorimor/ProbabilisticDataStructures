@@ -633,6 +633,12 @@ namespace ProbabilisticDataStructures
         /// belongs to it. Runs appear in the same order as the quotients that own them,
         /// which is what makes the pairing possible at all.
         /// <para>
+        /// Each walk stops after one lap of the table, and throws: on consistent metadata,
+        /// asked for an occupied quotient, none of them comes back to where it began, so
+        /// one that does would otherwise circle for ever. See
+        /// <see cref="QuotientTable.Lapped"/>.
+        /// </para>
+        /// <para>
         /// Internal so that the tests can run it on a table they have broken on purpose,
         /// and ask it for a quotient no run belongs to.
         /// </para>
@@ -643,8 +649,13 @@ namespace ProbabilisticDataStructures
             while (this.IsShifted(bucket))
             {
                 bucket = Prev(bucket, this.slotMaskIndex);
+                if (bucket == quotient)
+                {
+                    throw QuotientTable.Lapped(quotient, this.slots);
+                }
             }
 
+            var start = bucket;
             var run = bucket;
 
             while (bucket != quotient)
@@ -652,12 +663,20 @@ namespace ProbabilisticDataStructures
                 do
                 {
                     run = Next(run, this.slotMaskIndex);
+                    if (run == start)
+                    {
+                        throw QuotientTable.Lapped(quotient, this.slots);
+                    }
                 }
                 while (this.IsContinuation(run));
 
                 do
                 {
                     bucket = Next(bucket, this.slotMaskIndex);
+                    if (bucket == start)
+                    {
+                        throw QuotientTable.Lapped(quotient, this.slots);
+                    }
                 }
                 while (!this.IsOccupied(bucket));
             }

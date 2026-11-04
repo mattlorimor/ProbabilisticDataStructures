@@ -187,6 +187,8 @@ namespace TestProbabilisticDataStructures
         /// </list>
         /// Each throws within a lap of each walk it makes: the reads are held to three laps,
         /// so a walk that went on until some other walk's bound caught it fails here too.
+        /// Measured, the same in each kind: 16 slot reads for back, 17 for run and 25 for
+        /// bucket, of the 48 allowed.
         /// </summary>
         [TestMethod]
         [DataRow("quotient", "back")]
@@ -224,6 +226,7 @@ namespace TestProbabilisticDataStructures
             }
 
             var (thrown, reads) = RunBounded(table.Reads, 64 * table.Slots, () => table.RunStart(quotient));
+            Console.WriteLine($"{kind} {walk}: {reads} slot reads, then {thrown?.GetType().Name}");
 
             Assert.IsInstanceOfType<InvalidOperationException>(thrown,
                 $"{kind} {walk}: the search returned, or threw something else: {thrown}");

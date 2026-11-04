@@ -667,8 +667,12 @@ namespace ProbabilisticDataStructures
         /// Where the run belonging to a quotient begins.
         /// </summary>
         /// <remarks>
+        /// Each walk stops after one lap of the table, and throws, as the quotient filter's
+        /// does. See <see cref="QuotientTable.Lapped"/>.
+        /// <para>
         /// Internal so that the tests can run it on a table they have broken on purpose,
         /// and ask it for a quotient no run belongs to.
+        /// </para>
         /// </remarks>
         internal uint FindRunStart(uint quotient)
         {
@@ -676,20 +680,33 @@ namespace ProbabilisticDataStructures
             while (IsShifted(slot))
             {
                 slot = Prev(slot);
+                if (slot == quotient)
+                {
+                    throw QuotientTable.Lapped(quotient, this.Slots);
+                }
             }
 
+            var start = slot;
             var runner = slot;
             while (runner != quotient)
             {
                 do
                 {
                     slot = Next(slot);
+                    if (slot == start)
+                    {
+                        throw QuotientTable.Lapped(quotient, this.Slots);
+                    }
                 }
                 while (IsContinuation(slot));
 
                 do
                 {
                     runner = Next(runner);
+                    if (runner == start)
+                    {
+                        throw QuotientTable.Lapped(quotient, this.Slots);
+                    }
                 }
                 while (!IsOccupied(runner));
             }
