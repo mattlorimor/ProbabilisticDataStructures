@@ -384,11 +384,12 @@ namespace ProbabilisticDataStructures
         /// which only a sketch whose rows double past any count a <c>ulong</c> holds can
         /// reach, after 2^64 - 1 adds.
         /// <para>
-        /// The add that doubles the rows builds the doubled rows before it changes anything.
-        /// They are the most a sketch allocates at once, eight bytes a counter before they
-        /// are packed, and if it cannot get them it throws the
-        /// <see cref="OutOfMemoryException"/> with the sketch as it was before the add: the
-        /// key is not counted, so adding it again counts it once.
+        /// The add that doubles the rows builds the doubled rows, and the copy of the rows it
+        /// keeps to fold them back by, before it changes anything. The doubled rows are the
+        /// most a sketch allocates at once, eight bytes a counter before they are packed, and
+        /// if it cannot get everything it throws the <see cref="OutOfMemoryException"/> with
+        /// the sketch as it was before the add: the key is not counted, so adding it again
+        /// counts it once.
         /// </para>
         /// </remarks>
         /// <param name="data">The data to add.</param>
@@ -1013,20 +1014,54 @@ namespace ProbabilisticDataStructures
         /// outnumber those inserted before it.
         /// <para>
         /// The key is counted before the rows double, as it always was: in the rows that
-        /// become the record, and so in both copies of each of its counters. But the doubled
-        /// rows are built first, the key's counters included, and nothing in the sketch is
-        /// changed until they are, so a doubling that runs out of memory leaves the sketch as
-        /// it was. It used to count the key, append the record and then allocate, and a
-        /// failure left the key counted though the add threw, a record of a doubling that had
-        /// not happened, and the next doubling where it was, so that every add after it tried
-        /// again and appended another; the payload such a sketch wrote, its own reader
-        /// refused.
+        /// become the record, and so in both copies of each of its counters. But everything
+        /// the doubling allocates is built first, and nothing in the sketch is changed until
+        /// it is, so a doubling that runs out of memory leaves the sketch as it was. It used to
+        /// count the key, append the record and then allocate, and a failure left the key
+        /// counted though the add threw, a record of a doubling that had not happened, and the
+        /// next doubling where it was, so that every add after it tried again and appended
+        /// another; the payload such a sketch wrote, its own reader refused.
+        /// </para>
+        /// <para>
+        /// The record is a copy of the rows with the key counted in it, built with the doubled
+        /// rows, and what is left once both are built only puts them in place. The record used
+        /// to be the old rows themselves, with the key's increments taken in them after the
+        /// doubled rows were built. An increment can move a chunk to a tails array, which
+        /// allocates, and one that ran out of memory there left the rows before it counted
+        /// and, in its own row, a counter whose stub had been written and whose high bits had
+        /// not.
         /// </para>
         /// </remarks>
         private void Expand(in HashKernelReturnValue kernel)
         {
             var doubled = this.width * 2;
 
+            var laidOut = LayOutDoubled(kernel, doubled);
+            var record = CountedCopyOfRows(kernel);
+            this.records.EnsureCapacity(this.records.Count + 1);
+
+            // Everything the doubling needs has been built, and only from here is the sketch
+            // changed, which allocates nothing. The count is below the one the rows double at,
+            // which is below the largest a ulong holds, so it has room.
+            this.count++;
+            this.records.Add(record);
+            Install(laidOut);
+
+            this.expansionLimit = LimitFor(doubled);
+            this.contractionLimit = ContractionLimitFor(doubled);
+        }
+
+        /// <summary>
+        /// The rows doubled, with each counter copied into the new half and the key counted
+        /// in both copies of each of its counters.
+        /// </summary>
+        /// <remarks>
+        /// The plain counts the rows are packed from, eight bytes a counter and the largest
+        /// thing a doubling allocates, are held only here, so that nothing holds them once
+        /// the rows are packed and the record is copied after.
+        /// </remarks>
+        private Layout LayOutDoubled(in HashKernelReturnValue kernel, int doubled)
+        {
             var values = CountsAt(doubled);
             for (var i = 0; i < this.rows.Length; i++)
             {
@@ -1040,25 +1075,23 @@ namespace ProbabilisticDataStructures
                 values[i][column + this.width] = counted;
             }
 
-            var laidOut = LayOut(values, doubled);
-            this.records.EnsureCapacity(this.records.Count + 1);
+            return LayOut(values, doubled);
+        }
 
-            // Everything the doubling needs has been built, and only from here is the sketch
-            // changed. Nothing below allocates but an increment whose counter outgrows its
-            // chunk's pool, which moves the chunk to a tails array, small beside the rows.
+        /// <summary>
+        /// A copy of the rows with the key counted in them, for the record a doubling keeps of
+        /// the rows it doubles.
+        /// </summary>
+        private ValeCounterArray[] CountedCopyOfRows(in HashKernelReturnValue kernel)
+        {
+            var copies = new ValeCounterArray[this.rows.Length];
             for (var i = 0; i < this.rows.Length; i++)
             {
-                this.rows[i].Increment(ColumnOf(kernel, i));
+                copies[i] = CopyOfRow(this.rows[i]);
+                copies[i].Increment(ColumnOf(kernel, i));
             }
 
-            // The count is below the one the rows double at, which is below the largest a
-            // ulong holds, so it has room.
-            this.count++;
-            this.records.Add(this.rows);
-            Install(laidOut);
-
-            this.expansionLimit = LimitFor(doubled);
-            this.contractionLimit = ContractionLimitFor(doubled);
+            return copies;
         }
 
         /// <summary>
@@ -1237,6 +1270,18 @@ namespace ProbabilisticDataStructures
             {
                 BeforeAllocatingTails = this.BeforeAllocating,
             };
+        }
+
+        /// <summary>
+        /// A copy of a row, allocated past <see cref="BeforeAllocating"/>, which it is handed
+        /// in turn.
+        /// </summary>
+        private ValeCounterArray CopyOfRow(ValeCounterArray row)
+        {
+            this.BeforeAllocating?.Invoke();
+            var copy = row.Copy();
+            copy.BeforeAllocatingTails = this.BeforeAllocating;
+            return copy;
         }
 
         /// <summary>

@@ -508,5 +508,88 @@ namespace TestProbabilisticDataStructures
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => array.Increment(100));
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => array.Decrement(100));
         }
+
+        /// <summary>
+        /// A copy holds the same counters packed the same way, and the two change apart: a
+        /// write to either, to a chunk on tails, to one moving onto tails or to one in its
+        /// pool, leaves the other as it was.
+        /// </summary>
+        /// <remarks>
+        /// Three chunks: the first on tails, the second one add from spilling its pool, and the
+        /// third in its pool. A copy sharing the words, a tails array, or the dictionary of
+        /// them would show the other's write. Two tunings, so that a copy made at the default
+        /// one is caught as well.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(C, S)]
+        [DataRow(ValeCounterArray.MaxCountersPerChunk, ValeCounterArray.MinStubBits)]
+        public void TestACopyHoldsTheSameCountersAndChangesApartFromTheArray(
+            int countersPerChunk, int stubBits)
+        {
+            const ulong Large = 1UL << 40;
+            var array = new ValeCounterArray(3 * countersPerChunk, countersPerChunk, stubBits);
+            for (var i = 0; array.ChunksWithTails == 0; i++)
+            {
+                array.Set(i, Large);
+            }
+            OneAddFromSpilling(array, countersPerChunk);
+            array.Set(2 * countersPerChunk, 7);
+            array.Set(2 * countersPerChunk + 1, Large);
+            Assert.AreEqual(1, array.ChunksWithTails, "the first chunk alone should be on tails");
+
+            var copy = array.Copy();
+            AssertAlike(array, copy, "a copy just made");
+
+            var held = CountsOf(array);
+            copy.Set(1, 3 * Large);
+            copy.Increment(countersPerChunk);
+            copy.Set(2 * countersPerChunk + 1, 5);
+            Assert.AreEqual(2, copy.ChunksWithTails, "the copy's second chunk did not spill");
+            CollectionAssert.AreEqual(held, CountsOf(array), "a write to the copy changed the array");
+            Assert.AreEqual(1, array.ChunksWithTails, "the copy's spill put the array's chunk on tails");
+
+            held = CountsOf(copy);
+            array.Set(0, 5 * Large);
+            array.Increment(countersPerChunk);
+            array.Set(2 * countersPerChunk, 9);
+            CollectionAssert.AreEqual(held, CountsOf(copy), "a write to the array changed the copy");
+            AssertAlike(array, array.Copy(), "a copy of the array as it now is");
+        }
+
+        /// <summary>
+        /// Fills the pool of the chunk starting at <paramref name="first"/> with as many of the
+        /// shortest extensions as it holds, and leaves its first counter one count short of
+        /// needing one more.
+        /// </summary>
+        private static void OneAddFromSpilling(ValeCounterArray array, int first)
+        {
+            var shortest = 1UL << array.StubBits;
+            var fit = array.PoolFragments / ValeCounter.ExtensionLength(1);
+            Assert.IsTrue(fit < array.CountersPerChunk, "the chunk is too short to fill its pool");
+            for (var i = 1; i <= fit; i++)
+            {
+                array.Set(first + i, shortest);
+            }
+            array.Set(first, shortest - 1);
+        }
+
+        private static ulong[] CountsOf(ValeCounterArray array)
+        {
+            var counts = new ulong[array.Count];
+            for (var i = 0; i < counts.Length; i++)
+            {
+                counts[i] = array.Get(i);
+            }
+            return counts;
+        }
+
+        private static void AssertAlike(ValeCounterArray expected, ValeCounterArray actual, string what)
+        {
+            CollectionAssert.AreEqual(CountsOf(expected), CountsOf(actual), $"{what}: the counts");
+            Assert.AreEqual(expected.CountersPerChunk, actual.CountersPerChunk, $"{what}: counters a chunk");
+            Assert.AreEqual(expected.StubBits, actual.StubBits, $"{what}: stub bits");
+            Assert.AreEqual(expected.ChunksWithTails, actual.ChunksWithTails, $"{what}: chunks on tails");
+            Assert.AreEqual(expected.SizeInBytes, actual.SizeInBytes, $"{what}: bytes");
+        }
     }
 }

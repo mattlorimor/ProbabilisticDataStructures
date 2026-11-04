@@ -178,6 +178,27 @@ namespace ProbabilisticDataStructures
             _pool = new ulong[_poolWords];
         }
 
+        /// <summary>
+        /// A copy of the array, which changes apart from it: the same counters packed the same
+        /// way, at the same tuning and with the same chunks on tails, in arrays of its own.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="BeforeAllocatingTails"/> is not copied; whoever wants the copy hooked
+        /// hooks it.
+        /// </remarks>
+        internal ValeCounterArray Copy()
+        {
+            var copy = new ValeCounterArray(_counterCount, _countersPerChunk, _stubBits);
+            Array.Copy(_words, copy._words, _words.Length);
+            copy._tails.EnsureCapacity(_tails.Count);
+            foreach (var (chunk, tails) in _tails)
+            {
+                copy._tails.Add(chunk, (ulong[])tails.Clone());
+            }
+
+            return copy;
+        }
+
         /// <summary>How many counters the array holds.</summary>
         internal int Count => _counterCount;
 
