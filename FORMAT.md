@@ -303,7 +303,7 @@ function through the `ReadFrom` overload that takes one.
 | `u32` | 4 bytes, little-endian |
 | `u64` | 8 bytes, little-endian |
 | `f64` | 8 bytes, IEEE 754 binary64, little-endian |
-| `bytes` | `u32` length, then that many bytes |
+| `bytes` | a length, then that many bytes: the length is a `u32` in the ordinary envelope and a `u64` in [the large form](#the-large-form) |
 
 `Buckets`, the packed bit array most filters are built on, is written as:
 

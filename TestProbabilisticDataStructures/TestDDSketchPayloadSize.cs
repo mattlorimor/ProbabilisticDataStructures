@@ -163,9 +163,10 @@ namespace TestProbabilisticDataStructures
                 PersistenceFormat.CheckPayloadLength(counter.Length);
             }
 
-            // A sign's run longer than one array, the longest a payload holds, is refused
-            // for that by the count, before the payload's whole size is known, and by
-            // WriteTo too; the positive sign's is counted first.
+            // A sign's run longer than one array is no reason to refuse (#228): the payload is
+            // past one array too, and ToByteArray refuses it for that, naming it; WriteTo would
+            // write it in the large form, and is not asked, since its body would write the run
+            // it was told of from the counts the sketch holds.
             foreach (var (positive, negative) in new[]
             {
                 (LargestRun + 1, 0L),
@@ -178,34 +179,28 @@ namespace TestProbabilisticDataStructures
             })
             {
                 var sketch = Claiming(positive, negative, out var shape);
-                var longest = 8 * Math.Max(positive, negative);
-                if (longest > PayloadWriter.LongestRun)
-                {
-                    TestPayloadCount.AssertRunRefusedWhileClaiming(sketch, longest, shape);
-                }
-                else
-                {
-                    TestPayloadCount.AssertRefusedWhileClaiming(
-                        sketch, Fixed + 8 * (positive + negative), shape);
-                }
+                TestPayloadCount.AssertStreamedWhileClaiming(sketch, Fixed + 8 * (positive + negative), null, shape);
             }
         }
 
         /// <summary>
-        /// The refusal is the write's own and not only the hook's. A sketch holding one
-        /// value is told its run is longer than it is, which is as much as a test can do
-        /// of a run no suite can afford, and then asked to write itself: it must refuse,
-        /// whichever sign is long, with the writer's exception and nothing on the stream.
-        /// It does not look at the counts to do it -- there are 64 of them -- so a write
-        /// that tried would fail some other way, as the old arithmetic did: an overflow
-        /// at 300,000,000 buckets, and a loop off the end of the array it sized for 2^29.
+        /// A sign's run past one array is counted for the large form, in 64 bits, and not
+        /// overflowed. A sketch holding one value is told its run is longer than it is, which
+        /// is as much as a test can do of a run no suite can afford: its <c>ToByteArray</c>
+        /// refuses it, whichever sign is long, naming its payload in the ordinary envelope,
+        /// while its count declares the large form's, both signs' runs with a <c>u64</c>
+        /// length (#228). It does not look at the counts to do it -- there are 64 of them --
+        /// so a count that tried would fail some other way, as the old arithmetic did: an
+        /// overflow at 300,000,000 buckets, and a loop off the end of the array it sized for
+        /// 2^29. <c>WriteTo</c> is not asked: in the large form it would write the run it was
+        /// told of.
         /// </summary>
         [TestMethod]
         [DataRow("positive", 300_000_000)]
         [DataRow("negative", 300_000_000)]
         [DataRow("positive", 536_870_912)]
         [DataRow("negative", 536_870_912)]
-        public void TestAWriteOfARunNoEnvelopeHoldsIsRefusedNotOverflowed(string side, int span)
+        public void TestARunPastOneArrayIsCountedForTheLargeFormNotOverflowed(string side, int span)
         {
             var sketch = new DDSketch(0.01);
             var value = side == "positive" ? 1.0 : -1.0;
@@ -214,19 +209,28 @@ namespace TestProbabilisticDataStructures
 
             // Index 0 is the only bucket the value has, so this makes the run [0, span).
             SetMaxIndex(sketch, side, span - 1);
+            var counted = new List<long>();
+            PersistenceFormat.Counted = (body, length) =>
+            {
+                if (ReferenceEquals(body, sketch)) counted.Add(length);
+            };
 
-            // Each row's run is longer than one array, the longest a payload holds, which is
-            // what refuses it, in the count; the payload as a whole would go to the stream in
-            // the large form.
-            using var stream = new MemoryStream();
-            var ex = Assert.ThrowsExactly<InvalidOperationException>(() => sketch.WriteTo(stream));
-            var run = 8L * span;
-            StringAssert.Contains(ex.Message, $"a run of {run:N0} bytes", ex.Message);
-            StringAssert.Contains(ex.Message, PayloadWriter.LongestRun.ToString("N0"), ex.Message);
-            Assert.AreEqual(0L, stream.Length, "nothing should have been written");
+            try
+            {
+                var ex = Assert.ThrowsExactly<InvalidOperationException>(() => sketch.ToByteArray());
+                StringAssert.Contains(ex.Message, (Fixed + 8L * span).ToString("N0"), ex.Message);
+            }
+            finally
+            {
+                PersistenceFormat.Counted = null;
+                SetMaxIndex(sketch, side, 0);
+            }
+
+            Assert.HasCount(1, counted, "the byte array's write did not count its payload, once");
+            Assert.AreEqual(Fixed + 8L * span + 8, counted[0],
+                "the count is not the large form's, with the lengths of both signs' runs a u64");
 
             // The sketch is as it was: told its real run again, it writes what it wrote.
-            SetMaxIndex(sketch, side, 0);
             CollectionAssert.AreEqual(before, Written(sketch));
             Assert.AreEqual(1UL, sketch.Count());
         }

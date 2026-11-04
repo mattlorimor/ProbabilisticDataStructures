@@ -1105,15 +1105,19 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// Exempt: the arrays a 64-bit filter's buckets are split into hold 2^30 buckets
         /// each, so the reader's cap on how many there are is reached only by a filter
-        /// whose bits alone are more than any payload holds -- an envelope carries at
-        /// most int.MaxValue bytes. Below that, nothing caps it: one past the old
-        /// ceiling in buckets reads back.
+        /// whose bits alone are about 134 terabytes, which no memory this runs in holds.
+        /// The envelope is no longer what stops it: the large form declares a payload of
+        /// up to <c>long.MaxValue</c> bytes, and each array is a run of its own (#222,
+        /// #228). Below the cap, nothing caps it: one past the old ceiling in buckets reads
+        /// back.
         /// </summary>
         [TestMethod]
         public void TestBloomFilter64CannotReachItsArrayCap()
         {
             var bytesAtTheCap = (ulong)PersistenceFormat.MaxNestedCount * Buckets64.maxArraySize / 8;
-            Assert.IsGreaterThan((ulong)int.MaxValue, bytesAtTheCap);
+            Assert.IsLessThan((ulong)long.MaxValue, bytesAtTheCap, "the large form could not declare a filter at the cap");
+            Assert.IsGreaterThan((ulong)GC.GetGCMemoryInfo().TotalAvailableMemoryBytes, bytesAtTheCap,
+                "the memory this runs in could hold a filter at the cap");
 
             var filter = new BloomFilter64(OldCap, 0.01);
             for (var i = 0; i < 100; i++) filter.Add(Key(i));
@@ -1441,7 +1445,8 @@ namespace TestProbabilisticDataStructures
                     nameof(TestPartitionedFilterCannotReachItsPartitionCap)),
                 (StructureId.BloomFilter64,
                     "its arrays hold 2^30 buckets each, so the reader's cap on their number " +
-                    "is reached only by a filter no payload can hold",
+                    "is reached only by a filter no memory holds; the large form's envelope " +
+                    "would carry it",
                     nameof(TestBloomFilter64CannotReachItsArrayCap)),
                 (StructureId.BloomierFilter,
                     "its value width is bounded to the same range by the builder and the " +

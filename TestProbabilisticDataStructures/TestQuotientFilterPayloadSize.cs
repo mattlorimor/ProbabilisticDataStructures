@@ -48,23 +48,25 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A filter whose table would pass the longest run a payload holds is refused by its
-        /// <c>WriteTo</c> and its <c>ToByteArray</c> before anything is allocated for it,
-        /// with the writer's exception naming the table's length (#216). The rows are filters
-        /// the constructor builds (<see cref="TestWhichConstructedFiltersCanBeWritten"/>), too
-        /// large to build here, so a small filter claims the two widths that size its table.
-        /// The payload is three counts and the run's length, sixteen bytes, and eight a word;
-        /// the table's bytes are past <c>int.MaxValue</c> in each, which is where the count
-        /// wrapped when it was an <c>int</c>, and so past one array, the longest a run can be.
-        /// At 2^31 slots of thirteen bits they are 2^32 and sixteen, which is sixteen in 32
-        /// bits: a run's length worked out in a <c>uint</c> would call that table nearly empty.
+        /// A filter whose table would pass one array is refused by its <c>ToByteArray</c>
+        /// before anything is allocated for it, with the writer's exception naming the payload
+        /// (#216), and written by its <c>WriteTo</c> in the large form, where the table's run
+        /// has a <c>u64</c> length (#228), the header declaring the count with it. The rows are
+        /// filters the constructor builds (<see cref="TestWhichConstructedFiltersFitOneArray"/>),
+        /// too large to build here, so a small filter claims the two widths that size its
+        /// table. The payload is three counts and the run's length, sixteen bytes in the
+        /// ordinary envelope and twenty in the large form, and eight a word; the table's bytes
+        /// are past <c>int.MaxValue</c> in each, which is where the count wrapped when it was
+        /// an <c>int</c>, and so past one array. At 2^31 slots of thirteen bits they are 2^32
+        /// and sixteen, which is sixteen in 32 bits: a run's length worked out in a
+        /// <c>uint</c> would call that table nearly empty.
         /// </summary>
         [TestMethod]
         [DataRow(31u, 5u, 268_435_458L)]
         [DataRow(30u, 13u, 268_435_458L)]
         [DataRow(30u, 15u, 301_989_890L)]
         [DataRow(31u, 13u, 536_870_914L)]
-        public void TestATableTooLargeToWriteIsRefusedNamingTheSize(
+        public void TestATableTooLargeForOneArrayIsRefusedAsOneAndWrittenInTheLargeForm(
             uint quotientBits, uint remainderBits, long words)
         {
             Assert.AreEqual(words, (((1L << (int)quotientBits) * (remainderBits + 3)) >> 6) + 2,
@@ -73,16 +75,17 @@ namespace TestProbabilisticDataStructures
             var filter = new QuotientFilter(100, 0.01);
             for (var i = 0; i < 40; i++) filter.Add(System.Text.Encoding.ASCII.GetBytes($"k{i}"));
 
-            TestPayloadCount.AssertRunRefusedWhileClaiming(filter, 8 * words,
+            TestPayloadCount.AssertStreamedWhileClaiming(filter, 16 + 8 * words, 20 + 8 * words,
                 (filter, "quotientBits", quotientBits), (filter, "remainderBits", remainderBits));
         }
 
         /// <summary>
-        /// Which filters the constructor builds can be written, worked out from its own
-        /// sizing and the writer's own count, and not by building them: a small filter claims
-        /// each split, and its payload is counted as <c>WriteTo</c> counts it. The first row of
-        /// each pair fits an envelope and the second does not. The table's arithmetic is
-        /// restated here as well, as a table of 2^q slots of r + 3 bits and two spare words.
+        /// Which filters the constructor builds fit one array, worked out from its own sizing
+        /// and the writer's own count, and not by building them: a small filter claims each
+        /// split, and its payload is counted as <c>WriteTo</c> counts it. The first row of
+        /// each pair fits the ordinary envelope and the second does not, and is written in the
+        /// large form, its table a run with a <c>u64</c> length (#228). The table's arithmetic
+        /// is restated here as well, as a table of 2^q slots of r + 3 bits and two spare words.
         /// </summary>
         [TestMethod]
         [DataRow(1_610_612_736u, 0.07, 31, 4, true)]
@@ -92,31 +95,25 @@ namespace TestProbabilisticDataStructures
         [DataRow(805_306_368u, 0.0002, 30, 13, false)]
         [DataRow(805_306_368u, 0.00005, 30, 15, false)]
         [DataRow(100_000u, 0.01, 18, 7, true)]
-        public void TestWhichConstructedFiltersCanBeWritten(
-            uint n, double rate, int quotientBits, int remainderBits, bool writable)
+        public void TestWhichConstructedFiltersFitOneArray(
+            uint n, double rate, int quotientBits, int remainderBits, bool fits)
         {
             var (q, r) = QuotientFilter.Split(n, rate);
             Assert.AreEqual((uint)quotientBits, q);
             Assert.AreEqual((uint)remainderBits, r);
 
             var words = (((1L << quotientBits) * (remainderBits + 3)) >> 6) + 2;
-            var run = 8 * words;
-            Assert.AreEqual(writable, run <= PayloadWriter.LongestRun,
-                "the row says the table can be written, and it is a run longer than any payload holds, or the reverse");
+            var counted = CountedWhileClaiming(q, r);
+            Assert.AreEqual(16 + 8 * words, counted, "the count is not the table's bytes and sixteen");
+            Assert.AreEqual(fits, counted <= LargestPayload,
+                $"the row says the filter fits one array, and its payload of {counted:N0} bytes does not, or the reverse");
 
-            // The table is one run, and a count refuses a run longer than one array; every
-            // split the constructor makes that is within it also fits one array.
-            if (writable)
+            // A table past one array is a run past one array, which the large form carries.
+            if (!fits)
             {
-                var counted = CountedWhileClaiming(q, r);
-                Assert.AreEqual(16 + 8 * words, counted, "the count is not the table's bytes and sixteen");
-                Assert.IsLessThanOrEqualTo(LargestPayload, counted, "a filter that can be written does not fit one array");
-            }
-            else
-            {
-                var ex = Assert.ThrowsExactly<InvalidOperationException>(() => CountedWhileClaiming(q, r),
-                    "a table longer than any run a payload holds was counted");
-                StringAssert.Contains(ex.Message, $"a run of {run:N0} bytes", ex.Message);
+                var filter = new QuotientFilter(100, 0.01);
+                TestPayloadCount.AssertStreamedWhileClaiming(filter, counted, counted + 4,
+                    (filter, "quotientBits", q), (filter, "remainderBits", r));
             }
         }
 

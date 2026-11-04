@@ -35,7 +35,7 @@ namespace TestProbabilisticDataStructures
         private static readonly Regex PayloadSection =
             new(@"^### `(?<name>[A-Za-z0-9]+)` \(id (?<id>\d+)\)\r?$", RegexOptions.Multiline);
 
-        private static string Specification()
+        internal static string Specification()
         {
             using var resource = typeof(TestFormatDocumentation).Assembly
                 .GetManifestResourceStream("TestProbabilisticDataStructures.FORMAT.md");
@@ -150,6 +150,46 @@ namespace TestProbabilisticDataStructures
         private static readonly Regex ByteRange =
             new(@"bytes (?<from>\d+) through (?<to>\d+)(?<plus> \+ \*n\*)?");
 
+        /// <summary>
+        /// The types of the fields FORMAT.md lays out in the first code block after
+        /// <paramref name="heading"/>, in order, the first word of each line, with a
+        /// <c>Buckets</c> expanded into the fields its own block gives it.
+        /// </summary>
+        private static List<string> DocumentedFields(string spec, string heading)
+        {
+            List<string> Block(string after)
+            {
+                var at = spec.IndexOf(after, StringComparison.Ordinal);
+                Assert.IsGreaterThanOrEqualTo(0, at, $"FORMAT.md has no '{after}'");
+                var open = spec.IndexOf("```", at, StringComparison.Ordinal);
+                var close = spec.IndexOf("```", open + 3, StringComparison.Ordinal);
+                Assert.IsTrue(open >= 0 && close > open, $"FORMAT.md has no layout after '{after}'");
+                return spec[(open + 3)..close]
+                    .Split('\n')
+                    .Select(line => line.Trim())
+                    .Where(line => line.Length > 0)
+                    .Select(line => line.Split(' ', 2)[0])
+                    .ToList();
+            }
+
+            var fields = new List<string>();
+            foreach (var type in Block(heading))
+            {
+                fields.AddRange(type == "Buckets" ? Block("`Buckets`, the packed bit array") : new[] { type });
+            }
+
+            Assert.IsNotEmpty(fields, $"FORMAT.md lays out no fields after '{heading}'");
+            return fields;
+        }
+
+        /// <summary>How many bytes FORMAT.md's table of primitives gives <paramref name="primitive"/>.</summary>
+        private static int PrimitiveSize(string spec, string primitive)
+        {
+            var row = Regex.Match(spec, $@"^\| `{Regex.Escape(primitive)}` \| (?<n>\d+) bytes?\b", RegexOptions.Multiline);
+            Assert.IsTrue(row.Success, $"FORMAT.md's table of primitives gives no size for `{primitive}`");
+            return int.Parse(row.Groups["n"].Value);
+        }
+
         /// <summary>An offset or a size from an envelope's table, at a payload of <paramref name="n"/> bytes.</summary>
         private static long Evaluate(string term, long n)
         {
@@ -239,6 +279,34 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual((long)PersistenceFormat.LargeHeaderLength, payload.Offset,
                 "the large form's payload does not start where the library's large header ends");
             Assert.AreEqual(n, payload.Size);
+
+            // The payload itself, decoded by the filter's section and the tables of primitives
+            // alone: each field as wide as its primitive's row says, a `Buckets` as its own
+            // block lays it out, and a run's length as wide as the `bytes` row gives the large
+            // form's (#228). It has to end where the envelope says the payload does, and its one
+            // run has to be the filter's bits.
+            var (_, runPrefix) = LargeForm.DocumentedRunPrefix();
+            long cursor = payload.Offset;
+            var runs = new List<long>();
+            foreach (var type in DocumentedFields(spec, "### `BloomFilter` (id 1)"))
+            {
+                if (type == "bytes")
+                {
+                    var run = (long)BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan((int)cursor, runPrefix));
+                    runs.Add(run);
+                    cursor += runPrefix + run;
+                }
+                else
+                {
+                    cursor += PrimitiveSize(spec, type);
+                }
+            }
+
+            Assert.AreEqual(payload.Offset + n, cursor,
+                "the large form's payload, decoded by FORMAT.md's layout of the filter, does not end where its length says");
+            Assert.HasCount(1, runs, "the filter's layout decoded to other than its one run");
+            Assert.AreEqual((long)filter.Buckets.RawData.Length, runs[0],
+                "the run the layout decodes is not the filter's bits");
 
             var checksums = rows.Where(r => r.Field.StartsWith("CRC-32", StringComparison.Ordinal)).ToArray();
             Assert.HasCount(2, checksums, "the large form's table does not have two checksums, the header's and the payload's");

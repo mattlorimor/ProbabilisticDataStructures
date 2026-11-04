@@ -369,7 +369,7 @@ namespace TestProbabilisticDataStructures
         /// claiming more than the frame holds is refused as the payload ending, at the
         /// offset just after it.
         /// </summary>
-        private static List<int> RunPrefixes(byte[] clean, Func<byte[], object> read)
+        internal static List<int> RunPrefixes(byte[] clean, Func<byte[], object> read)
         {
             var found = new List<int>();
 

@@ -779,6 +779,21 @@ namespace ProbabilisticDataStructures
         /// <summary>The widest field taken in place: a nested envelope's header.</summary>
         internal const int WidestField = 16;
 
+        /// <summary>
+        /// The most of a run a reader that unpacks it into storage of its own takes from the
+        /// stream at a time (#228): a whole number of eight-byte words, and under the 85,000
+        /// bytes from which an array goes on the large object heap.
+        /// </summary>
+        internal const int PieceLength = 64 * 1024;
+
+        /// <summary>
+        /// A shorter piece for the sources made on the calling thread, so that the suite can
+        /// show a run read in pieces at lengths it can build; null otherwise, as it is in
+        /// every thread but a test's. A whole number of eight-byte words.
+        /// </summary>
+        [ThreadStatic]
+        internal static int? LoweredPieceLength;
+
         private readonly Stream stream;
         private readonly byte[] field = new byte[WidestField];
         private byte[]? skipped;
