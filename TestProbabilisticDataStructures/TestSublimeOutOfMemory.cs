@@ -461,6 +461,50 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// An add whose increment fills a row's stub, with room for it, has not put that row's
+        /// chunk on tails, even where the row's next increment would: only the rows whose
+        /// stubs were already full can move a chunk, and here none of them does, so the add
+        /// lays nothing out.
+        /// </summary>
+        /// <remarks>
+        /// Set by hand, each row's first chunk at 50 of its pool's 51 fragments. The first row's
+        /// counter at the spiller is at 30, so the add fills its stub at 31, from where the next
+        /// add would need two more fragments; the other two rows' counters are at 63, whose
+        /// stubs are full and whose increment to 64 keeps its extension two fragments long. Asked
+        /// of the first row after its stub was raised, the question finds a full stub one add
+        /// from spilling, and an add that crowds the rows where none was moved.
+        /// </remarks>
+        [TestMethod]
+        public void TestAnAddThatFillsAStubDoesNotCountItsChunkAsSpilling()
+        {
+            var sketch = new SublimeCountMinSketch(0.05, 0.5, 1.0, Identity);
+            var rows = RowsOf(sketch).ToArray();
+            var shortest = 1UL << rows[0].StubBits;
+            for (var i = 0; i < rows.Length; i++)
+            {
+                var fill = i == 0 ? 25 : 24;
+                for (var column = Spiller + 1; column <= Spiller + fill; column++)
+                {
+                    rows[i].Set(column, shortest);
+                }
+                rows[i].Set(Spiller, i == 0 ? shortest - 2 : 2 * shortest - 1);
+            }
+            Assert.AreEqual(0, OnTails(rows), "a chunk spilled while its pool was filled");
+
+            sketch.Add(At(Spiller));
+
+            for (var i = 0; i < rows.Length; i++)
+            {
+                Assert.AreSame(rows[i], RowsOf(sketch)[i],
+                    $"row {i} was laid out again by an add that moved no chunk");
+            }
+            Assert.AreEqual(0, OnTails(rows), "the add put a chunk on tails");
+            Assert.AreEqual(shortest - 1, rows[0].Get(Spiller), "the first row's counter");
+            Assert.AreEqual(2 * shortest, rows[1].Get(Spiller), "the second row's counter");
+            Assert.AreEqual(2 * shortest, rows[2].Get(Spiller), "the third row's counter");
+        }
+
+        /// <summary>
         /// The removal that folds the rows takes its key out of the counts it folds, not
         /// through a decrement, so it stops at nought itself: a key never added leaves its
         /// counters at nought, and the rows fold as they do for any other key never added.
