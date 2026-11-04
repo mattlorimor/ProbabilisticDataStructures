@@ -869,10 +869,26 @@ rest of a message survives, as it should, and one that deletes the guard does no
   on the budget -- the smallest it loads under -- and holds the read's allocation, from
   `GC.GetAllocatedBytesForCurrentThread`, to that plus a stated slack, on a sample large
   enough that anything missing could not hide in the slack. Two things learned getting
-  there: the counter is exact for what a read allocates, but a collection landing
-  mid-read can add a retired allocation context's worth, so the measurement is the least
+  there: the counter is exact for what a read allocates, but a background collection
+  running beside a read can add a few kilobytes to it, so the measurement is the least
   of five; and the first undercharge found was in the accounting itself, a `params`
   array allocated by every call that summed the charges.
+- **What a read allocates does not depend on when the last collection ran.** The least of
+  five removes noise that comes and goes, not an allocation a read makes only sometimes.
+  Every read named its structure with `ToString` as its budget was made, and the runtime
+  keeps an enum's names in a cache it holds weakly, so a read after a collection had
+  reclaimed them built them again: 2,352 bytes, in all five repeats when a collection
+  landed in each. A `DpswSketch` read in the large form, long and megabytes, met that on
+  a loaded macOS runner and failed a check with a few hundred bytes of room (#287).
+  Turning background collection off told the two kinds apart: reads then measured exact
+  under blocking collections landing mid-read, and only a read straight after a full
+  collection came out high, by the same bytes for every structure but `BinaryFuseFilter`,
+  whose reader asked the same of its width's enum with `Enum.IsDefined`.
+  `TestWhatAReadAllocatesDoesNotDependOnWhenACollectionRan` reads each structure that way
+  and back to back and asks for the same number, and its guard needs a name looked up
+  the same way to cost more after a collection, so the sweep cannot pass by measuring
+  nothing. What a read would ask of a runtime cache -- an enum's names or values,
+  reflection -- belongs in its refusal, not its read.
 - **A refusal's number is held to loading.** Honest charges were not enough: a refusal
   named the running total at the charge that failed, so a read refused needing a number
   was refused again, needing more, under exactly that number. Every read is now priced
