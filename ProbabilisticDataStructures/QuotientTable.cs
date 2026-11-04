@@ -16,6 +16,19 @@ namespace ProbabilisticDataStructures
     internal static class QuotientTable
     {
         /// <summary>
+        /// The check a reader will run on each table it restores, before any run in it is
+        /// walked. For now it is what the readers do today, which is nothing.
+        /// </summary>
+        /// <param name="data">The table's words.</param>
+        /// <param name="bitsPerSlot">The width of a slot, metadata included.</param>
+        /// <param name="slots">The slot count.</param>
+        /// <param name="count">The entries the payload says the table holds.</param>
+        /// <param name="table">The table's place in its chain, or -1 for a filter's only table.</param>
+        internal static void CheckMetadata(ulong[] data, int bitsPerSlot, uint slots, uint count, int table)
+        {
+        }
+
+        /// <summary>
         /// What a run-start search throws when one of its walks has gone all the way round
         /// the table without finding what it walks to.
         /// </summary>
