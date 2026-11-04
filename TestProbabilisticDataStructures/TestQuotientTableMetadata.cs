@@ -770,5 +770,68 @@ namespace TestProbabilisticDataStructures
                 AssertCountRefused($"memento table {t}", payload, tables[t], tables[t].Count + 1, $"Table {t}", read);
             }
         }
+
+        // ---- A Memento run rewrite that does not fit ----------------------------------
+
+        /// <summary>
+        /// A Memento table of four slots holding quotient 0's run of two slots and quotient
+        /// 1's run of one, in one cluster, with one slot free.
+        /// </summary>
+        private static MementoSegment ThreeSlotsOfFour()
+        {
+            var segment = new MementoSegment(2, 8, 6);
+            foreach (var (quotient, field) in new (uint, ulong)[] { (0, 5), (0, 6), (1, 7) })
+            {
+                segment.InsertField(quotient, field);
+                segment.Count++;
+            }
+
+            Assert.AreEqual(4u, segment.Slots, "premise: four slots.");
+            CollectionAssert.AreEqual(new ulong[] { 5, 6 }, segment.ReadRun(0), "premise: quotient 0's run.");
+            CollectionAssert.AreEqual(new ulong[] { 7 }, segment.ReadRun(1), "premise: quotient 1's run.");
+            return segment;
+        }
+
+        /// <summary>
+        /// Rewriting quotient 0's run of two slots to three fills the table's last free slot,
+        /// and is written: the run, quotient 1's run after it, and the count. The control for
+        /// the refusal below, at the exact fit.
+        /// </summary>
+        [TestMethod]
+        public void TestAMementoRunRewriteThatExactlyFitsIsWritten()
+        {
+            var segment = ThreeSlotsOfFour();
+
+            segment.RewriteRun(0, [10, 11, 12]);
+
+            Assert.AreEqual(4u, segment.Count, "the count.");
+            var bits = MementoSegment.SlotBits(8, 6);
+            var entries = QuotientFamilyInvariants.DecodeTable("rewritten", segment.Slots,
+                i => QuotientFamilyInvariants.Slot(segment.Data, bits, i), sortedRuns: false, nonZeroFields: false);
+            CollectionAssert.AreEqual(
+                new List<(uint, ulong)> { (0, 10), (0, 11), (0, 12), (1, 7) }, entries, "the table.");
+        }
+
+        /// <summary>
+        /// Rewriting quotient 0's run of two slots to four would need five slots of a table of
+        /// four. The rewrite took the cluster apart before putting it back, so the insert that
+        /// found no room threw with the table half rewritten: quotient 0's new run in place,
+        /// quotient 1's entry gone and its slot marked occupied, the count wrong. In the work on
+        /// Memento's box check, when an edited payload could still reach this, the Add after
+        /// such a throw did not return. It is refused before a slot is written, and the table
+        /// and its count are as they were.
+        /// </summary>
+        [TestMethod]
+        public void TestAMementoRunRewriteThatDoesNotFitLeavesTheTableAsItWas()
+        {
+            var segment = ThreeSlotsOfFour();
+            var words = (ulong[])segment.Data.Clone();
+
+            var ex = Assert.ThrowsExactly<InvalidOperationException>(() => segment.RewriteRun(0, [10, 11, 12, 13]));
+
+            CollectionAssert.AreEqual(words, segment.Data, "the table was written before the rewrite was refused.");
+            Assert.AreEqual(3u, segment.Count, "the count was changed before the rewrite was refused.");
+            StringAssert.Contains(ex.Message, "cannot take the run of quotient 0");
+        }
     }
 }
