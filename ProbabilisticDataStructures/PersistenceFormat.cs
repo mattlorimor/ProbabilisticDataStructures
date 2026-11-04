@@ -400,6 +400,30 @@ namespace ProbabilisticDataStructures
         internal static int MaxPayloadLength => Array.MaxLength - EnvelopeLength;
 
         /// <summary>
+        /// The bit of the version field that marks the large form of the envelope. The
+        /// format version is the other fifteen bits.
+        /// </summary>
+        internal const ushort LargeFormFlag = 0x8000;
+
+        /// <summary>The large form's header: the ordinary header with a <c>u64</c> length, and its own checksum.</summary>
+        internal const int LargeHeaderLength = 22;
+
+        /// <summary>The bytes the large form adds around a payload: its header and its checksum.</summary>
+        internal const int LargeEnvelopeLength = LargeHeaderLength + ChecksumLength;
+
+        /// <summary>
+        /// A lower threshold for the large form, on the calling thread, for the suite;
+        /// null otherwise.
+        /// </summary>
+        [ThreadStatic]
+        internal static long? LoweredLargeFormThreshold;
+
+        /// <summary>
+        /// The longest payload written in the ordinary envelope.
+        /// </summary>
+        internal static long LargeFormThreshold => LoweredLargeFormThreshold ?? MaxPayloadLength;
+
+        /// <summary>
         /// Refuses a payload longer than an envelope holds, naming the size it would be and
         /// the size one can be, before anything is allocated for it.
         /// </summary>

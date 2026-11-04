@@ -126,8 +126,10 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// Every structure refuses every version it never defined, for each of: zero,
         /// each version up to the library's highest, the one after it, and the largest
-        /// a header can hold. Only the version is wrong -- the checksum is repaired --
-        /// so a reader that ignores the version reads the payload, and fails here.
+        /// an ordinary header can hold, the version field's high bit being the large
+        /// form's flag rather than part of the version. Only the version is wrong -- the
+        /// checksum is repaired -- so a reader that ignores the version reads the payload,
+        /// and fails here.
         /// </summary>
         /// <remarks>
         /// The message has to name the structure, the version it was handed and the
@@ -154,9 +156,12 @@ namespace TestProbabilisticDataStructures
                 Assert.IsNotNull(read(clean), $"the sample {id} payload does not read");
 
                 var refusedBetween = 0;
+                // The largest is one short of the flag. With the flag set the header is the
+                // large form's, whose own checksum this relabelling does not repair; the
+                // large form's versions are swept by the test below.
                 var tried = Enumerable.Range(0, ceiling + 1)
                     .Select(v => (ushort)v)
-                    .Append(ushort.MaxValue)
+                    .Append((ushort)(PersistenceFormat.LargeFormFlag - 1))
                     .Where(v => !readable.Contains(v));
 
                 foreach (var version in tried)
@@ -189,6 +194,73 @@ namespace TestProbabilisticDataStructures
             }
 
             StructureRoster.AssertCoversEveryStructure("undefined format versions", swept);
+        }
+
+        /// <summary>
+        /// The large form is held to the same rule: its version is the version field
+        /// without the flag, and every structure refuses, in the large form, every version
+        /// it never defined, from zero to the largest the field holds beside the flag. Both
+        /// checksums are repaired, so the version is the only thing wrong.
+        /// </summary>
+        /// <remarks>
+        /// The refusal names the version without the flag, as the reader reads it: a
+        /// reader that compared the whole field, flag and all, with the table would refuse
+        /// every large-form payload as a later version, these and the sound ones alike, and
+        /// the sound ones are read first.
+        /// </remarks>
+        [TestMethod]
+        public void TestTheLargeFormRefusesEveryVersionItsStructureNeverDefined()
+        {
+            var swept = new List<StructureId>();
+            var ceiling = (ushort)(PersistenceFormat.MaxSupportedVersion + 1);
+            var flag = PersistenceFormat.LargeFormFlag;
+
+            foreach (var (id, read, _, clean) in LargeForm.Samples())
+            {
+                var readable = PersistenceFormat.ReadableVersions(id);
+                var explanation = PersistenceFormat.DescribeVersions(readable);
+
+                Assert.IsTrue(LargeForm.IsLarge(clean), $"the {id} sample is not in the large form");
+                CollectionAssert.Contains(readable.ToList(), LargeForm.Layout(clean),
+                    $"the {id} sample in the large form is not at a version {id} defines");
+                Assert.IsNotNull(read(clean), $"the {id} sample in the large form does not read");
+
+                var refusedBetween = 0;
+                var tried = Enumerable.Range(0, ceiling + 1)
+                    .Select(v => (ushort)v)
+                    .Append((ushort)(flag - 1))
+                    .Where(v => !readable.Contains(v));
+
+                foreach (var version in tried)
+                {
+                    var relabelled = (byte[])clean.Clone();
+                    BinaryPrimitives.WriteUInt16LittleEndian(relabelled.AsSpan(4), (ushort)(version | flag));
+
+                    var ex = Assert.ThrowsExactly<InvalidDataException>(
+                        () => read(LargeForm.Reseal(relabelled)),
+                        $"{id} read a large-form payload labelled version {version}, which it never defined");
+
+                    StringAssert.Contains(ex.Message, id.ToString(),
+                        $"the refusal of {id} at large-form version {version} does not name the structure");
+                    StringAssert.Contains(ex.Message, $"version {version},",
+                        $"the refusal of {id} at large-form version {version} does not name the version: {ex.Message}");
+                    StringAssert.Contains(ex.Message, explanation,
+                        $"the refusal of {id} at large-form version {version} does not say which versions it reads");
+
+                    if (version >= 1 && version <= PersistenceFormat.MaxSupportedVersion)
+                    {
+                        refusedBetween++;
+                    }
+                }
+
+                Assert.IsGreaterThan(0, refusedBetween,
+                    $"nothing between 1 and the highest version was refused for {id} in the large form, " +
+                    "so this sweep did not exercise the per-structure rule on it");
+
+                swept.Add(id);
+            }
+
+            StructureRoster.AssertCoversEveryStructure("undefined large-form versions", swept);
         }
 
         /// <summary>
@@ -268,13 +340,17 @@ namespace TestProbabilisticDataStructures
             Assert.IsNotEmpty(names, "no fixtures are embedded, so nothing below is checked");
 
             var stored = new HashSet<(StructureId Id, ushort Version)>();
+            var forms = new HashSet<bool>();
 
             foreach (var name in names)
             {
                 var file = name[FixturePrefix.Length..];
                 var bytes = ReadResource(name);
                 var id = (StructureId)BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(6));
-                var version = VersionOf(bytes);
+
+                // The version without the large form's flag, which is the version the
+                // structure's layout is; the flag says only which envelope holds it.
+                var version = LargeForm.Layout(bytes);
 
                 Assert.IsTrue(Enum.IsDefined(id), $"{file} holds structure id {(ushort)id}, which is not one");
                 CollectionAssert.Contains(PersistenceFormat.ReadableVersions(id).ToList(), version,
@@ -290,7 +366,14 @@ namespace TestProbabilisticDataStructures
 
                 Assert.IsNotNull(readers[id](bytes), $"the stored {file} no longer reads");
                 stored.Add((id, version));
+                forms.Add(LargeForm.IsLarge(bytes));
             }
+
+            // Each form of the envelope is a layout of its own, and needs a stored payload
+            // that reads as much as a version does.
+            Assert.IsTrue(forms.Contains(false), "no stored payload in the ordinary envelope reads");
+            Assert.IsTrue(forms.Contains(true),
+                "no stored payload in the large form reads. Check in one, written small under a lowered threshold.");
 
             foreach (var file in refusedByDesign.Keys)
             {
