@@ -402,6 +402,106 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Every structure's payload in the large form with one byte more than its
+        /// structure reads, its length and checksums repaired, is refused for the byte
+        /// left over, before the checksum, which is not reached.
+        /// </summary>
+        /// <remarks>
+        /// The envelope checks that the payload was read to its end, for every structure,
+        /// after the structure's reader returns and before the checksum: a structure is
+        /// returned only from a payload it read exactly. Most readers check it themselves
+        /// too; one whose reader does not is held to it by the envelope alone, and this
+        /// sweep is what shows the envelope does.
+        /// </remarks>
+        [TestMethod]
+        public void TestAPayloadLongerThanItsStructureReadsIsRefusedInTheLargeForm()
+        {
+            var samples = LargeForm.Samples();
+            var header = PersistenceFormat.LargeHeaderLength;
+
+            foreach (var (id, read, _, clean) in samples)
+            {
+                var longer = new byte[clean.Length + 1];
+                clean.AsSpan(0, clean.Length - 4).CopyTo(longer);
+                BinaryPrimitives.WriteUInt64LittleEndian(longer.AsSpan(10), (ulong)(clean.Length - header - 4 + 1));
+
+                var ex = Assert.ThrowsExactly<InvalidDataException>(() => read(LargeForm.Reseal(longer)),
+                    $"{id} in the large form was read with a byte left over");
+                StringAssert.Contains(ex.Message, "left over", $"{id} was refused for something else: {ex.Message}");
+                StringAssert.Contains(ex.Message, NotReached, $"{id} was refused for a byte left over as if after its checksum");
+            }
+
+            StructureRoster.AssertCoversEveryStructure("large-form leftover", samples.Select(s => s.Id));
+        }
+
+        /// <summary>
+        /// A length in the large header is refused for what it is before anything is priced
+        /// from it, where nothing can read it: past what a stream holds, and past what one
+        /// array holds, which is what a reader holding the payload reads it into. One the
+        /// reader can hold goes on to be priced, and refused for its cost. Both checksums
+        /// are repaired each time, so the length is the only thing wrong.
+        /// </summary>
+        /// <remarks>
+        /// Straddles each limit by one, and none of them allocates: the largest array is
+        /// refused under the default budget before the read makes room for it.
+        /// </remarks>
+        [TestMethod]
+        public void TestALargeFormLengthNothingCanHoldIsRefusedForThat()
+        {
+            var filter = new BloomFilter(200, 0.01);
+            for (var i = 0; i < 40; i++) filter.Add(Key($"w{i}"));
+            var bytes = LargeForm.WriteLarge(filter);
+
+            InvalidDataException Claiming(ulong length)
+            {
+                var claimed = (byte[])bytes.Clone();
+                BinaryPrimitives.WriteUInt64LittleEndian(claimed.AsSpan(10), length);
+                return Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<BloomFilter>(LargeForm.Reseal(claimed)),
+                    $"a large-form payload claiming {length:N0} bytes was read");
+            }
+
+            var stream = Claiming((ulong)long.MaxValue + 1);
+            StringAssert.Contains(stream.Message, "more than a stream can hold");
+            Assert.IsNull(stream.InnerException, $"a length past a stream's was priced: {stream.Message}");
+
+            foreach (var length in new[] { (ulong)long.MaxValue, (ulong)Array.MaxLength + 1 })
+            {
+                var array = Claiming(length);
+                StringAssert.Contains(array.Message, "single array", $"{length:N0} bytes: {array.Message}");
+                Assert.IsNull(array.InnerException, $"a length of {length:N0} bytes, past one array, was priced: {array.Message}");
+            }
+
+            var held = Claiming((ulong)Array.MaxLength);
+            Assert.IsInstanceOfType<ReadBudgetExceededException>(held.InnerException,
+                $"a length one array holds was not priced: {held.Message}");
+        }
+
+        /// <summary>
+        /// A large-form payload written with a hash set through <c>SetHash</c>, read without
+        /// one, is refused for that under any budget, as the ordinary envelope's is: the
+        /// header names the hash, and once its own checksum has vouched for it, that is
+        /// checked before anything is priced.
+        /// </summary>
+        [TestMethod]
+        public void TestALargeFormPayloadWithAHashThatCannotBeResolvedIsRefusedForThatFirst()
+        {
+            var filter = new BloomFilter(200, 0.01);
+            filter.SetHash(data => (ulong)data.Length * 0x9E3779B97F4A7C15UL);
+            for (var i = 0; i < 40; i++) filter.Add(Key($"w{i}"));
+            var bytes = LargeForm.WriteLarge(filter);
+            Assert.IsTrue(LargeForm.IsLarge(bytes));
+
+            foreach (var budget in new[] { 0L, ReadOptions.DefaultMemoryBudget })
+            {
+                var ex = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<BloomFilter>(bytes, new ReadOptions(budget)));
+                StringAssert.Contains(ex.Message, "SetHash", $"under {budget} bytes it was refused for something else: {ex.Message}");
+                Assert.IsNull(ex.InnerException, $"under {budget} bytes the hash was priced before it was checked: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// The flag sits outside every format version a reader reads, and above all of
         /// them, which is what makes a released reader refuse the large form as written by
         /// a later version.
