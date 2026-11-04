@@ -288,7 +288,8 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// Every structure with a body is counted by its own <c>WriteTo</c>, once, before it
         /// writes, at exactly the length of the payload it then writes, in every state its
-        /// test class gives, at the version that state says it writes.
+        /// test class gives, at the version that state says it writes. A null stream is
+        /// refused before anything is counted.
         /// </summary>
         /// <remarks>
         /// The count is watched as <c>WriteTo</c> makes it, through
@@ -314,9 +315,12 @@ namespace TestProbabilisticDataStructures
             {
                 var counts = new List<(IPayloadBody Body, long Length)>();
                 byte[] bytes;
+                ArgumentNullException refused;
                 PersistenceFormat.Counted = (body, length) => counts.Add((body, length));
                 try
                 {
+                    refused = Assert.ThrowsExactly<ArgumentNullException>(() => state.WriteTo(null));
+                    Assert.IsEmpty(counts, $"{state.Name}: counted before the stream was checked");
                     bytes = state.Write();
                 }
                 finally
@@ -326,6 +330,7 @@ namespace TestProbabilisticDataStructures
 
                 var id = (StructureId)BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(6));
                 var name = $"{id}, {state.Name}";
+                Assert.AreEqual("stream", refused.ParamName, $"{name}: a null stream refused by another name");
                 Assert.AreEqual(id.ToString(), state.Structure.GetType().Name,
                     $"{name}: the envelope names another structure");
 
@@ -364,6 +369,60 @@ namespace TestProbabilisticDataStructures
             }
 
             StructureRoster.AssertCoversEveryStructure("payload count", lengths.Keys, NotYetCounted);
+        }
+
+        /// <summary>
+        /// Every write a body can make, given to a counter and to a writer that stores: the
+        /// counter's length is the stored payload's, its own buffer holds nothing, and the
+        /// runs and blocks begun on it are counted there and not asked to be filled. The
+        /// bulk writes are given more than the counter's scratch holds, so one that copied
+        /// into it would throw.
+        /// </summary>
+        [TestMethod]
+        public void TestACounterCountsWhatTheSameWritesStore()
+        {
+            var bytes = new byte[100_000];
+            var counter = PayloadWriter.Counter();
+            var writer = new PayloadWriter();
+            var filled = new List<bool>();
+
+            foreach (var payload in new[] { counter, writer })
+            {
+                payload.WriteByte(1);
+                payload.WriteUInt16(2);
+                payload.WriteUInt32(3);
+                payload.WriteUInt64(4);
+                payload.WriteInt64(-5);
+                payload.WriteDouble(6.5);
+                payload.WriteBytes(bytes);
+                payload.WriteRaw(bytes);
+
+                var run = payload.BeginRun(2 * sizeof(ulong));
+                if (run)
+                {
+                    payload.WriteUInt64(7);
+                    payload.WriteUInt64(8);
+                }
+
+                var block = payload.BeginBlock(sizeof(long));
+                if (block)
+                {
+                    payload.WriteInt64(9);
+                }
+
+                filled.Add(run);
+                filled.Add(block);
+            }
+
+            Assert.IsTrue(counter.IsCounting);
+            Assert.IsFalse(writer.IsCounting);
+            CollectionAssert.AreEqual(new[] { false, false, true, true }, filled,
+                "a counter is to count runs and blocks, and a writer to fill them");
+            Assert.AreEqual(1 + 2 + 4 + 8 + 8 + 8 + (4 + 100_000) + 100_000 + (4 + 16) + 8,
+                writer.WrittenSpan.Length);
+            Assert.AreEqual(writer.WrittenSpan.Length, writer.Length);
+            Assert.AreEqual(writer.Length, counter.Length, "the counter counted another payload");
+            Assert.AreEqual(0, counter.WrittenSpan.Length, "a counter stored something");
         }
 
         /// <summary>
@@ -516,11 +575,12 @@ namespace TestProbabilisticDataStructures
     /// these, found by reflection. Give the states the layout depends on: the shapes, the
     /// contents a length depends on, and each version the writer chooses between.
     /// </remarks>
-    internal sealed record PayloadState(string Name, IPayloadBody Structure, ushort Version, Func<byte[]> Write)
+    internal sealed record PayloadState(
+        string Name, IPayloadBody Structure, ushort Version, Func<byte[]> Write, Action<Stream> WriteTo)
     {
         internal static PayloadState Of<T>(
             string name, T structure, ushort version = PersistenceFormat.DefaultVersion)
             where T : IBinaryPersistable<T>, IPayloadBody =>
-            new(name, structure, version, () => structure.ToByteArray());
+            new(name, structure, version, () => structure.ToByteArray(), stream => structure.WriteTo(stream));
     }
 }
