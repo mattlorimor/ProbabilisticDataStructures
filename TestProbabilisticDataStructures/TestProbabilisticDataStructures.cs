@@ -1,6 +1,7 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 using System.IO.Hashing;
+using System.Linq;
 using System.Security.Cryptography;
 
 namespace TestProbabilisticDataStructures
@@ -48,6 +49,40 @@ namespace TestProbabilisticDataStructures
 
             optimalK = OptimalK(0.0001);
             Assert.AreEqual(14u, optimalK);
+        }
+
+        /// <summary>
+        /// The helpers that split a hash into 32-bit halves are internal (#234). Inside the
+        /// library only <c>SublimeCountMinSketch</c> uses the 32-bit kernel, and callers use
+        /// <see cref="Utils.HashKernel128(System.ReadOnlySpan{byte}, System.Func{System.ReadOnlySpan{byte}, ulong})"/>
+        /// and <see cref="Utils.HashBytesToUInt64(System.ReadOnlySpan{byte}, int)"/>, and
+        /// those are checked to be public too, so that this cannot pass on a reflection
+        /// that finds nothing.
+        /// </summary>
+        [TestMethod]
+        public void TestThe32BitHashHelpersAreNotPublic()
+        {
+            var publicMethods = typeof(Utils)
+                .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+                .Select(m => m.Name)
+                .ToHashSet();
+
+            Assert.Contains(nameof(Utils.HashKernel128), publicMethods);
+            Assert.Contains(nameof(Utils.HashBytesToUInt64), publicMethods);
+            Assert.IsTrue(typeof(HashKernel128ReturnValue).IsPublic);
+
+            foreach (var name in new[]
+            {
+                nameof(Utils.HashKernel),
+                nameof(Utils.HashKernelFromSum),
+                nameof(Utils.HashKernelFromHashBytes),
+                nameof(Utils.HashBytesToUInt32),
+            })
+            {
+                Assert.DoesNotContain(name, publicMethods, $"Utils.{name} is public");
+            }
+
+            Assert.IsFalse(typeof(HashKernelReturnValue).IsPublic, "HashKernelReturnValue is public");
         }
 
         /// <summary>
