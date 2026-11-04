@@ -247,29 +247,22 @@ namespace TestProbabilisticDataStructures
 
             (StructureId.CuckooBloomFilter, NoBody),
 
-            (StructureId.HyperLogLog, NoBody),
 
-            (StructureId.MinHashSignature, NoBody),
 
             (StructureId.BinaryFuseFilter, NoBody),
 
             (StructureId.DDSketch, NoBody),
 
-            (StructureId.HyperLogLogPlus, NoBody),
 
             (StructureId.QuotientFilter, NoBody),
 
-            (StructureId.ThetaSketch, NoBody),
 
-            (StructureId.SimHashSignature, NoBody),
 
             (StructureId.BloomierFilter, NoBody),
 
             (StructureId.HeavyKeeper, NoBody),
 
-            (StructureId.VarOpt, NoBody),
 
-            (StructureId.UltraLogLog, NoBody),
 
             (StructureId.Grafite, NoBody),
 
@@ -279,7 +272,6 @@ namespace TestProbabilisticDataStructures
 
             (StructureId.SublimeCountMinSketch, NoBody),
 
-            (StructureId.TupleSketch, NoBody),
 
             (StructureId.PrivateCountMinSketch, NoBody),
 
