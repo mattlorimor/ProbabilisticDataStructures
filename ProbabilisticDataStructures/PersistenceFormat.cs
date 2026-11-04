@@ -773,11 +773,20 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Writes a <see cref="Buckets"/> into a payload.
         /// </summary>
+        /// <remarks>
+        /// The run is the table's own array, written from the array it holds rather than a
+        /// copy. Its length is the one the count and width give, which is what
+        /// <see cref="ReadBuckets"/> holds the run to, so that a counter counts it from the
+        /// shape and never touches the bytes.
+        /// </remarks>
         internal static void WriteBuckets(PayloadWriter payload, Buckets buckets)
         {
             payload.WriteUInt32(buckets.count);
             payload.WriteByte(buckets.BucketSize);
-            payload.WriteBytes(buckets.RawData);
+            if (payload.BeginRun(Buckets.DataLength(buckets.count, buckets.BucketSize)))
+            {
+                payload.WriteRaw(buckets.RawData);
+            }
         }
 
         /// <summary>

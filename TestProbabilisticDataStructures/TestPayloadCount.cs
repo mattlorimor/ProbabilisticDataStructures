@@ -231,21 +231,13 @@ namespace TestProbabilisticDataStructures
         /// </remarks>
         private static readonly (StructureId Id, string Why)[] NotYetCounted =
         {
-            (StructureId.BloomFilter, NoBody),
 
-            (StructureId.CountingBloomFilter, NoBody),
 
-            (StructureId.DeletableBloomFilter, NoBody),
 
-            (StructureId.PartitionedBloomFilter, NoBody),
 
-            (StructureId.ScalableBloomFilter, NoBody),
 
-            (StructureId.StableBloomFilter, NoBody),
 
-            (StructureId.InverseBloomFilter, NoBody),
 
-            (StructureId.CuckooBloomFilter, NoBody),
 
 
 

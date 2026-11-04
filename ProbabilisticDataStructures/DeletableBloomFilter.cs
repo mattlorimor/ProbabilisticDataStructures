@@ -29,7 +29,7 @@ namespace ProbabilisticDataStructures
     /// and raises its false positive rate, as it does for <see cref="BloomFilter"/>, where
     /// the details are. A filter read back keeps the scheme its payload was placed with.
     /// </remarks>
-    public class DeletableBloomFilter : IFilter, IBinaryPersistable<DeletableBloomFilter>
+    public class DeletableBloomFilter : IFilter, IBinaryPersistable<DeletableBloomFilter>, IPayloadBody
     {
         /// <summary>
         /// Filter data
@@ -359,11 +359,10 @@ namespace ProbabilisticDataStructures
         /// Writes this filter to a stream, in the format documented in FORMAT.md.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.M);
             payload.WriteUInt32(this.k);
             BitPlacement.Write(payload, this.Placement);
@@ -371,11 +370,8 @@ namespace ProbabilisticDataStructures
             PersistenceFormat.WriteBuckets(payload, this.Buckets);
             PersistenceFormat.WriteBuckets(payload, this.Collisions);
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.DeletableBloomFilter,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan,
+            return new(
+                StructureId.DeletableBloomFilter, PersistenceFormat.Identify(this.Hash),
                 PersistenceFormat.PlacementVersion);
         }
 

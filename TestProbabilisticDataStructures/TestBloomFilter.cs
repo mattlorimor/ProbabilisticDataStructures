@@ -7,6 +7,25 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestBloomFilter
     {
+        /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to. The length
+        /// is the shape's, the bits a run held as the table's own array, so two sizes, empty
+        /// and filled, and both placements, which write one byte either way.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of(
+                "10 at 50%, empty", new BloomFilter(10, 0.5), PersistenceFormat.PlacementVersion);
+
+            foreach (var placement in new[] { Placement.Narrow, Placement.Wide })
+            {
+                var filled = new BloomFilter(200, 0.01, null, placement);
+                for (var i = 0; i < 40; i++) filled.Add(Encoding.ASCII.GetBytes($"w{i}"));
+                yield return PayloadState.Of(
+                    $"200 at 1%, {placement}, filled", filled, PersistenceFormat.PlacementVersion);
+            }
+        }
+
         private static byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
         private static byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
         private static byte[] C_BYTES = Encoding.ASCII.GetBytes("c");

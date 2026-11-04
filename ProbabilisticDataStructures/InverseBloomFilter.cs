@@ -66,7 +66,7 @@ namespace ProbabilisticDataStructures
     /// is format version 9, which records the placement; a filter read back keeps the
     /// scheme its payload was placed with.
     /// </summary>
-    public class InverseBloomFilter : IFilter, IBinaryPersistable<InverseBloomFilter>
+    public class InverseBloomFilter : IFilter, IBinaryPersistable<InverseBloomFilter>, IPayloadBody
     {
         private byte[][] Array { get; set; }
         internal Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
@@ -329,11 +329,10 @@ namespace ProbabilisticDataStructures
         /// Writes this filter to a stream, in the format documented in FORMAT.md.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.capacity);
             BitPlacement.Write(payload, this.Placement);
 
@@ -360,11 +359,8 @@ namespace ProbabilisticDataStructures
                 }
             }
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.InverseBloomFilter,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan,
+            return new(
+                StructureId.InverseBloomFilter, PersistenceFormat.Identify(this.Hash),
                 PersistenceFormat.ColumnPlacementVersion);
         }
 

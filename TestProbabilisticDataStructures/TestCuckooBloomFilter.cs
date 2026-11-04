@@ -9,6 +9,26 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestCuckooBloomFilter
     {
+        /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to. Only the
+        /// occupied entries are written, each as wide as the fingerprint needs, so empty and
+        /// filled, at a narrow fingerprint and a wide one.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            foreach (var rate in new[] { 0.1, 0.000001 })
+            {
+                yield return PayloadState.Of(
+                    $"at {rate}, empty", new CuckooBloomFilter(100, rate, null, 7),
+                    PersistenceFormat.CuckooOriginalStateVersion);
+
+                var filled = new CuckooBloomFilter(100, rate, null, 7);
+                for (var i = 0; i < 60; i++) filled.Add(Encoding.ASCII.GetBytes($"w{i}"));
+                yield return PayloadState.Of(
+                    $"at {rate}, filled", filled, PersistenceFormat.CuckooOriginalStateVersion);
+            }
+        }
+
         private static byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
         private static byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
         private static byte[] C_BYTES = Encoding.ASCII.GetBytes("c");

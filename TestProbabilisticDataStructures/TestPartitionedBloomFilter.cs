@@ -7,6 +7,22 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestPartitionedBloomFilter
     {
+        /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: a run per
+        /// partition, so filters of different partition counts and sizes.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of(
+                "10 at 50%, empty", new PartitionedBloomFilter(10, 0.5),
+                PersistenceFormat.PlacementVersion);
+
+            var filled = new PartitionedBloomFilter(200, 0.001);
+            for (var i = 0; i < 40; i++) filled.Add(Encoding.ASCII.GetBytes($"w{i}"));
+            yield return PayloadState.Of(
+                "200 at 0.1%, filled", filled, PersistenceFormat.PlacementVersion);
+        }
+
         private static byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
         private static byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
         private static byte[] C_BYTES = Encoding.ASCII.GetBytes("c");
