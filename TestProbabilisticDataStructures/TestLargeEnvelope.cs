@@ -503,6 +503,46 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A large-form payload refused for its budget is refused before its checksum, and
+        /// says so, while the inner exception stays the
+        /// <see cref="ReadBudgetExceededException"/> a caller tells a budget refusal by:
+        /// under a budget too small for the payload alone, which is priced from the stream
+        /// and never held, and under one a byte short of the whole read, where the payload
+        /// is held and priced and the refusal comes as the price is settled.
+        /// </summary>
+        /// <remarks>
+        /// What is priced comes from fields the checksum has not vouched for, so a refusal
+        /// for its cost may be damage the checksum would have named.
+        /// </remarks>
+        [TestMethod]
+        public void TestALargeFormRefusalForItsBudgetSaysTheChecksumWasNotReached()
+        {
+            var filter = new BloomFilter(20_000, 0.01);
+            for (var i = 0; i < 40; i++) filter.Add(Key($"w{i}"));
+            var bytes = LargeForm.WriteLarge(filter);
+            var payload = bytes.Length - PersistenceFormat.LargeEnvelopeLength;
+
+            var unheld = Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<BloomFilter>(bytes, new ReadOptions(payload / 2)));
+            var why = Assert.IsInstanceOfType<ReadBudgetExceededException>(unheld.InnerException,
+                $"a refusal under half the payload is not a budget refusal: {unheld.Message}");
+            StringAssert.Contains(unheld.Message, NotReached, "a payload priced from the stream did not say its checksum was not reached");
+
+            var held = Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<BloomFilter>(bytes, new ReadOptions(why.RequiredBytes - 1)));
+            Assert.IsInstanceOfType<ReadBudgetExceededException>(held.InnerException,
+                $"a refusal a byte short of the read is not a budget refusal: {held.Message}");
+            StringAssert.Contains(held.Message, NotReached, "a payload held and priced did not say its checksum was not reached");
+            Assert.IsGreaterThanOrEqualTo(PersistenceFormat.EnvelopeCost((ulong)payload), why.RequiredBytes - 1,
+                "a byte short of the read is less than holding the payload costs, so the second path was not taken");
+            Assert.IsLessThan(PersistenceFormat.EnvelopeCost((ulong)payload), (long)(payload / 2),
+                "half the payload is enough to hold it, so the first path was not taken");
+
+            Assert.IsNotNull(Persistence.FromByteArray<BloomFilter>(bytes, new ReadOptions(why.RequiredBytes)),
+                "the large form does not read under the total its refusal named");
+        }
+
+        /// <summary>
         /// The flag sits outside every format version a reader reads, and above all of
         /// them, which is what makes a released reader refuse the large form as written by
         /// a later version.
