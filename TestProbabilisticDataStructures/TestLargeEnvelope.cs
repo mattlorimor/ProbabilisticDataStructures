@@ -1,10 +1,13 @@
 using System;
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Hashing;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -108,6 +111,133 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// How many bytes FORMAT.md gives a run's length in the ordinary envelope and in the
+        /// large form, read from its table of payload primitives alone: the <c>bytes</c> row
+        /// names the primitive each form's length is, and that primitive's row its size.
+        /// </summary>
+        internal static (int Ordinary, int Large) DocumentedRunPrefix()
+        {
+            var spec = TestFormatDocumentation.Specification();
+            var bytes = Regex.Match(spec, @"^\| `bytes` \| (?<text>[^|]+?) \|\r?$", RegexOptions.Multiline);
+            Assert.IsTrue(bytes.Success, "FORMAT.md's table of primitives has no row for `bytes`");
+            var forms = Regex.Match(bytes.Groups["text"].Value,
+                @"`(?<ordinary>u\d+)` in the ordinary envelope and a `(?<large>u\d+)` in \[the large form\]");
+            Assert.IsTrue(forms.Success,
+                $"FORMAT.md's `bytes` row does not say what a run's length is in each form: '{bytes.Groups["text"].Value}'");
+
+            int Size(string primitive)
+            {
+                var row = Regex.Match(spec, $@"^\| `{primitive}` \| (?<n>\d+) bytes?\b", RegexOptions.Multiline);
+                Assert.IsTrue(row.Success, $"FORMAT.md's table of primitives has no size for `{primitive}`");
+                return int.Parse(row.Groups["n"].Value);
+            }
+
+            return (Size(forms.Groups["ordinary"].Value), Size(forms.Groups["large"].Value));
+        }
+
+        /// <summary>
+        /// The large form's envelope around <paramref name="payload"/>, as FORMAT.md lays it
+        /// out, for the structure whose ordinary envelope is <paramref name="ordinary"/>: the
+        /// same magic, structure and hash, the version flagged, a <c>u64</c> length, and each
+        /// checksum taken in one call over the bytes it covers.
+        /// </summary>
+        internal static byte[] Enveloped(byte[] ordinary, byte[] payload)
+        {
+            var bytes = new byte[22 + payload.Length + 4];
+            ordinary.AsSpan(0, 10).CopyTo(bytes);
+            BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(4), (ushort)(BinaryPrimitives.ReadUInt16LittleEndian(ordinary.AsSpan(4)) | 0x8000));
+            BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(10), (ulong)payload.Length);
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(18), Crc32.HashToUInt32(bytes.AsSpan(4, 14)));
+            payload.CopyTo(bytes, 22);
+
+            var covered = new byte[14 + payload.Length];
+            bytes.AsSpan(4, 14).CopyTo(covered);
+            payload.CopyTo(covered, 14);
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(22 + payload.Length), Crc32.HashToUInt32(covered));
+            return bytes;
+        }
+
+        /// <summary>The structure an envelope names.</summary>
+        internal static StructureId StructureOf(byte[] envelope) =>
+            (StructureId)BinaryPrimitives.ReadUInt16LittleEndian(envelope.AsSpan(6));
+
+        /// <summary>A reader for every structure, from the shared sample payloads.</summary>
+        internal static Dictionary<StructureId, Func<byte[], object>> Readers() =>
+            TestPersistenceAllStructures.SamplePayloads()
+                .GroupBy(s => s.Id)
+                .ToDictionary(g => g.Key, g => g.First().Read);
+
+        // The run prefixes of each ordinary envelope probed so far, by its bytes: probing
+        // reads a payload once per offset, and several sweeps ask for the same samples.
+        private static readonly ConcurrentDictionary<string, int[]> Probed = new();
+
+        /// <summary>
+        /// Where in an ordinary envelope the length prefixes of its payload's runs are, as
+        /// <see cref="TestPayloadReader"/> finds them, by probing rather than from a layout.
+        /// </summary>
+        internal static int[] RunPrefixes(byte[] ordinary, Func<byte[], object> read) =>
+            Probed.GetOrAdd(Convert.ToHexString(SHA256.HashData(ordinary)),
+                _ => TestPayloadReader.RunPrefixes(ordinary, read).OrderBy(at => at).ToArray());
+
+        /// <summary>
+        /// The payload the large form carries for the structure whose ordinary envelope is
+        /// <paramref name="ordinary"/>, worked out from that envelope and FORMAT.md alone: the
+        /// ordinary payload with each run's length widened from the ordinary envelope's
+        /// primitive to the large form's, and nothing else changed. With
+        /// <paramref name="nestedLarge"/>, an envelope held in a run is rewritten in the large
+        /// form the same way, its own runs widened, as it is written when its own payload is
+        /// past the threshold too; without, it is kept as the ordinary envelope it is.
+        /// </summary>
+        /// <param name="runs">How many runs this payload holds, nested ones not counted.</param>
+        /// <param name="nested">How many nested envelopes were rewritten, at any depth.</param>
+        internal static byte[] Widened(
+            byte[] ordinary, IReadOnlyDictionary<StructureId, Func<byte[], object>> readers, bool nestedLarge,
+            out int runs, out int nested)
+        {
+            var (narrow, wide) = DocumentedRunPrefix();
+            Assert.AreEqual(4, narrow, "FORMAT.md's ordinary run length is not the u32 the ordinary payloads carry");
+
+            var prefixes = RunPrefixes(ordinary, readers[StructureOf(ordinary)]);
+            var payload = new MemoryStream();
+            var at = 14;
+            nested = 0;
+
+            foreach (var prefix in prefixes)
+            {
+                Assert.IsGreaterThanOrEqualTo(at, prefix, "a run was found inside the run before it");
+                payload.Write(ordinary, at, prefix - at);
+
+                var length = (int)BinaryPrimitives.ReadUInt32LittleEndian(ordinary.AsSpan(prefix));
+                var run = ordinary.AsSpan(prefix + narrow, length).ToArray();
+                if (nestedLarge && IsEnvelope(run))
+                {
+                    run = Enveloped(run, Widened(run, readers, nestedLarge: true, out _, out var deeper));
+                    nested += 1 + deeper;
+                }
+
+                var widened = new byte[wide];
+                BinaryPrimitives.WriteUInt64LittleEndian(widened, (ulong)run.Length);
+                payload.Write(widened);
+                payload.Write(run);
+                at = prefix + narrow + length;
+            }
+
+            payload.Write(ordinary, at, ordinary.Length - 4 - at);
+            runs = prefixes.Length;
+            return payload.ToArray();
+        }
+
+        /// <summary>
+        /// Whether a run holds one whole ordinary envelope: the magic, and a length that
+        /// accounts for the rest of the run.
+        /// </summary>
+        internal static bool IsEnvelope(ReadOnlySpan<byte> run) =>
+            run.Length >= 18
+            && run[..4].SequenceEqual(PersistenceFormat.Magic)
+            && (BinaryPrimitives.ReadUInt16LittleEndian(run[4..]) & PersistenceFormat.LargeFormFlag) == 0
+            && BinaryPrimitives.ReadUInt32LittleEndian(run[10..]) + 18L == run.Length;
+
+        /// <summary>
         /// Every structure's sample payload, read, and written again both ways: in the
         /// ordinary envelope, and with the threshold at <paramref name="threshold"/>.
         /// </summary>
@@ -190,8 +320,8 @@ namespace TestProbabilisticDataStructures
         /// With the threshold at nothing every payload is written in the large form, the
         /// envelopes nested in a scalable filter or a top-k included, so those are read
         /// through the nested envelope's own check as well; the test requires that one
-        /// was. A structure that holds no other carries in the large form exactly the
-        /// payload it carries in the ordinary envelope: only the envelope differs.
+        /// was. What the large form carries, byte for byte, is
+        /// <see cref="TestEveryRunInTheLargeFormCarriesAU64Length"/>'s to check.
         /// </remarks>
         [TestMethod]
         public void TestEveryStructureRoundTripsInTheLargeForm()
@@ -212,12 +342,6 @@ namespace TestProbabilisticDataStructures
                 {
                     nested++;
                 }
-                else
-                {
-                    CollectionAssert.AreEqual(
-                        ordinary[14..^4], large[PersistenceFormat.LargeHeaderLength..^4],
-                        $"{id}'s payload in the large form is not the payload of its ordinary envelope");
-                }
 
                 var restored = read(large);
                 CollectionAssert.AreEqual(ordinary, LargeForm.Write(restored),
@@ -229,6 +353,105 @@ namespace TestProbabilisticDataStructures
             Assert.IsGreaterThan(0, nested,
                 "no sample held an envelope in the large form inside its own, so no nested one was read");
             StructureRoster.AssertCoversEveryStructure("large-form round trip", samples.Select(s => s.Id));
+        }
+
+        /// <summary>
+        /// Every structure's payload in the large form is its ordinary payload with each
+        /// run's length a <c>u64</c>, and nothing else changed: worked out outside the writer,
+        /// from the ordinary envelope and FORMAT.md's table of primitives alone, and compared
+        /// byte for byte. With the threshold at nothing the envelopes nested in a run are in
+        /// the large form too, and are widened the same way inside. The roster is
+        /// <see cref="StructureId"/>, through the shared sample payloads.
+        /// </summary>
+        /// <remarks>
+        /// The Decision on #228: in the large form every length-prefixed run, nested
+        /// envelopes included, has an eight-byte length in place of the four-byte one, so a
+        /// payload in it differs from the ordinary one by four bytes a run. The runs are found
+        /// as <see cref="TestPayloadReader"/> finds them, by probing the ordinary payload, so
+        /// no layout is kept here beside FORMAT.md, and the width is the one its table gives.
+        /// The sweep must have widened runs and rewritten nested envelopes, or it shows
+        /// nothing about either.
+        /// </remarks>
+        [TestMethod]
+        public void TestEveryRunInTheLargeFormCarriesAU64Length()
+        {
+            var readers = LargeForm.Readers();
+            var samples = LargeForm.Samples();
+            var runs = 0;
+            var nested = 0;
+
+            foreach (var (id, _, ordinary, large) in samples)
+            {
+                var payload = LargeForm.Widened(ordinary, readers, nestedLarge: true, out var held, out var rewritten);
+                CollectionAssert.AreEqual(LargeForm.Enveloped(ordinary, payload), large,
+                    $"{id} in the large form, {large.Length:N0} bytes, is not its ordinary payload of " +
+                    $"{ordinary.Length - 18:N0} bytes with the length of each of its {held} runs a u64");
+                runs += held;
+                nested += rewritten;
+            }
+
+            Assert.IsGreaterThan(0, runs, "no sample held a run, so no length was shown widened");
+            Assert.IsGreaterThan(0, nested, "no sample held a nested envelope, so none was shown widened inside");
+            StructureRoster.AssertCoversEveryStructure("u64 runs in the large form", samples.Select(s => s.Id));
+        }
+
+        /// <summary>
+        /// The count declares the large form at its length with <c>u64</c> runs, exactly, and
+        /// chooses the form by its length with <c>u32</c> ones: a payload a byte past the
+        /// threshold by its <c>u32</c> count is declared, and written, at its <c>u64</c> count;
+        /// one whose <c>u32</c> count is within the threshold is written in the ordinary
+        /// envelope, byte for byte as with no threshold, even where its <c>u64</c> count is not.
+        /// </summary>
+        /// <remarks>
+        /// Straddled at the ordinary payload's length <c>n</c>, with <c>r</c> runs: at
+        /// <c>n − 1</c> the large form, declaring <c>n + 4r</c>; at <c>n</c>, <c>n + 4r − 1</c>
+        /// and <c>n + 4r</c> the ordinary envelope. Between the first two of those the
+        /// <c>u32</c> count fits and the <c>u64</c> count does not, so a count that chose the
+        /// form by its <c>u64</c> length fails there, and one that declared its <c>u32</c>
+        /// length fails at <c>n − 1</c>. A nested envelope is shorter than the structure
+        /// holding it, so it stays ordinary at each of these. The second count is never the
+        /// shorter, so the form it was chosen by holds.
+        /// </remarks>
+        [TestMethod]
+        public void TestTheLargeFormDeclaresItsU64CountExactlyEitherSideOfTheThreshold()
+        {
+            var readers = LargeForm.Readers();
+            var swept = new List<StructureId>();
+            var straddled = 0;
+
+            foreach (var (id, read, bytes) in TestPersistenceAllStructures.SamplePayloads())
+            {
+                var structure = read(bytes);
+                var ordinary = LargeForm.Write(structure);
+                long n = ordinary.Length - PersistenceFormat.EnvelopeLength;
+                var widened = LargeForm.Widened(ordinary, readers, nestedLarge: false, out var runs, out _);
+                long wide = n + 4L * runs;
+                Assert.AreEqual(wide, widened.LongLength, $"{id}'s {runs} runs did not widen its payload by four bytes each");
+
+                var past = LargeForm.WriteLarge(structure, n - 1);
+                Assert.IsTrue(LargeForm.IsLarge(past), $"{id} a byte past the threshold by its u32 count was not written in the large form");
+                Assert.AreEqual((ulong)wide, BinaryPrimitives.ReadUInt64LittleEndian(past.AsSpan(10)),
+                    $"{id} a byte past the threshold declared other than its count with u64 runs, {wide:N0}; its count with u32 runs is {n:N0}");
+                Assert.AreEqual(PersistenceFormat.LargeEnvelopeLength + wide, past.LongLength,
+                    $"{id} in the large form is not the length its header declares");
+
+                foreach (var threshold in new[] { n, wide - 1, wide }.Where(t => t >= n).Distinct())
+                {
+                    CollectionAssert.AreEqual(ordinary, LargeForm.WriteLarge(structure, threshold),
+                        $"{id} under a threshold of {threshold:N0}, its count with u32 runs {n:N0} within it and with u64 runs " +
+                        $"{wide:N0}, was not written in the ordinary envelope");
+                }
+
+                if (runs > 0)
+                {
+                    straddled++;
+                }
+
+                swept.Add(id);
+            }
+
+            Assert.IsGreaterThan(0, straddled, "no sample held a run, so its u32 and u64 counts never differed");
+            StructureRoster.AssertCoversEveryStructure("the large form's count", swept);
         }
 
         /// <summary>

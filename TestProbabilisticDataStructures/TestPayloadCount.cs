@@ -12,8 +12,8 @@ namespace TestProbabilisticDataStructures
     /// <summary>
     /// A structure too large to write as one array is refused by its <c>ToByteArray</c>
     /// before anything is built for the payload, naming the size the payload would have
-    /// been (#216, #229); one with a run longer than any payload holds is refused for that
-    /// run by its <c>WriteTo</c> as well.
+    /// been (#216, #229); its <c>WriteTo</c> sets about writing it in the large form, a run
+    /// past one array included, since there a run's length is a <c>u64</c> (#228).
     /// </summary>
     /// <remarks>
     /// The structures here cannot be built at the sizes that matter, so a small one is made
@@ -58,11 +58,10 @@ namespace TestProbabilisticDataStructures
         /// it failed with an <c>OverflowException</c>. Five rows of 100,000,000 is what
         /// ε = 0.0001 and δ = 1% build. At 2^32 cells the product of the two 32-bit
         /// dimensions is nought in 32 bits, so a count that multiplied them there would
-        /// call the table empty. None of these is a byte array's; the first two are written to
-        /// a stream in the large form (#225), and from 268,435,449 cells the cells are a run
-        /// longer than one array, the longest a payload holds since a reader reads a run into
-        /// one, so the last three are refused for that, by <c>WriteTo</c> as well. The second
-        /// and third straddle that bound.
+        /// call the table empty. None of these is a byte array's, and all are written to a
+        /// stream in the large form (#225), where the cells' run has a <c>u64</c> length, four
+        /// bytes more than the payload named, from 268,435,449 cells a run longer than one
+        /// array, which no longer refuses it (#228). The second and third straddle that bound.
         /// </summary>
         [TestMethod]
         [DataRow(1u, 268_435_446u, 2_147_483_580L)]
@@ -78,15 +77,7 @@ namespace TestProbabilisticDataStructures
             var sketch = new CountSketch(0.5, 0.5);
             for (var i = 0; i < 40; i++) sketch.Add(Key(i), i % 5 - 2);
 
-            var run = 8L * depth * width;
-            if (run > PayloadWriter.LongestRun)
-            {
-                AssertRunRefusedWhileClaiming(sketch, run, (sketch, "width", width), (sketch, "depth", depth));
-            }
-            else
-            {
-                AssertRefusedWhileClaiming(sketch, payload, (sketch, "width", width), (sketch, "depth", depth));
-            }
+            AssertStreamedWhileClaiming(sketch, payload, payload + 4, (sketch, "width", width), (sketch, "depth", depth));
         }
 
         /// <summary>
@@ -119,9 +110,11 @@ namespace TestProbabilisticDataStructures
         /// ceiling by its sketch alone holds that sketch, 2,147,483,577 bytes, four past the
         /// ceiling, in the large form's envelope, eight bytes longer than the ordinary one,
         /// as its own write would frame it, and that envelope is a run of 2,147,483,603 bytes,
-        /// longer than one array: no reader could read it, so it is refused for the run, by
-        /// <c>WriteTo</c> too. The two rows straddle that choice; a sketch nested in the large
-        /// form is written once runs are widened (#228).
+        /// longer than one array. The two rows straddle that choice. Both top-k payloads are
+        /// past the ceiling, so <c>WriteTo</c> writes them in the large form, where the
+        /// sketch's run and every element's have a <c>u64</c> length (#228); the claimed
+        /// sketch's body would read cells it does not hold, so that write is
+        /// <see cref="TestLargeEnvelopeWriting.TestTheWindowWhereANestedEnvelopeOutgrewItsMemoryStreamIsWritten"/>'s.
         /// </summary>
         [TestMethod]
         [DataRow(268_435_442u, 2_147_483_630L)]
@@ -143,15 +136,7 @@ namespace TestProbabilisticDataStructures
             foreach (var element in elements) topK.Add(System.Text.Encoding.ASCII.GetBytes(element));
             var sketch = (CountMinSketch)typeof(TopK).GetProperty("Cms", Fields)!.GetValue(topK)!;
 
-            var nested = envelope + sketchPayload;
-            if (nested > PayloadWriter.LongestRun)
-            {
-                AssertRunRefusedWhileClaiming(topK, nested, (sketch, "Width", width), (sketch, "Depth", 1u));
-            }
-            else
-            {
-                AssertRefusedWhileClaiming(topK, payload, (sketch, "Width", width), (sketch, "Depth", 1u));
-            }
+            AssertStreamedWhileClaiming(topK, payload, null, (sketch, "Width", width), (sketch, "Depth", 1u));
         }
 
         /// <summary>
@@ -204,9 +189,10 @@ namespace TestProbabilisticDataStructures
         /// eight bytes a cell is 2^32 bytes, nought in 32 bits: a cell count times
         /// <c>sizeof(long)</c> is worked out in 32 bits unless one side is widened first,
         /// because the constant converts to the cell count's <c>uint</c>. The first row's
-        /// runs are each within the longest a payload holds, one array, so only a byte array
-        /// refuses it; in the others the counts, the first run, are longer than one array, and
-        /// <c>WriteTo</c> refuses them for that too. The first two straddle that bound.
+        /// runs are each within one array; in the others the counts, the first run, are longer
+        /// than one array. The first two straddle that bound, which no longer refuses a write:
+        /// <c>WriteTo</c> writes each in the large form, its three runs with <c>u64</c> lengths
+        /// (#228), and only a byte array refuses them.
         /// </summary>
         [TestMethod]
         [DataRow(1, 268_435_448u, 4_563_402_636L)]
@@ -226,15 +212,7 @@ namespace TestProbabilisticDataStructures
                 table.Add(key);
             }
 
-            var counts = 8L * cells;
-            if (counts > PayloadWriter.LongestRun)
-            {
-                AssertRunRefusedWhileClaiming(table, counts, (table, "cells", cells));
-            }
-            else
-            {
-                AssertRefusedWhileClaiming(table, payload, (table, "cells", cells));
-            }
+            AssertStreamedWhileClaiming(table, payload, payload + 12, (table, "cells", cells));
         }
 
         /// <summary>
@@ -571,10 +549,8 @@ namespace TestProbabilisticDataStructures
         /// <remarks>
         /// <c>ToByteArray</c>, because a payload past one array is written by <c>WriteTo</c>
         /// in the large form, streamed (#225), and a byte array is the one thing that cannot
-        /// hold it (#229). <c>WriteTo</c> of a claimed shape is not tried: it would set about
-        /// writing a payload of the size claimed. A shape with one run past the longest a
-        /// payload holds is refused for that instead, by both, and is
-        /// <see cref="AssertRunRefusedWhileClaiming"/>'s.
+        /// hold it (#229). <c>WriteTo</c> of a claimed shape sets about writing a payload of
+        /// the size claimed, and is <see cref="AssertStreamedWhileClaiming"/>'s.
         /// </remarks>
         internal static void AssertRefusedWhileClaiming<T>(
             T structure, long payload, params (object Owner, string Member, object Claimed)[] shape)
@@ -601,42 +577,53 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Has the structure claim a shape with a run longer than the longest a payload
-        /// holds, asserts both its <c>WriteTo</c> and its <c>ToByteArray</c> refuse it for
-        /// that run, before anything is written or built, and puts the shape back.
+        /// Has the structure claim a shape whose payload is past what one array holds, with a
+        /// run past one array or not, asserts its <c>ToByteArray</c> refuses it for its size,
+        /// and, given the count with <c>u64</c> runs, that its <c>WriteTo</c> sets about
+        /// writing it in the large form, declaring that count (#228); then puts the shape back.
         /// </summary>
         /// <param name="structure">The structure written.</param>
-        /// <param name="run">The run's length, which the refusal must name.</param>
+        /// <param name="payload">The size the byte array's refusal must name: its count with <c>u32</c> runs.</param>
+        /// <param name="counted">
+        /// What the large form's header must declare, its count with <c>u64</c> runs; or null
+        /// for a structure whose body would read past what it holds, which is asked of
+        /// <c>ToByteArray</c> alone.
+        /// </param>
         /// <param name="shape">As <see cref="AssertRefusedWhileClaiming"/> takes it.</param>
-        internal static void AssertRunRefusedWhileClaiming<T>(
-            T structure, long run, params (object Owner, string Member, object Claimed)[] shape)
+        /// <remarks>
+        /// <c>WriteTo</c> writes the header the count gives, and then the body, which writes
+        /// what the structure holds rather than what it claims, so the write ends short of its
+        /// count and is refused for that once the body returns, with nothing in the stream but
+        /// the header: the streaming buffer holds the rest. So it allocates the buffer, and no
+        /// more than a refusal besides. A run past one array is no reason to refuse: in the
+        /// large form its length is a <c>u64</c>.
+        /// </remarks>
+        internal static void AssertStreamedWhileClaiming<T>(
+            T structure, long payload, long? counted, params (object Owner, string Member, object Claimed)[] shape)
             where T : IBinaryPersistable<T>
         {
-            Assert.IsGreaterThan(PayloadWriter.LongestRun, run, "the row's run is not past the longest");
+            AssertRefusedWhileClaiming(structure, payload, shape);
+            if (counted is not long declared)
+            {
+                return;
+            }
 
             WhileClaiming(structure, shape, () =>
             {
                 using var stream = new MemoryStream();
-                foreach (var (how, write) in new (string, Action)[]
-                {
-                    ("WriteTo", () => structure.WriteTo(stream)),
-                    ("ToByteArray", () => structure.ToByteArray()),
-                })
-                {
-                    var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-                    var ex = Assert.ThrowsExactly<InvalidOperationException>(write,
-                        $"{how} of a {typeof(T).Name} holding a run of {run:N0} bytes was not refused");
-                    var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+                var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+                var ex = Assert.ThrowsExactly<InvalidOperationException>(() => structure.WriteTo(stream),
+                    $"a {typeof(T).Name} claiming a payload of {payload:N0} bytes was written whole");
+                var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
 
-                    StringAssert.Contains(ex.Message, $"a run of {run:N0} bytes",
-                        $"{how}'s refusal should name the run: {ex.Message}");
-                    StringAssert.Contains(ex.Message, PayloadWriter.LongestRun.ToString("N0"),
-                        $"{how}'s refusal should name the longest run: {ex.Message}");
-                    Assert.AreEqual(0L, stream.Length, $"{how} wrote to the stream before refusing");
-                    Assert.IsLessThan(RefusalAllocates, allocated,
-                        $"{how}'s refusal allocated {allocated:N0} bytes: the payload was built, or " +
-                        "begun, before its run was checked");
-                }
+                StringAssert.Contains(ex.Message, $"counted a payload of {declared:N0} bytes",
+                    $"WriteTo did not set about writing the large form at the count with u64 runs: {ex.Message}");
+                var left = stream.ToArray();
+                Assert.HasCount(PersistenceFormat.LargeHeaderLength, left, "more than the large form's header reached the stream");
+                Assert.AreEqual((ulong)declared, BinaryPrimitives.ReadUInt64LittleEndian(left.AsSpan(10)),
+                    "the large form's header does not declare the count with u64 runs");
+                Assert.IsLessThan(PayloadWriter.StreamBufferLength + RefusalAllocates, allocated,
+                    $"WriteTo allocated {allocated:N0} bytes: more than its buffer was built for the claimed payload");
             });
         }
 

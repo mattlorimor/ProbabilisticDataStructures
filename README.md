@@ -182,9 +182,9 @@ largest that can be saved as one array, with `ToByteArray`, and in the envelope 
 release that reads its format version reads. That array holds the payload and a frame
 around it, so a payload is at most 2,147,483,573 bytes, whatever the structure was built
 at. Past 2 GiB the `Stream` overloads are the way: `WriteTo` writes a structure built
-larger in the large form of the envelope, unless one run in its payload, such as a table
-written whole, would pass `Array.MaxLength` bytes, which nothing writes yet. `as built`
-means the largest build is under that. Reading a payload in the ordinary envelope takes at
+larger in the large form of the envelope, where a run in its payload, such as a table
+written whole, can pass `Array.MaxLength` bytes. `as built` means the largest build is
+under that. Reading a payload in the ordinary envelope takes at
 least twice its size in budget, so the default reads payloads of up to about half a
 gigabyte. One in the large form is read from its stream, which has to be one that can
 seek, without being held.

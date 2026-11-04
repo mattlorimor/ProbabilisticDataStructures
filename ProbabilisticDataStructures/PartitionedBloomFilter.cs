@@ -407,7 +407,7 @@ namespace ProbabilisticDataStructures
         /// Reads the payload of the envelope <c>Read</c> opened, once the envelope has
         /// been checked. See <see cref="PayloadParse{T}"/>.
         /// </summary>
-        private static PartitionedBloomFilter ReadPayload(
+        internal static PartitionedBloomFilter ReadPayload(
             ref PayloadReader reader, ushort version, HashId hashId,
             Func<ReadOnlySpan<byte>, ulong>? hash)
         {

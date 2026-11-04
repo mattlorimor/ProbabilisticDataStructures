@@ -63,7 +63,9 @@ namespace TestProbabilisticDataStructures
         /// <remarks>
         /// The threshold is a byte under each payload, so the structure is written in the
         /// large form and anything nested in it, being shorter, in the ordinary one, and the
-        /// payload is then exactly the ordinary envelope's. With the threshold at nothing the
+        /// payload is then the ordinary envelope's with the length of each of its runs a
+        /// <c>u64</c> (#228), as <see cref="LargeForm.Widened"/> works it out from FORMAT.md.
+        /// With the threshold at nothing the
         /// nested envelopes are streamed too: every buffer must give the same bytes there,
         /// and they must read back. A buffer of eight bytes cuts a sample into hundreds of
         /// pieces, so a piece left out of the running checksum, or written out of turn, is
@@ -74,6 +76,7 @@ namespace TestProbabilisticDataStructures
         public void TestEveryStructureStreamedInPiecesIsTheLargeFormOfItsOrdinaryPayload()
         {
             var swept = new List<StructureId>();
+            var readers = LargeForm.Readers();
             var pieced = 0;
             var direct = 0;
 
@@ -82,7 +85,7 @@ namespace TestProbabilisticDataStructures
                 var structure = read(bytes);
                 var ordinary = LargeForm.Write(structure);
                 var payload = ordinary[14..^4];
-                var expected = LargeFormOf(ordinary, payload);
+                var expected = LargeForm.Enveloped(ordinary, LargeForm.Widened(ordinary, readers, nestedLarge: false, out _, out _));
                 byte[] atNothing = null;
 
                 foreach (var size in Buffers)
@@ -239,23 +242,26 @@ namespace TestProbabilisticDataStructures
         /// Past what one array holds, at the threshold that ships, <c>WriteTo</c> writes the
         /// large form rather than refusing: its header goes out declaring the whole length as a
         /// <c>u64</c>, before the body runs. A count sketch is made to claim a table of
-        /// 268,435,446 cells, a payload of 2,147,483,580 bytes, seven past the ordinary
-        /// envelope's ceiling, with every run in it short of the longest; its body writes the
-        /// cells it really holds, so the write ends short of the count and is refused for that,
-        /// with the header in the stream. No payload that long is built.
+        /// 268,435,446 cells, a payload of 2,147,483,580 bytes in the ordinary envelope, seven
+        /// past its ceiling, and four more in the large form, where the cells' run has a
+        /// <c>u64</c> length (#228); its body writes the cells it really holds, so the write
+        /// ends short of the count and is refused for that, with the header in the stream. No
+        /// payload that long is built.
         /// </summary>
         [TestMethod]
         public void TestAWriteToPastOneArrayIsStreamedInTheLargeFormAtTheRealThreshold()
         {
             const uint width = 268_435_446;
-            const long claimed = 12 + 8L * width;
-            Assert.IsGreaterThan((long)PersistenceFormat.MaxPayloadLength, claimed);
-            Assert.IsLessThanOrEqualTo(PayloadWriter.LongestRun, 8L * width, "the claimed run is past the longest");
+            const long ordinaryLength = 12 + 8L * width;
+            const long claimed = ordinaryLength + 4;
+            Assert.IsGreaterThan((long)PersistenceFormat.MaxPayloadLength, ordinaryLength);
 
             var sketch = new CountSketch(0.5, 0.5);
             for (var i = 0; i < 40; i++) sketch.Add(Key($"c{i}"), i % 5 - 2);
             var before = sketch.ToByteArray();
-            var real = before.Length - 18L;
+
+            // What the body writes in the large form: the cells it holds, their run's length a u64.
+            var real = before.Length - 18L + 4;
 
             var fields = typeof(CountSketch);
             var widthField = fields.GetField("width", BindingFlags.NonPublic | BindingFlags.Instance)!;
@@ -415,17 +421,19 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A run longer than the longest is refused by the count, naming its length and the
-        /// bound, before anything is written or built, in the ordinary envelope and in the
-        /// large form, by <c>WriteTo</c> and by <c>ToByteArray</c>; a run of exactly the
-        /// longest is written, and reads back.
+        /// In the ordinary envelope, a run longer than the longest is refused by the count,
+        /// naming its length and the bound, before anything is written or built, by
+        /// <c>WriteTo</c> and by <c>ToByteArray</c>; a run of exactly the longest is written,
+        /// and reads back. In the large form, whose runs carry a <c>u64</c> length (#228), the
+        /// bound does not hold: the run a byte past it is written, by both, and reads back.
         /// </summary>
         /// <remarks>
         /// A Bloom filter's payload holds one run, its bit array. The bound straddles it by a
-        /// byte. In the large form the header goes out before the body runs, so a refusal
-        /// that came as the run was written rather than counted would leave it in the stream.
-        /// The filter is large enough that building its payload before refusing it would
-        /// pass <see cref="RefusalAllocates"/> many times over.
+        /// byte. The bound is the most a reader takes into one array, and the ordinary
+        /// envelope's payload is held in one; the large form is read from its stream, and in
+        /// it a run is bounded by what its reader can price and its structure can hold. The
+        /// filter is large enough that building its payload before refusing it would pass
+        /// <see cref="RefusalAllocates"/> many times over.
         /// </remarks>
         [TestMethod]
         public void TestARunPastTheLongestIsRefusedBeforeAnythingIsWritten()
@@ -444,41 +452,49 @@ namespace TestProbabilisticDataStructures
                 Assert.AreEqual(threshold is not null, LargeForm.IsLarge(written), $"{form} was not the form written");
                 CollectionAssert.AreEqual(ordinary, Persistence.FromByteArray<BloomFilter>(written).ToByteArray(),
                     $"in {form}, a run of exactly the longest does not read back");
+            }
 
-                WithLongestRun(run - 1, () => Under(threshold, () =>
-                {
-                    using var stream = new MemoryStream();
-                    var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-                    var ex = Assert.ThrowsExactly<InvalidOperationException>(() => filter.WriteTo(stream),
-                        $"in {form}, a run a byte past the longest was written");
-                    var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
-                    StringAssert.Contains(ex.Message, run.ToString("N0"), $"in {form}, the refusal did not name the run: {ex.Message}");
-                    StringAssert.Contains(ex.Message, (run - 1).ToString("N0"), $"in {form}, the refusal did not name the bound: {ex.Message}");
-                    Assert.AreEqual(0L, stream.Length, $"in {form}, a run past the longest was refused after writing began");
-                    Assert.IsLessThan(RefusalAllocates, allocated, $"in {form}, the refusal allocated {allocated:N0} bytes");
+            var larges = WithLongestRun(run - 1, () =>
+            {
+                using var stream = new MemoryStream();
+                var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+                var ex = Assert.ThrowsExactly<InvalidOperationException>(() => filter.WriteTo(stream),
+                    "in the ordinary envelope, a run a byte past the longest was written");
+                var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+                StringAssert.Contains(ex.Message, run.ToString("N0"), $"the refusal did not name the run: {ex.Message}");
+                StringAssert.Contains(ex.Message, (run - 1).ToString("N0"), $"the refusal did not name the bound: {ex.Message}");
+                Assert.AreEqual(0L, stream.Length, "a run past the longest was refused after writing began");
+                Assert.IsLessThan(RefusalAllocates, allocated, $"the refusal allocated {allocated:N0} bytes");
 
-                    var array = Assert.ThrowsExactly<InvalidOperationException>(() => filter.ToByteArray(),
-                        $"in {form}, ToByteArray wrote a run a byte past the longest");
-                    StringAssert.Contains(array.Message, run.ToString("N0"));
-                    return 0;
-                }));
+                var array = Assert.ThrowsExactly<InvalidOperationException>(() => filter.ToByteArray(),
+                    "in the ordinary envelope, ToByteArray wrote a run a byte past the longest");
+                StringAssert.Contains(array.Message, run.ToString("N0"));
+
+                return new[] { Under(0, () => Write(filter)), Under(0, () => filter.ToByteArray()) };
+            });
+
+            foreach (var large in larges)
+            {
+                Assert.IsTrue(LargeForm.IsLarge(large), "the filter under a threshold of nothing was not written in the large form");
+                CollectionAssert.AreEqual(ordinary, Persistence.FromByteArray<BloomFilter>(large).ToByteArray(),
+                    "in the large form, a run a byte past the ordinary envelope's longest does not read back");
             }
 
             CollectionAssert.AreEqual(ordinary, filter.ToByteArray(), "the filter writes differently after the refusals");
         }
 
         /// <summary>
-        /// A structure held inside another is a run of its whole envelope, and is held to the
-        /// longest run in the count, before anything is written: a top-k whose count-min
-        /// sketch's envelope is a byte past the bound is refused naming that envelope's
-        /// length, in both forms, with nothing in the stream, while the sketch on its own,
-        /// which holds no run, is written under the same bound.
+        /// A structure held inside another is a run of its whole envelope. In the ordinary
+        /// envelope it is held to the longest run in the count, before anything is written: a
+        /// top-k whose count-min sketch's envelope is a byte past the bound is refused naming
+        /// that envelope's length, with nothing in the stream, while the sketch on its own,
+        /// which holds no run, is written under the same bound. In the large form, whose runs
+        /// carry a <c>u64</c> length (#228), the same top-k is written, and reads back.
         /// </summary>
         /// <remarks>
-        /// The count does not begin the nested run with <see cref="PayloadWriter.BeginRun"/>,
-        /// so this is the check that sees it. The write would refuse it too, as it begins the
-        /// run of the bytes it has built, but only after the large form's header had gone to
-        /// the stream, and after building the nested envelope in memory.
+        /// The count of a nested structure is the count of its own envelope and payload, which
+        /// is then counted as one run, so this is the check that sees it: the nested
+        /// structure's own payload holds no run.
         /// </remarks>
         [TestMethod]
         public void TestANestedStructurePastTheLongestRunIsRefusedInTheCount()
@@ -486,6 +502,7 @@ namespace TestProbabilisticDataStructures
             var topK = new TopK(0.001, 0.01, 3);
             foreach (var element in new[] { "a", "bb", "ccc", "a" }) topK.Add(Key(element));
             var sketch = (CountMinSketch)typeof(TopK).GetProperty("Cms", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(topK)!;
+            var expected = Write(topK);
 
             foreach (var threshold in new long?[] { null, 0 })
             {
@@ -497,6 +514,16 @@ namespace TestProbabilisticDataStructures
 
                 WithLongestRun(nested - 1, () => Under(threshold, () =>
                 {
+                    if (threshold is not null)
+                    {
+                        var large = Write(topK);
+                        Assert.IsTrue(LargeForm.IsLarge(large), "the top-k under a threshold of nothing was not in the large form");
+                        Assert.AreEqual(1, LargeForm.NestedLarge(large), "the top-k's sketch was not in the large form inside it");
+                        CollectionAssert.AreEqual(large, Write(Persistence.FromByteArray<TopK>(large)),
+                            "in the large form, a top-k whose sketch's envelope is a byte past the longest run does not read back");
+                        return 0;
+                    }
+
                     using var stream = new MemoryStream();
                     var ex = Assert.ThrowsExactly<InvalidOperationException>(() => topK.WriteTo(stream),
                         $"in {form}, a top-k whose sketch's envelope is a byte past the longest run was written");
@@ -508,6 +535,161 @@ namespace TestProbabilisticDataStructures
                 }));
             }
         }
+
+        /// <summary>
+        /// A structure nested in one written in the large form is written straight into the
+        /// outer stream, a buffer at a time, with nothing its size held: a top-k whose
+        /// count-min sketch's envelope is about two megabytes allocates its streaming buffer and
+        /// little else, with the sketch's envelope in either form, and no write to the stream
+        /// is longer than the buffer. What it writes reads back.
+        /// </summary>
+        /// <remarks>
+        /// A nested envelope was written to a <see cref="MemoryStream"/> of its own, copied out
+        /// with <c>ToArray</c>, and appended to the outer payload as one run, so the large form
+        /// held it twice over, and wrote it in one piece; past one array, which a run in the
+        /// large form can be (#228), no <see cref="MemoryStream"/> holds it at all
+        /// (<see cref="TestTheWindowWhereANestedEnvelopeOutgrewItsMemoryStreamIsWritten"/>).
+        /// The sketch's envelope is in the large form with the threshold at nothing, and
+        /// ordinary with it a byte under the top-k's payload. Measured as the least of five,
+        /// and the envelope is more than sixteen times the bound.
+        /// </remarks>
+        [TestMethod]
+        public void TestANestedEnvelopeInTheLargeFormIsWrittenStraightIntoTheOuterStream()
+        {
+            var topK = new TopK(0.00005, 0.01, 10);
+            for (var i = 0; i < 1000; i++) topK.Add(Key($"g{i % 50}"));
+            var nested = (long)Cms(topK).ToByteArray().Length;
+            var payload = topK.ToByteArray().Length - (long)PersistenceFormat.EnvelopeLength;
+            var bound = PayloadWriter.StreamBufferLength + LargeWriteOverhead;
+            Assert.IsGreaterThan(16L * bound, nested, "the sketch is too small for the bound to tell");
+            var expected = Write(topK);
+
+            foreach (var (threshold, form) in new[] { (0L, "in the large form"), (payload - 1, "ordinary") })
+            {
+                var allocated = LargeForm.Below(threshold, () => LeastAllocated(() => topK.WriteTo(Stream.Null)));
+                Console.WriteLine($"[NESTED WRITE] sketch {form}: envelope {nested:N0}, top-k's write allocated {allocated:N0}");
+                Assert.IsLessThan(bound, allocated,
+                    $"a top-k whose sketch's envelope, {form}, is {nested:N0} bytes allocated {allocated:N0} writing the large form");
+
+                var recording = new RecordingStream();
+                LargeForm.Below(threshold, () => WriteTo(topK, recording));
+                Assert.IsTrue(LargeForm.IsLarge(recording.ToArray()), $"the top-k with its sketch {form} was not in the large form");
+                var longest = recording.Writes.Max();
+                Assert.IsLessThanOrEqualTo(PayloadWriter.StreamBufferLength, longest,
+                    $"with its sketch {form}, the top-k made a write of {longest:N0} bytes, longer than the buffer: the envelope went out whole");
+                CollectionAssert.AreEqual(expected, Write(Persistence.FromByteArray<TopK>(recording.ToArray())),
+                    $"the top-k with its sketch {form}, streamed, does not read back");
+            }
+        }
+
+        /// <summary>
+        /// The window #225 left, straddled at the threshold that ships: a top-k whose sketch's
+        /// envelope was past one array and within <c>int.MaxValue</c> passed the count's run
+        /// check, then failed in the <see cref="MemoryStream"/> that held the nested envelope,
+        /// after the outer header had gone to the stream. Now the sketch's envelope is written
+        /// into the outer stream: the large header declaring the count with <c>u64</c> runs,
+        /// the top-k's fields, the run's <c>u64</c> length, and the sketch's own header,
+        /// declaring its payload, all reach the stream, whichever side of either edge.
+        /// </summary>
+        /// <remarks>
+        /// No payload that size is built. A count-min sketch is made to claim one row of the
+        /// width given, a payload of 33 bytes and eight a cell; its body writes the cells it
+        /// holds and then reads past them, throwing <see cref="IndexOutOfRangeException"/>,
+        /// by which point everything asserted on has gone to the stream. A buffer of eight
+        /// bytes sends each field on as it is written.
+        /// <list type="bullet">
+        /// <item>268,435,442 cells: a sketch payload of 2,147,483,569 bytes, which the ordinary
+        /// envelope holds, so its envelope is 2,147,483,587 bytes, within one array.</item>
+        /// <item>268,435,443: 2,147,483,577, in the large form, an envelope of 2,147,483,603,
+        /// past one array: the window's lower edge.</item>
+        /// <item>268,435,448: an envelope of 2,147,483,643, within <c>int.MaxValue</c>, and
+        /// 268,435,449: 2,147,483,651, past it: the upper edge, where #225's count refused.</item>
+        /// </list>
+        /// The note on #228 gives the window as sketch payloads of 2,147,483,566 to
+        /// 2,147,483,621 bytes. Below 2,147,483,574 the sketch's envelope is the ordinary one,
+        /// eighteen bytes, which one array holds, so the window opens there.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(268_435_442u)]
+        [DataRow(268_435_443u)]
+        [DataRow(268_435_448u)]
+        [DataRow(268_435_449u)]
+        public void TestTheWindowWhereANestedEnvelopeOutgrewItsMemoryStreamIsWritten(uint width)
+        {
+            var elements = new[] { "a", "bb" };
+            var topK = new TopK(0.5, 0.5, 3);
+            foreach (var element in elements) topK.Add(Key(element));
+
+            var sketchPayload = 33 + 8L * width;
+            var nestedLarge = sketchPayload > PersistenceFormat.MaxPayloadLength;
+            var envelope = nestedLarge ? PersistenceFormat.LargeEnvelopeLength : PersistenceFormat.EnvelopeLength;
+            var run = envelope + sketchPayload;
+
+            // K and N, the run's u64 length and the run, the heap's count, and each element's
+            // u64 length, bytes and frequency.
+            var counted = 8 + 8 + run + 4 + elements.Sum(e => 8 + e.Length + 8);
+            Assert.IsGreaterThan((long)PersistenceFormat.MaxPayloadLength, counted, "the top-k is not past the ordinary envelope");
+
+            var left = WrittenClaimingSketch(topK, width, 1);
+            Assert.IsTrue(LargeForm.IsLarge(left), "the top-k's header is not the large form's");
+            Assert.AreEqual((ulong)counted, BinaryPrimitives.ReadUInt64LittleEndian(left.AsSpan(10)), "the header does not declare the count");
+
+            // The sketch's run begins after K and N, and its envelope after the run's length.
+            var at = PersistenceFormat.LargeHeaderLength + 8;
+            var nestedHeader = nestedLarge ? PersistenceFormat.LargeHeaderLength : 14;
+            Assert.IsGreaterThan(at + 8 + nestedHeader, left.Length,
+                $"the stream holds {left.Length} bytes, and the sketch's header ends at {at + 8 + nestedHeader}");
+            Assert.AreEqual((ulong)run, BinaryPrimitives.ReadUInt64LittleEndian(left.AsSpan(at)), "the run's length is not the sketch's envelope's as a u64");
+
+            var inner = left.AsSpan(at + 8);
+            Assert.IsTrue(inner[..4].SequenceEqual(PersistenceFormat.Magic), "the sketch's envelope does not follow its run's length");
+            Assert.AreEqual(nestedLarge, (BinaryPrimitives.ReadUInt16LittleEndian(inner[4..]) & PersistenceFormat.LargeFormFlag) != 0,
+                "the sketch's envelope is not in the form its payload calls for");
+            Assert.AreEqual((ushort)StructureId.CountMinSketch, BinaryPrimitives.ReadUInt16LittleEndian(inner[6..]));
+            Assert.AreEqual((ulong)sketchPayload,
+                nestedLarge ? BinaryPrimitives.ReadUInt64LittleEndian(inner[10..]) : BinaryPrimitives.ReadUInt32LittleEndian(inner[10..]),
+                "the sketch's header does not declare its payload");
+            if (nestedLarge)
+            {
+                Assert.AreEqual(Crc32.HashToUInt32(inner[4..18]), BinaryPrimitives.ReadUInt32LittleEndian(inner[18..]),
+                    "the sketch's large header does not carry its own checksum");
+            }
+        }
+
+        /// <summary>
+        /// What a top-k's <c>WriteTo</c> sends to the stream, a field at a time, with its
+        /// count-min sketch claiming <paramref name="depth"/> rows of <paramref name="width"/>
+        /// cells, before the sketch's body reads past the cells it holds and throws
+        /// <see cref="IndexOutOfRangeException"/>; the sketch's shape is then put back.
+        /// </summary>
+        internal static byte[] WrittenClaimingSketch(TopK topK, uint width, uint depth)
+        {
+            var sketch = Cms(topK);
+            var shape = typeof(CountMinSketch);
+            var widthMember = shape.GetProperty("Width", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance)!;
+            var depthMember = shape.GetProperty("Depth", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance)!;
+            var heldWidth = widthMember.GetValue(sketch)!;
+            var heldDepth = depthMember.GetValue(sketch)!;
+            widthMember.SetValue(sketch, width);
+            depthMember.SetValue(sketch, depth);
+
+            var recording = new RecordingStream();
+            try
+            {
+                WithBuffer(8, () => Assert.ThrowsExactly<IndexOutOfRangeException>(() => topK.WriteTo(recording),
+                    $"a top-k claiming a sketch of {depth} rows of {width:N0} cells was not refused, or did not reach the cells it does not hold"));
+            }
+            finally
+            {
+                widthMember.SetValue(sketch, heldWidth);
+                depthMember.SetValue(sketch, heldDepth);
+            }
+
+            return recording.ToArray();
+        }
+
+        private static CountMinSketch Cms(TopK topK) =>
+            (CountMinSketch)typeof(TopK).GetProperty("Cms", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(topK)!;
 
         /// <summary>
         /// A payload longer than a stream holds, whose length no envelope could declare, is
@@ -623,27 +805,6 @@ namespace TestProbabilisticDataStructures
                 Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<BloomFilter>(left.Concat(next).ToArray()),
                     $"cut at {cut}, what was left was read with a whole envelope after it");
             }
-        }
-
-        /// <summary>
-        /// The large form of a payload as FORMAT.md lays it out, from its ordinary envelope:
-        /// the same magic, structure and hash, the version flagged, a <c>u64</c> length, and
-        /// each checksum taken in one call over the bytes it covers.
-        /// </summary>
-        private static byte[] LargeFormOf(byte[] ordinary, byte[] payload)
-        {
-            var bytes = new byte[22 + payload.Length + 4];
-            ordinary.AsSpan(0, 10).CopyTo(bytes);
-            BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(4), (ushort)(BinaryPrimitives.ReadUInt16LittleEndian(ordinary.AsSpan(4)) | 0x8000));
-            BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(10), (ulong)payload.Length);
-            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(18), Crc32.HashToUInt32(bytes.AsSpan(4, 14)));
-            payload.CopyTo(bytes, 22);
-
-            var covered = new byte[14 + payload.Length];
-            bytes.AsSpan(4, 14).CopyTo(covered);
-            payload.CopyTo(covered, 14);
-            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(22 + payload.Length), Crc32.HashToUInt32(covered));
-            return bytes;
         }
 
         private static byte[] Write(object structure) => LargeForm.Write(structure);

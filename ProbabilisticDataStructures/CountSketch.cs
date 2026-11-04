@@ -424,9 +424,12 @@ namespace ProbabilisticDataStructures
 
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
-            var bytes = reader.ReadBytes();
-            reader.ExpectEnd();
-            CheckCells(width, depth, bytes.LongLength);
+
+            // The cells are one run, which in the large form can be longer than one array
+            // (#228): read in pieces, straight into the rows, when the payload is not held,
+            // and copied out whole when it is.
+            var stored = reader.BeginWords();
+            CheckCells(width, depth, stored);
 
             var sketch = new CountSketch(0.5, 0.5)
             {
@@ -437,18 +440,28 @@ namespace ProbabilisticDataStructures
 
             budget.Charge(RowsCost(width, depth));
             sketch.table = new long[depth][];
-            var at = 0;
             for (var row = 0; row < depth; row++)
             {
                 sketch.table[row] = new long[width];
-                for (var column = 0; column < width; column++)
+            }
+
+            var filling = 0;
+            var column = 0;
+            while (filling < depth)
+            {
+                var piece = reader.ReadWords();
+                for (var at = 0; at < piece.Length; at += sizeof(long))
                 {
-                    sketch.table[row][column] = BinaryPrimitives.ReadInt64LittleEndian(
-                        bytes.AsSpan(at));
-                    at += sizeof(long);
+                    sketch.table[filling][column] = BinaryPrimitives.ReadInt64LittleEndian(piece[at..]);
+                    if (++column == width)
+                    {
+                        column = 0;
+                        filling++;
+                    }
                 }
             }
 
+            reader.ExpectEnd();
             return sketch;
         }
 
@@ -460,7 +473,7 @@ namespace ProbabilisticDataStructures
         {
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
-            var stored = reader.SkipBytes();
+            var stored = reader.SkipWords();
             reader.ExpectEnd();
             CheckCells(width, depth, stored);
             reader.Budget.Price(RowsCost(width, depth));

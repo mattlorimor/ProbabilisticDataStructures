@@ -1,5 +1,6 @@
 using System;
 using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Hashing;
 
@@ -27,8 +28,11 @@ namespace ProbabilisticDataStructures
     /// <see cref="StreamBufferLength"/> bytes and no more. It empties the buffer into a
     /// stream whenever the next write would not fit, and appends each piece to a running
     /// checksum as it goes, so that a payload in the large form of the envelope, which can
-    /// be longer than any array, is written without being held (#225). A run longer than
-    /// the buffer goes to the stream as it is, after what the buffer holds. The writer is
+    /// be longer than any array, is written without being held (#225). Its runs' lengths
+    /// are the large form's <c>u64</c>s (#228), and a nested envelope is written into it as
+    /// it is produced, with that envelope's own checksum carried over its payload beside
+    /// the outer one. A run longer than the buffer goes to the stream as it is, after what
+    /// the buffer holds. The writer is
     /// given the length the count declared in the header already written, and refuses a
     /// write that would take the payload past it, at that write, which is not made.
     /// </para>
@@ -58,28 +62,43 @@ namespace ProbabilisticDataStructures
         internal static long? LoweredLongestRun;
 
         /// <summary>
-        /// The longest run a payload can hold: <see cref="PayloadReader.LongestRun"/>, the
-        /// largest array, which is the most a reader of a run takes, unless the suite has
-        /// lowered it on this thread.
+        /// The longest run a payload in the ordinary envelope can hold:
+        /// <see cref="PayloadReader.LongestRun"/>, the largest array, which is the most a
+        /// reader of a held payload takes a run into, unless the suite has lowered it on this
+        /// thread.
         /// </summary>
         /// <remarks>
-        /// A run's length prefix is a <c>u32</c>, so a run past this, which the ceiling on
-        /// the ordinary envelope kept out of every payload until the large form, would be
-        /// written with a length its reader refuses, and one of 2^32 bytes or more with a
-        /// length that had wrapped. No check downstream would see the second: the count and
-        /// the write agree on the bytes, and the checksum covers the wrong length as
-        /// faithfully as the right one. So a run past it is refused where it is counted,
-        /// before anything is written. Widening runs is #228.
+        /// A run's length prefix there is a <c>u32</c>, and a run past this would be written
+        /// with a length its reader refuses, or, from 2^32 bytes, a length that had wrapped,
+        /// which no check downstream would see: the count and the write agree on the bytes,
+        /// and the checksum covers the wrong length as faithfully as the right one. So a run
+        /// past it is refused by the count of an ordinary payload, before anything is written.
+        /// An ordinary payload is shorter than this anyway unless the suite has lowered it. In
+        /// the large form a run's length is a <c>u64</c> (#228), and this does not bound it:
+        /// there a run is bounded by what its reader can price and its structure can hold.
         /// </remarks>
         internal static long LongestRun => LoweredLongestRun ?? PayloadReader.LongestRun;
 
         private byte[] buffer;
         private int length;
 
-        // A counter's: what the writes so far would have written. Its buffer is the
-        // scratch a field is written into to be counted, and nothing reads it.
+        // Whether a run's length is written as a u64, as it is in the large form, or as the
+        // ordinary envelope's u32: the form of the envelope being written, which a nested
+        // one sets for its own payload and puts back.
+        private bool wide;
+
+        // A counter's: what the writes so far would have written, and the longest run among
+        // them. Its buffer is the scratch a field is written into to be counted, and nothing
+        // reads it.
         private readonly bool counting;
         private long counted;
+        private long longest;
+
+        // The checksums of the nested envelopes being written, innermost last, and how much
+        // of the buffer has been appended to them: a nested envelope's checksum covers the
+        // bytes of its own payload, wherever in the outer one they fall.
+        private List<Crc32>? nested;
+        private int nestedFrom;
 
         // A streaming writer's: the stream its buffer is emptied into, the running checksum
         // each piece is appended to on the way, the header and length the count gave, the
@@ -105,10 +124,11 @@ namespace ProbabilisticDataStructures
             this.buffer = new byte[capacity];
         }
 
-        private PayloadWriter(bool counting)
+        private PayloadWriter(bool counting, bool wide)
         {
             this.buffer = new byte[sizeof(ulong)];
             this.counting = counting;
+            this.wide = wide;
         }
 
         private PayloadWriter(Stream sink, Crc32 crc, EnvelopeHeader header, long declared)
@@ -118,16 +138,20 @@ namespace ProbabilisticDataStructures
             this.crc = crc;
             this.header = header;
             this.declared = declared;
+            this.wide = true;
         }
 
         /// <summary>
-        /// A writer that stores nothing and counts what it is given.
+        /// A writer that stores nothing and counts what it is given, with a run's length the
+        /// <c>u64</c> of the large form when <paramref name="wide"/> and the ordinary
+        /// envelope's <c>u32</c> otherwise.
         /// </summary>
-        internal static PayloadWriter Counter() => new(counting: true);
+        internal static PayloadWriter Counter(bool wide = false) => new(counting: true, wide);
 
         /// <summary>
         /// A writer that writes what it is given to <paramref name="sink"/>, a buffer at a
-        /// time, appending every byte to <paramref name="crc"/> as it goes.
+        /// time, appending every byte to <paramref name="crc"/> as it goes. It writes the
+        /// large form, so a run's length is a <c>u64</c>.
         /// </summary>
         /// <param name="sink">The stream the payload is written to, after its header.</param>
         /// <param name="crc">The running checksum the header began.</param>
@@ -142,10 +166,33 @@ namespace ProbabilisticDataStructures
         internal bool IsCounting => this.counting;
 
         /// <summary>
+        /// Whether a run's length is written as the large form's <c>u64</c>, rather than as
+        /// the ordinary envelope's <c>u32</c>: set for the payload of a nested envelope by the
+        /// form that envelope is in, and put back after it.
+        /// </summary>
+        internal bool IsWide
+        {
+            get => this.wide;
+            set => this.wide = value;
+        }
+
+        /// <summary>The longest run a counter has counted.</summary>
+        internal long LongestCounted => this.longest;
+
+        /// <summary>
         /// How long the payload is: the bytes written, or, for a counter, the bytes the
         /// same writes would have written.
         /// </summary>
         internal long Length => this.counting ? this.counted : this.flushed + this.length;
+
+        /// <summary>
+        /// Puts a counter's count back to <paramref name="length"/>, what it was before a
+        /// nested body was counted into it to measure that body.
+        /// </summary>
+        internal void Rewind(long length)
+        {
+            this.counted = length;
+        }
 
         /// <summary>
         /// How many bytes of the payload a streaming writer has written to its stream.
@@ -218,19 +265,32 @@ namespace ProbabilisticDataStructures
         /// the run is. True otherwise, and the caller then writes exactly
         /// <paramref name="length"/> bytes.
         /// </returns>
-        /// <exception cref="InvalidOperationException">
-        /// The run is longer than <see cref="LongestRun"/>. A counter refuses it, so a write
-        /// counted first refuses it before anything is written.
-        /// </exception>
         /// <remarks>
         /// The length is taken in 64 bits so that a counter can count a run longer than
         /// a payload holds, which is how such a payload comes to be refused naming its
-        /// whole size.
+        /// whole size. The prefix is a <c>u64</c> in the large form and a <c>u32</c> in the
+        /// ordinary envelope (#228). A counter keeps the longest run it counts, which the
+        /// count of an ordinary payload holds to <see cref="LongestRun"/>, before anything is
+        /// written; a payload that would need a longer run is past the ordinary envelope, and
+        /// in the large form, unless the bound has been lowered. So a <c>u32</c> prefix is
+        /// only ever written for a run that fits one.
         /// </remarks>
         internal bool BeginRun(long length)
         {
-            CheckRun(length);
-            WriteUInt32((uint)length);
+            if (this.counting)
+            {
+                this.longest = Math.Max(this.longest, length);
+            }
+
+            if (this.wide)
+            {
+                WriteUInt64((ulong)length);
+            }
+            else
+            {
+                WriteUInt32((uint)length);
+            }
+
             return BeginBlock(length);
         }
 
@@ -250,8 +310,8 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Refuses a run longer than a payload can hold, naming its length, before its
-        /// length prefix is written.
+        /// Refuses a run longer than a payload in the ordinary envelope can hold, naming its
+        /// length, before anything is written.
         /// </summary>
         /// <param name="length">The run's length, in bytes, without its prefix.</param>
         /// <exception cref="InvalidOperationException">
@@ -263,11 +323,50 @@ namespace ProbabilisticDataStructures
             {
                 throw new InvalidOperationException(
                     $"The payload would hold a run of {length:N0} bytes, and no single run in a " +
-                    $"payload can be longer than {LongestRun:N0} bytes yet, the most a reader " +
-                    "takes into one array. The structure is intact and can still be used, but it " +
-                    "is too large to write, to a stream or as a byte array. Keep less in it, or " +
-                    "split what it holds across several.");
+                    $"payload in the ordinary envelope can be longer than {LongestRun:N0} bytes, " +
+                    "the most a reader takes into one array. The structure is intact and can " +
+                    "still be used, but it is too large to write in that envelope. Keep less in " +
+                    "it, or split what it holds across several.");
             }
+        }
+
+        /// <summary>
+        /// Begins carrying <paramref name="checksum"/> over every byte written from here,
+        /// until <see cref="EndChecksum"/>: the checksum of a nested envelope, over its
+        /// payload, which is written into this one (#228).
+        /// </summary>
+        internal void BeginChecksum(Crc32 checksum)
+        {
+            this.SettleChecksums();
+            (this.nested ??= new List<Crc32>()).Add(checksum);
+        }
+
+        /// <summary>
+        /// Stops carrying the innermost checksum <see cref="BeginChecksum"/> began, once every
+        /// byte written since has been appended to it.
+        /// </summary>
+        internal void EndChecksum()
+        {
+            this.SettleChecksums();
+            this.nested!.RemoveAt(this.nested.Count - 1);
+        }
+
+        /// <summary>
+        /// Appends what has been written to the buffer since the last time to every nested
+        /// checksum being carried: before the buffer is emptied, and when one begins or ends.
+        /// </summary>
+        private void SettleChecksums()
+        {
+            if (this.nested is { Count: > 0 })
+            {
+                var written = this.buffer.AsSpan(this.nestedFrom, this.length - this.nestedFrom);
+                foreach (var checksum in this.nested)
+                {
+                    checksum.Append(written);
+                }
+            }
+
+            this.nestedFrom = this.length;
         }
 
         /// <summary>
@@ -278,8 +377,10 @@ namespace ProbabilisticDataStructures
         {
             if (this.length > 0)
             {
+                this.SettleChecksums();
                 Emit(this.buffer.AsSpan(0, this.length));
                 this.length = 0;
+                this.nestedFrom = 0;
             }
         }
 
@@ -390,6 +491,15 @@ namespace ProbabilisticDataStructures
                 Flush();
                 if (value.Length > this.buffer.Length)
                 {
+                    // Past the buffer, so the nested checksums take it here rather than from it.
+                    if (this.nested is not null)
+                    {
+                        foreach (var checksum in this.nested)
+                        {
+                            checksum.Append(value);
+                        }
+                    }
+
                     Emit(value);
                     return;
                 }
@@ -458,13 +568,32 @@ namespace ProbabilisticDataStructures
         private readonly long start;
         private readonly long end;
 
-        internal PayloadReader(ReadOnlySpan<byte> payload, ReadBudget budget)
+        // Whether a run's length is the large form's u64 rather than the ordinary envelope's
+        // u32 (#228), and whether the read this reader belongs to holds no payload, as the
+        // large form's does not: its runs of words are read in pieces and its nested
+        // envelopes from this reader. The second holds for a nested envelope's payload, in
+        // either form, read inside the large form, and not for an ordinary payload priced
+        // from its stream, whose read holds it.
+        private readonly bool wide;
+        private readonly bool streamed;
+
+        // The run of words begun and not yet read to its end: the bytes left of it, and,
+        // from a held payload, the copy of it, or from a stream, the buffer a piece is read
+        // into.
+        private long wordsLeft;
+        private byte[]? words;
+
+        internal PayloadReader(ReadOnlySpan<byte> payload, ReadBudget budget, bool wide = false)
         {
             this.payload = payload;
             this.offset = 0;
             this.source = null;
             this.start = 0;
             this.end = 0;
+            this.wide = wide;
+            this.streamed = false;
+            this.wordsLeft = 0;
+            this.words = null;
             this.Budget = budget;
         }
 
@@ -473,15 +602,34 @@ namespace ProbabilisticDataStructures
         /// held: one that prices it, reading fields and skipping runs, or one that reads it,
         /// reading each run from the stream into the array it is returned in.
         /// </summary>
-        internal PayloadReader(PayloadSource source, long length, ReadBudget budget)
+        /// <param name="source">The stream the payload is read from.</param>
+        /// <param name="length">How many of its bytes are this reader's.</param>
+        /// <param name="budget">The allowance the read draws on.</param>
+        /// <param name="wide">Whether a run's length is a <c>u64</c>: the payload is in the large form.</param>
+        /// <param name="streamed">
+        /// Whether the read holds no payload, as the large form's does not, so that what it
+        /// reads is read, and priced, as a read from the stream: false for the price of an
+        /// ordinary payload, whose read holds it.
+        /// </param>
+        internal PayloadReader(PayloadSource source, long length, ReadBudget budget, bool wide = false, bool streamed = false)
         {
             this.payload = default;
             this.offset = 0;
             this.source = source;
             this.start = source.Position;
             this.end = source.Position + length;
+            this.wide = wide;
+            this.streamed = streamed;
+            this.wordsLeft = 0;
+            this.words = null;
             this.Budget = budget;
         }
+
+        /// <summary>
+        /// Whether the read this reader belongs to holds no payload, as the large form's does
+        /// not: a nested envelope in it is read from this reader, rather than copied out.
+        /// </summary>
+        internal bool IsStreamed => this.streamed;
 
         /// <summary>
         /// The allowance the read this payload belongs to draws on, so that code handed
@@ -522,7 +670,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal byte[] ReadBytes()
         {
-            var count = ReadRunLength();
+            var count = ReadArrayRunLength();
 
             // Bounds-checked first, so a run the payload does not hold is refused as
             // truncated; then the array is charged before it is made.
@@ -541,19 +689,27 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Reads a run's length prefix, refusing a length no array holds, which is what a
-        /// run is read into: the one place a run's length is read, by a read and by a price.
+        /// Reads a run's length prefix: the one place a run's length is read, by a read and
+        /// by a price, whatever the run is read into. A <c>u32</c> in the ordinary envelope,
+        /// and a <c>u64</c> in the large form (#228).
+        /// </summary>
+        private ulong ReadRunLength() => this.wide ? ReadUInt64() : ReadUInt32();
+
+        /// <summary>
+        /// Reads the length prefix of a run that is read into one array, refusing a length
+        /// no array holds.
         /// </summary>
         /// <remarks>
         /// Past the largest array, not past the largest <c>int</c>. Between them, a held
         /// payload could never hold the run, so the bounds check refused it; a payload read
         /// from its stream can, and the run would then have passed both checks and asked
-        /// for an array no runtime makes.
+        /// for an array no runtime makes. A run its structure keeps in storage of its own is
+        /// not read into one array, and is not held to one (<see cref="BeginWords"/>).
         /// </remarks>
-        private int ReadRunLength()
+        private int ReadArrayRunLength()
         {
-            var count = ReadUInt32();
-            if (count > LongestRun)
+            var count = ReadRunLength();
+            if (count > (ulong)LongestRun)
             {
                 throw new InvalidDataException(
                     $"Payload holds a {count}-byte run, which cannot be read into a " +
@@ -564,17 +720,121 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Reads the length prefix of a run that is not read into one array, held to what
+        /// the payload has left rather than to an array.
+        /// </summary>
+        private long ReadHeldRunLength()
+        {
+            var count = ReadRunLength();
+            if (count > (ulong)this.Remaining)
+            {
+                throw Ended(count);
+            }
+
+            return (long)count;
+        }
+
+        /// <summary>
         /// Prices what <see cref="ReadBytes"/> allocates for the run that comes next, after
         /// the same checks, and leaves the reader at the start of the run. Returns its
         /// length.
         /// </summary>
         internal int PriceBytes()
         {
-            var count = ReadRunLength();
+            var count = ReadArrayRunLength();
             RequireAhead(count);
             this.Budget.Price(ReadBudget.ArrayOf((ulong)count, 1));
             return count;
         }
+
+        /// <summary>
+        /// Begins a run of eight-byte words that its structure unpacks into storage of its
+        /// own, rather than keeping the run as the array it is read into, and returns the
+        /// run's length; <see cref="ReadWords"/> then hands it back a piece at a time.
+        /// </summary>
+        /// <remarks>
+        /// A run past one array, which the large form allows (#228), cannot be read into one,
+        /// and a structure that keeps its run in words, or in more arrays than one, can hold
+        /// it. So a read that holds no payload takes such a run from the stream in pieces of
+        /// at most <see cref="PayloadSource.PieceBytes"/>, through one buffer of that length or
+        /// the run's, whichever is shorter, charged here. From a held payload the run is
+        /// copied out whole, as <see cref="ReadBytes"/> copies a run, and handed back as one
+        /// piece, so that the ordinary envelope's read allocates and is charged what it always
+        /// was; a run there is never past one array.
+        /// </remarks>
+        internal long BeginWords()
+        {
+            if (!this.streamed)
+            {
+                this.words = ReadBytes();
+                this.wordsLeft = this.words.Length;
+                return this.wordsLeft;
+            }
+
+            var count = ReadHeldRunLength();
+            var piece = PieceFor(count);
+            this.Budget.Charge(ReadBudget.ArrayOf((ulong)piece, 1));
+            this.words = piece == 0 ? Array.Empty<byte>() : new byte[piece];
+            this.wordsLeft = count;
+            return count;
+        }
+
+        /// <summary>
+        /// The next piece of the run <see cref="BeginWords"/> began, a whole number of words
+        /// when the run is, until it has all been handed back; valid until the next call.
+        /// </summary>
+        internal ReadOnlySpan<byte> ReadWords()
+        {
+            var words = this.words!;
+            if (!this.streamed)
+            {
+                var held = words.AsSpan(words.Length - (int)this.wordsLeft);
+                this.wordsLeft = 0;
+                return held;
+            }
+
+            var count = (int)Math.Min(this.wordsLeft, words.Length);
+            this.source!.ReadPiece(words, count);
+            this.wordsLeft -= count;
+            return words.AsSpan(0, count);
+        }
+
+        /// <summary>
+        /// Prices what <see cref="BeginWords"/> allocates for the run that comes next, after
+        /// the same checks, and skips it. Returns its length.
+        /// </summary>
+        internal long SkipWords()
+        {
+            if (!this.streamed)
+            {
+                return SkipBytes();
+            }
+
+            var count = ReadHeldRunLength();
+            this.Budget.Price(ReadBudget.ArrayOf((ulong)PieceFor(count), 1));
+            Skip(count);
+            return count;
+        }
+
+        /// <summary>The buffer a run of <paramref name="count"/> bytes is read through in pieces.</summary>
+        private static int PieceFor(long count) => (int)Math.Min(count, PayloadSource.PieceBytes);
+
+        /// <summary>
+        /// Reads the length prefix of a run that holds a nested envelope, which a read that
+        /// holds no payload reads from this reader rather than copying it out, held to what
+        /// the payload has left. Returns its length.
+        /// </summary>
+        internal long BeginEnvelopeRun() => ReadHeldRunLength();
+
+        /// <summary>
+        /// Begins carrying <paramref name="checksum"/> over every byte this reader's stream
+        /// gives from here, until <see cref="EndChecksum"/>: a nested envelope's checksum, over
+        /// its payload, read from the outer stream.
+        /// </summary>
+        internal void BeginChecksum(Crc32 checksum) => this.source!.BeginChecksum(checksum);
+
+        /// <summary>Stops carrying the checksum <see cref="BeginChecksum"/> began last.</summary>
+        internal void EndChecksum() => this.source!.EndChecksum();
 
         /// <summary>
         /// Prices what <see cref="ReadBytes"/> allocates for the run that comes next, and
@@ -636,17 +896,23 @@ namespace ProbabilisticDataStructures
         /// and held to what remains before it is narrowed.
         /// </para>
         /// </remarks>
-        internal PayloadReader Slice(long length)
+        internal PayloadReader Slice(long length) => Slice(length, this.wide);
+
+        /// <summary>
+        /// As <see cref="Slice(long)"/>, for bytes whose runs have lengths as wide as
+        /// <paramref name="wide"/> says: a nested envelope's payload, in its own form.
+        /// </summary>
+        internal PayloadReader Slice(long length, bool wide)
         {
             RequireAhead(length);
             if (this.source is null)
             {
-                var slice = new PayloadReader(this.payload.Slice(this.offset, (int)length), this.Budget);
+                var slice = new PayloadReader(this.payload.Slice(this.offset, (int)length), this.Budget, wide);
                 this.offset += (int)length;
                 return slice;
             }
 
-            return new PayloadReader(this.source, length, this.Budget);
+            return new PayloadReader(this.source, length, this.Budget, wide, this.streamed);
         }
 
         /// <summary>
@@ -671,12 +937,17 @@ namespace ProbabilisticDataStructures
         {
             if (count < 0 || count > this.Remaining)
             {
-                throw new InvalidDataException(
-                    $"Payload ended after {this.Length} bytes while reading " +
-                    $"{count} more at offset {this.Offset}. It is truncated or does not " +
-                    "have the shape this structure expects.");
+                throw new InvalidDataException(EndedMessage(count.ToString()));
             }
         }
+
+        /// <summary>The refusal of a claim to <paramref name="count"/> more bytes than remain.</summary>
+        private InvalidDataException Ended(ulong count) => new(EndedMessage(count.ToString()));
+
+        private string EndedMessage(string count) =>
+            $"Payload ended after {this.Length} bytes while reading " +
+            $"{count} more at offset {this.Offset}. It is truncated or does not " +
+            "have the shape this structure expects.";
 
         /// <summary>
         /// Refuses a count that the rest of the payload could not hold, before anything
@@ -779,6 +1050,28 @@ namespace ProbabilisticDataStructures
         /// <summary>The widest field taken in place: a nested envelope's header.</summary>
         internal const int WidestField = 16;
 
+        /// <summary>
+        /// The most of a run a reader that unpacks it into storage of its own takes from the
+        /// stream at a time (#228): a whole number of eight-byte words, and under the 85,000
+        /// bytes from which an array goes on the large object heap.
+        /// </summary>
+        internal const int PieceLength = 64 * 1024;
+
+        /// <summary>
+        /// A shorter piece for the sources made on the calling thread, so that the suite can
+        /// show a run read in pieces at lengths it can build; null otherwise, as it is in
+        /// every thread but a test's. A whole number of eight-byte words.
+        /// </summary>
+        [ThreadStatic]
+        internal static int? LoweredPieceLength;
+
+        /// <summary>
+        /// The longest piece a run is read in on this thread: <see cref="PieceLength"/>, unless
+        /// lowered. Either is a whole number of words, so that no word is cut between two
+        /// pieces.
+        /// </summary>
+        internal static int PieceBytes => LoweredPieceLength ?? PieceLength;
+
         private readonly Stream stream;
         private readonly byte[] field = new byte[WidestField];
         private byte[]? skipped;
@@ -786,6 +1079,24 @@ namespace ProbabilisticDataStructures
         // Set once the read that follows a price has begun, and then every byte the source
         // takes is appended to it.
         private Crc32? checksum;
+
+        // The checksums of the nested envelopes being read, innermost first, each appended
+        // every byte taken while it is carried, as the payload's own is.
+        private NestedChecksum? nested;
+
+        /// <summary>A nested envelope's checksum, and the one around it, if it is nested in another.</summary>
+        private sealed class NestedChecksum(Crc32 checksum, NestedChecksum? outer)
+        {
+            internal Crc32 Checksum { get; } = checksum;
+
+            internal NestedChecksum? Outer { get; } = outer;
+        }
+
+        /// <summary>
+        /// What carrying a nested envelope's checksum allocates: the checksum's state, and
+        /// the link that carries it.
+        /// </summary>
+        internal static long NestedChecksumCost => ReadBudget.Sum(ReadBudget.SmallObject, ReadBudget.SmallObject);
 
         internal PayloadSource(Stream stream)
         {
@@ -824,9 +1135,52 @@ namespace ProbabilisticDataStructures
 
             var span = this.field.AsSpan(0, count);
             this.Fill(span);
-            this.checksum?.Append(span);
-            this.Position += count;
+            this.Taken(span);
             return span;
+        }
+
+        /// <summary>
+        /// Begins carrying <paramref name="crc"/> over every byte taken from here, as the
+        /// payload's own checksum is carried, until <see cref="EndChecksum"/>.
+        /// </summary>
+        internal void BeginChecksum(Crc32 crc) => this.nested = new NestedChecksum(crc, this.nested);
+
+        /// <summary>Stops carrying the checksum <see cref="BeginChecksum"/> began last.</summary>
+        internal void EndChecksum() => this.nested = this.nested!.Outer;
+
+        /// <summary>
+        /// Reads the next <paramref name="count"/> bytes into the start of
+        /// <paramref name="piece"/>, through the stream's array overload of <c>Read</c>: a
+        /// piece of a run its structure unpacks into storage of its own.
+        /// </summary>
+        /// <exception cref="InvalidDataException">The stream ends first.</exception>
+        internal void ReadPiece(byte[] piece, int count)
+        {
+            for (var read = 0; read < count;)
+            {
+                var n = this.stream.Read(piece, read, count - read);
+                if (n == 0)
+                {
+                    throw Truncated();
+                }
+                read += n;
+            }
+
+            this.Taken(piece.AsSpan(0, count));
+        }
+
+        /// <summary>
+        /// Appends bytes just taken to every checksum being carried, and moves past them.
+        /// </summary>
+        private void Taken(ReadOnlySpan<byte> bytes)
+        {
+            this.checksum?.Append(bytes);
+            for (var carried = this.nested; carried is not null; carried = carried.Outer)
+            {
+                carried.Checksum.Append(bytes);
+            }
+
+            this.Position += bytes.Length;
         }
 
         /// <summary>
@@ -851,8 +1205,7 @@ namespace ProbabilisticDataStructures
                 read += n;
             }
 
-            this.checksum?.Append(run);
-            this.Position += run.Length;
+            this.Taken(run);
         }
 
         /// <summary>Moves past the next <paramref name="count"/> bytes.</summary>
