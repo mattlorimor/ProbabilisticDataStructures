@@ -1450,6 +1450,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every payload this library wrote holds its counters and reads as before, and the format
   is unchanged.
 
+- **A `CountMinSketch` or `SublimeCountMinSketch` payload claiming counters it did not
+  hold had a row allocated before it was refused, or was refused for a budget that would
+  not have loaded it.** Both readers allocated each row before reading it, and neither
+  they nor their prices checked that the counters the shape claims are in the payload. A
+  count-min sketch of 275 bytes with its width edited to ten million allocated 80 MB,
+  under the default budget or under none, before failing at the first missing counter,
+  and a Sublime sketch of 590 bytes with its width edited to 2^23 allocated 67 MB the same
+  way; edited to 2^22 and read under a budget just short of what the unedited payload
+  needs, each was refused for that budget instead. Both now check the counters against the
+  bytes remaining in the shape check their read and price share, before a row is priced or
+  allocated, as the `PrivateCountMinSketch` and `HeavyKeeper` readers do, and refuse a
+  payload that lacks them for that, under any budget. It needs a payload edited on purpose
+  with its checksum repaired; every payload this library wrote holds its counters and
+  reads as before, and the format is unchanged.
+
+- **`DpswSketch.Add` on a window at the largest position wrapped the position to
+  `long.MinValue`.** The reader accepts any position that is not negative, `long.MaxValue`
+  included, since the format can hold it, and `Add` incremented it unchecked. A window
+  read at `long.MaxValue` took the next item at `long.MinValue`, and its own payload was
+  then refused by its reader as having seen a negative number of items. Adds alone would
+  take 2^63 − 1 items to get there; a payload edited on purpose, with its checksum
+  repaired, gets there at once. `Add` now refuses it with an `InvalidOperationException`
+  and leaves the window unchanged, as `DDSketch.Add` refuses a sketch already holding
+  2^64 − 1 values, and such a window still reads. No format change.
+
 - **`InverseBloomFilter`, `HyperLogLog` and `DpswSketch` failed inside an allocation, or
   saturated, instead of refusing a size they could not build.** `InverseBloomFilter`'s
   slots are one array of references, which holds 2,147,483,591: a capacity past that was
