@@ -37,11 +37,15 @@ namespace TestProbabilisticDataStructures
         private const int PayloadStart = 14;
 
         /// <summary>
-        /// Where the counters of the current arrays begin in the payload of a sketch that
-        /// has never expanded: three doubles, the rows and the width, the three counts,
-        /// and the number of records, which is nought.
+        /// Where the tuning of the current arrays lies in the payload of a sketch that has
+        /// never expanded: after three doubles, the rows and the width, the three counts, and
+        /// the number of records, which is nought. A byte for the counters to a chunk and one
+        /// for the stub width, from version 10.
         /// </summary>
-        private const int CountersStart = 3 * 8 + 4 + 4 + 3 * 8 + 4;
+        private const int TuningAt = 3 * 8 + 4 + 4 + 3 * 8 + 4;
+
+        /// <summary>Where the counters of the current arrays begin, after their tuning.</summary>
+        private const int CountersStart = TuningAt + 2;
 
         /// <summary>
         /// The counters set heavy in a row of 1024 are every 128th, from the fifth: eight
@@ -97,9 +101,16 @@ namespace TestProbabilisticDataStructures
             new SublimeCountMinSketch(0.5, 0.5, 1.0 / 16);
 
         /// <summary>
-        /// Overwrites the counters of a one-row payload and repairs the checksum, so that
-        /// what reads the result is the reader and not the CRC.
+        /// Overwrites the counters of a one-row payload, stores the tuning they call for
+        /// and repairs the checksum, so that what reads the result is the reader and not the
+        /// CRC, nor the reader's refusal of a tuning the counters do not call for.
         /// </summary>
+        /// <remarks>
+        /// The tuning is the sketch's own rule's, and the reader holds the stored one to that
+        /// rule, so what these tests check of the tuning a read packs at they check of the
+        /// rule: a rule that tallied a counter as the wrong length would be stored and read
+        /// at the wrong tuning alike.
+        /// </remarks>
         private static byte[] WithCounters(byte[] original, Func<int, ulong> valueAt)
         {
             var bytes = (byte[])original.Clone();
@@ -108,11 +119,17 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(1, (int)BinaryPrimitives.ReadUInt32LittleEndian(
                 bytes.AsSpan(PayloadStart + 24)), "the payload should hold a single row");
 
+            var row = new ulong[width];
             for (var j = 0; j < width; j++)
             {
+                row[j] = valueAt(j);
                 BinaryPrimitives.WriteUInt64LittleEndian(
-                    bytes.AsSpan(PayloadStart + CountersStart + 8 * j), valueAt(j));
+                    bytes.AsSpan(PayloadStart + CountersStart + 8 * j), row[j]);
             }
+
+            var (chunkCounters, stub) = SublimeCountMinSketch.Tune(new[] { row });
+            bytes[PayloadStart + TuningAt] = (byte)chunkCounters;
+            bytes[PayloadStart + TuningAt + 1] = (byte)stub;
 
             var crc = new Crc32();
             crc.Append(bytes.AsSpan(4, bytes.Length - 8));

@@ -272,6 +272,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with what it holds. A `TopK` keeps version 1: its sketch is in an envelope of its own, and
   that is version 9. (#192)
 
+- **`SublimeCountMinSketch` saves at format version 10, which stores how each state is
+  packed.** Every save is now
+  [format version 10](FORMAT.md#sublimecountminsketch-id-29): the layout of version 1 with
+  two bytes before the counters of each record and of the current rows, the counters to a
+  chunk and the stub width a read packs those counters at. A read is then priced from the
+  fields and seeks past the counters, where the price read every counter to work their
+  tuning out. For a sketch that has doubled three times, the price read every byte of its
+  envelope but the checksum; it now reads 94 of the 38,498, the header and the fields, and
+  seeks past 38,400 bytes of counters. The tuning stored is the one the counters call for,
+  not the one the sketch held them at, so the same counts still write the same bytes; a
+  reader refuses a payload whose counters call for another, or whose tuning no chunk
+  holds. The counters are still plain `u64`, and are charged what they were.
+  **Releases up to 6.2.0 refuse every such payload** as written by a later version.
+  Payloads 6.2.0 wrote still read, priced as before by reading their counters, and save
+  again as version 10. (#280)
+
 - **`SetSketch` now documents a small low bias in a very large sketch's cardinality, which
   it keeps.** An element's first value goes to a register drawn with a 32-bit
   multiply-and-shift, the draw `VarOpt` evicted with until the fix below, and it is exact
