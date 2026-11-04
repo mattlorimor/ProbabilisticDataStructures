@@ -446,10 +446,11 @@ namespace TestProbabilisticDataStructures
             Assert.IsLessThanOrEqualTo(limit + 1, (uint)pairs.Read,
                 $"the build read {pairs.Read:N0} pairs, and allocated {allocated:N0} bytes, to " +
                 $"refuse more than {limit:N0} keys");
-            // A dictionary of the limit's keys is 28 bytes an entry, in tables that double as
-            // they fill, so under 128 bytes a key of the limit with the refusal; measured, 104.
-            // The bound is twice that. Collecting all the pairs first allocated 10 MB, about
-            // forty times the bound.
+            // The limit's keys are held in two arrays, 16 bytes a key, with an index of them
+            // of 4 bytes a slot kept under three quarters full, each doubling as it fills:
+            // measured with the refusal, 51 bytes a key of the limit, where the dictionary that
+            // held them before was 104. The bound was set at twice the dictionary's and stands.
+            // Collecting all the pairs first allocated 10 MB, about forty times the bound.
             Assert.IsLessThan(256L * limit, allocated,
                 $"refusing more than {limit:N0} keys allocated {allocated:N0} bytes: every pair " +
                 "was collected before the count was compared with the limit");
@@ -500,6 +501,72 @@ namespace TestProbabilisticDataStructures
             Assert.IsLessThan(115.0, perKey,
                 $"a build of {BuildKeys:N0} keys allocated {allocated:N0} bytes, {perKey:F1} a " +
                 "key: the pairs were held in more than one collection of every pair");
+        }
+
+        /// <summary>What collecting <paramref name="keys"/> distinct pairs allocates, under a limit.</summary>
+        private static long Collected(int keys, uint limit)
+        {
+            var pairs = new CountedPairs(keys);
+            var hash = Defaults.GetDefaultHashFunction();
+            return Allocated(() => BloomierFilter.Collect(pairs, hash, 0xFF, 8, limit));
+        }
+
+        /// <summary>
+        /// The index a build finds repeated keys by is kept no more than three quarters full:
+        /// it doubles when a key would take it past. Its length is a power of two, which
+        /// absorbs the fraction almost everywhere, so the test straddles the one step that
+        /// shows it: 3 · 2^15 keys fill an index of 2^17 slots to exactly three quarters, and
+        /// one more key doubles it to 2^18. An index kept half full would be 2^18 at both,
+        /// and one kept seven eighths full 2^17 at both. The arrays of the pairs are 2^17
+        /// long at both, so the difference between the two is the doubled index, 4 bytes a
+        /// slot of 2^18, and the one more key.
+        /// </summary>
+        [TestMethod]
+        public void TestABloomierBuildKeepsItsIndexAtMostThreeQuartersFull()
+        {
+            const int full = 3 << 15;
+            var most = BloomierFilter.MaxKeys(8);
+            var difference = Collected(full + 1, most) - Collected(full, most);
+            var index = 4L << 18;
+
+            Assert.IsGreaterThanOrEqualTo(index, difference,
+                $"one key past three quarters of 2^17 added {difference:N0} bytes to the build, " +
+                $"where an index doubled to 2^18 slots is {index:N0}: the index was not doubled " +
+                "there, so it is kept fuller than three quarters, or was doubled already");
+            Assert.IsLessThan(index + 1024, difference,
+                $"one key past three quarters of 2^17 added {difference:N0} bytes to the build, " +
+                $"more than an index of 2^18 slots, {index:N0}");
+        }
+
+        /// <summary>
+        /// The arrays of a build's pairs double as keys arrive, and never past its limit,
+        /// since no more keys than that are kept: a set of exactly the limit's keys ends in
+        /// arrays of the limit's length. Under the public limit the same pairs double past
+        /// the count, to the next power of two, and are cut back to it at the end. At the
+        /// most keys a map of 8-bit values holds, 954,204,160, that is the difference between
+        /// arrays of that many keys and arrays of 2^30 cut back to it, 1.9 GB of doubling and
+        /// 15.3 GB of copy.
+        /// </summary>
+        /// <remarks>
+        /// One past a power of two, 2^16 + 1 keys, is where a doubling passes the count by the
+        /// most. Under its own limit the arrays end at 2^16 + 1; under the public one they
+        /// double to 2^17 and are cut back to 2^16 + 1. The difference is those two arrays of
+        /// 2^17 keys, 16 bytes a key, less nothing: the arrays up to 2^16 are the same in both.
+        /// </remarks>
+        [TestMethod]
+        public void TestABloomierBuildAtItsLimitGrowsItsArraysNoFurther()
+        {
+            const int keys = (1 << 16) + 1;
+            var difference = Collected(keys, BloomierFilter.MaxKeys(8)) - Collected(keys, keys);
+            var doubled = 16L << 17;
+
+            Assert.IsGreaterThanOrEqualTo(doubled, difference,
+                $"a set of {keys:N0} keys allocated {difference:N0} bytes more under the public " +
+                $"limit than under a limit of its own size, where arrays doubled past the count " +
+                $"are {doubled:N0}: the arrays grew past the limit");
+            Assert.IsLessThan(doubled + 1024, difference,
+                $"a set of {keys:N0} keys allocated {difference:N0} bytes more under the public " +
+                "limit than under a limit of its own size, more than the arrays doubled past it");
         }
 
         /// <summary>
