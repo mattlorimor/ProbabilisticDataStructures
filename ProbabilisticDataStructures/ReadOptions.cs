@@ -220,12 +220,16 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal const long SmallObject = 64;
 
-        private readonly string structure;
+        // Named only in a refusal. An enum's names are kept in a cache the runtime holds
+        // weakly, and naming the structure as every budget was made built them again after
+        // any collection that had reclaimed them, so what a read allocated depended on when
+        // the last collection ran (#287).
+        private readonly StructureId structure;
 
         internal ReadBudget(long limit, StructureId structure)
         {
             this.Limit = limit;
-            this.structure = structure.ToString();
+            this.structure = structure;
         }
 
         /// <summary>
@@ -307,7 +311,7 @@ namespace ProbabilisticDataStructures
         /// <summary>The refusal of a read that takes <paramref name="required"/> bytes.</summary>
         internal InvalidDataException Refusal(long required)
         {
-            var why = new ReadBudgetExceededException(this.structure, required, this.Limit);
+            var why = new ReadBudgetExceededException(this.structure.ToString(), required, this.Limit);
             return new InvalidDataException(why.Message, why);
         }
 
