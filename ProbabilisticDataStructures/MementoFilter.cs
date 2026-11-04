@@ -745,11 +745,21 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.MementoFilter);
-            var payload = PersistenceFormat.Read(
-                stream, StructureId.MementoFilter, out _, budget, Price,
-                hash, CheckHash);
+            return PersistenceFormat.Read(
+                stream, StructureId.MementoFilter, budget, Price, hash, CheckHash,
+                ReadPayload);
+        }
 
-            var reader = new PayloadReader(payload, budget);
+        /// <summary>
+        /// Reads the payload of the envelope <c>Read</c> opened, once the envelope has
+        /// been checked. See <see cref="PayloadParse{T}"/>.
+        /// </summary>
+        private static MementoFilter ReadPayload(
+            ref PayloadReader reader, ushort version, HashId hashId,
+            Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            var budget = reader.Budget;
+
             var added = reader.ReadUInt64();
             var expansions = reader.ReadUInt32();
             var mementoBits = (int)reader.ReadUInt32();

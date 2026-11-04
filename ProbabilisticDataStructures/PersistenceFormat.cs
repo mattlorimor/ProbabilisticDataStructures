@@ -127,6 +127,24 @@ namespace ProbabilisticDataStructures
     internal delegate void HashCheck(HashId recorded, Func<ReadOnlySpan<byte>, ulong>? supplied);
 
     /// <summary>
+    /// Reads a structure from its payload, once
+    /// <see cref="PersistenceFormat.Read{T}(Stream, StructureId, ReadBudget, PayloadPrice, Func{ReadOnlySpan{byte}, ulong}, HashCheck, PayloadParse{T})"/>
+    /// has opened the envelope around it: the half of a structure's reader that comes
+    /// after its envelope.
+    /// </summary>
+    /// <param name="reader">The payload, from its first byte, drawing on the read's budget.</param>
+    /// <param name="version">The format version the envelope names.</param>
+    /// <param name="hashId">The hash the envelope names.</param>
+    /// <param name="hash">The hash the caller supplied, or null.</param>
+    /// <remarks>
+    /// The envelope runs it, rather than handing the payload back, so that what is done
+    /// after the structure has read its payload is the envelope's to do for every
+    /// structure alike. A static method, so that passing it allocates nothing.
+    /// </remarks>
+    internal delegate T PayloadParse<T>(
+        ref PayloadReader reader, ushort version, HashId hashId, Func<ReadOnlySpan<byte>, ulong>? hash);
+
+    /// <summary>
     /// The envelope every persisted structure is wrapped in.
     /// </summary>
     /// <remarks>
@@ -481,24 +499,33 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Reads and validates an envelope, returning its payload and the hash that was
-        /// in use when it was written.
+        /// Reads and validates an envelope, then reads the structure in it from its
+        /// payload with <paramref name="parse"/>, and returns the structure.
         /// </summary>
         /// <exception cref="InvalidDataException">
         /// The stream does not hold a payload of this format, holds a format version
         /// the structure never defined (a later one included), holds a different
-        /// structure, or has been corrupted.
+        /// structure, or has been corrupted; or the structure's reader refused the
+        /// payload.
         /// </exception>
-        internal static byte[] Read(
-            Stream stream, StructureId expected, out HashId hash, ReadBudget budget,
-            PayloadPrice price, Func<ReadOnlySpan<byte>, ulong>? supplied, HashCheck checkHash)
+        /// <remarks>
+        /// <paramref name="price"/>, <paramref name="supplied"/> and
+        /// <paramref name="checkHash"/> are as
+        /// <see cref="Read(Stream, StructureId, out HashId, out ushort, ReadBudget, PayloadPrice, Func{ReadOnlySpan{byte}, ulong}, HashCheck)"/>
+        /// takes them.
+        /// </remarks>
+        internal static T Read<T>(
+            Stream stream, StructureId expected, ReadBudget budget, PayloadPrice price,
+            Func<ReadOnlySpan<byte>, ulong>? supplied, HashCheck checkHash, PayloadParse<T> parse)
         {
-            return Read(stream, expected, out hash, out _, budget, price, supplied, checkHash);
+            var payload = Read(stream, expected, out var hash, out var version, budget, price, supplied, checkHash);
+            var reader = new PayloadReader(payload, budget);
+            return parse(ref reader, version, hash, supplied);
         }
 
         /// <summary>
-        /// Reads and validates an envelope, also reporting the format version it was
-        /// written at, for structures whose payload layout depends on it.
+        /// Reads and validates an envelope, returning its payload, the hash that was in
+        /// use when it was written and the format version it was written at.
         /// </summary>
         /// <exception cref="InvalidDataException">
         /// The stream does not hold a payload of this format, holds a format version
@@ -526,7 +553,7 @@ namespace ProbabilisticDataStructures
         /// already priced, nested envelope included, so its own reads draw on that.
         /// </para>
         /// </remarks>
-        internal static byte[] Read(
+        private static byte[] Read(
             Stream stream, StructureId expected, out HashId hash, out ushort version,
             ReadBudget budget, PayloadPrice price, Func<ReadOnlySpan<byte>, ulong>? supplied, HashCheck checkHash)
         {
