@@ -63,6 +63,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   such member: they use the whole 64-bit hash, and a register reaches its cap only around
   2^64 items, more than a `ulong` count holds. Nothing stored changes. (#194)
 
+- **The large form of the envelope, for payloads past 2 GiB, and its reader.** FORMAT.md
+  now specifies a second form of the envelope for a payload longer than the ordinary one
+  holds, 2,147,483,573 bytes:
+  - the version field's high bit, `0x8000`, set, with the format version in the other
+    fifteen bits;
+  - a `u64` payload length;
+  - a checksum over the header, checked before any field in it is used;
+  - the payload's checksum after the payload, compared once the structure has read it.
+  On a mismatch the structure read is discarded, and a refusal before the end says the
+  checksum was not reached. Releases up to 6.2.0 refuse such a payload as written by a
+  later version. Every reader here reads it, nested envelopes included, holding the
+  payload as it holds an ordinary one. Nothing written changes: a payload that fits the
+  ordinary envelope is written in it, byte for byte as before, and one past the ordinary
+  ceiling is still refused until the writer streams its payload. (#222, #223, #224, #227)
+
 ### Changed
 
 - **The package's minimum `System.IO.Hashing` rises from 10.0.11 to 10.0.14.** A project
@@ -370,6 +385,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#235)
 
 ### Fixed
+
+- **A payload naming a bucket width no bucket has is refused as the payload's.** A
+  stored width of 0, or more than 8 bits, in the bucket table of a `BloomFilter`,
+  `BloomFilter64`, `CountingBloomFilter`, `DeletableBloomFilter`,
+  `PartitionedBloomFilter` (and so a `ScalableBloomFilter`) or `StableBloomFilter` was
+  refused with the constructor's `ArgumentOutOfRangeException`, about a `bucketSize`
+  parameter no caller had passed. It is now an `InvalidDataException`, as every payload the
+  library will not read is. A flipped bit could not reach it in the ordinary envelope,
+  whose checksum is checked first, and only an edited payload with a repaired checksum
+  did; the large form checks its checksum at the end, and its corruption sweep found it.
 
 - **`WriteTo` of any structure too large to write now refuses it, by its whole
   size, before allocating anything for the payload.** Each runs its own

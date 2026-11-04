@@ -874,11 +874,20 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.VarOpt);
-            var payload = PersistenceFormat.Read(
-                stream, StructureId.VarOpt, out _, budget, Price,
-                hash, CheckHash);
+            return PersistenceFormat.Read(
+                stream, StructureId.VarOpt, budget, Price, hash, CheckHash,
+                ReadPayload);
+        }
 
-            var reader = new PayloadReader(payload, budget);
+        /// <summary>
+        /// Reads the payload of the envelope <c>Read</c> opened, once the envelope has
+        /// been checked. See <see cref="PayloadParse{T}"/>.
+        /// </summary>
+        private static VarOpt ReadPayload(
+            ref PayloadReader reader, ushort version, HashId hashId,
+            Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            var budget = reader.Budget;
 
             var k = reader.ReadUInt32();
             var randomState = reader.ReadUInt64();

@@ -453,10 +453,54 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// Every structure's sample, written in the large form, is held to the same two
+        /// rules: its charges are an honest bound on what its read allocates, and a
+        /// refusal names one total that loads, which its price and its reader's charges
+        /// both come to.
+        /// </summary>
+        /// <remarks>
+        /// With the threshold at nothing, the envelopes a scalable filter or a top-k holds
+        /// are in the large form too, so the price of a nested large envelope, worked out
+        /// where it lies in the outer payload, is held to what reading it charges. A price
+        /// that did not recognise the flag would stop at the first nested envelope and
+        /// leave the rest to be charged unpriced.
+        /// </remarks>
+        [TestMethod]
+        [DynamicData(nameof(Structures))]
+        public void TestEveryStructureInTheLargeFormIsChargedHonestlyAndNamesOneTotal(string structure)
+        {
+            var id = Enum.Parse<StructureId>(structure);
+            Assert.IsTrue(Samples.Value.TryGetValue(id, out var sample),
+                $"{id} has no sample to read under a budget. Add one.");
+
+            var large = InTheLargeForm(sample);
+            AssertHonest(id, large);
+            AssertOneTotal(id, large);
+        }
+
+        /// <summary>
+        /// A sample written again in the large form, and writing in it, so that the checks
+        /// that a read writes back the bytes it was read from hold in that form.
+        /// </summary>
+        private static Sample InTheLargeForm(Sample sample)
+        {
+            var bytes = LargeForm.Below(0, () => sample.Write(sample.Read(sample.Bytes, ReadOptions.Unlimited)));
+            Assert.IsTrue(LargeForm.IsLarge(bytes), $"{sample.Name} was not written in the large form");
+            return sample with
+            {
+                Name = sample.Name + " in the large form",
+                Bytes = bytes,
+                Write = restored => LargeForm.Below(0, () => sample.Write(restored)),
+            };
+        }
+
         private static void AssertOneTotal(StructureId id, Sample sample)
         {
             var bytes = sample.Bytes;
-            var payload = (long)bytes.Length - 18;
+            var payload = (long)bytes.Length - (LargeForm.IsLarge(bytes)
+                ? PersistenceFormat.LargeEnvelopeLength
+                : PersistenceFormat.EnvelopeLength);
             sample.Read(bytes, ReadOptions.Unlimited);
 
             Assert.IsTrue(RefusedForBudget(() => sample.Read(bytes, new ReadOptions(0)), out var first),
