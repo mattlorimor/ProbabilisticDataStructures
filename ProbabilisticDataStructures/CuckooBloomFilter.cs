@@ -139,7 +139,7 @@ namespace ProbabilisticDataStructures
         /// makes its behavior assertable rather than only describable.
         /// </param>
         public CuckooBloomFilter(uint n, double fpRate,
-            Func<ReadOnlySpan<byte>, ulong>? hash = null, int? seed = null)
+            Func<ReadOnlySpan<byte>, ulong>? hash = null, ulong? seed = null)
         {
             Guard.ValidItemCount(n, nameof(n));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
@@ -173,7 +173,7 @@ namespace ProbabilisticDataStructures
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.random = seed is null
                 ? SeededRandom.Unpredictable()
-                : new SeededRandom((ulong)seed.Value);
+                : new SeededRandom(seed.Value);
             this.originalRandomState = this.random.State;
             this.M = m;
             this.B = b;

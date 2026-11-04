@@ -889,14 +889,29 @@ namespace TestProbabilisticDataStructures
             AssertRefusedBeforeAllocating<InverseBloomFilter>(Poke(bytes, 0, 1u << 22), 8L << 22);
         }
 
-        /// <summary>A count-min sketch's rows are allocated before they are read.</summary>
+        /// <summary>
+        /// A count-min sketch's rows are allocated before they are read, so a payload that
+        /// claims counters it does not hold is refused for that before any row is
+        /// allocated, under the default budget and under none. Its price and its reader
+        /// share the check, so the price, which a payload malformed past what it has
+        /// priced does not stop, does not stand in for the reader's.
+        /// <para>
+        /// A row of ten million counters is 80 MB, less than the default budget, so the
+        /// budget alone does not stop it. The width is the field to edit: the rows are
+        /// allocated one at a time, each read before the next, so a depth claiming rows
+        /// that are not there allocates one row past the payload and no more.
+        /// </para>
+        /// </summary>
         [TestMethod]
-        public void TestACountMinSketchWiderThanTheBudgetIsRefused()
+        public void TestACountMinSketchClaimingCountersItDoesNotHoldIsRefusedBeforeAllocating()
         {
-            // f64 epsilon, f64 delta, then u32 width at 16: rows of 2^22 counters.
-            var bytes = new CountMinSketch(0.1, 0.1).ToByteArray();
-            // Delta 0.1 is ceil(ln 10), three rows.
-            AssertRefusedBeforeAllocating<CountMinSketch>(Poke(bytes, 16, 1u << 22), 3 * (8L << 22));
+            // f64 epsilon, f64 delta, then u32 width at 16. Delta 0.5 is one row.
+            var bytes = new CountMinSketch(0.1, 0.5).ToByteArray();
+
+            foreach (var options in new[] { ReadOptions.Default, ReadOptions.Unlimited })
+            {
+                AssertRefusedForMissingCounters<CountMinSketch>(Poke(bytes, 16, 10_000_000), options, "width");
+            }
         }
 
         /// <summary>
@@ -974,8 +989,8 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// The read is refused naming the counters as more than the payload holds, and
-        /// allocated less than <see cref="SmallBudget"/> before it was: no row of the ten
-        /// million counters claimed.
+        /// allocated less than <see cref="SmallBudget"/> before it was: no row of the
+        /// millions of counters claimed.
         /// </summary>
         private static void AssertRefusedForMissingCounters<T>(byte[] poked, ReadOptions options, string edited)
             where T : IBinaryPersistable<T>
@@ -999,15 +1014,23 @@ namespace TestProbabilisticDataStructures
                 $"a {typeof(T).Name} with its {edited} edited, under {budget}, was refused for something else");
         }
 
-        /// <summary>A Sublime sketch's rows, as a count-min sketch's are.</summary>
+        /// <summary>
+        /// A Sublime sketch's rows, as a count-min sketch's are. Its counters are read as
+        /// plain counts into rows allocated first, and packed after, so the plain rows are
+        /// what a claim of counters it does not hold allocated. A row of 2^23 counters is
+        /// 64 MiB, less than the default budget.
+        /// </summary>
         [TestMethod]
-        public void TestASublimeSketchWiderThanTheBudgetIsRefused()
+        public void TestASublimeSketchClaimingCountersItDoesNotHoldIsRefusedBeforeAllocating()
         {
             // Three f64, u32 depth at 24, u32 width at 28. Unexpanded, so no records
-            // constrain the width: rows of 2^24 counters.
-            var bytes = Filled(new SublimeCountMinSketch(0.1), (s, k) => s.Add(k), 10).ToByteArray();
-            // Delta 0.1 is three rows.
-            AssertRefusedBeforeAllocating<SublimeCountMinSketch>(Poke(bytes, 28, 1u << 24), 3 * (8L << 24));
+            // constrain the width, and delta 0.5 is one row.
+            var bytes = Filled(new SublimeCountMinSketch(0.5), (s, k) => s.Add(k), 10).ToByteArray();
+
+            foreach (var options in new[] { ReadOptions.Default, ReadOptions.Unlimited })
+            {
+                AssertRefusedForMissingCounters<SublimeCountMinSketch>(Poke(bytes, 28, 1u << 23), options, "width");
+            }
         }
 
         /// <summary>HLL++'s sparse buffer is sized by the count it claims.</summary>
@@ -1127,6 +1150,29 @@ namespace TestProbabilisticDataStructures
             var window = Filled(
                 new DpswSketch(2000, 1.0, width: 1024, depth: 3, seed: 1), (s, k) => s.Add(k), 5000).ToByteArray();
             AssertRefusedForItsShape<DpswSketch>(window, Poke(window, 60, 1u << 22), "beyond what it can hold");
+        }
+
+        /// <summary>
+        /// A count-min sketch claiming more counters than its payload holds, as a private
+        /// sketch above. Its price checks that the counters are there before it prices the
+        /// rows that hold them, so the claim is refused for that, not priced and refused
+        /// for a budget that would not have loaded it.
+        /// </summary>
+        [TestMethod]
+        public void TestACountMinSketchClaimingCountersItDoesNotHoldIsRefusedForThat()
+        {
+            // u32 width at 16: rows of 2^22 counters, 32 MiB each.
+            var bytes = Filled(new CountMinSketch(0.001, 0.01), (s, k) => s.Add(k), 100).ToByteArray();
+            AssertRefusedForItsShape<CountMinSketch>(bytes, Poke(bytes, 16, 1u << 22), "beyond what it can hold");
+        }
+
+        /// <summary>A Sublime sketch claiming more counters than its payload holds, likewise.</summary>
+        [TestMethod]
+        public void TestASublimeSketchClaimingCountersItDoesNotHoldIsRefusedForThat()
+        {
+            // u32 width at 28, unexpanded so that no record constrains it.
+            var bytes = Filled(new SublimeCountMinSketch(0.1), (s, k) => s.Add(k), 10).ToByteArray();
+            AssertRefusedForItsShape<SublimeCountMinSketch>(bytes, Poke(bytes, 28, 1u << 22), "beyond what it can hold");
         }
 
         /// <summary>

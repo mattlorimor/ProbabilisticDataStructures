@@ -354,6 +354,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   however few are distinct; and `Grafite.Build` holds the keys in two sorted sets, about
   96 bytes a key, before it can refuse.
 
+- **A count-min sketch's reset, an `InfiniFilter`'s doubling and a Bloomier build hold
+  less at once.** No answer and no stored byte changes. (#238)
+  <br><br>
+  `CountMinSketch.Reset`, and `TopK.Reset` through it, clears the sketch's rows where they
+  are. It allocated a new matrix while the old one was still held, so a reset needed twice
+  the sketch at once: 16 GiB more for each row at the widest row a sketch has.
+  <br><br>
+  `InfiniFilter` moves each entry that a doubling voids down the chain as its walk of the
+  old table reaches it. It listed them first and moved them after, in a list that nothing
+  bounded: measured, 14% of the table's entries at a doubling with 2-bit fingerprints, and
+  0.2% with 8-bit ones.
+  <br><br>
+  `BloomierFilter.Build` holds the distinct pairs once, in the arrays its peel reads, with
+  an index beside them to find a key given again. It held them in a dictionary, copied
+  them into a list once every pair was read, and copied them again for the peel; at the
+  954,204,160 keys of the 8-bit limit, the dictionary and the list were at least 42 GB.
+  Measured on builds of 12 million and 2^24 keys, its peak memory falls from 139 and 130
+  bytes a key to 67 and 73, and the time a build takes is as it was, within the noise of
+  a shared machine. It refuses what it refused, in the same order, and builds every map to
+  the same bytes.
+
 - **`VarOpt` now says what is exact about its total weight, and keeps the arithmetic.**
   The documentation said the sampled weights sum to *exactly* the stream's total weight.
   What holds is that no weight is lost when an item is dropped, because the survivors
@@ -400,6 +421,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers over wider ranges, at their cost, or set it to `ulong.MaxValue` for the old
   behaviour. It is not written with the filter, so the stored format does not change and a
   filter read back has the default. `MementoFilter` shipped in 6.2.0, so 6.2.0 is affected.
+
+- **The 32-bit hash helpers in `Utils` are internal, and that is a breaking change.**
+  `Utils.HashKernel`, `Utils.HashKernelFromSum`, `Utils.HashKernelFromHashBytes`,
+  `Utils.HashBytesToUInt32` and the `HashKernelReturnValue` they return split a hash into
+  32-bit halves. Inside the library only `SublimeCountMinSketch` uses the 32-bit kernel,
+  and it still does. Code that called them switches to `Utils.HashKernel128`, which
+  returns two 64-bit values in a `HashKernel128ReturnValue`, and `Utils.HashBytesToUInt64`.
+  `HashKernel128`'s second value is not the hash's upper half, so code that needs the old
+  values exactly computes them: `(uint)h` and `(uint)(h >> 32)` of the 64-bit hash, and
+  `BinaryPrimitives.ReadUInt32LittleEndian` for what `HashBytesToUInt32` read. Nothing a
+  structure computes or stores changes. (#234)
+
+- **`StableBloomFilter` and `CuckooBloomFilter` take a `ulong?` seed, and that is a breaking
+  change.** They took an `int?` and widened it to the generator's 64 bits, so only 2^32 of
+  its starting states could be chosen; every other seeded structure already took a
+  `ulong?`. Code compiled against 6.2.0 has to be rebuilt. A non-negative constant such as
+  `seed: 42` compiles unchanged and gives the same sequence as before. An `int` variable
+  needs a cast, and a negative seed needs the conversion the filters used to make: pass
+  `unchecked((ulong)seed)`, which is 2^64 + seed, so `-1` becomes `ulong.MaxValue`, for the
+  sequence the `int` gave. Stored filters are unaffected: they record where their generator
+  is and where it began as 64-bit values, and resume from those however they were seeded.
+  (#235)
 
 ### Fixed
 
@@ -513,6 +556,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the count and its bit position as `long`, refuses the same boxes itself as a backstop, and
   no longer reads past the end of a run. The stored format does not change, and every
   payload a release wrote reads as before.
+
+- **A `QuotientFilter`, `InfiniFilter` or `MementoFilter` payload whose metadata did not
+  agree with itself was read, and a walk of it could go round the table for ever.** These
+  filters find a quotient's run by walking back to the start of its cluster and forward
+  again, as Bender et al. describe, and the walks end only because each slot's occupied,
+  continuation and shifted bits agree with one another. No reader looked at them. With one
+  metadata bit edited and the checksum repaired, every such payload tried was read, of a
+  quotient filter's table and of both tables of an Infini filter, and 377 of 384 of a
+  Memento table, the rest refused by the box check for a box the edit had re-paired. The
+  run-start search went round without end on a table with no unshifted slot or with every
+  slot a continuation, and when asked for a quotient no run belongs to; a query walks
+  it, and so does `MementoFilter`'s reader, for every occupied run. A stored count lower
+  than a table's entries was read too, and a full `QuotientFilter` read that way would take
+  another `Add`, whose insert looks for a free slot with nothing to stop it.
+  <br><br>
+  Every reader in the family now checks each table it reads, in one pass before any run is
+  walked, and refuses with an `InvalidDataException` naming the table and the slot a table
+  whose metadata is inconsistent, or whose entries are not its stored count. As a backstop
+  the run-start search stops after one lap of the table and throws an
+  `InvalidOperationException`. And `MementoFilter`'s run rewrite, which `Add` and
+  `TestAndRemove` use, refuses a rewrite the table has no room for before it writes a slot,
+  where it used to find out part way through and leave the table half rewritten. Reading
+  costs the pass: measured on tables of 2,097,152 slots, 9 to 10 ms at load 0.33 and 15 ms
+  at 0.72 for a `QuotientFilter` or `InfiniFilter` table, whose reads took under 1 ms
+  before, and 3 to 17 ms more for a `MementoFilter` table. The stored format does not
+  change; the stored payloads read as before, and so does every state the exhaustive
+  sequence tests reach.
 
 - **A `ThetaSketch` or `TupleSketch` read back from storage, or built by `Union`,
   `Intersect` or `Difference`, now goes on exactly as the sketch it stands for would.**
@@ -1493,6 +1563,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every payload this library wrote holds its counters and reads as before, and the format
   is unchanged.
 
+- **A `CountMinSketch` or `SublimeCountMinSketch` payload claiming counters it did not
+  hold had a row allocated before it was refused, or was refused for a budget that would
+  not have loaded it.** Both readers allocated each row before reading it, and neither
+  they nor their prices checked that the counters the shape claims are in the payload. A
+  count-min sketch of 275 bytes with its width edited to ten million allocated 80 MB,
+  under the default budget or under none, before failing at the first missing counter,
+  and a Sublime sketch of 590 bytes with its width edited to 2^23 allocated 67 MB the same
+  way; edited to 2^22 and read under a budget just short of what the unedited payload
+  needs, each was refused for that budget instead. Both now check the counters against the
+  bytes remaining in the shape check their read and price share, before a row is priced or
+  allocated, as the `PrivateCountMinSketch` and `HeavyKeeper` readers do, and refuse a
+  payload that lacks them for that, under any budget. It needs a payload edited on purpose
+  with its checksum repaired; every payload this library wrote holds its counters and
+  reads as before, and the format is unchanged.
+
+- **`DpswSketch.Add` on a window at the largest position wrapped the position to
+  `long.MinValue`.** The reader accepts any position that is not negative, `long.MaxValue`
+  included, since the format can hold it, and `Add` incremented it unchecked. A window
+  read at `long.MaxValue` took the next item at `long.MinValue`, and its own payload was
+  then refused by its reader as having seen a negative number of items. Adds alone would
+  take 2^63 − 1 items to get there; a payload edited on purpose, with its checksum
+  repaired, gets there at once. `Add` now refuses it with an `InvalidOperationException`
+  and leaves the window unchanged, as `DDSketch.Add` refuses a sketch already holding
+  2^64 − 1 values, and such a window still reads. No format change.
+
 - **`InverseBloomFilter`, `HyperLogLog` and `DpswSketch` failed inside an allocation, or
   saturated, instead of refusing a size they could not build.** `InverseBloomFilter`'s
   slots are one array of references, which holds 2,147,483,591: a capacity past that was
@@ -1651,6 +1746,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   count wrap. Nothing but a payload gets a sketch within reach of that, since `Add` takes
   one value at a time. No format change.
 
+- **`DDSketch.Add` on a sketch already holding 2^64 − 1 values wrapped its total to
+  nought.** It added one to the total, to a store's total and to the value's bucket without
+  checking any of them. `Add` alone would take 2^64 calls to get there, but a sketch read
+  from a payload can be full, since the reader accepts a total of exactly 2^64 − 1, and so
+  can one merged from such sketches. Given one more value, a full sketch answered `Count()`
+  with 0 and `Quantile` with "The sketch holds nothing", and unless the value fell in the
+  bucket or zero count already holding everything, its own payload was then refused by its
+  reader. `Add` now refuses it with an `InvalidOperationException` and leaves the sketch
+  unchanged, as `Merge` refuses a merge past the same total. The check is one comparison
+  per add, and there is no format change.
+
 - **A payload whose byte run claimed almost `int.MaxValue` bytes was refused with an
   `ArgumentOutOfRangeException`, not the `InvalidDataException` every other payload the
   library will not read gets.** The reader checked a run against the payload as
@@ -1794,10 +1900,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same fault. It took its record off before it allocated the folded rows and set the
   width before it packed them, so a failure lost the record, and with it any folding back,
   or left the width halved over rows that were not. It now builds the folded rows first
-  too, and a failure leaves the rows, the width and the record as they were. The removal
-  that called for the folding is taken, as before, and the next removal folds. A sketch
+  too, and a failure leaves the rows, the width and the record as they were. A sketch
   that gets its memory is unchanged, in memory and on the wire, and so is the format.
   (#213)
+
+- **Four more ways a `SublimeCountMinSketch` that ran out of memory was left partly
+  changed.** The `Add` that doubles the rows took its key's increments in the old rows, which
+  it keeps to fold back by, after it had built the doubled ones. An increment allocates when
+  it moves a chunk to a tails array, and one that failed there left the rows before it
+  counted and, in its own row, a counter with its stub written and its high bits not. The
+  record is now a copy of the old rows with the key counted in it, built with the doubled
+  rows, and what follows only puts them in place. It is built once nothing holds the plain
+  counts the doubled rows were packed from, and needs no more memory than before: five rows
+  of 2^22 counters double under the same smallest heap limit as they did, 373 MiB with the
+  default collector, where building the copy before the doubled rows needed 392. A `Remove`
+  that folded the rows back took the key out before it built the folded rows, so a failure
+  left the key removed though the `Remove` threw, and removing it again took it out twice;
+  the folded rows are now built with the key taken out of them, before anything changes. An
+  `Add` that put enough chunks on tails arrays to have the rows laid out again counted its
+  key first. It now takes at once the increments that stop at a stub with room, which can
+  neither allocate nor move a chunk, asks each other row beforehand whether its increment
+  will put a chunk on tails, and if they will crowd the rows takes the first back and builds
+  the new layout, the key counted, from the sketch as it was. Measured on five rows of 2^16
+  counters, an add takes 80 ns where it took 77. A `Reset` set the starting width and then
+  replaced the rows one at a time, so a failure left rows of the old width under the new
+  one and a sketch its writer refused to write; it now builds its rows first. Each of these
+  now throws the `OutOfMemoryException` with the sketch exactly as it was, and trying again
+  adds or removes the key once. No key raises different counters, and nothing a sketch
+  writes changes. (#242)
 
 - **A read refused for its budget named a number that did not load it.**
   `ReadBudgetExceededException.RequiredBytes` was the running total at the allocation

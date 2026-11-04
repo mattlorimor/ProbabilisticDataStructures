@@ -553,6 +553,10 @@ what the sketch indexes by, and recomputing them from the parameters would silen
 relocate every cell if the sizing were ever adjusted. `epsilon` and `delta` are stored
 because `Epsilon()` and `Delta()` report them.
 
+A reader rejects a matrix with no rows or no columns, one past the limits the constructor
+builds to (see [Sizes](#sizes)), and more cells than the rest of the payload could hold,
+which it checks before allocating a row.
+
 ### `BloomFilter64` (id 2)
 
 ```
@@ -916,6 +920,16 @@ is why an entry can be moved without its slot's occupied bit moving with it.
 A payload claiming more entries than there are slots is refused, as is one whose table is
 not the size its two widths call for.
 
+The reader then checks the table's metadata, in one pass round the table from a slot whose
+entry is not shifted, or an empty one. It refuses a table where an empty slot falls
+between an occupied quotient and its run, where a run's first entry is shifted with no
+occupied quotient waiting for a run or unshifted while one is waiting, where a
+continuation follows an empty slot or is not shifted, where an occupied quotient is left
+without a run, or where no slot can start the pass because every one is shifted. It also
+refuses a table whose entries, the slots with any of the three bits set, are not the
+stored count. No writer produces any of these, and every lookup walks the metadata on the
+strength of them.
+
 The quotient bits run from 1 to 32 and the two widths together come to at most 64, the
 bits a hash supplies; a payload outside either is refused. The writer never goes past 31
 quotient bits, because the slot count is a 32-bit number and 2^32 does not fit it. A
@@ -1215,9 +1229,10 @@ A reader rejects a chain of no tables, a chain longer than a 64-bit hash could j
 a table with more than 31 bits of address (releases up to 6.2.0 read up to 40, with a slot
 count that wrapped and gave a table of 1 to 256 slots; no writer ever produced one), a
 table holding more entries than it has slots, a table whose address and fingerprint
-together exceed the hash, and a word count that disagrees with the shape claimed. The
-tables are stored newest first, and the count of entries per table is stored rather than
-recomputed, because a table's occupancy cannot be derived from its bits alone.
+together exceed the hash, and a word count that disagrees with the shape claimed. It then
+checks each table's metadata as `QuotientFilter`'s reader does, and refuses the same
+tables. The tables are stored newest first, and each table's count of entries is stored as
+well; it must be the slots whose metadata has any bit set, which the reader checks.
 
 ### `MementoFilter` (id 28)
 
@@ -1253,7 +1268,10 @@ read another", so a small count costs as much as one memento and a large one sti
 A reader rejects an impossible memento width, a chain of no tables or absurdly many, a
 table with more than 31 bits of address (as `InfiniFilter`'s), a table whose slots are wider
 than 64 bits, a table with more entries than slots, and a word count disagreeing with the
-shape claimed. It then decodes every occupied run once and rejects a box whose count claims
+shape claimed. It then checks each table's metadata as `QuotientFilter`'s reader does, with
+the count of slots used held to the slots whose metadata has any bit set, and refuses the
+same tables, before any run is decoded, since decoding one walks the metadata. Then it
+decodes every occupied run once and rejects a box whose count claims
 more keys than the rest of its run has bits for, or whose run ends inside its count; no
 writer produces either, and refusing them at read is what keeps every query on a filter it
 read from meeting one.
@@ -1297,9 +1315,10 @@ that follow it do not require is refused.
 A reader also rejects a delta outside nought to one, a growth exponent outside the same
 range, a size factor that is not positive, a row count of zero or past the deepest sketch
 the constructor builds (see [Sizes](#sizes)), a width that is not a power of two — the
-low bits of a hash pick the counter — and more than thirty records, which would be more
-counters than a row may hold. Readers before this limit was shared refused more than
-sixty-four rows, which a delta of `1e-28` already needs.
+low bits of a hash pick the counter — current rows with more counters than the rest of
+the payload could hold, which it checks before allocating any, and more than thirty
+records, which would be more counters than a row may hold. Readers before this limit was
+shared refused more than sixty-four rows, which a delta of `1e-28` already needs.
 
 The total count and the count at which the arrays next double are held to the rest. The
 arrays double once the total reaches (width × size factor)^(1 / growth exponent), rounded

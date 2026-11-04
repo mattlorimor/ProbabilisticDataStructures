@@ -26,9 +26,18 @@ namespace TestProbabilisticDataStructures
                 System.IO.Hashing.XxHash3.Hash(structure.ToByteArray()));
         }
 
+        /// <summary>
+        /// An <c>int</c> seed as the filters took it before their seeds were 64-bit: widened
+        /// with sign extension, the conversion the CHANGELOG gives a caller with a negative
+        /// one. The helpers here keep <c>int</c> rows, and so their pinned sequences, by
+        /// passing each through it.
+        /// </summary>
+        private static ulong? AsTheIntSeedWas(int? seed) =>
+            seed is null ? null : unchecked((ulong)seed.Value);
+
         private static StableBloomFilter FilledStable(int? seed)
         {
-            var f = new StableBloomFilter(1000, 2, 0.01, seed: seed);
+            var f = new StableBloomFilter(1000, 2, 0.01, seed: AsTheIntSeedWas(seed));
             Feed(f);
 
             return f;
@@ -54,7 +63,7 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         private static CuckooBloomFilter FilledCuckoo(int? seed)
         {
-            var f = new CuckooBloomFilter(100, 0.01, seed: seed);
+            var f = new CuckooBloomFilter(100, 0.01, seed: AsTheIntSeedWas(seed));
             FeedCuckoo(f);
 
             return f;
@@ -96,6 +105,54 @@ namespace TestProbabilisticDataStructures
         {
             Assert.AreNotEqual(Fingerprint(FilledCuckoo(7)), Fingerprint(FilledCuckoo(8)),
                 "the seed made no difference, so the eviction choice is not being seeded");
+        }
+
+        /// <summary>
+        /// A seed is the generator's whole 64-bit starting state, as it is for every other
+        /// seeded structure (#235): one past <see cref="int.MaxValue"/> is taken as given,
+        /// and the same one gives the same filter. The payload says where the generator
+        /// began, so that is checked to be the seed itself. The filter is also checked to
+        /// differ from one seeded with what the seed would have been as an <c>int</c> of
+        /// its low 32 bits, sign-extended, which is what the generator got before.
+        /// </summary>
+        [TestMethod]
+        [DataRow(0x8000_0000UL)]
+        [DataRow(0x1_0000_0007UL)]
+        [DataRow(0xFFFF_FFFF_0000_0000UL)]
+        public void TestASeedPastIntMaxValueSeedsTheWholeGenerator(ulong seed)
+        {
+            var asAnInt = unchecked((ulong)(int)(uint)seed);
+            Assert.AreNotEqual(seed, asAnInt, "the row does not tell a 64-bit seed from an int");
+
+            StableBloomFilter Stable(ulong s)
+            {
+                var f = new StableBloomFilter(1000, 2, 0.01, seed: s);
+                Feed(f);
+                return f;
+            }
+
+            Assert.AreEqual(seed,
+                GeneratorPositions(new StableBloomFilter(1000, 2, 0.01, seed: seed).ToByteArray()).Began,
+                "the stable filter's generator did not begin at the seed");
+            Assert.AreEqual(Fingerprint(Stable(seed)), Fingerprint(Stable(seed)),
+                "the same seed gave two different stable filters");
+            Assert.AreNotEqual(Fingerprint(Stable(asAnInt)), Fingerprint(Stable(seed)),
+                "the stable filter's seed lost its high bits");
+
+            CuckooBloomFilter Cuckoo(ulong s)
+            {
+                var f = new CuckooBloomFilter(100, 0.01, seed: s);
+                FeedCuckoo(f);
+                return f;
+            }
+
+            Assert.AreEqual(seed,
+                GeneratorPositions(new CuckooBloomFilter(100, 0.01, seed: seed).ToByteArray()).Began,
+                "the cuckoo filter's generator did not begin at the seed");
+            Assert.AreEqual(Fingerprint(Cuckoo(seed)), Fingerprint(Cuckoo(seed)),
+                "the same seed gave two different cuckoo filters");
+            Assert.AreNotEqual(Fingerprint(Cuckoo(asAnInt)), Fingerprint(Cuckoo(seed)),
+                "the cuckoo filter's seed lost its high bits");
         }
 
         /// <summary>
@@ -289,7 +346,7 @@ namespace TestProbabilisticDataStructures
         /// A new filter of the shape FilledStable builds: what a reset one has to equal.
         /// </summary>
         private static byte[] NewStable(int seed) =>
-            new StableBloomFilter(1000, 2, 0.01, seed: seed).ToByteArray();
+            new StableBloomFilter(1000, 2, 0.01, seed: AsTheIntSeedWas(seed)).ToByteArray();
 
         private static void AddMore(StableBloomFilter f, string prefix, int count)
         {
@@ -535,7 +592,7 @@ namespace TestProbabilisticDataStructures
         /// A new filter of the shape FilledCuckoo builds: what a reset one has to equal.
         /// </summary>
         private static byte[] NewCuckoo(int seed) =>
-            new CuckooBloomFilter(100, 0.01, seed: seed).ToByteArray();
+            new CuckooBloomFilter(100, 0.01, seed: AsTheIntSeedWas(seed)).ToByteArray();
 
         private static void AddMore(CuckooBloomFilter f, string prefix, int count)
         {

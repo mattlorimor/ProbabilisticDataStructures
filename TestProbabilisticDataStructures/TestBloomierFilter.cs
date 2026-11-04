@@ -413,5 +413,30 @@ namespace TestProbabilisticDataStructures
                 () => BloomierFilter.Build(conflictFirst, 8, null, limit)).Message,
                 "twice with different values");
         }
+
+        /// <summary>
+        /// The public build is limited to the most keys whose cells are one array, at the
+        /// width of its values: it hands <see cref="BloomierFilter.MaxKeys"/> to the build it
+        /// calls, which refuses past whatever it is handed, as the tests above hold it to at
+        /// a lowered limit. That limit is 318 to 954 million keys, which no test can reach, so
+        /// this asks each map what limit its build was under, the limit it refused past. Every
+        /// width is asked, since the limit steps with the cells' width in bytes.
+        /// </summary>
+        [TestMethod]
+        public void TestThePublicBuildIsLimitedToTheMostKeysItsValuesHold()
+        {
+            var limits = new HashSet<uint>();
+            for (var valueBits = 1; valueBits <= 40; valueBits++)
+            {
+                var map = BloomierFilter.Build(Pairs(2), valueBits);
+                Assert.AreEqual(BloomierFilter.MaxKeys(valueBits), map.KeyLimit,
+                    $"the public build of {valueBits}-bit values was not limited to the most keys they hold");
+                limits.Add(map.KeyLimit);
+            }
+
+            // Not vacuous: the limit differs between widths, so one number for every width
+            // would fail.
+            Assert.IsGreaterThan(1, limits.Count, "premise: the limit steps with the width");
+        }
     }
 }

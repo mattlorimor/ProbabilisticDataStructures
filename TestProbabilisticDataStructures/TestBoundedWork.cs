@@ -305,5 +305,39 @@ namespace TestProbabilisticDataStructures
             Assert.IsLessThanOrEqualTo(2L, Tested(empty, 1_000_000, out answer));
             Assert.IsFalse(answer, "a filter holding nothing answered possibly");
         }
+
+        /// <summary>
+        /// A Bloomier build finds a key given again through an index that places each key
+        /// from its mixed hash, so a hash that counts up costs a few steps a key, where
+        /// placed from the hash as it is every key would start in one slot and the steps
+        /// would grow with the square of the keys. 2^16 keys, each given twice so that half
+        /// the lookups find a key, under a hash that is the key itself. Probed: 220,747 steps,
+        /// 3.37 a key, of which the lookups are 190,663 and placing the keys again as the index
+        /// doubles the rest. The ceiling is 8 a key, a little over twice that; placed from the
+        /// hash as it is, every key starts in the first slot and the i-th steps past the i
+        /// before it, more than 2^31 steps in all. The floor is 200,000, the probe less a
+        /// tenth, so that a count that left out either walk's steps fails.
+        /// </summary>
+        [TestMethod]
+        public void TestABloomierBuildFindsItsKeysInAFewStepsWhateverTheirHash()
+        {
+            const int keys = 1 << 16;
+            var once = Enumerable.Range(0, keys)
+                .Select(i => new KeyValuePair<byte[], ulong>(BitConverter.GetBytes(i), (ulong)(i & 0xFF)))
+                .ToArray();
+            Func<ReadOnlySpan<byte>, ulong> countsUp = span => BitConverter.ToUInt32(span);
+
+            var (collected, _) = BloomierFilter.Collect(
+                once.Concat(once), countsUp, 0xFF, 8, BloomierFilter.MaxKeys(8));
+            var steps = BloomierFilter.CollectedSteps;
+
+            Assert.HasCount(keys, collected, "premise: each key was collected once");
+            Assert.IsGreaterThan(200_000L, steps,
+                $"{keys:N0} keys whose hash counts up took {steps:N0} steps in the index: the " +
+                "count left out steps the index took");
+            Assert.IsLessThan(8L * keys, steps,
+                $"{keys:N0} keys whose hash counts up took {steps:N0} steps in the index, " +
+                $"{(double)steps / keys:F2} a key");
+        }
     }
 }
