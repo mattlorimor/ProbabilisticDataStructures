@@ -148,6 +148,7 @@ namespace TestProbabilisticDataStructures
         private const string EndChecksum = "checksum at the end of the payload does not match";
         private const string NotReached = "checksum was not reached";
         private const string OrdinaryChecksum = "Payload checksum does not match";
+        internal const string PastTheStream = "after the large form's header";
 
         private static byte[] Key(string s) => Encoding.ASCII.GetBytes(s);
 
@@ -389,8 +390,9 @@ namespace TestProbabilisticDataStructures
                 () => Persistence.FromByteArray<BloomFilter>(LargeForm.Reseal(relabelled)));
             StringAssert.Contains(sealedId.Message, "was read as");
 
-            // A length past the stream that one array could hold: believed, it is priced, and the
-            // budget refuses it.
+            // A length past what the stream holds: believed, it is refused for the bytes that
+            // are not there, before anything is priced from it. A streamed read holds no
+            // payload, so a length costs nothing, and the stream is what it is held to.
             var longer = (byte[])bytes.Clone();
             BinaryPrimitives.WriteUInt64LittleEndian(longer.AsSpan(10), (ulong)Array.MaxLength);
             var unsealedLength = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<BloomFilter>(longer));
@@ -398,8 +400,9 @@ namespace TestProbabilisticDataStructures
             Assert.IsNull(unsealedLength.InnerException, "a length was acted on before its header's checksum held");
             var sealedLength = Assert.ThrowsExactly<InvalidDataException>(
                 () => Persistence.FromByteArray<BloomFilter>(LargeForm.Reseal(longer)));
-            Assert.IsInstanceOfType<ReadBudgetExceededException>(sealedLength.InnerException,
-                $"a length of the largest array, believed, was not refused for its cost: {sealedLength.Message}");
+            StringAssert.Contains(sealedLength.Message, PastTheStream,
+                $"a length past the stream, believed, was not refused for that: {sealedLength.Message}");
+            Assert.IsNull(sealedLength.InnerException, $"a length past the stream was priced: {sealedLength.Message}");
         }
 
         /// <summary>
@@ -436,46 +439,59 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A length in the large header is refused for what it is before anything is priced
-        /// from it, where nothing can read it: past what a stream holds, and past what one
-        /// array holds, which is what a reader holding the payload reads it into. One the
-        /// reader can hold goes on to be priced, and refused for its cost. Both checksums
-        /// are repaired each time, so the length is the only thing wrong.
+        /// A length in the large header is refused before anything is priced from it when
+        /// nothing can hold it, past what any stream holds, or when this stream does not,
+        /// under any budget. One array is no longer a limit: the payload is streamed, not
+        /// held (#226). Both checksums are repaired each time, so the length is the only
+        /// thing wrong.
         /// </summary>
         /// <remarks>
-        /// Straddles each limit by one, and none of them allocates: the largest array is
-        /// refused under the default budget before the read makes room for it.
+        /// Straddles each limit by one: the largest a stream holds and a byte more, and the
+        /// payload's own length and a byte more, which is the first that leaves the stream
+        /// short of its checksum. Between them lie the largest array and a byte past it,
+        /// where a reader that held the payload refused or priced the length, and neither
+        /// is reached now. A length past one array that the stream does hold is read on;
+        /// <see cref="TestLargeEnvelopeReading"/> shows that, on a stream that claims one.
         /// </remarks>
         [TestMethod]
-        public void TestALargeFormLengthNothingCanHoldIsRefusedForThat()
+        public void TestALargeFormLengthIsHeldToTheStreamBeforeItIsPriced()
         {
             var filter = new BloomFilter(200, 0.01);
             for (var i = 0; i < 40; i++) filter.Add(Key($"w{i}"));
             var bytes = LargeForm.WriteLarge(filter);
+            var payload = (ulong)(bytes.Length - PersistenceFormat.LargeEnvelopeLength);
 
-            InvalidDataException Claiming(ulong length)
+            byte[] Claiming(ulong length)
             {
                 var claimed = (byte[])bytes.Clone();
                 BinaryPrimitives.WriteUInt64LittleEndian(claimed.AsSpan(10), length);
-                return Assert.ThrowsExactly<InvalidDataException>(
-                    () => Persistence.FromByteArray<BloomFilter>(LargeForm.Reseal(claimed)),
-                    $"a large-form payload claiming {length:N0} bytes was read");
+                return LargeForm.Reseal(claimed);
             }
 
-            var stream = Claiming((ulong)long.MaxValue + 1);
+            InvalidDataException Refused(ulong length, ReadOptions options) => Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<BloomFilter>(Claiming(length), options),
+                $"a large-form payload claiming {length:N0} bytes was read");
+
+            var stream = Refused((ulong)long.MaxValue + 1, ReadOptions.Default);
             StringAssert.Contains(stream.Message, "more than a stream can hold");
             Assert.IsNull(stream.InnerException, $"a length past a stream's was priced: {stream.Message}");
 
-            foreach (var length in new[] { (ulong)long.MaxValue, (ulong)Array.MaxLength + 1 })
+            foreach (var length in new[] { (ulong)long.MaxValue, (ulong)Array.MaxLength + 1, (ulong)Array.MaxLength, payload + 1 })
             {
-                var array = Claiming(length);
-                StringAssert.Contains(array.Message, "single array", $"{length:N0} bytes: {array.Message}");
-                Assert.IsNull(array.InnerException, $"a length of {length:N0} bytes, past one array, was priced: {array.Message}");
+                // Under nothing, too: a length that had been priced would be refused for its
+                // budget there, naming a total that no budget could load.
+                foreach (var options in new[] { ReadOptions.Default, new ReadOptions(0) })
+                {
+                    var past = Refused(length, options);
+                    StringAssert.Contains(past.Message, PastTheStream,
+                        $"{length:N0} bytes under {options.MemoryBudget:N0}: {past.Message}");
+                    Assert.IsNull(past.InnerException,
+                        $"a length of {length:N0} bytes, past the stream, was priced under {options.MemoryBudget:N0}: {past.Message}");
+                }
             }
 
-            var held = Claiming((ulong)Array.MaxLength);
-            Assert.IsInstanceOfType<ReadBudgetExceededException>(held.InnerException,
-                $"a length one array holds was not priced: {held.Message}");
+            Assert.IsNotNull(Persistence.FromByteArray<BloomFilter>(Claiming(payload)),
+                "the payload's own length, which the stream holds with its checksum, was not read");
         }
 
         /// <summary>
@@ -505,14 +521,17 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// A large-form payload refused for its budget is refused before its checksum, and
         /// says so, while the inner exception stays the
-        /// <see cref="ReadBudgetExceededException"/> a caller tells a budget refusal by:
-        /// under a budget too small for the payload alone, which is priced from the stream
-        /// and never held, and under one a byte short of the whole read, where the payload
-        /// is held and priced and the refusal comes as the price is settled.
+        /// <see cref="ReadBudgetExceededException"/> a caller tells a budget refusal by,
+        /// under every budget short of the read: nothing, half the payload, and a byte
+        /// short of the whole. Each names the same total, which loads, and none holds the
+        /// payload to price it.
         /// </summary>
         /// <remarks>
         /// What is priced comes from fields the checksum has not vouched for, so a refusal
-        /// for its cost may be damage the checksum would have named.
+        /// for its cost may be damage the checksum would have named. The large form is
+        /// priced from its stream in a first pass, which seeks over the runs (#226), so a
+        /// read refused a byte short of the whole, where a reader holding the payload had
+        /// it in memory by then, has allocated less than half of it.
         /// </remarks>
         [TestMethod]
         public void TestALargeFormRefusalForItsBudgetSaysTheChecksumWasNotReached()
@@ -522,23 +541,27 @@ namespace TestProbabilisticDataStructures
             var bytes = LargeForm.WriteLarge(filter);
             var payload = bytes.Length - PersistenceFormat.LargeEnvelopeLength;
 
-            var unheld = Assert.ThrowsExactly<InvalidDataException>(
-                () => Persistence.FromByteArray<BloomFilter>(bytes, new ReadOptions(payload / 2)));
-            var why = Assert.IsInstanceOfType<ReadBudgetExceededException>(unheld.InnerException,
-                $"a refusal under half the payload is not a budget refusal: {unheld.Message}");
-            StringAssert.Contains(unheld.Message, NotReached, "a payload priced from the stream did not say its checksum was not reached");
+            var first = Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<BloomFilter>(bytes, new ReadOptions(0)));
+            var total = Assert.IsInstanceOfType<ReadBudgetExceededException>(first.InnerException,
+                $"a refusal under nothing is not a budget refusal: {first.Message}").RequiredBytes;
+            Assert.IsGreaterThan((long)payload, total, "the read is priced at less than the filter's bits, so it is not priced");
 
-            var held = Assert.ThrowsExactly<InvalidDataException>(
-                () => Persistence.FromByteArray<BloomFilter>(bytes, new ReadOptions(why.RequiredBytes - 1)));
-            Assert.IsInstanceOfType<ReadBudgetExceededException>(held.InnerException,
-                $"a refusal a byte short of the read is not a budget refusal: {held.Message}");
-            StringAssert.Contains(held.Message, NotReached, "a payload held and priced did not say its checksum was not reached");
-            Assert.IsGreaterThanOrEqualTo(PersistenceFormat.EnvelopeCost((ulong)payload), why.RequiredBytes - 1,
-                "a byte short of the read is less than holding the payload costs, so the second path was not taken");
-            Assert.IsLessThan(PersistenceFormat.EnvelopeCost((ulong)payload), (long)(payload / 2),
-                "half the payload is enough to hold it, so the first path was not taken");
+            foreach (var budget in new[] { 0L, payload / 2, total - 1 })
+            {
+                InvalidDataException refused = null;
+                var allocated = TestReadBudget.Allocated(() => refused = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<BloomFilter>(bytes, new ReadOptions(budget))));
 
-            Assert.IsNotNull(Persistence.FromByteArray<BloomFilter>(bytes, new ReadOptions(why.RequiredBytes)),
+                var why = Assert.IsInstanceOfType<ReadBudgetExceededException>(refused.InnerException,
+                    $"a refusal under {budget:N0} bytes is not a budget refusal: {refused.Message}");
+                Assert.AreEqual(total, why.RequiredBytes, $"refused under {budget:N0} bytes, the read named another total");
+                StringAssert.Contains(refused.Message, NotReached, $"refused under {budget:N0} bytes, it did not say its checksum was not reached");
+                Assert.IsLessThan(payload / 2L, allocated,
+                    $"refused under {budget:N0} bytes, the read allocated {allocated:N0}, as if it held its {payload:N0}-byte payload");
+            }
+
+            Assert.IsNotNull(Persistence.FromByteArray<BloomFilter>(bytes, new ReadOptions(total)),
                 "the large form does not read under the total its refusal named");
         }
 

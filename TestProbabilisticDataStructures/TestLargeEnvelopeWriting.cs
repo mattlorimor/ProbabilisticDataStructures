@@ -370,21 +370,23 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The longest run a payload holds is <c>int.MaxValue</c> bytes, unless lowered, and
-        /// lowered only on the thread that lowered it. A reader of a run refuses one past it
-        /// as more than one array, and goes past that check at it: the writer's bound is the
-        /// reader's.
+        /// The longest run a payload holds is <see cref="Array.MaxLength"/> bytes, unless
+        /// lowered, and lowered only on the thread that lowered it. A reader of a run refuses
+        /// one past it as more than one array, and goes past that check at it: the writer's
+        /// bound is the reader's.
         /// </summary>
         /// <remarks>
         /// The reader's half is held on a Bloom filter, whose bit array is a run read by
         /// <see cref="PayloadReader.ReadBytes"/>, with its length prefix rewritten and the
-        /// checksum repaired, so the length is the only thing wrong.
+        /// checksum repaired, so the length is the only thing wrong. A run is read into one
+        /// array, so the bound is the largest array, not the largest <c>int</c>: a run
+        /// between them passed the reader's check and then could not be allocated.
         /// </remarks>
         [TestMethod]
         public void TestTheLongestRunIsTheLongestAReaderTakes()
         {
             Assert.IsNull(PayloadWriter.LoweredLongestRun);
-            Assert.AreEqual((long)int.MaxValue, PayloadWriter.LongestRun);
+            Assert.AreEqual((long)Array.MaxLength, PayloadWriter.LongestRun);
 
             WithLongestRun(5, () =>
             {
@@ -393,10 +395,10 @@ namespace TestProbabilisticDataStructures
                 var other = new Thread(() => elsewhere = PayloadWriter.LongestRun);
                 other.Start();
                 other.Join();
-                Assert.AreEqual((long)int.MaxValue, elsewhere, "a bound lowered on one thread was seen on another");
+                Assert.AreEqual((long)Array.MaxLength, elsewhere, "a bound lowered on one thread was seen on another");
                 return 0;
             });
-            Assert.AreEqual((long)int.MaxValue, PayloadWriter.LongestRun, "the bound was not put back");
+            Assert.AreEqual((long)Array.MaxLength, PayloadWriter.LongestRun, "the bound was not put back");
 
             var bytes = new BloomFilter(100, 0.01).ToByteArray();
             InvalidDataException Claiming(uint length)
@@ -408,8 +410,8 @@ namespace TestProbabilisticDataStructures
                     () => Persistence.FromByteArray<BloomFilter>(claimed, ReadOptions.Unlimited));
             }
 
-            StringAssert.Contains(Claiming((uint)int.MaxValue + 1).Message, "single array");
-            Assert.DoesNotContain("single array", Claiming(int.MaxValue).Message, "a run of the longest was refused as too long");
+            StringAssert.Contains(Claiming((uint)Array.MaxLength + 1).Message, "single array");
+            Assert.DoesNotContain("single array", Claiming((uint)Array.MaxLength).Message, "a run of the longest was refused as too long");
         }
 
         /// <summary>

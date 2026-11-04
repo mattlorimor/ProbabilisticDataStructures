@@ -63,7 +63,7 @@ namespace TestProbabilisticDataStructures
         /// One structure to read: its bytes, how to read them under options, with and
         /// without a supplied hash, and how to write what was read.
         /// </summary>
-        private sealed record Sample(
+        internal sealed record Sample(
             string Name,
             byte[] Bytes,
             Func<byte[], ReadOptions, object> Read,
@@ -121,7 +121,7 @@ namespace TestProbabilisticDataStructures
         /// A sample of every structure, sized so its read allocates well past the slack.
         /// Built once per run, on first use.
         /// </summary>
-        private static readonly Lazy<Dictionary<StructureId, Sample>> Samples = new(() =>
+        internal static readonly Lazy<Dictionary<StructureId, Sample>> Samples = new(() =>
             new Dictionary<StructureId, Sample>
             {
                 [StructureId.BloomFilter] = Of("BloomFilter",
@@ -267,7 +267,7 @@ namespace TestProbabilisticDataStructures
         /// 240,200 and 248,248 bytes. That noise only ever adds, so the least of a few
         /// repeats is the read's own allocation.
         /// </remarks>
-        private static long Allocated(Func<object> read, int repeats = 5)
+        internal static long Allocated(Func<object> read, int repeats = 5)
         {
             var least = long.MaxValue;
             for (var i = 0; i < repeats; i++)
@@ -483,7 +483,7 @@ namespace TestProbabilisticDataStructures
         /// A sample written again in the large form, and writing in it, so that the checks
         /// that a read writes back the bytes it was read from hold in that form.
         /// </summary>
-        private static Sample InTheLargeForm(Sample sample)
+        internal static Sample InTheLargeForm(Sample sample)
         {
             var bytes = LargeForm.Below(0, () => sample.Write(sample.Read(sample.Bytes, ReadOptions.Unlimited)));
             Assert.IsTrue(LargeForm.IsLarge(bytes), $"{sample.Name} was not written in the large form");
@@ -522,13 +522,25 @@ namespace TestProbabilisticDataStructures
                 Assert.AreEqual(budget, why.MemoryBudget);
             }
 
-            // From a stream that cannot seek, the runs are read past rather than skipped,
-            // and the total is the same.
-            Assert.IsTrue(RefusedForBudget(() => sample.ReadStream(new OneWay(bytes), new ReadOptions(0)), out var oneWay),
-                $"{sample.Name} loaded from a stream that cannot seek under a budget of nothing");
-            Assert.AreEqual(total, oneWay!.RequiredBytes,
-                $"{sample.Name} named {oneWay.RequiredBytes} bytes read from a stream that cannot seek, " +
-                $"and {total} from one that can");
+            // From a stream that cannot seek, an ordinary payload's runs are read past
+            // rather than skipped, and the total is the same. The large form is priced in
+            // a pass of its own before it is read, which has to seek back between the two,
+            // so from such a stream it is refused for the stream, under any budget (#226).
+            if (LargeForm.IsLarge(bytes))
+            {
+                var unseekable = Assert.ThrowsExactly<NotSupportedException>(
+                    () => sample.ReadStream(new OneWay(bytes), new ReadOptions(0)),
+                    $"{sample.Name} was not refused for a stream that cannot seek");
+                StringAssert.Contains(unseekable.Message, "seek", unseekable.Message);
+            }
+            else
+            {
+                Assert.IsTrue(RefusedForBudget(() => sample.ReadStream(new OneWay(bytes), new ReadOptions(0)), out var oneWay),
+                    $"{sample.Name} loaded from a stream that cannot seek under a budget of nothing");
+                Assert.AreEqual(total, oneWay!.RequiredBytes,
+                    $"{sample.Name} named {oneWay.RequiredBytes} bytes read from a stream that cannot seek, " +
+                    $"and {total} from one that can");
+            }
 
             Assert.IsFalse(RefusedForBudget(() => sample.Read(bytes, new ReadOptions(total)), out var again),
                 $"{sample.Name} was refused needing {total} bytes, and refused again under exactly that, " +

@@ -56,6 +56,24 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// What refuses a run claiming <paramref name="claim"/> bytes whose length prefix
+        /// ends at <paramref name="offset"/>, of a payload that does not hold them: more than
+        /// one array holds, past <see cref="Array.MaxLength"/>, which a run is read into and
+        /// so is checked first; otherwise the payload ending, which is where the offset
+        /// arithmetic wrapped.
+        /// </summary>
+        /// <remarks>
+        /// The two meet at <see cref="Array.MaxLength"/>, not at <c>int.MaxValue</c>: a run
+        /// between them used to pass the first check, be refused by the second only because
+        /// no held payload is that long, and, read from a stream rather than held, reach an
+        /// allocation no array can make. So below an offset of 57 the claims that wrapped are
+        /// all past one array, and the wrap is reached at the offsets above it.
+        /// </remarks>
+        internal static string RefusalFor(long claim, int offset) => claim > Array.MaxLength
+            ? "cannot be read into a single array"
+            : $"while reading {claim} more at offset {offset}.";
+
+        /// <summary>
         /// Reads past <paramref name="skipped"/> bytes and then a run. A method of its
         /// own because a reader cannot be captured by a lambda.
         /// </summary>
@@ -75,7 +93,7 @@ namespace TestProbabilisticDataStructures
         /// <paramref name="offset"/>: the largest that does not wrap, the smallest that
         /// does, and the largest there is.
         /// </summary>
-        private static int[] ClaimsAround(int offset)
+        internal static int[] ClaimsAround(int offset)
         {
             var lastSafe = int.MaxValue - offset;
 
@@ -93,7 +111,7 @@ namespace TestProbabilisticDataStructures
         /// The claims a probe of a DDSketch payload found on either side of the edge --
         /// 2,147,483,584 refused as it should be, and 2,147,483,647 not -- and the ones
         /// between them, on a payload that holds eight bytes after the prefix. Every one
-        /// is refused as the payload ending.
+        /// is refused: as the payload ending, or, past one array, as more than one holds.
         /// </summary>
         [TestMethod]
         [DataRow(9)]
@@ -112,7 +130,7 @@ namespace TestProbabilisticDataStructures
                 () => ReadRunAfter(payload, 0),
                 $"a run claiming {claim:N0} bytes of a twelve-byte payload was not refused as one");
 
-            StringAssert.Contains(ex.Message, $"while reading {claim} more at offset 4.");
+            StringAssert.Contains(ex.Message, RefusalFor(claim, 4), ex.Message);
         }
 
         /// <summary>
@@ -139,7 +157,7 @@ namespace TestProbabilisticDataStructures
                     $"a run at offset {offset} claiming {claim:N0} bytes was not refused as " +
                     "the payload ending");
 
-                StringAssert.Contains(ex.Message, $"while reading {claim} more at offset {offset}.");
+                StringAssert.Contains(ex.Message, RefusalFor(claim, offset), ex.Message);
             }
         }
 
@@ -179,6 +197,8 @@ namespace TestProbabilisticDataStructures
         /// tells the two apart. That mutation survived the type alone.
         /// </remarks>
         [TestMethod]
+        [DataRow(0x7FFF_FFC8L)]
+        [DataRow(0x7FFF_FFFFL)]
         [DataRow(0x8000_0000L)]
         [DataRow(0xFFFF_FFFFL)]
         public void TestARunClaimingMoreThanAnArrayHoldsIsRefused(long claim)
@@ -190,8 +210,29 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The largest array is the edge: a run claiming as many bytes as one holds goes on
+        /// to be refused as the payload ending, and one byte more as more than an array
+        /// holds. The first rows above are that byte more and the largest <c>int</c>, which
+        /// the reader let through until a run could be read from a stream.
+        /// </summary>
+        [TestMethod]
+        public void TestARunOfTheLargestArrayGoesOnToTheBoundsCheck()
+        {
+            Assert.AreEqual(0x7FFF_FFC7, Array.MaxLength, "the largest array is not the one the rows above straddle");
+
+            var largest = Assert.ThrowsExactly<InvalidDataException>(
+                () => ReadRunAfter(Payload(0, (uint)Array.MaxLength, 8), 0));
+            StringAssert.Contains(largest.Message, $"while reading {Array.MaxLength} more at offset 4.", largest.Message);
+
+            var past = Assert.ThrowsExactly<InvalidDataException>(
+                () => ReadRunAfter(Payload(0, (uint)Array.MaxLength + 1, 8), 0));
+            StringAssert.Contains(past.Message, "cannot be read into a single array", past.Message);
+        }
+
+        /// <summary>
         /// Every structure that writes a run refuses one that claims more than its payload
-        /// holds, at the claims either side of where the offset arithmetic wrapped.
+        /// holds, at the claims either side of where the offset arithmetic wrapped: as the
+        /// payload ending, or, for a claim past one array, as more than one holds.
         /// </summary>
         /// <remarks>
         /// The roster is <see cref="StructureId"/>: a structure is swept if a payload of
@@ -245,7 +286,7 @@ namespace TestProbabilisticDataStructures
                     foreach (var claim in ClaimsAround(offset))
                     {
                         claimsTried++;
-                        var expected = $"while reading {claim} more at offset {offset}.";
+                        var expected = RefusalFor(claim, offset);
 
                         try
                         {
@@ -254,7 +295,7 @@ namespace TestProbabilisticDataStructures
                         }
                         catch (InvalidDataException ex) when (ex.Message.Contains(expected))
                         {
-                            // Refused as the payload ending, for the claim it made.
+                            // Refused for the claim it made.
                         }
                         catch (Exception ex)
                         {
@@ -265,8 +306,8 @@ namespace TestProbabilisticDataStructures
 
                 if (wrong.Count > 0)
                 {
-                    failures.Add($"{name}: {wrong.Count} claims were not refused as the payload " +
-                        $"ending, the first at {wrong[0]}");
+                    failures.Add($"{name}: {wrong.Count} claims were not refused for what they claim, " +
+                        $"the first at {wrong[0]}");
                 }
             }
 
@@ -278,28 +319,36 @@ namespace TestProbabilisticDataStructures
             // would be exempt from every check below and pass them all.
             Assert.IsGreaterThan(0, claimsTried, "no run was found in any payload");
 
-            StructureRoster.AssertCoversEveryStructure(
-                "run lengths", withRuns,
-                (StructureId.CountMinSketch,
-                    "its counters are u64 cells in a matrix the header sizes; no byte run"),
-                (StructureId.MinHashSignature,
-                    "a u32 count of u64 values, each a field; no byte run"),
-                (StructureId.SimHashSignature, "one u64 value; no byte run"),
-                (StructureId.ThetaSketch, "a u32 count of u64 values, each a field; no byte run"),
-                (StructureId.TupleSketch,
-                    "a u32 count of u64 values and of f64 summaries, each a field; no byte run"),
-                (StructureId.SetSketch, "u16 registers a header sizes, each a field; no byte run"),
-                (StructureId.SublimeCountMinSketch,
-                    "u64 counters in rows and records a header counts; no byte run"),
-                (StructureId.PrivateCountMinSketch,
-                    "f64 cells in a matrix the header sizes; no byte run"),
-                (StructureId.DpswSketch,
-                    "its sketches are written as bodies of fields within the window's own payload; " +
-                    "no byte run"),
-                (StructureId.Grafite, "u64 words a u32 counts, each a field; no byte run"),
-                (StructureId.InfiniFilter, "u64 words a u32 counts, each a field; no byte run"),
-                (StructureId.MementoFilter, "u64 words a u32 counts, each a field; no byte run"));
+            StructureRoster.AssertCoversEveryStructure("run lengths", withRuns, NoRun);
         }
+
+        /// <summary>
+        /// The structures no payload of which holds a run, each with what it holds instead:
+        /// the exemptions of every sweep that probes for runs, in either form of the
+        /// envelope, and checked by each, so one that gains a run fails both.
+        /// </summary>
+        internal static readonly (StructureId Id, string Why)[] NoRun =
+        {
+            (StructureId.CountMinSketch,
+                "its counters are u64 cells in a matrix the header sizes; no byte run"),
+            (StructureId.MinHashSignature,
+                "a u32 count of u64 values, each a field; no byte run"),
+            (StructureId.SimHashSignature, "one u64 value; no byte run"),
+            (StructureId.ThetaSketch, "a u32 count of u64 values, each a field; no byte run"),
+            (StructureId.TupleSketch,
+                "a u32 count of u64 values and of f64 summaries, each a field; no byte run"),
+            (StructureId.SetSketch, "u16 registers a header sizes, each a field; no byte run"),
+            (StructureId.SublimeCountMinSketch,
+                "u64 counters in rows and records a header counts; no byte run"),
+            (StructureId.PrivateCountMinSketch,
+                "f64 cells in a matrix the header sizes; no byte run"),
+            (StructureId.DpswSketch,
+                "its sketches are written as bodies of fields within the window's own payload; " +
+                "no byte run"),
+            (StructureId.Grafite, "u64 words a u32 counts, each a field; no byte run"),
+            (StructureId.InfiniFilter, "u64 words a u32 counts, each a field; no byte run"),
+            (StructureId.MementoFilter, "u64 words a u32 counts, each a field; no byte run"),
+        };
 
         /// <summary>
         /// The frame with a u32 overwritten at an offset within it, and the checksum
@@ -366,7 +415,7 @@ namespace TestProbabilisticDataStructures
         /// Every stored payload, each with the reader of its structure. Read from the
         /// embedded fixtures themselves, so one added is swept without being named.
         /// </summary>
-        private static IEnumerable<(StructureId Id, string Name, Func<byte[], object> Read, byte[] Bytes)>
+        internal static IEnumerable<(StructureId Id, string Name, Func<byte[], object> Read, byte[] Bytes)>
             StoredPayloads(Dictionary<StructureId, Func<byte[], object>> readers)
         {
             var assembly = typeof(TestPayloadReader).Assembly;
