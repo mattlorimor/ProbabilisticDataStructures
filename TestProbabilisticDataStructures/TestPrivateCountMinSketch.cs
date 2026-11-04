@@ -39,6 +39,24 @@ namespace TestProbabilisticDataStructures
         private static byte[] Key(string s) => Encoding.UTF8.GetBytes(s);
 
         /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: the length
+        /// is the shape's, so a narrow single row and a wider, deeper sketch, and both
+        /// placements, which write their own byte. The writer has one version.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            var version = PersistenceFormat.ColumnPlacementVersion;
+            yield return PayloadState.Of("8 x 1, empty", new PrivateCountMinSketch(8, 1, 1.0, seed: 1), version);
+
+            foreach (var placement in new[] { Placement.Narrow, Placement.Wide })
+            {
+                var sketch = new PrivateCountMinSketch(100, 3, 1.0, 2, null, placement);
+                for (var i = 0; i < 200; i++) sketch.Add(Key(i % 30));
+                yield return PayloadState.Of($"100 x 3, {placement}, filled", sketch, version);
+            }
+        }
+
+        /// <summary>
         /// A private sketch's payload is its dimensions, a placement byte, its budget and
         /// its count, twenty-five bytes, then its counters at eight bytes each with no run
         /// around them (#216). The writer wrote them a counter at a time, so only the

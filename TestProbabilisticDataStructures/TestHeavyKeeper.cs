@@ -30,6 +30,31 @@ namespace TestProbabilisticDataStructures
         private static byte[] Key(string s) => Encoding.ASCII.GetBytes(s);
 
         /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: the
+        /// buckets are the shape's, and the tracked elements are written at their own
+        /// lengths, so a structure empty, holding two elements of different lengths, and
+        /// full after evictions, narrow and deeper, and placed both ways. The writer has one
+        /// version.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            var version = PersistenceFormat.ColumnPlacementVersion;
+            yield return PayloadState.Of("empty", new HeavyKeeper(3, 16, seed: 1), version);
+
+            var partial = new HeavyKeeper(3, 16, seed: 1);
+            partial.Add(Key("a"));
+            partial.Add(Key("a fair bit longer than the first"));
+            yield return PayloadState.Of("two elements of different lengths", partial, version);
+
+            foreach (var placement in new[] { Placement.Narrow, Placement.Wide })
+            {
+                var full = new HeavyKeeper(4, 64, 3, 1.08, 2, null, placement);
+                for (var i = 0; i < 300; i++) full.Add(Key(new string('x', 1 + i % 23) + (i % 11)));
+                yield return PayloadState.Of($"full after evictions, 64 x 3, {placement}", full, version);
+            }
+        }
+
+        /// <summary>
         /// A HeavyKeeper's payload is its parameters, placement byte, generator and count,
         /// thirty-seven bytes, then two bytes of fingerprint and eight of counter a bucket
         /// with no run around them, then its tracked elements (#216). The writer wrote the

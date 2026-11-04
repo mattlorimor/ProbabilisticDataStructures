@@ -48,7 +48,7 @@ namespace ProbabilisticDataStructures
     /// payload was placed with.
     /// </para>
     /// </remarks>
-    public class PrivateCountMinSketch : IBinaryPersistable<PrivateCountMinSketch>
+    public class PrivateCountMinSketch : IBinaryPersistable<PrivateCountMinSketch>, IPayloadBody
     {
         private readonly double[][] matrix;
         private readonly uint width;
@@ -381,18 +381,13 @@ namespace ProbabilisticDataStructures
         /// came from.
         /// </remarks>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             this.WriteBody(payload);
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.PrivateCountMinSketch,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan,
+            return new(StructureId.PrivateCountMinSketch, PersistenceFormat.Identify(this.Hash),
                 PersistenceFormat.ColumnPlacementVersion);
         }
 
@@ -646,7 +641,8 @@ namespace ProbabilisticDataStructures
         /// <see cref="DpswSketch"/> can hold sketches without each carrying its own
         /// frame. The seed is no more written here than it is by <see cref="WriteTo"/>.
         /// The layout is format version 9's, with the placement byte, so whatever holds it
-        /// is written at version 9 too.
+        /// is written at version 9 too. A counter counts it as the sketch's own payload is
+        /// counted, so a window holding sketches is counted through their bodies.
         /// </summary>
         internal void WriteBody(PayloadWriter payload)
         {
@@ -656,11 +652,15 @@ namespace ProbabilisticDataStructures
             payload.WriteDouble(this.rho);
             payload.WriteUInt64(this.count);
 
-            for (var i = 0; i < this.depth; i++)
+            // The counters, row by row, with no run around them, sized by the shape.
+            if (payload.BeginBlock((long)this.depth * this.width * sizeof(double)))
             {
-                for (var j = 0; j < this.width; j++)
+                for (var i = 0; i < this.depth; i++)
                 {
-                    payload.WriteDouble(this.matrix[i][j]);
+                    for (var j = 0; j < this.width; j++)
+                    {
+                        payload.WriteDouble(this.matrix[i][j]);
+                    }
                 }
             }
         }

@@ -19,6 +19,25 @@ namespace TestProbabilisticDataStructures
         private static byte[] Key(int i) => Encoding.UTF8.GetBytes("k" + i);
 
         /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: the rows
+        /// are the depth and width, and each record of an earlier state is written at its
+        /// own width, so a fresh sketch, a deeper one, and one that has expanded and holds
+        /// records. The writer has one version.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of("fresh, one row", new SublimeCountMinSketch(0.5, 0.5, 1.0));
+
+            var deeper = new SublimeCountMinSketch(0.01);
+            for (var i = 0; i < 40; i++) deeper.Add(Key(i));
+            yield return PayloadState.Of("five rows, a few keys", deeper);
+
+            var expanded = new SublimeCountMinSketch(0.1);
+            for (var i = 0; expanded.Width <= 128; i++) expanded.Add(Key(i));
+            yield return PayloadState.Of($"expanded to {expanded.Width}, with records", expanded);
+        }
+
+        /// <summary>
         /// A Sublime sketch's payload is its parameters, dimensions, count and limits and the
         /// number of its records, sixty bytes, then each record and the rows as counts of
         /// eight bytes, with no run around them (#216). The sketch packs its counters, so

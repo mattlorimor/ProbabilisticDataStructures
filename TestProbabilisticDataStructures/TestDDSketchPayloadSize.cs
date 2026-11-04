@@ -148,7 +148,13 @@ namespace TestProbabilisticDataStructures
                 (1L, 1L),
             })
             {
-                var sketch = Claiming(positive, negative, out _);
+                var sketch = Claiming(positive, negative, out var shape);
+                foreach (var (store, member, claimed) in shape)
+                {
+                    store.GetType().GetProperty(member, BindingFlags.NonPublic | BindingFlags.Instance)!
+                        .SetValue(store, claimed);
+                }
+
                 var counter = PayloadWriter.Counter();
                 ((IPayloadBody)sketch).WritePayload(counter);
                 Assert.AreEqual(Fixed + 8 * (positive + negative), counter.Length,

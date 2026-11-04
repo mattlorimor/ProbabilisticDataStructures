@@ -39,7 +39,7 @@ namespace ProbabilisticDataStructures
     /// person's whole history.
     /// </para>
     /// </remarks>
-    public class DpswSketch : IBinaryPersistable<DpswSketch>
+    public class DpswSketch : IBinaryPersistable<DpswSketch>, IPayloadBody
     {
         /// <summary>One private sketch and the range of the substream it covers.</summary>
         private sealed class Segment
@@ -655,11 +655,10 @@ namespace ProbabilisticDataStructures
         /// </para>
         /// </remarks>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt64((ulong)this.window);
             payload.WriteDouble(this.rho);
             payload.WriteDouble(this.alpha);
@@ -674,6 +673,7 @@ namespace ProbabilisticDataStructures
                 payload.WriteUInt64((ulong)substream.Start);
                 payload.WriteUInt32((uint)substream.Held);
 
+                // A counter counts each body by the writes that write it.
                 foreach (var segment in substream.Segments)
                 {
                     segment.Sketch.WriteBody(payload);
@@ -682,11 +682,8 @@ namespace ProbabilisticDataStructures
 
             // Version 9, because each body is the private sketch's version 9 body, with the
             // byte that says how that sketch was placed.
-            PersistenceFormat.Write(
-                stream,
-                StructureId.DpswSketch,
+            return new(StructureId.DpswSketch,
                 PersistenceFormat.Identify(this.hash ?? Defaults.GetDefaultHashFunction()),
-                payload.WrittenSpan,
                 PersistenceFormat.ColumnPlacementVersion);
         }
 
