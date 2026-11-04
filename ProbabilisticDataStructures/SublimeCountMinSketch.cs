@@ -549,21 +549,29 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Restores the sketch to its original state.
         /// </summary>
+        /// <remarks>
+        /// It builds the rows it starts again with before it changes anything, so a reset that
+        /// cannot get the memory for them throws the <see cref="OutOfMemoryException"/> with
+        /// the sketch as it was. It used to set the tuning and the starting width first and
+        /// then replace the rows one at a time, so a failure left rows of the old width under
+        /// the new one, and a sketch that could not be written.
+        /// </remarks>
         public SublimeCountMinSketch Reset()
         {
-            this.countersPerChunk = ValeCounterArray.DefaultCountersPerChunk;
-            this.stubBits = ValeCounterArray.DefaultStubBits;
-
-            this.width = StartingWidth(this.countersPerChunk, this.sizeFactor);
-
-            for (var i = 0; i < this.rows.Length; i++)
+            var starting = StartingWidth(ValeCounterArray.DefaultCountersPerChunk, this.sizeFactor);
+            var fresh = new ValeCounterArray[this.rows.Length];
+            for (var i = 0; i < fresh.Length; i++)
             {
-                this.rows[i] = NewRow(this.width, this.countersPerChunk, this.stubBits);
+                fresh[i] = NewRow(
+                    starting, ValeCounterArray.DefaultCountersPerChunk, ValeCounterArray.DefaultStubBits);
             }
 
+            // Built; from here the sketch is changed, and nothing allocates.
+            Install(new Layout(
+                fresh, starting, ValeCounterArray.DefaultCountersPerChunk, ValeCounterArray.DefaultStubBits));
             this.records.Clear();
             this.count = 0;
-            this.expansionLimit = LimitFor(this.width);
+            this.expansionLimit = LimitFor(starting);
             this.contractionLimit = 0;
             return this;
         }
