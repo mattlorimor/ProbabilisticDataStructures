@@ -115,6 +115,14 @@ namespace ProbabilisticDataStructures
         private readonly ulong[] _pool;
 
         /// <summary>
+        /// Called before the array allocates a tails array for a chunk that has outgrown its
+        /// pool, the one allocation a write to a counter can make. It is null;
+        /// <see cref="SublimeCountMinSketch.BeforeAllocating"/> hands a test's hook to the
+        /// rows of a sketch, to fail that allocation.
+        /// </summary>
+        internal Action? BeforeAllocatingTails { get; set; }
+
+        /// <summary>
         /// Builds an array of counters, all nought.
         /// </summary>
         /// <param name="counterCount">How many counters the array holds.</param>
@@ -422,6 +430,7 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         private ulong[] MoveToTails(int chunk, int used)
         {
+            BeforeAllocatingTails?.Invoke();
             var tails = new ulong[_countersPerChunk];
 
             var at = 0;

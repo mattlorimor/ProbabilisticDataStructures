@@ -157,12 +157,32 @@ namespace ProbabilisticDataStructures
         internal int WidthLimit { get; set; } = MaxWidth;
 
         /// <summary>
-        /// Called before each row of counters that a doubling, a folding or a repacking
-        /// allocates, plain counts and packed rows alike. It is null; a test sets it to
-        /// throw an <see cref="OutOfMemoryException"/> at one of them, to reach a resize
-        /// that cannot get its memory without building a sketch of gigabytes.
+        /// Called before each row of counters that a doubling, a folding, a repacking or a
+        /// reset allocates, plain counts and packed rows alike, and before each tails array
+        /// that a row of the sketch allocates for a chunk that has outgrown its pool. It is
+        /// null; a test sets it to throw an <see cref="OutOfMemoryException"/> at one of them,
+        /// to reach a resize that cannot get its memory without building a sketch of
+        /// gigabytes.
         /// </summary>
-        internal Action? BeforeAllocatingRow { get; set; }
+        /// <remarks>
+        /// Setting it hands it to every row the sketch holds, and the sketch hands it to every
+        /// row it builds. The records of earlier states are left out: they are only read, so
+        /// they never allocate.
+        /// </remarks>
+        internal Action? BeforeAllocating
+        {
+            get => this.beforeAllocating;
+            set
+            {
+                this.beforeAllocating = value;
+                foreach (var row in this.rows)
+                {
+                    row.BeforeAllocatingTails = value;
+                }
+            }
+        }
+
+        private Action? beforeAllocating;
 
         /// <summary>
         /// The width a row starts at: a chunk's worth of counters over the size factor,
@@ -511,8 +531,7 @@ namespace ProbabilisticDataStructures
 
             for (var i = 0; i < this.rows.Length; i++)
             {
-                this.rows[i] = new ValeCounterArray(
-                    this.width, this.countersPerChunk, this.stubBits);
+                this.rows[i] = NewRow(this.width, this.countersPerChunk, this.stubBits);
             }
 
             this.records.Clear();
@@ -1199,22 +1218,25 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// A row of plain counts for a resize to fill, allocated past
-        /// <see cref="BeforeAllocatingRow"/>.
+        /// <see cref="BeforeAllocating"/>.
         /// </summary>
         private ulong[] NewCounts(int forWidth)
         {
-            this.BeforeAllocatingRow?.Invoke();
+            this.BeforeAllocating?.Invoke();
             return new ulong[forWidth];
         }
 
         /// <summary>
-        /// A row of packed counters for a resize to fill, allocated past
-        /// <see cref="BeforeAllocatingRow"/>.
+        /// A row of packed counters for a resize or a reset to fill, allocated past
+        /// <see cref="BeforeAllocating"/>, which it is handed in turn.
         /// </summary>
         private ValeCounterArray NewRow(int forWidth, int chunkCounters, int stub)
         {
-            this.BeforeAllocatingRow?.Invoke();
-            return new ValeCounterArray(forWidth, chunkCounters, stub);
+            this.BeforeAllocating?.Invoke();
+            return new ValeCounterArray(forWidth, chunkCounters, stub)
+            {
+                BeforeAllocatingTails = this.BeforeAllocating,
+            };
         }
 
         /// <summary>

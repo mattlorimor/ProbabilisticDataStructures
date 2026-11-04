@@ -27,10 +27,11 @@ namespace TestProbabilisticDataStructures
     /// at. That run is a manual one; the issue, #213, has the recipe.
     /// <para>
     /// A test cannot set a heap limit from inside its own process, so the sketch has a hook,
-    /// <see cref="SublimeCountMinSketch.BeforeAllocatingRow"/>, that every row a doubling or
-    /// a folding allocates passes through on its way to the allocation. Each test fails those
-    /// allocations one at a time, the first, then the second, and so on until the resize
-    /// gets all it asks for, and holds the sketch to what it was at every one of them.
+    /// <see cref="SublimeCountMinSketch.BeforeAllocating"/>, that every row a doubling or
+    /// a folding allocates passes through on its way to the allocation, and every tails array
+    /// a row of the sketch allocates. Each test fails those allocations one at a time, the
+    /// first, then the second, and so on until the resize gets all it asks for, and holds the
+    /// sketch to what it was at every one of them.
     /// </para>
     /// </remarks>
     [TestClass]
@@ -90,9 +91,9 @@ namespace TestProbabilisticDataStructures
                 var sketch = OneShortOfDoubling();
                 var before = sketch.ToByteArray();
                 var hook = new FailAt(failing);
-                sketch.BeforeAllocatingRow = hook.Before;
+                sketch.BeforeAllocating = hook.Before;
                 var threw = RunsOutOfMemory(() => sketch.Add(Doubler));
-                sketch.BeforeAllocatingRow = null;
+                sketch.BeforeAllocating = null;
 
                 if (!threw)
                 {
@@ -174,9 +175,9 @@ namespace TestProbabilisticDataStructures
 
                 var sketch = OneShortOfFolding();
                 var hook = new FailAt(failing);
-                sketch.BeforeAllocatingRow = hook.Before;
+                sketch.BeforeAllocating = hook.Before;
                 var threw = RunsOutOfMemory(() => sketch.Remove(Folder));
-                sketch.BeforeAllocatingRow = null;
+                sketch.BeforeAllocating = null;
 
                 if (!threw)
                 {
