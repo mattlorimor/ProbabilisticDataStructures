@@ -389,16 +389,17 @@ namespace TestProbabilisticDataStructures
                 () => Persistence.FromByteArray<BloomFilter>(LargeForm.Reseal(relabelled)));
             StringAssert.Contains(sealedId.Message, "was read as");
 
-            // A length past the stream: the budget is what refuses it once it is believed.
+            // A length past the stream that one array could hold: believed, it is priced, and the
+            // budget refuses it.
             var longer = (byte[])bytes.Clone();
-            BinaryPrimitives.WriteUInt64LittleEndian(longer.AsSpan(10), 1UL << 40);
+            BinaryPrimitives.WriteUInt64LittleEndian(longer.AsSpan(10), (ulong)Array.MaxLength);
             var unsealedLength = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<BloomFilter>(longer));
             StringAssert.Contains(unsealedLength.Message, HeaderChecksum);
             Assert.IsNull(unsealedLength.InnerException, "a length was acted on before its header's checksum held");
             var sealedLength = Assert.ThrowsExactly<InvalidDataException>(
                 () => Persistence.FromByteArray<BloomFilter>(LargeForm.Reseal(longer)));
             Assert.IsInstanceOfType<ReadBudgetExceededException>(sealedLength.InnerException,
-                $"a length of a terabyte, believed, was not refused for its cost: {sealedLength.Message}");
+                $"a length of the largest array, believed, was not refused for its cost: {sealedLength.Message}");
         }
 
         /// <summary>

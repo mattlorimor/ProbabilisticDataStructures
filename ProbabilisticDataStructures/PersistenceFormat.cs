@@ -691,8 +691,9 @@ namespace ProbabilisticDataStructures
         /// read.
         /// <para>
         /// The payload is held here, read into one array as the ordinary envelope's is, so
-        /// one longer than an array is refused for that once it has been priced; a reader
-        /// that streams the large form lifts that (#226).
+        /// one longer than an array is refused for that before it is priced, as an
+        /// ordinary header's length is; a reader that streams the large form lifts that
+        /// (#226).
         /// </para>
         /// </remarks>
         private static T ReadLarge<T>(
@@ -704,6 +705,15 @@ namespace ProbabilisticDataStructures
             ReadExactly(stream, header[HeaderLength..], "rest of the large header");
             var length = CheckLargeHeader(header, expected, out var version, out var hash);
             var envelope = EnvelopeCost(length);
+
+            // Held, so refused past one array for that, as the ordinary header's length
+            // is, before it is priced as though it could be read.
+            if (length > (ulong)Array.MaxLength)
+            {
+                throw new InvalidDataException(
+                    $"Payload claims a length of {length} bytes, which cannot be read " +
+                    "into a single array.");
+            }
 
             // The header is vouched for by its own checksum, so the hash it names is
             // checked now, before anything is priced, as an ordinary header's is once its
@@ -723,13 +733,6 @@ namespace ProbabilisticDataStructures
             else
             {
                 budget.Charge(envelope);
-            }
-
-            if (length > (ulong)Array.MaxLength)
-            {
-                throw new InvalidDataException(
-                    $"Payload claims a length of {length} bytes, which cannot be read " +
-                    "into a single array.");
             }
 
             var payload = ReadExactly(stream, (int)length, "payload");
