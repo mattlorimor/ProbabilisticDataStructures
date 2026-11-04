@@ -464,6 +464,12 @@ namespace ProbabilisticDataStructures
         /// Removing something never added, or removing it more often than it was added,
         /// leaves the sketch holding counts that are too low rather than refusing. The
         /// sketch does not know what it holds, so it cannot tell the difference.
+        /// <para>
+        /// The removal that folds the rows back builds the folded rows, with the key taken out
+        /// of them, before it changes anything. If it cannot get the memory it throws the
+        /// <see cref="OutOfMemoryException"/> with the sketch as it was before the removal:
+        /// the key is not taken out, so removing it again removes it once.
+        /// </para>
         /// </remarks>
         /// <param name="data">The data to remove.</param>
         /// <returns>The sketch.</returns>
@@ -477,22 +483,23 @@ namespace ProbabilisticDataStructures
         public SublimeCountMinSketch Remove(ReadOnlySpan<byte> data)
         {
             var kernel = Utils.HashKernel(data, this.Hash);
+            var after = this.count > 0 ? this.count - 1 : 0;
+
+            // The removal that takes the count below the folding point folds the rows, and
+            // takes the key out of the folded rows as it builds them, which is the part that
+            // can run out of memory.
+            if (after < this.contractionLimit && this.records.Count > 0)
+            {
+                Contract(kernel, after);
+                return this;
+            }
 
             for (var i = 0; i < this.rows.Length; i++)
             {
                 this.rows[i].Decrement(ColumnOf(kernel, i));
             }
 
-            if (this.count > 0)
-            {
-                this.count--;
-            }
-
-            if (this.count < this.contractionLimit && this.records.Count > 0)
-            {
-                Contract();
-            }
-
+            this.count = after;
             return this;
         }
 
@@ -1112,9 +1119,11 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Folds every row back in half, keeping the updates made since the expansion
-        /// that doubled it.
+        /// Takes the removal of the key that calls for the folding, and folds every row back
+        /// in half, keeping the updates made since the expansion that doubled it.
         /// </summary>
+        /// <param name="kernel">The hash of the key being removed.</param>
+        /// <param name="after">The count once the key is removed.</param>
         /// <remarks>
         /// Both halves start an expansion holding what the single array held, so what
         /// each has gathered since is its current value less that starting value. A
@@ -1129,15 +1138,16 @@ namespace ProbabilisticDataStructures
         /// a counter of 2^63 or more came out negative and was folded to nought.
         /// </para>
         /// <para>
-        /// The folded rows are built before anything is changed, so a folding that runs out
-        /// of memory leaves the rows, their width and the record as they were, and the next
-        /// removal tries again. It used to take the record off first and set the width before
-        /// packing the rows, so a failure lost the record, and with it the folding, or left
-        /// the width halved over rows that were not. The removal that calls for it has been
-        /// taken already, and stays taken.
+        /// The folded rows are built before anything is changed, the key taken out of them as
+        /// they are, so a removal whose folding runs out of memory leaves the sketch as it
+        /// was, and the removal tried again removes the key once. It used to take the record
+        /// off first and set the width before packing the rows, so a failure lost the record,
+        /// and with it the folding, or left the width halved over rows that were not. And
+        /// until #242 the removal was taken in the rows before they were folded, so a folding
+        /// that failed left the key removed though the removal threw.
         /// </para>
         /// </remarks>
-        private void Contract()
+        private void Contract(in HashKernelReturnValue kernel, ulong after)
         {
             var record = this.records[^1];
 
@@ -1145,10 +1155,11 @@ namespace ProbabilisticDataStructures
             var folded = new ulong[this.rows.Length][];
             for (var i = 0; i < this.rows.Length; i++)
             {
+                var column = ColumnOf(kernel, i);
                 folded[i] = NewCounts(halved);
                 for (var j = 0; j < halved; j++)
                 {
-                    var gathered = (UInt128)this.rows[i].Get(j) + this.rows[i].Get(j + halved);
+                    var gathered = (UInt128)Removed(i, j, column) + Removed(i, j + halved, column);
                     var started = (UInt128)record[i].Get(j);
                     var kept = gathered > started ? gathered - started : UInt128.Zero;
                     folded[i][j] = kept > ulong.MaxValue ? ulong.MaxValue : (ulong)kept;
@@ -1158,6 +1169,7 @@ namespace ProbabilisticDataStructures
             var laidOut = LayOut(folded, halved);
 
             // Built; from here the sketch is changed, and nothing allocates.
+            this.count = after;
             this.records.RemoveAt(this.records.Count - 1);
             Install(laidOut);
 
@@ -1165,6 +1177,17 @@ namespace ProbabilisticDataStructures
             this.contractionLimit = this.records.Count == 0
                 ? 0
                 : ContractionLimitFor(halved);
+        }
+
+        /// <summary>
+        /// Counter <paramref name="j"/> of a row as removing a key leaves it: one less at the
+        /// key's own counter, <paramref name="column"/>, stopping at nought as a decrement
+        /// does, and as it is everywhere else.
+        /// </summary>
+        private ulong Removed(int row, int j, int column)
+        {
+            var value = this.rows[row].Get(j);
+            return j == column && value != 0 ? value - 1 : value;
         }
 
         /// <summary>
