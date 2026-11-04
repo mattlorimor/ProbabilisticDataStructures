@@ -364,6 +364,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A payload naming a bucket width no bucket has is refused as the payload's.** A
+  stored width of 0, or more than 8 bits, in the bucket table of a `BloomFilter`,
+  `BloomFilter64`, `CountingBloomFilter`, `DeletableBloomFilter`,
+  `PartitionedBloomFilter` (and so a `ScalableBloomFilter`) or `StableBloomFilter` was
+  refused with the constructor's `ArgumentOutOfRangeException`, about a `bucketSize`
+  parameter no caller had passed. It is now an `InvalidDataException`, as every payload the
+  library will not read is. A flipped bit could not reach it in the ordinary envelope,
+  whose checksum is checked first, and only an edited payload with a repaired checksum
+  did; the large form checks its checksum at the end, and its corruption sweep found it.
+
 - **`WriteTo` of any structure too large to write now refuses it, by its whole
   size, before allocating anything for the payload.** Each runs its own
   payload layout through a counting writer first, which builds nothing, and a payload past
