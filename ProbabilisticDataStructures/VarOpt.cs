@@ -50,7 +50,7 @@ namespace ProbabilisticDataStructures
     /// that.
     /// </para>
     /// </remarks>
-    public class VarOpt : IBinaryPersistable<VarOpt>
+    public class VarOpt : IBinaryPersistable<VarOpt>, IPayloadBody
     {
         /// <summary>
         /// Items heavier than the threshold, held with exact weights. Once sampling
@@ -778,11 +778,10 @@ namespace ProbabilisticDataStructures
         /// Writes the structure to a stream in the library's persistence format.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.k);
             payload.WriteUInt64(this.random.State);
             payload.WriteUInt64(this.N);
@@ -790,6 +789,8 @@ namespace ProbabilisticDataStructures
             payload.WriteUInt32((uint)this.LightCount);
             payload.WriteDouble(this.LightWeight);
 
+            // Each item is as long as it is, so a counter walks them one at a time; a
+            // counted run costs it nothing.
             for (var i = 0; i < this.HeavyCount; i++)
             {
                 payload.WriteBytes(this.HeavyItems[i]);
@@ -800,11 +801,7 @@ namespace ProbabilisticDataStructures
                 payload.WriteBytes(this.LightItems[i]);
             }
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.VarOpt,
-                HashId.None,
-                payload.WrittenSpan);
+            return new(StructureId.VarOpt, HashId.None);
         }
 
         /// <summary>

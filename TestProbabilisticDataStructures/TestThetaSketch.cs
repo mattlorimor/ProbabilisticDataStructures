@@ -19,6 +19,28 @@ namespace TestProbabilisticDataStructures
             return key;
         }
 
+        /// <summary>
+        /// The header and eight bytes a value held, which is what the sketch holds once the
+        /// write has compacted it: one written uncompacted is counted at what it writes, and
+        /// one past its nominal entries at the entries it keeps.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of("empty", new ThetaSketch(16));
+
+            // Repeats in the buffer until the write compacts them away.
+            var exact = new ThetaSketch(4096);
+            for (var i = 0; i < 300; i++) exact.Add(Item(i % 100));
+            Assert.IsFalse((bool)typeof(ThetaSketch).GetField("compact",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(exact)!, "the state was compacted before the write");
+            yield return PayloadState.Of("exact, repeats uncompacted", exact);
+
+            var estimating = new ThetaSketch(16);
+            for (var i = 0; i < 1000; i++) estimating.Add(Item(i));
+            yield return PayloadState.Of("past its nominal entries", estimating);
+        }
+
         [TestMethod]
         public void TestANewSketchIsEmpty()
         {

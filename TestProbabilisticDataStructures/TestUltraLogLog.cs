@@ -28,6 +28,19 @@ namespace TestProbabilisticDataStructures
         private static byte[] Element(int i) => Key($"element-{i}");
 
         /// <summary>
+        /// The precision and the registers as one run, a byte each, which is as long as the
+        /// sketch has registers whatever they hold.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of("precision 3, empty", new UltraLogLog(3));
+
+            var filled = new UltraLogLog(10);
+            for (var i = 0; i < 5000; i++) filled.Add(Element(i));
+            yield return PayloadState.Of("precision 10, filled", filled);
+        }
+
+        /// <summary>
         /// Below the minimum precision the register index would consume hash bits the
         /// update value needs, and above the maximum the registers alone run past what
         /// this library builds.

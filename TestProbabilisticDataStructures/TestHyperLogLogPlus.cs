@@ -27,6 +27,47 @@ namespace TestProbabilisticDataStructures
         private static readonly double Nominal = 1.04 / Math.Sqrt(M);
 
         /// <summary>
+        /// Both forms: the sparse one as long as its distinct hashes, the dense one as long
+        /// as its registers. A sparse estimator holding repeats is compacted by the write,
+        /// so it is counted at the hashes it then writes and not the entries it held.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of("precision 4, sparse, empty", InForm(new HyperLogLogPlus(4), sparse: true));
+
+            var few = new HyperLogLogPlus(10);
+            for (var i = 0; i < 7; i++) few.Add(Item(i));
+            Assert.AreEqual(7ul, few.Count(), "counting compacts it, and these are distinct");
+            yield return PayloadState.Of("precision 10, sparse, seven hashes", InForm(few, sparse: true));
+
+            // Five items twice each: ten entries in a buffer of sixteen, so nothing has
+            // compacted them before the write does.
+            var repeats = new HyperLogLogPlus(10);
+            for (var i = 0; i < 10; i++) repeats.Add(Item(i % 5));
+            yield return PayloadState.Of("precision 10, sparse, repeats uncompacted", InForm(repeats, sparse: true, compact: false));
+
+            foreach (var precision in new uint[] { 4, 10 })
+            {
+                var dense = new HyperLogLogPlus(precision);
+                for (var i = 0; i < 5000; i++) dense.Add(Item(i));
+                yield return PayloadState.Of($"precision {precision}, dense", InForm(dense, sparse: false));
+            }
+        }
+
+        private static HyperLogLogPlus InForm(HyperLogLogPlus estimator, bool sparse, bool compact = true)
+        {
+            Assert.AreEqual(sparse, estimator.IsSparse, "the state is not in the form it names");
+            if (sparse)
+            {
+                var isCompact = (bool)typeof(HyperLogLogPlus)
+                    .GetField("sparseIsCompact", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .GetValue(estimator)!;
+                Assert.AreEqual(compact, isCompact, "the sparse state is not compacted as it says");
+            }
+            return estimator;
+        }
+
+        /// <summary>
         /// A distinct item per number, cheaply and identically on every platform.
         /// </summary>
         private static byte[] Item(long i)

@@ -9,6 +9,17 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestSimHash
     {
+        /// <summary>
+        /// The fingerprint alone, eight bytes whatever it was built from, so these differ in
+        /// what they hold and not in length; the roster exempts it from needing two.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of("one word", SimHash.Signature(new[] { "fox" }));
+            yield return PayloadState.Of("four words",
+                SimHash.Signature(new[] { "the", "quick", "brown", "fox" }));
+        }
+
         [TestMethod]
         public void TestIdenticalDocumentsGiveIdenticalSignatures()
         {

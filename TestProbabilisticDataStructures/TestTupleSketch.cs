@@ -17,6 +17,33 @@ namespace TestProbabilisticDataStructures
         private static byte[] Key(int i) => Encoding.UTF8.GetBytes("user-" + i);
 
         /// <summary>
+        /// The header, then eight bytes a key and eight a summary, for the keys held once the
+        /// write has compacted the sketch: repeats folded, and past the nominal entries the
+        /// entries kept.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of("empty", new TupleSketch(16));
+
+            foreach (var policy in new[] { SummaryPolicy.Sum, SummaryPolicy.Max })
+            {
+                // Repeats in the buffer until the write folds them.
+                var exact = new TupleSketch(4096, policy);
+                for (var i = 0; i < 300; i++) exact.Add(Key(i % 100), i);
+                var fields = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+                Assert.AreNotEqual(
+                    typeof(TupleSketch).GetField("held", fields)!.GetValue(exact),
+                    typeof(TupleSketch).GetField("ordered", fields)!.GetValue(exact),
+                    "the state was compacted before the write");
+                yield return PayloadState.Of($"exact, repeats unfolded, {policy}", exact);
+            }
+
+            var estimating = new TupleSketch(16);
+            for (var i = 0; i < 1000; i++) estimating.Add(Key(i), 1.5);
+            yield return PayloadState.Of("past its nominal entries", estimating);
+        }
+
+        /// <summary>
         /// A tuple sketch's payload is its nominal entries, policy, theta and how many keys
         /// it holds, seventeen bytes, then eight bytes a key and eight a summary. It holds up
         /// to twice its nominal entries less one before it trims, and the constructor takes
