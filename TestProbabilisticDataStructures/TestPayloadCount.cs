@@ -51,12 +51,15 @@ namespace TestProbabilisticDataStructures
         /// that array is longer than one can be and the write failed with an
         /// <c>OutOfMemoryException</c>; from 2^28 its length is past <c>int.MaxValue</c> and
         /// it failed with an <c>OverflowException</c>. Five rows of 100,000,000 is what
-        /// ε = 0.0001 and δ = 1% build.
+        /// ε = 0.0001 and δ = 1% build. At 2^32 cells the product of the two 32-bit
+        /// dimensions is nought in 32 bits, so a count that multiplied them there would
+        /// call the table empty.
         /// </summary>
         [TestMethod]
         [DataRow(1u, 268_435_446u, 2_147_483_580L)]
         [DataRow(1u, 268_435_449u, 2_147_483_604L)]
         [DataRow(5u, 100_000_000u, 4_000_000_012L)]
+        [DataRow(4u, 1_073_741_824u, 34_359_738_380L)]
         public void TestACountSketchTooLargeToWriteIsRefusedBeforeItsCellsAreStaged(
             uint depth, uint width, long payload)
         {
@@ -65,12 +68,95 @@ namespace TestProbabilisticDataStructures
             var sketch = new CountSketch(0.5, 0.5);
             for (var i = 0; i < 40; i++) sketch.Add(Key(i), i % 5 - 2);
 
-            var shape = new[] { "width", "depth" }
-                .Select(name => typeof(CountSketch).GetField(name, Fields)!)
-                .ToArray();
-
-            AssertRefusedWhileClaiming(sketch, shape, new object[] { width, depth }, payload);
+            AssertRefusedWhileClaiming(sketch, payload, (sketch, "width", width), (sketch, "depth", depth));
         }
+
+        /// <summary>
+        /// A Count-Min sketch's payload is its two parameters, its dimensions, a placement
+        /// byte and its count, thirty-three bytes, then the cells at eight bytes each with no
+        /// run around them. The writer wrote them a cell at a time, so only the buffer's
+        /// growth checked a size. 268,435,443 cells in one row is the first past the
+        /// ceiling, and 2^32 is where the product of the dimensions is nought in 32 bits.
+        /// </summary>
+        [TestMethod]
+        [DataRow(1u, 268_435_443u, 2_147_483_577L)]
+        [DataRow(4u, 1_073_741_824u, 34_359_738_401L)]
+        public void TestACountMinSketchTooLargeToWriteIsRefusedNamingItsWholeSize(
+            uint depth, uint width, long payload)
+        {
+            Assert.AreEqual(33 + 8L * depth * width, payload, "the row's payload is miscomputed");
+
+            var sketch = new CountMinSketch(0.5, 0.5);
+            for (var i = 0; i < 40; i++) sketch.Add(Key(i));
+
+            AssertRefusedWhileClaiming(sketch, payload, (sketch, "Width", width), (sketch, "Depth", depth));
+        }
+
+        /// <summary>
+        /// A top-k's payload holds its sketch whole, envelope and all, inside a run, so the
+        /// sketch is counted as part of it. The corner is a sketch that fits a payload of its
+        /// own and does not fit inside the top-k: 268,435,442 cells is a sketch payload of
+        /// 2,147,483,569 bytes, four under the ceiling, and the top-k around it adds its own
+        /// eight, the run's prefix, the sketch's envelope and its heap. A top-k past the
+        /// ceiling by its sketch alone is refused by its own whole size too.
+        /// </summary>
+        [TestMethod]
+        [DataRow(268_435_442u, 2_147_483_630L)]
+        [DataRow(268_435_443u, 2_147_483_638L)]
+        public void TestATopKTooLargeToWriteIsRefusedNamingItsWholeSize(uint width, long payload)
+        {
+            // K and N, the run's prefix and the sketch's envelope, the sketch, the heap's
+            // count, and each element's prefix, bytes and frequency.
+            var elements = new[] { "a", "bb" };
+            Assert.AreEqual(
+                8 + 4 + 18 + (33 + 8L * width) + 4 + elements.Sum(e => 4 + e.Length + 8), payload,
+                "the row's payload is miscomputed");
+
+            var topK = new TopK(0.5, 0.5, 3);
+            foreach (var element in elements) topK.Add(System.Text.Encoding.ASCII.GetBytes(element));
+            var sketch = (CountMinSketch)typeof(TopK).GetProperty("Cms", Fields)!.GetValue(topK)!;
+
+            AssertRefusedWhileClaiming(topK, payload, (sketch, "Width", width), (sketch, "Depth", 1u));
+        }
+
+        /// <summary>
+        /// A payload that fits is built once, into a buffer of the length counted, and framed:
+        /// what a write allocates is the payload twice, and little else. Before the count,
+        /// this sketch's write allocated 240,432 bytes: its cells staged in an array of their
+        /// own, and a writer's buffer started small and grown to hold them. A writer grown by
+        /// doubling, as one is that is not given the counted length, allocates more again.
+        /// Measured as the least of five, since a collection landing mid-write can add a
+        /// retired allocation context's worth (TESTING.md, on the read budget).
+        /// </summary>
+        [TestMethod]
+        public void TestAPayloadThatFitsIsBuiltOnceAtItsCountedLength()
+        {
+            var sketch = new CountSketch(0.01, 0.5);
+            for (var i = 0; i < 40; i++) sketch.Add(Key(i), i);
+
+            var payload = sketch.ToByteArray().Length - (long)PersistenceFormat.EnvelopeLength;
+            Assert.AreEqual(12 + 8L * 10_000, payload, "the sketch is not the shape the bound assumes");
+
+            var allocated = Enumerable.Range(0, 5).Min(_ =>
+            {
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                sketch.WriteTo(Stream.Null);
+                return GC.GetAllocatedBytesForCurrentThread() - before;
+            });
+
+            // The payload's buffer and the frame, which is the payload and the envelope.
+            var twice = 2 * payload + PersistenceFormat.EnvelopeLength;
+            Assert.IsGreaterThanOrEqualTo(twice, allocated, "the write allocated less than it builds");
+            Assert.IsLessThan(twice + WriteOverhead, allocated,
+                $"the write allocated {allocated:N0} bytes against the {twice:N0} it builds");
+        }
+
+        /// <summary>
+        /// What a write allocates besides the payload's buffer and the frame: their array
+        /// headers and the counter, probed at 166 bytes. This is about twenty-five times
+        /// that, and a twentieth of the one more copy of this payload it is there to catch.
+        /// </summary>
+        private const long WriteOverhead = 4096;
 
         /// <summary>
         /// An invertible Bloom lookup table's payload is its cell count and key size, then
@@ -97,9 +183,7 @@ namespace TestProbabilisticDataStructures
                 table.Add(key);
             }
 
-            var shape = new[] { typeof(InvertibleBloomLookupTable).GetField("cells", Fields)! };
-
-            AssertRefusedWhileClaiming(table, shape, new object[] { cells }, payload);
+            AssertRefusedWhileClaiming(table, payload, (table, "cells", cells));
         }
 
         /// <summary>
@@ -128,9 +212,7 @@ namespace TestProbabilisticDataStructures
                 SetSketch.DefaultQ, null, variant);
             for (var i = 0; i < 40; i++) sketch.Add(Key(i));
 
-            var shape = new[] { typeof(SetSketch).GetField("m", Fields)! };
-
-            AssertRefusedWhileClaiming(sketch, shape, new object[] { Array.MaxLength }, payload);
+            AssertRefusedWhileClaiming(sketch, payload, (sketch, "m", Array.MaxLength));
         }
 
         /// <summary>
@@ -360,14 +442,23 @@ namespace TestProbabilisticDataStructures
         /// Has the structure claim a shape, asserts its <c>WriteTo</c> refuses it, and puts
         /// the shape back.
         /// </summary>
+        /// <param name="structure">The structure written.</param>
+        /// <param name="payload">The size the refusal must name.</param>
+        /// <param name="shape">
+        /// The members that size its table, by name, each on the object that holds it --
+        /// the structure, or a structure inside it -- with the value it is to claim.
+        /// </param>
         internal static void AssertRefusedWhileClaiming<T>(
-            T structure, FieldInfo[] shape, object[] claimed, long payload)
+            T structure, long payload, params (object Owner, string Member, object Claimed)[] shape)
             where T : IBinaryPersistable<T>
         {
             var before = structure.ToByteArray();
-            var held = shape.Select(field => field.GetValue(structure)).ToArray();
+            var members = shape
+                .Select(s => (s.Owner, Member: s.Owner.GetType().GetMember(s.Member, Fields | BindingFlags.Public).Single()))
+                .ToArray();
+            var held = members.Select(m => Get(m.Member, m.Owner)).ToArray();
 
-            for (var i = 0; i < shape.Length; i++) shape[i].SetValue(structure, claimed[i]);
+            for (var i = 0; i < shape.Length; i++) Set(members[i].Member, members[i].Owner, shape[i].Claimed);
 
             try
             {
@@ -390,11 +481,26 @@ namespace TestProbabilisticDataStructures
             }
             finally
             {
-                for (var i = 0; i < shape.Length; i++) shape[i].SetValue(structure, held[i]);
+                for (var i = 0; i < shape.Length; i++) Set(members[i].Member, members[i].Owner, held[i]);
             }
 
             CollectionAssert.AreEqual(before, structure.ToByteArray(),
                 "the structure writes differently after a refused write");
+        }
+
+        private static object Get(MemberInfo member, object owner) =>
+            member is FieldInfo field ? field.GetValue(owner) : ((PropertyInfo)member).GetValue(owner);
+
+        private static void Set(MemberInfo member, object owner, object value)
+        {
+            if (member is FieldInfo field)
+            {
+                field.SetValue(owner, value);
+            }
+            else
+            {
+                ((PropertyInfo)member).SetValue(owner, value);
+            }
         }
 
         private static byte[] Key(int i) => System.Text.Encoding.ASCII.GetBytes($"item-{i}");

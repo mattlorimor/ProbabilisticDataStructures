@@ -734,16 +734,13 @@ namespace TestProbabilisticDataStructures
             // refuses a payload of a writer that does not count yet.
             new Claim("`WriteTo` of one throws an `InvalidOperationException` naming the size it would be and the size one can be, with the structure unchanged", () =>
             {
-                var fields = BindingFlags.NonPublic | BindingFlags.Instance;
-                TestPayloadCount.AssertRefusedWhileClaiming(new CountSketch(0.5, 0.5),
-                    new[] { typeof(CountSketch).GetField("width", fields)!, typeof(CountSketch).GetField("depth", fields)! },
-                    new object[] { 100_000_000u, 5u }, 4_000_000_012);
-                TestPayloadCount.AssertRefusedWhileClaiming(new InvertibleBloomLookupTable(4, 4),
-                    new[] { typeof(InvertibleBloomLookupTable).GetField("cells", fields)! },
-                    new object[] { 300_000_000u }, 6_000_000_020);
-                TestPayloadCount.AssertRefusedWhileClaiming(new SetSketch(8),
-                    new[] { typeof(SetSketch).GetField("m", fields)! },
-                    new object[] { Array.MaxLength }, 4_294_967_206);
+                var countSketch = new CountSketch(0.5, 0.5);
+                TestPayloadCount.AssertRefusedWhileClaiming(countSketch, 4_000_000_012,
+                    (countSketch, "width", 100_000_000u), (countSketch, "depth", 5u));
+                var table = new InvertibleBloomLookupTable(4, 4);
+                TestPayloadCount.AssertRefusedWhileClaiming(table, 6_000_000_020, (table, "cells", 300_000_000u));
+                var setSketch = new SetSketch(8);
+                TestPayloadCount.AssertRefusedWhileClaiming(setSketch, 4_294_967_206, (setSketch, "m", Array.MaxLength));
 
                 var ex = Assert.Throws<InvalidOperationException>(
                     () => QuotientFilter.CheckWritable((int)((MaxPayload - 16) / 8) + 1));
