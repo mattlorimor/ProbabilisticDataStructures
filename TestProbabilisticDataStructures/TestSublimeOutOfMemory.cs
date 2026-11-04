@@ -429,6 +429,86 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// An add that moves chunks to tails arrays without crowding the rows takes its
+        /// increments where they lie, and each chunk it moves allocates a tails array. One that
+        /// runs out of memory at any of them leaves the sketch exactly as it was: the key counted
+        /// in no row, and no chunk moved. The add tried again counts the key once, as the twin's
+        /// add did, with nothing laid out.
+        /// </summary>
+        /// <remarks>
+        /// At rows of 4,096 a row is 61 chunks, so the three rows are 183, and a chunk moved in
+        /// each leaves three on tails, short of the 5.49 that three in a hundred of them is: the
+        /// add crowds nothing. The add used to take each row's increment in turn, and an
+        /// increment that moved its chunk wrote the counter's stub before it allocated the tails
+        /// array, so a failure there left the counter with its stub carried and its high bits
+        /// not, at nought where it had held 31, and the estimate at nought with it. The rows
+        /// before it had counted the key (#274).
+        /// <para>
+        /// <paramref name="roles"/> says what each row's counter at the spiller is, row by row: m,
+        /// one add from moving its chunk; r, given room in its stub by setting it one lower; or
+        /// s, a full stub whose increment keeps its extension's length, by setting it to 63 with
+        /// the counter after it cleared to make room for that extension. Room in the first row
+        /// is taken before any row finds a full stub, and in the others after.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        [DataRow("mmm", DisplayName = "mmm: every row moves its chunk")]
+        [DataRow("rmm", DisplayName = "rmm: room in the first row's stub")]
+        [DataRow("mrm", DisplayName = "mrm: room in the middle row's stub")]
+        [DataRow("mmr", DisplayName = "mmr: room in the last row's stub")]
+        [DataRow("msm", DisplayName = "msm: a full stub that stays in the middle row")]
+        public void TestAnAddThatRunsOutOfMemoryMovingAChunkToTailsLeavesTheSketchAsItWas(string roles)
+        {
+            const int Width = 4_096;
+
+            SublimeCountMinSketch Make()
+            {
+                var sketch = OneAddFromSpilling((double)ValeCounterArray.DefaultCountersPerChunk / Width);
+                var rows = RowsOf(sketch);
+                var shortest = 1UL << rows[0].StubBits;
+                for (var i = 0; i < roles.Length; i++)
+                {
+                    if (roles[i] == 'r')
+                    {
+                        rows[i].Set(Spiller, rows[i].Get(Spiller) - 1);
+                    }
+                    else if (roles[i] == 's')
+                    {
+                        rows[i].Set(Spiller + 1, 0);
+                        rows[i].Set(Spiller, 2 * shortest - 1);
+                    }
+                }
+                return sketch;
+            }
+
+            var twin = Make();
+            Assert.AreEqual(Width, twin.Width);
+            Assert.AreEqual(roles.Length, twin.Depth);
+            var rows = RowsOf(twin).ToArray();
+            var before = rows.Select(row => row.Get(Spiller)).ToArray();
+            twin.Add(At(Spiller));
+            Assert.AreEqual(Width, twin.Width, "the add doubled the rows");
+            for (var i = 0; i < rows.Length; i++)
+            {
+                Assert.AreSame(rows[i], RowsOf(twin)[i],
+                    $"row {i} was laid out again, by an add that was to crowd nothing");
+                Assert.AreEqual(roles[i] == 'm' ? 1 : 0, rows[i].ChunksWithTails,
+                    $"row {i}'s chunks on tails after the add");
+                Assert.AreEqual(before[i] + 1, rows[i].Get(Spiller), $"row {i} did not count the key once");
+            }
+
+            var wrong = new List<string>();
+            var failures = FailEachAllocation(
+                wrong, Make, sketch => sketch.Add(At(Spiller)), twin, Identity);
+            Assert.AreEqual(0, wrong.Count, string.Join(Environment.NewLine, wrong));
+
+            // The add allocates a tails array for each chunk it moves, and nothing else through
+            // the hook.
+            Assert.AreEqual(roles.Count(role => role == 'm'), failures,
+                "the sweep did not fail every allocation the add makes");
+        }
+
+        /// <summary>
         /// The crowded add counts its key into the counts it lays out, not through an
         /// increment, so it stops at the largest count itself: a counter there stays there, one
         /// below it takes its last step up, and the estimate is what the other rows give.
