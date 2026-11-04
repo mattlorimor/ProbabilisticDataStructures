@@ -637,6 +637,54 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// At the edge of a pool, whether an increment moves its chunk to a tails array is
+        /// answered as it then happens, and as the pool's size says it must: a carry whose
+        /// extension keeps its length fits a pool with no room for a longer one, one that grows
+        /// into the pool's last free fragment fits, and one that grows into a pool already full
+        /// spills, as does a counter's first extension into one fragment of room.
+        /// </summary>
+        /// <remarks>
+        /// The long run above reaches these only by chance, and passed with the answer taken at
+        /// the count as it is rather than one higher, with the counter's own extension left out,
+        /// and with a pool filled exactly taken for one too small. Each case is built exactly at the
+        /// default tuning: a pool of 51 fragments, two for an extension of an overflow of one or
+        /// two (a count of 32 to 95) and three for three to eight. The answer and the move are
+        /// both held to what the pool's size says, so a rule that moved early would not pass by
+        /// agreeing with itself.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(24, 0, 63UL, false, DisplayName = "keeps its length, 50 of 51 fragments")]
+        [DataRow(24, 0, 95UL, false, DisplayName = "grows into the last free fragment")]
+        [DataRow(23, 1, 95UL, true, DisplayName = "grows into a pool already full")]
+        [DataRow(25, 0, 31UL, true, DisplayName = "a first extension into one fragment of room")]
+        public void TestAnIncrementAtTheEdgeOfAPoolIsAnsweredAsThePoolSays(
+            int shortest, int longer, ulong value, bool spills)
+        {
+            Assert.AreEqual(51, new ValeCounterArray(C, C, S).PoolFragments);
+            Assert.AreEqual(2, ValeCounter.ExtensionLength(1));
+            Assert.AreEqual(2, ValeCounter.ExtensionLength(2));
+            Assert.AreEqual(3, ValeCounter.ExtensionLength(3));
+
+            var array = new ValeCounterArray(C, C, S);
+            var j = 0;
+            for (var n = 0; n < shortest; n++)
+            {
+                array.Set(j++, 1UL << S);
+            }
+            for (var n = 0; n < longer; n++)
+            {
+                array.Set(j++, 3UL << S);
+            }
+            array.Set(j, value);
+            Assert.AreEqual(0, array.ChunksWithTails, "the pool spilled while it was filled");
+
+            Assert.AreEqual(spills, array.IncrementMovesToTails(j), "the answer before the increment");
+            array.Increment(j);
+            Assert.AreEqual(spills ? 1 : 0, array.ChunksWithTails, "what the increment did");
+            Assert.AreEqual(value + 1, array.Get(j), "the count the increment left");
+        }
+
+        /// <summary>
         /// Fills the pool of the chunk starting at <paramref name="first"/> with as many of the
         /// shortest extensions as it holds, and leaves its first counter one count short of
         /// needing one more.

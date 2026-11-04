@@ -406,6 +406,84 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The crowded add counts its key into the counts it lays out, not through an
+        /// increment, so it stops at the largest count itself: a counter there stays there, one
+        /// below it takes its last step up, and the estimate is what the other rows give.
+        /// </summary>
+        /// <remarks>
+        /// The first row's counter at the spiller is set by hand, and its extension alone
+        /// spills that row's chunk, so the add moves the other two rows' chunks and crowds the
+        /// rows as before. Without the stop, a counter at the largest count wrapped to nought,
+        /// and with it the estimate, for a key counted at least 2^64 times.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(ulong.MaxValue, ulong.MaxValue)]
+        [DataRow(ulong.MaxValue - 1, ulong.MaxValue)]
+        public void TestACrowdedAddLeavesACounterAtTheLargestCountThere(ulong held, ulong expected)
+        {
+            var sketch = OneAddFromSpilling(1.0);
+            var rows = RowsOf(sketch).ToArray();
+            rows[0].Set(Spiller, held);
+            Assert.AreEqual(1, OnTails(rows), "the first row's chunk did not spill");
+            var raised = rows[1].Get(Spiller) + 1;
+
+            sketch.Add(At(Spiller));
+
+            for (var i = 0; i < rows.Length; i++)
+            {
+                Assert.AreNotSame(rows[i], RowsOf(sketch)[i], $"row {i} was not laid out again");
+            }
+            Assert.AreEqual(expected, RowsOf(sketch)[0].Get(Spiller), "the first row's counter");
+            Assert.AreEqual(raised, sketch.Count(At(Spiller)), "the estimate after the add");
+        }
+
+        /// <summary>
+        /// The removal that folds the rows takes its key out of the counts it folds, not
+        /// through a decrement, so it stops at nought itself: a key never added leaves its
+        /// counters at nought, and the rows fold as they do for any other key never added.
+        /// </summary>
+        /// <remarks>
+        /// One key, at column 1, doubles the rows and is then removed to one short of folding
+        /// them, as <see cref="OneShortOfFolding"/> does; the removals that fold them are of keys
+        /// at columns 5 and 9, which hold nought in every row. Without the stop, the counter
+        /// such a key landed on came out of the folding at the largest count.
+        /// </remarks>
+        [TestMethod]
+        public void TestAFoldingRemovalOfAKeyNeverAddedLeavesItsCountersAtNought()
+        {
+            static SublimeCountMinSketch OneShortOfFoldingAtColumnOne()
+            {
+                var sketch = new SublimeCountMinSketch(0.01, 0.5, 1.0, Identity);
+                for (var i = 0; i < 5_000; i++)
+                {
+                    sketch.Add(At(1));
+                }
+                for (var i = 0; i < 2_440; i++)
+                {
+                    sketch.Remove(At(1));
+                }
+
+                Assert.AreEqual(128, sketch.Width, "the sketch did not double, or folded early");
+                Assert.AreEqual(1, RecordsOf(sketch));
+                return sketch;
+            }
+
+            var one = OneShortOfFoldingAtColumnOne();
+            Assert.AreEqual(0UL, one.Count(At(5)));
+            one.Remove(At(5));
+            var other = OneShortOfFoldingAtColumnOne();
+            other.Remove(At(9));
+
+            Assert.AreEqual(64, one.Width, "the removal did not fold the rows");
+            Assert.AreEqual(0UL, one.Count(At(5)), "the key never added after the folding");
+            Assert.AreEqual(2_560UL, one.Count(At(1)),
+                "the key added, which the removal did not touch, after the folding");
+            Assert.AreEqual(2_559UL, one.TotalCount());
+            CollectionAssert.AreEqual(other.ToByteArray(), one.ToByteArray(),
+                "two keys never added folded the rows differently");
+        }
+
+        /// <summary>
         /// A reset that runs out of memory building its rows leaves the sketch exactly as it
         /// was, its width, rows, records and tuning included, and the reset tried again leaves
         /// the sketch a new one would be.
