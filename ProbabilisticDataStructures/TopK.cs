@@ -8,7 +8,7 @@ namespace ProbabilisticDataStructures
     /// TopK uses a Count-Min Sketch to calculate the top-K frequent elements in a
     /// stream.
     /// </summary>
-    public class TopK : IBinaryPersistable<TopK>
+    public class TopK : IBinaryPersistable<TopK>, IPayloadBody
     {
         private CountMinSketch Cms { get; set; }
         private uint K { get; set; }
@@ -217,11 +217,10 @@ namespace ProbabilisticDataStructures
         /// that and no more. Nothing reads it back: the count is the sketch's, which is
         /// 64 bits and written whole.
         /// </remarks>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.K);
             payload.WriteUInt32((uint)Math.Min(this.N, uint.MaxValue));
 
@@ -238,11 +237,7 @@ namespace ProbabilisticDataStructures
                 payload.WriteUInt64(element.Freq);
             }
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.TopK,
-                PersistenceFormat.Identify(this.Cms.HashFunction),
-                payload.WrittenSpan);
+            return new(StructureId.TopK, PersistenceFormat.Identify(this.Cms.HashFunction));
         }
 
         /// <summary>

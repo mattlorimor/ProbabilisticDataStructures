@@ -36,7 +36,7 @@ namespace ProbabilisticDataStructures
     /// <see cref="long.MaxValue"/>.
     /// </para>
     /// </remarks>
-    public class CountSketch : IBinaryPersistable<CountSketch>
+    public class CountSketch : IBinaryPersistable<CountSketch>, IPayloadBody
     {
         private uint width;
         private uint depth;
@@ -314,32 +314,27 @@ namespace ProbabilisticDataStructures
         /// Writes the sketch to a stream.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.width);
             payload.WriteUInt32(this.depth);
 
             // Signed, unlike a Count-Min Sketch's cells, so they are written as such
-            // rather than reinterpreted on the way back.
-            var bytes = new byte[(long)this.width * this.depth * sizeof(long)];
-            var at = 0;
-            foreach (var row in this.table)
+            // rather than reinterpreted on the way back. One run, sized by the shape.
+            if (payload.BeginRun((long)this.width * this.depth * sizeof(long)))
             {
-                foreach (var cell in row)
+                foreach (var row in this.table)
                 {
-                    BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(at), cell);
-                    at += sizeof(long);
+                    foreach (var cell in row)
+                    {
+                        payload.WriteInt64(cell);
+                    }
                 }
             }
 
-            payload.WriteBytes(bytes);
-
-            PersistenceFormat.Write(
-                stream, StructureId.CountSketch, PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+            return new(StructureId.CountSketch, PersistenceFormat.Identify(this.Hash));
         }
 
         /// <summary>

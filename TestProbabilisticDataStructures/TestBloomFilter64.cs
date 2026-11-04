@@ -9,6 +9,28 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestBloomFilter64
     {
+        /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to. The bits
+        /// are a run per array, and a filter holds more than one only past 2^30 buckets, a
+        /// gigabit, so one is also given several small arrays, one of them empty, by
+        /// reflection: a count that took only the first array, or the first array's length
+        /// for all of them, would differ there and nowhere else.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of("small, empty", new BloomFilter64(10, 0.5));
+
+            var filled = new BloomFilter64(200, 0.01);
+            for (var i = 0; i < 40; i++) filled.Add(Encoding.ASCII.GetBytes($"w{i}"));
+            yield return PayloadState.Of("200 at 1%, filled", filled);
+
+            var several = new BloomFilter64(200, 0.01);
+            typeof(Buckets64)
+                .GetProperty("Data", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .SetValue(several.Buckets, new[] { new byte[24], new byte[0], new byte[7] });
+            yield return PayloadState.Of("three arrays, one empty", several);
+        }
+
         private static byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
         private static byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
         private static byte[] C_BYTES = Encoding.ASCII.GetBytes("c");

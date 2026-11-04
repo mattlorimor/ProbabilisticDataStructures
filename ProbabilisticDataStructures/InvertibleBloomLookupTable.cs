@@ -40,7 +40,7 @@ namespace ProbabilisticDataStructures
     /// reports an empty difference for sets that differ. Deduplicate before adding.
     /// </para>
     /// </remarks>
-    public class InvertibleBloomLookupTable : IBinaryPersistable<InvertibleBloomLookupTable>
+    public class InvertibleBloomLookupTable : IBinaryPersistable<InvertibleBloomLookupTable>, IPayloadBody
     {
         /// <summary>
         /// How many cells each key is placed in. Four is the usual choice. Peeling lists
@@ -579,33 +579,38 @@ namespace ProbabilisticDataStructures
         /// Writes the table to a stream.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.cells);
             payload.WriteUInt32((uint)this.keySize);
 
-            var counts = new byte[(long)this.cells * sizeof(long)];
-            var hashes = new byte[(long)this.cells * sizeof(ulong)];
-            for (var cell = 0; cell < this.cells; cell++)
+            // Three runs, each sized by the shape the header gives. Counts are signed: a
+            // subtracted table is mostly negative, and reading them back unsigned would
+            // turn every one of those into an enormous positive.
+            if (payload.BeginRun((long)this.cells * sizeof(long)))
             {
-                BinaryPrimitives.WriteInt64LittleEndian(
-                    counts.AsSpan(cell * sizeof(long)), this.counts[cell]);
-                BinaryPrimitives.WriteUInt64LittleEndian(
-                    hashes.AsSpan(cell * sizeof(ulong)), this.hashSums[cell]);
+                foreach (var count in this.counts)
+                {
+                    payload.WriteInt64(count);
+                }
             }
 
-            // Counts are signed: a subtracted table is mostly negative, and reading them
-            // back unsigned would turn every one of those into an enormous positive.
-            payload.WriteBytes(counts);
-            payload.WriteBytes(this.keySums);
-            payload.WriteBytes(hashes);
+            if (payload.BeginRun((long)this.cells * this.keySize))
+            {
+                payload.WriteRaw(this.keySums);
+            }
 
-            PersistenceFormat.Write(
-                stream, StructureId.InvertibleBloomLookupTable,
-                PersistenceFormat.Identify(this.Hash), payload.WrittenSpan);
+            if (payload.BeginRun((long)this.cells * sizeof(ulong)))
+            {
+                foreach (var hash in this.hashSums)
+                {
+                    payload.WriteUInt64(hash);
+                }
+            }
+
+            return new(StructureId.InvertibleBloomLookupTable, PersistenceFormat.Identify(this.Hash));
         }
 
         /// <summary>

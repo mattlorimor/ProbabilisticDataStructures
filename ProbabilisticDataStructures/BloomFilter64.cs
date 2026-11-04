@@ -13,7 +13,7 @@ namespace ProbabilisticDataStructures
     /// BloomFilter64 implements a classic Bloom filter. A bloom filter has a non-zero
     /// probability of false positives and a zero probability of false negatives.
     /// </summary>
-    public class BloomFilter64 : IFilter, IBinaryPersistable<BloomFilter64>
+    public class BloomFilter64 : IFilter, IBinaryPersistable<BloomFilter64>, IPayloadBody
     {
         /// <summary>
         /// Filter data
@@ -228,21 +228,16 @@ namespace ProbabilisticDataStructures
         /// Writes this filter to a stream, in the format documented in FORMAT.md.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt64(this.m);
             payload.WriteUInt32(this.k);
             payload.WriteUInt64(this.count);
             PersistenceFormat.WriteBuckets64(payload, this.Buckets);
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.BloomFilter64,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+            return new(StructureId.BloomFilter64, PersistenceFormat.Identify(this.Hash));
         }
 
         /// <summary>

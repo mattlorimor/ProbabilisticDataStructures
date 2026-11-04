@@ -726,8 +726,22 @@ namespace TestProbabilisticDataStructures
                 return Enumerable.Range(0, 200).All(i => widest.Test((ulong)i * 7919))
                     && Assert.Throws<ArgumentOutOfRangeException>(() => new MementoFilter(1UL << 32, 29)).ParamName == "fingerprintBits";
             }),
+            // A structure whose WriteTo counts its payload first (#216), made to claim a shape
+            // past the ceiling, is refused naming the whole payload and the ceiling before
+            // anything is built for it, and writes what it wrote before once the shape is put
+            // back; TestPayloadCount holds every structure with a body to being counted by its
+            // WriteTo. The quotient filter sizes its own, and the buffer's growth is what
+            // refuses a payload of a writer that does not count yet.
             new Claim("`WriteTo` of one throws an `InvalidOperationException` naming the size it would be and the size one can be, with the structure unchanged", () =>
             {
+                var countSketch = new CountSketch(0.5, 0.5);
+                TestPayloadCount.AssertRefusedWhileClaiming(countSketch, 4_000_000_012,
+                    (countSketch, "width", 100_000_000u), (countSketch, "depth", 5u));
+                var table = new InvertibleBloomLookupTable(4, 4);
+                TestPayloadCount.AssertRefusedWhileClaiming(table, 6_000_000_020, (table, "cells", 300_000_000u));
+                var setSketch = new SetSketch(8);
+                TestPayloadCount.AssertRefusedWhileClaiming(setSketch, 4_294_967_206, (setSketch, "m", Array.MaxLength));
+
                 var ex = Assert.Throws<InvalidOperationException>(
                     () => QuotientFilter.CheckWritable((int)((MaxPayload - 16) / 8) + 1));
                 return ex.Message.Contains(MaxPayload.ToString("N0"), StringComparison.Ordinal)
