@@ -1128,11 +1128,11 @@ namespace TestProbabilisticDataStructures
         /// past one array and its header the payload that makes, on a stream that claims as
         /// much and holds zeros past the run's length. Read unlimited, so unpriced, the run is
         /// begun, with the piece it would be read through, and refused before the store's
-        /// window is made, so the read allocates that piece and a refusal. Before the check, the span passed the store's
-        /// index check from the index of one, was priced, and the window was asked for an
-        /// array no runtime makes. The edges are the span itself, worked out by the store's
-        /// own reckoning, since a run of as many counts as an array holds is seventeen
-        /// gigabytes to read; from <c>int.MinValue</c>, a span of 2^32 ends at
+        /// window is made, so the read allocates that piece and a refusal. Without the check
+        /// the span passes the store's index check, and the read goes on to make a window of
+        /// that many counts, which no array holds. The edges are the span itself, worked out
+        /// by the store's own reckoning, since a run of as many counts as an array holds is
+        /// seventeen gigabytes to read; from <c>int.MinValue</c>, a span of 2^32 ends at
         /// <c>int.MaxValue</c>, and in an <c>int</c> it is nought.
         /// </remarks>
         [TestMethod]
@@ -1177,6 +1177,71 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(Array.MaxLength, SpanOf(0, 8L * Array.MaxLength), "a span of one array's counts was refused");
             Refused(0, 8 * counts, "a span of a count past one array was taken");
             Refused(int.MinValue, 8L << 32, "a span of 2^32 counts from the lowest index was taken");
+        }
+
+        /// <summary>
+        /// A run shorter than a piece is read through a buffer of its own length, not of a
+        /// piece's: a small one of each structure #228 names, read from the large form,
+        /// allocates less than one piece in all.
+        /// </summary>
+        [TestMethod]
+        public void TestARunShorterThanAPieceIsReadThroughABufferOfItsOwnLength()
+        {
+            var quotient = new QuotientFilter(100, 0.01);
+            var countSketch = new CountSketch(0.5, 0.5);
+            var dd = new DDSketch(0.01);
+            var table = new InvertibleBloomLookupTable(4, 4);
+            for (var i = 0; i < 20; i++)
+            {
+                quotient.Add(Key($"q{i}"));
+                countSketch.Add(Key($"c{i}"), i % 5 - 2);
+                dd.Add(1.0 + i);
+                table.Add([(byte)(i + 1), 0, 0, 0]);
+            }
+
+            foreach (var (name, structure, read) in new (string, object, Func<Stream, object>)[]
+            {
+                ("QuotientFilter", quotient, s => QuotientFilter.ReadFrom(s, ReadOptions.Unlimited)),
+                ("CountSketch", countSketch, s => CountSketch.ReadFrom(s, ReadOptions.Unlimited)),
+                ("DDSketch", dd, s => DDSketch.ReadFrom(s, ReadOptions.Unlimited)),
+                ("InvertibleBloomLookupTable", table, s => InvertibleBloomLookupTable.ReadFrom(s, ReadOptions.Unlimited)),
+            })
+            {
+                var large = LargeForm.WriteLarge(structure);
+                Assert.IsLessThan((long)PayloadSource.PieceLength, (long)large.Length, $"the {name} is not shorter than a piece");
+                var allocated = TestReadBudget.Allocated(() => read(new MemoryStream(large, writable: false)));
+                Assert.IsLessThan((long)PayloadSource.PieceLength, allocated,
+                    $"the {name}, {large.Length:N0} bytes in the large form, allocated {allocated:N0} reading it: a piece for a shorter run");
+            }
+        }
+
+        /// <summary>
+        /// A slice of a payload reads as the payload it is cut from: a run's length as wide,
+        /// and held or streamed alike, so that a nested envelope's payload, sliced from the
+        /// large form, reads its runs in its own form and in pieces, and a nested envelope
+        /// inside it from the stream. Each both ways.
+        /// </summary>
+        [TestMethod]
+        public void TestASliceReadsAsThePayloadItIsCutFrom()
+        {
+            byte[] wide = [3, 0, 0, 0, 0, 0, 0, 0, 7, 8, 9];
+            byte[] narrow = [3, 0, 0, 0, 7, 8, 9];
+            Assert.IsTrue(SliceReads(wide, true).SequenceEqual(new byte[] { 7, 8, 9 }), "a slice of the large form read a run's length as a u32");
+            Assert.IsTrue(SliceReads(narrow, false).SequenceEqual(new byte[] { 7, 8, 9 }), "a slice of the ordinary envelope read a run's length as a u64");
+
+            foreach (var streamed in new[] { true, false })
+            {
+                var reader = new PayloadReader(new PayloadSource(new MemoryStream(wide)), wide.Length, Unlimited(), wide: true, streamed: streamed);
+                Assert.AreEqual(streamed, reader.Slice(wide.Length).IsStreamed,
+                    $"a slice of a reader that is {(streamed ? "" : "not ")}streamed is {(streamed ? "not " : "")}streamed");
+            }
+        }
+
+        private static byte[] SliceReads(byte[] bytes, bool wide)
+        {
+            var reader = new PayloadReader(bytes, Unlimited(), wide);
+            var slice = reader.Slice(bytes.Length);
+            return slice.ReadBytes();
         }
 
         /// <summary>

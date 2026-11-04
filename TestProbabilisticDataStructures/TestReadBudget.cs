@@ -495,6 +495,45 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A structure that holds others, in the large form with the envelopes it holds in
+        /// the ordinary one, is charged honestly and names one total: each nested envelope is
+        /// priced, where it lies in the outer payload, with its runs' lengths the <c>u32</c>s
+        /// of its own form, not the outer form's <c>u64</c>s (#228). The structures are the
+        /// samples whose large form holds a large envelope with the threshold at nothing;
+        /// with it a byte under the outer payload, the outer envelope is large and every
+        /// envelope it holds, shorter by at least its own envelope, is ordinary.
+        /// </summary>
+        [TestMethod]
+        public void TestAStructureHoldingOrdinaryEnvelopesInTheLargeFormIsChargedHonestly()
+        {
+            var holding = new List<StructureId>();
+            foreach (var (id, sample) in Samples.Value)
+            {
+                if (LargeForm.NestedLarge(InTheLargeForm(sample).Bytes) == 0)
+                {
+                    continue;
+                }
+
+                holding.Add(id);
+                var threshold = (long)sample.Bytes.Length - PersistenceFormat.EnvelopeLength - 1;
+                var bytes = LargeForm.Below(threshold, () => sample.Write(sample.Read(sample.Bytes, ReadOptions.Unlimited)));
+                Assert.IsTrue(LargeForm.IsLarge(bytes), $"{sample.Name} was not written in the large form");
+                Assert.AreEqual(0, LargeForm.NestedLarge(bytes), $"{sample.Name} holds an envelope in the large form");
+
+                var mixed = sample with
+                {
+                    Name = sample.Name + " in the large form, holding ordinary envelopes",
+                    Bytes = bytes,
+                    Write = restored => LargeForm.Below(threshold, () => sample.Write(restored)),
+                };
+                AssertHonest(id, mixed);
+                AssertOneTotal(id, mixed);
+            }
+
+            Assert.IsNotEmpty(holding, "no sample holds another structure, so none was priced holding ordinary envelopes");
+        }
+
+        /// <summary>
         /// A sample written again in the large form, and writing in it, so that the checks
         /// that a read writes back the bytes it was read from hold in that form.
         /// </summary>
