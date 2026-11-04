@@ -183,6 +183,7 @@ namespace ProbabilisticDataStructures
             var values = new ulong[4];
             var count = 0;
             var index = new int[8];
+            var steps = 0L;
 
             foreach (var pair in pairs)
             {
@@ -197,7 +198,7 @@ namespace ProbabilisticDataStructures
                 }
 
                 var key = hash(pair.Key);
-                var slot = SlotOf(index, keys, key);
+                var slot = SlotOf(index, keys, key, ref steps);
                 var known = index[slot] != 0;
                 var existing = known ? values[index[slot] - 1] : 0;
 
@@ -252,7 +253,7 @@ namespace ProbabilisticDataStructures
 
                 if (count > index.Length / 4 * 3)
                 {
-                    index = Reindex(keys, count, (int)Math.Min(2L * index.Length, Array.MaxLength));
+                    index = Reindex(keys, count, (int)Math.Min(2L * index.Length, Array.MaxLength), ref steps);
                 }
             }
 
@@ -262,8 +263,18 @@ namespace ProbabilisticDataStructures
                 Array.Resize(ref values, count);
             }
 
+            CollectedSteps = steps;
             return (keys, values);
         }
+
+        /// <summary>
+        /// How many slots past their first the last collection to finish on this thread
+        /// looked, over every key it found or placed and every key it placed again when its
+        /// index doubled: the work the index did. For the suite, which holds keys whose
+        /// hashes count up to a few steps a key.
+        /// </summary>
+        [ThreadStatic]
+        internal static long CollectedSteps;
 
         /// <summary>
         /// Where <paramref name="key"/> is in the index, or the empty slot where it would go:
@@ -271,12 +282,13 @@ namespace ProbabilisticDataStructures
         /// nought where it holds none. Keys are placed from the high half of their mixed
         /// hash, scaled to the index's length, and moved along to the next empty slot.
         /// </summary>
-        private static int SlotOf(int[] index, ulong[] keys, ulong key)
+        private static int SlotOf(int[] index, ulong[] keys, ulong key, ref long steps)
         {
             var slot = HomeOf(key, index.Length);
             while (index[slot] != 0 && keys[index[slot] - 1] != key)
             {
                 slot = slot + 1 == index.Length ? 0 : slot + 1;
+                steps++;
             }
 
             return slot;
@@ -286,7 +298,7 @@ namespace ProbabilisticDataStructures
         /// An index of <paramref name="length"/> slots over the first
         /// <paramref name="count"/> keys.
         /// </summary>
-        private static int[] Reindex(ulong[] keys, int count, int length)
+        private static int[] Reindex(ulong[] keys, int count, int length, ref long steps)
         {
             var index = new int[length];
             for (var i = 0; i < count; i++)
@@ -295,6 +307,7 @@ namespace ProbabilisticDataStructures
                 while (index[slot] != 0)
                 {
                     slot = slot + 1 == length ? 0 : slot + 1;
+                    steps++;
                 }
 
                 index[slot] = i + 1;
