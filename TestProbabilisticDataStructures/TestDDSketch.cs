@@ -700,6 +700,64 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A sketch holding 2^64 - 1 values takes no more: an add is refused with an
+        /// <see cref="InvalidOperationException"/> and leaves the sketch as it was, as a
+        /// merge past that total is refused. The total used to wrap to nought, and with it
+        /// the count of the value's bucket when that bucket held everything. An honest
+        /// sketch cannot get here, since it would take 2^64 adds, so each full sketch is
+        /// read from a payload.
+        /// <para>
+        /// Every sign of value goes to every full sketch, including the bucket or zero
+        /// count already holding all of it, so a refusal made after a store or the zero
+        /// count has taken the value fails on the bytes, and one made for one sign alone
+        /// fails on the others. One short of full, the same add is taken and fills the
+        /// sketch, so the refusal is not turning away a sketch with room; and that sketch,
+        /// filled by an add, refuses the next.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestAddingToAFullSketchIsRefusedAndChangesNothing()
+        {
+            var sketches = new (string Name, Func<ulong, DDSketch> Holding)[]
+            {
+                ("every value positive", HeavyPositive),
+                ("every value negative", HeavyNegative),
+                ("every value zero", HeavyZeros),
+            };
+
+            // 5 and -5 are the buckets HeavyPositive and HeavyNegative hold everything in,
+            // and 0 the zero count HeavyZeros does; 1000 and -1000 are buckets of their own
+            // and past the largest and smallest value held.
+            var values = new double[] { 5, -5, 0, 1000, -1000 };
+
+            foreach (var (name, holding) in sketches)
+            {
+                foreach (var value in values)
+                {
+                    var full = holding(ulong.MaxValue);
+                    var before = full.ToByteArray();
+
+                    var ex = Assert.ThrowsExactly<InvalidOperationException>(() => full.Add(value),
+                        $"{name}: adding {value} to a sketch holding 2^64 - 1 values was not refused");
+                    StringAssert.Contains(ex.Message, "a sketch can count", name);
+                    CollectionAssert.AreEqual(before, full.ToByteArray(),
+                        $"{name}: a refused add of {value} changed the sketch");
+
+                    var room = holding(ulong.MaxValue - 1);
+                    room.Add(value);
+                    Assert.AreEqual(ulong.MaxValue, room.Count(),
+                        $"{name}: adding {value} one short of full did not fill the sketch");
+
+                    var filled = room.ToByteArray();
+                    Assert.ThrowsExactly<InvalidOperationException>(() => room.Add(value),
+                        $"{name}: a sketch filled by adding {value} took another");
+                    CollectionAssert.AreEqual(filled, room.ToByteArray(),
+                        $"{name}: a refused add of {value} changed a sketch filled by adding");
+                }
+            }
+        }
+
+        /// <summary>
         /// A sketch of <c>1, 2, -1, -2</c> and <c>0</c>, at an accuracy coarse enough
         /// (gamma is 3) that 1 and 2 are in neighbouring buckets: two buckets for each
         /// sign and a zero, for <see cref="Forged"/> to rewrite the counts of.
