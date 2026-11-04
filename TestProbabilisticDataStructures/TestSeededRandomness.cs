@@ -99,6 +99,54 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A seed is the generator's whole 64-bit starting state, as it is for every other
+        /// seeded structure (#235): one past <see cref="int.MaxValue"/> is taken as given,
+        /// and the same one gives the same filter. The payload says where the generator
+        /// began, so that is checked to be the seed itself. The filter is also checked to
+        /// differ from one seeded with what the seed would have been as an <c>int</c> of
+        /// its low 32 bits, sign-extended, which is what the generator got before.
+        /// </summary>
+        [TestMethod]
+        [DataRow(0x8000_0000UL)]
+        [DataRow(0x1_0000_0007UL)]
+        [DataRow(0xFFFF_FFFF_0000_0000UL)]
+        public void TestASeedPastIntMaxValueSeedsTheWholeGenerator(ulong seed)
+        {
+            var asAnInt = unchecked((ulong)(int)(uint)seed);
+            Assert.AreNotEqual(seed, asAnInt, "the row does not tell a 64-bit seed from an int");
+
+            StableBloomFilter Stable(ulong s)
+            {
+                var f = new StableBloomFilter(1000, 2, 0.01, seed: s);
+                Feed(f);
+                return f;
+            }
+
+            Assert.AreEqual(seed,
+                GeneratorPositions(new StableBloomFilter(1000, 2, 0.01, seed: seed).ToByteArray()).Began,
+                "the stable filter's generator did not begin at the seed");
+            Assert.AreEqual(Fingerprint(Stable(seed)), Fingerprint(Stable(seed)),
+                "the same seed gave two different stable filters");
+            Assert.AreNotEqual(Fingerprint(Stable(asAnInt)), Fingerprint(Stable(seed)),
+                "the stable filter's seed lost its high bits");
+
+            CuckooBloomFilter Cuckoo(ulong s)
+            {
+                var f = new CuckooBloomFilter(100, 0.01, seed: s);
+                FeedCuckoo(f);
+                return f;
+            }
+
+            Assert.AreEqual(seed,
+                GeneratorPositions(new CuckooBloomFilter(100, 0.01, seed: seed).ToByteArray()).Began,
+                "the cuckoo filter's generator did not begin at the seed");
+            Assert.AreEqual(Fingerprint(Cuckoo(seed)), Fingerprint(Cuckoo(seed)),
+                "the same seed gave two different cuckoo filters");
+            Assert.AreNotEqual(Fingerprint(Cuckoo(asAnInt)), Fingerprint(Cuckoo(seed)),
+                "the cuckoo filter's seed lost its high bits");
+        }
+
+        /// <summary>
         /// Leaving the seed out still gives an unpredictable filter, so seeding is a
         /// thing a caller asks for rather than something they now have by default.
         /// </summary>
