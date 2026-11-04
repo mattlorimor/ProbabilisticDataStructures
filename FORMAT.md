@@ -30,6 +30,60 @@ structure id is caught by the same check rather than being acted on first. The m
 outside it: a payload whose magic is wrong is not this format at all, and there is
 nothing to checksum.
 
+### The large form
+
+A payload longer than the ordinary envelope holds, 2,147,483,573 bytes, needs a wider
+length than a `u32` and a header laid out for it, and is in the large form of the
+envelope. No other payload is: one that fits is written in the ordinary envelope above,
+byte for byte as it always was, so every release that reads its version goes on reading
+it.
+
+| Offset | Size | Field |
+| --- | --- | --- |
+| 0 | 4 | Magic, the ASCII bytes `PDS\0` |
+| 4 | 2 | Format version, with the flag `0x8000` set |
+| 6 | 2 | Structure id |
+| 8 | 2 | Hash id |
+| 10 | 8 | Payload length in bytes, a `u64` |
+| 18 | 4 | CRC-32 of bytes 4 through 17 |
+| 22 | *n* | Payload |
+| 22 + *n* | 4 | CRC-32 of bytes 4 through 17, then of bytes 22 through 21 + *n* |
+
+The version field's high bit, `0x8000`, marks the large form, and the format version is
+the other fifteen bits: a `BloomFilter` at version 8 in the large form carries `0x8008`.
+The flag says only which envelope holds the payload. The payload inside is the one the
+ordinary envelope would hold at that version, as the sections below lay it out, and a
+structure reads the same versions in either form. A structure nested in another is in
+whichever form its own payload's length calls for.
+
+A release that does not know the large form checks the magic and then, as every release
+from 3.2.0 on does, refuses a version above its own highest before it reads anything
+else. Every format version is below `0x8000`, so such a release refuses a payload in the
+large form as written by a later version, which it was. Nothing after the version field
+is read by it, and from there the large form is laid out afresh.
+
+The header has a checksum of its own, which a reader checks before it uses any field the
+checksum covers, so that a damaged structure id or length is refused as damaged and never
+acted on, as the ordinary envelope's one checksum ensures for its own header. The flag is
+read first, unavoidably, since it says how long the header is; flipped, it has the header
+read as the other form, whose checksum covers other bytes and fails. The final checksum
+covers the header's fields and then the payload, and not the header's checksum: it is the
+header's checksum carried on over the payload. Carried on over the header's checksum
+instead, it would not depend on the header at all, because a CRC-32 taken over some bytes
+followed by their own CRC-32 is the same, `2144DF1C`, whatever the bytes were.
+
+The final checksum follows the payload, and is compared once the payload has been read
+rather than before it is used, which is the only order open to a reader that does not hold
+the payload. If it does not match, the structure read from the payload is discarded and
+the read refused, so no caller receives it. A payload refused before its end, for its
+shape or for what reading it would cost, is refused saying that its checksum was not
+reached, because what was refused may be damage the checksum would have named.
+
+This library reads the large form by holding the payload, as it holds an ordinary one, so
+it refuses one in the large form longer than one array holds, 2,147,483,591 bytes. It
+writes the large form for no payload yet: one past the ordinary envelope's ceiling is
+still refused, as [Sizes](#sizes) describes.
+
 ### Format versions
 
 The version travels in each payload rather than being a property of the library, so a
@@ -46,6 +100,10 @@ structure whose layout changes bumps only its own.
 | 7 | the release after 6.2.0 | `ScalableBloomFilter` | the growth factor, written only by a filter that grows |
 | 8 | the release after 6.2.0 | `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter`, `StableBloomFilter` | a placement byte, and the item count as a `u64`; written by every save |
 | 9 | the release after 6.2.0 | `InverseBloomFilter`, `CountMinSketch`, `HeavyKeeper`, `PrivateCountMinSketch`, `DpswSketch` | a placement byte, in each private sketch body for `DpswSketch`; written by every save |
+
+The version field's high bit, `0x8000`, is not part of a version: it marks
+[the large form](#the-large-form) of the envelope, and the version is the other fifteen
+bits. No version in this table has that bit, and a version is never given one that does.
 
 The table is also the list of what each structure reads. A version belongs to the
 structures named against it, and a structure's reader reads those versions and no
@@ -387,14 +445,17 @@ payload when that total is more than the budget. The refusal is an `InvalidDataE
 whose inner exception is a `ReadBudgetExceededException` naming the total and the budget;
 the total is the same whatever the budget was, and a budget of it reads the payload.
 
-A payload that fits the budget is read and its checksum checked before it is priced, so a
-corrupted one is refused as corrupted. One whose length alone is more than the budget is
-never held: its fields are read from the stream and its runs skipped, to name the total,
-before its checksum could be checked. A payload that ends early, or whose fields are not
-ones its reader accepts, is priced as far as it goes.
+A payload in the ordinary envelope that fits the budget is read and its checksum checked
+before it is priced, so a corrupted one is refused as corrupted. One in the large form is
+priced before its checksum is reached, which follows it, and a refusal of it says so. One
+whose length alone is more than the budget is never held: its fields are read from the
+stream and its runs skipped, to name the total, before its checksum could be checked. A
+payload that ends early, or whose fields are not ones its reader accepts, is priced as far
+as it goes.
 
 The hash id is checked before anything is priced: after the checksum when the payload is
-held, and as the header states it when it is not. A payload naming a hash its reader
+held, as the header states it when it is not, and in the large form after the header's own
+checksum, either way. A payload naming a hash its reader
 cannot read it with — one the caller has not supplied and the reader cannot reconstruct,
 or any hash at all for a structure that hashes nothing — is refused for that under any
 budget.

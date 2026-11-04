@@ -98,18 +98,25 @@ namespace TestProbabilisticDataStructures
         /// own and does not fit inside the top-k: 268,435,442 cells is a sketch payload of
         /// 2,147,483,569 bytes, four under the ceiling, and the top-k around it adds its own
         /// eight, the run's prefix, the sketch's envelope and its heap. A top-k past the
-        /// ceiling by its sketch alone is refused by its own whole size too.
+        /// ceiling by its sketch alone is refused by its own whole size too, and that sketch,
+        /// 2,147,483,577 bytes, four past the ceiling, is counted in the large form's
+        /// envelope, eight bytes longer than the ordinary one, as its own write would frame
+        /// it. The two rows straddle that choice.
         /// </summary>
         [TestMethod]
         [DataRow(268_435_442u, 2_147_483_630L)]
-        [DataRow(268_435_443u, 2_147_483_638L)]
+        [DataRow(268_435_443u, 2_147_483_646L)]
         public void TestATopKTooLargeToWriteIsRefusedNamingItsWholeSize(uint width, long payload)
         {
             // K and N, the run's prefix and the sketch's envelope, the sketch, the heap's
             // count, and each element's prefix, bytes and frequency.
             var elements = new[] { "a", "bb" };
+            var sketchPayload = 33 + 8L * width;
+            var envelope = sketchPayload > PersistenceFormat.MaxPayloadLength
+                ? PersistenceFormat.LargeEnvelopeLength
+                : PersistenceFormat.EnvelopeLength;
             Assert.AreEqual(
-                8 + 4 + 18 + (33 + 8L * width) + 4 + elements.Sum(e => 4 + e.Length + 8), payload,
+                8 + 4 + envelope + sketchPayload + 4 + elements.Sum(e => 4 + e.Length + 8), payload,
                 "the row's payload is miscomputed");
 
             var topK = new TopK(0.5, 0.5, 3);

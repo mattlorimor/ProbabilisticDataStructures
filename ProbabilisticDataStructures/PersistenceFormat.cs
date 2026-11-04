@@ -162,6 +162,21 @@ namespace ProbabilisticDataStructures
     /// </code>
     /// The checksum covers the header as well as the payload, so a corrupted length or
     /// structure id is caught by the same check rather than being acted on first.
+    /// <para>
+    /// A payload longer than that envelope holds is in the large form, marked by
+    /// <see cref="LargeFormFlag"/> in the version field:
+    /// <code>
+    ///   offset  size  field
+    ///   0       4     magic, "PDS\0"
+    ///   4       2     format version | 0x8000
+    ///   6       2     structure id
+    ///   8       2     hash id
+    ///   10      8     payload length
+    ///   18      4     CRC-32 over bytes 4 through 17
+    ///   22      n     payload
+    ///   22+n    4     CRC-32 over bytes 4 through 17, then 22 through 21+n
+    /// </code>
+    /// </para>
     /// </remarks>
     internal static class PersistenceFormat
     {
@@ -281,7 +296,7 @@ namespace ProbabilisticDataStructures
         /// others. Accepting every version up to the highest anywhere would read a
         /// version some other structure defined as though it were this one's newest
         /// layout;
-        /// <see cref="Read(Stream, StructureId, out HashId, out ushort, ReadBudget, PayloadPrice, Func{ReadOnlySpan{byte}, ulong}, HashCheck)"/> refuses
+        /// <see cref="Read(Stream, byte[], StructureId, out HashId, out ushort, ReadBudget, PayloadPrice, Func{ReadOnlySpan{byte}, ulong}, HashCheck)"/> refuses
         /// it instead, and says which versions it does read.
         /// <para>
         /// Every structure is listed, including those that have only ever written the
@@ -400,28 +415,61 @@ namespace ProbabilisticDataStructures
         internal static int MaxPayloadLength => Array.MaxLength - EnvelopeLength;
 
         /// <summary>
-        /// The bit of the version field that marks the large form of the envelope. The
-        /// format version is the other fifteen bits.
+        /// The bit of the version field that marks the large form of the envelope, for a
+        /// payload longer than the ordinary one holds. The format version is the other
+        /// fifteen bits, and no version has this one.
         /// </summary>
+        /// <remarks>
+        /// A flag rather than a version (#223), because a version numbers one change to the
+        /// layouts of the structures it names, and the large form changes only the
+        /// envelope, for any of them. Every released reader checks the magic and then
+        /// refuses a version above its own highest before reading anything else, so it
+        /// refuses the large form as written by a later version, which it was; everything
+        /// after the version could be laid out afresh. A nested envelope's header is
+        /// checked by the same code, so the flag works there too.
+        /// </remarks>
         internal const ushort LargeFormFlag = 0x8000;
 
-        /// <summary>The large form's header: the ordinary header with a <c>u64</c> length, and its own checksum.</summary>
-        internal const int LargeHeaderLength = 22;
+        /// <summary>
+        /// The large form's header: magic, flagged version, structure id, hash id, a
+        /// <c>u64</c> payload length, and the header's own checksum.
+        /// </summary>
+        internal const int LargeHeaderLength = LargeFieldsLength + ChecksumLength;
 
         /// <summary>The bytes the large form adds around a payload: its header and its checksum.</summary>
         internal const int LargeEnvelopeLength = LargeHeaderLength + ChecksumLength;
 
         /// <summary>
-        /// A lower threshold for the large form, on the calling thread, for the suite;
-        /// null otherwise.
+        /// Where the large header's checksum begins: the end of the fields it covers, which
+        /// are the ordinary header's, with the length widened to a <c>u64</c>.
         /// </summary>
+        private const int LargeFieldsLength = HeaderLength + sizeof(uint);
+
+        /// <summary>
+        /// A lower threshold for the large form, on the calling thread, so that the suite
+        /// can write the large form at sizes it can hold; null otherwise, as it is in
+        /// every thread but a test's.
+        /// </summary>
+        /// <remarks>
+        /// Per thread because the suite runs its tests side by side, and every other
+        /// test's payloads must be written as they always are. The writer reads it through
+        /// <see cref="LargeFormThreshold"/>, itself, so a lowered threshold runs the code
+        /// that a payload past the real one runs.
+        /// </remarks>
         [ThreadStatic]
         internal static long? LoweredLargeFormThreshold;
 
         /// <summary>
-        /// The longest payload written in the ordinary envelope.
+        /// The longest payload written in the ordinary envelope: <see cref="MaxPayloadLength"/>,
+        /// unless the suite has lowered it on this thread. A longer one is written in the
+        /// large form, and only a longer one, so a payload that fits the ordinary envelope
+        /// stays byte for byte what it was, and readable by every release that reads its
+        /// version.
         /// </summary>
         internal static long LargeFormThreshold => LoweredLargeFormThreshold ?? MaxPayloadLength;
+
+        /// <summary>Whether a payload of <paramref name="length"/> bytes is written in the large form.</summary>
+        internal static bool IsLargeForm(long length) => length > LargeFormThreshold;
 
         /// <summary>
         /// Refuses a payload longer than an envelope holds, naming the size it would be and
@@ -470,6 +518,14 @@ namespace ProbabilisticDataStructures
         /// The two passes are held to agreeing because a body that counts one payload and
         /// writes another would otherwise be framed as whatever it wrote, under a size it
         /// was never checked at.
+        /// <para>
+        /// The count also chooses the envelope: the large form for a payload past
+        /// <see cref="LargeFormThreshold"/>, and the ordinary one, as it always was, for
+        /// any other. Past <see cref="MaxPayloadLength"/> the payload is still refused, as
+        /// it cannot be built in one buffer; writing one that long needs the payload
+        /// streamed rather than buffered (#225), so here the large form is reached only
+        /// with the threshold lowered.
+        /// </para>
         /// </remarks>
         internal static void Write(Stream stream, IPayloadBody structure)
         {
@@ -491,7 +547,71 @@ namespace ProbabilisticDataStructures
                     $"{written.Version}. Nothing was written: the two have to be one layout.");
             }
 
-            Write(stream, header.Structure, header.Hash, payload.WrittenSpan, header.Version);
+            if (IsLargeForm(length))
+            {
+                WriteLarge(stream, header, payload.WrittenSpan);
+            }
+            else
+            {
+                Write(stream, header.Structure, header.Hash, payload.WrittenSpan, header.Version);
+            }
+        }
+
+        /// <summary>
+        /// Writes a payload in the large form: its header, with its own checksum, then the
+        /// payload, then the checksum the header's began, carried on over the payload.
+        /// </summary>
+        /// <remarks>
+        /// The payload is held here, as it is for the ordinary envelope; the header and the
+        /// final checksum are written by the two calls a writer that streams the payload
+        /// puts either side of it (#225).
+        /// </remarks>
+        internal static void WriteLarge(Stream stream, EnvelopeHeader header, ReadOnlySpan<byte> payload)
+        {
+            var crc = WriteLargeHeader(stream, header, (ulong)payload.Length);
+            crc.Append(payload);
+            stream.Write(payload);
+            WriteLargeChecksum(stream, crc);
+        }
+
+        /// <summary>
+        /// Writes the large form's header for a payload of <paramref name="length"/> bytes,
+        /// and returns the checksum it began, which the payload is to be appended to as it
+        /// is written and which <see cref="WriteLargeChecksum"/> then writes.
+        /// </summary>
+        /// <remarks>
+        /// The header's checksum is the running checksum as it stands at the end of the
+        /// header's fields, and the payload is appended to the same running checksum
+        /// without it. Appending a CRC-32's own value to what it covers brings it to one
+        /// constant state whatever came before, so a checksum carried on over the header's
+        /// checksum would no longer depend on the header at all.
+        /// </remarks>
+        internal static Crc32 WriteLargeHeader(Stream stream, EnvelopeHeader header, ulong length)
+        {
+            Span<byte> bytes = stackalloc byte[LargeHeaderLength];
+            Magic.CopyTo(bytes);
+            BinaryPrimitives.WriteUInt16LittleEndian(bytes[4..], (ushort)(header.Version | LargeFormFlag));
+            BinaryPrimitives.WriteUInt16LittleEndian(bytes[6..], (ushort)header.Structure);
+            BinaryPrimitives.WriteUInt16LittleEndian(bytes[8..], (ushort)header.Hash);
+            BinaryPrimitives.WriteUInt64LittleEndian(bytes[10..], length);
+
+            var crc = new Crc32();
+            crc.Append(bytes[MagicLength..LargeFieldsLength]);
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes[LargeFieldsLength..], crc.GetCurrentHashAsUInt32());
+
+            stream.Write(bytes);
+            return crc;
+        }
+
+        /// <summary>
+        /// Writes the large form's final checksum: the one <see cref="WriteLargeHeader"/>
+        /// began, with the whole payload appended to it.
+        /// </summary>
+        internal static void WriteLargeChecksum(Stream stream, Crc32 crc)
+        {
+            Span<byte> bytes = stackalloc byte[ChecksumLength];
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes, crc.GetCurrentHashAsUInt32());
+            stream.Write(bytes);
         }
 
         /// <summary>
@@ -535,16 +655,139 @@ namespace ProbabilisticDataStructures
         /// <remarks>
         /// <paramref name="price"/>, <paramref name="supplied"/> and
         /// <paramref name="checkHash"/> are as
-        /// <see cref="Read(Stream, StructureId, out HashId, out ushort, ReadBudget, PayloadPrice, Func{ReadOnlySpan{byte}, ulong}, HashCheck)"/>
+        /// <see cref="Read(Stream, byte[], StructureId, out HashId, out ushort, ReadBudget, PayloadPrice, Func{ReadOnlySpan{byte}, ulong}, HashCheck)"/>
         /// takes them.
         /// </remarks>
         internal static T Read<T>(
             Stream stream, StructureId expected, ReadBudget budget, PayloadPrice price,
             Func<ReadOnlySpan<byte>, ulong>? supplied, HashCheck checkHash, PayloadParse<T> parse)
         {
-            var payload = Read(stream, expected, out var hash, out var version, budget, price, supplied, checkHash);
+            var header = ReadExactly(stream, HeaderLength, "header");
+            if (IsLargeHeader(header))
+            {
+                return ReadLarge(stream, header, expected, budget, price, supplied, checkHash, parse);
+            }
+
+            var payload = Read(stream, header, expected, out var hash, out var version, budget, price, supplied, checkHash);
             var reader = new PayloadReader(payload, budget);
             return parse(ref reader, version, hash, supplied);
+        }
+
+        /// <summary>
+        /// Reads an envelope in the large form, whose first <see cref="HeaderLength"/> bytes
+        /// have been read, and the structure in it, and returns the structure only once the
+        /// checksum at the end of its payload has matched.
+        /// </summary>
+        /// <remarks>
+        /// The header's own checksum is checked before any field it covers is used, so a
+        /// damaged structure id or length is refused as damaged, never acted on, as the
+        /// ordinary envelope's single checksum ensures for it. The payload's checksum
+        /// follows the payload and is compared once the structure's reader has read the
+        /// whole of it (#227): a reader that does not hold the payload cannot check it
+        /// sooner, and this is the order such a reader reads in. If it does not match, the
+        /// structure just read is discarded and the read refused, so no caller receives
+        /// it. A refusal before the checksum, for the payload's shape or its price, says
+        /// that the checksum was not reached, and nothing past the point of refusal is
+        /// read.
+        /// <para>
+        /// The payload is held here, read into one array as the ordinary envelope's is, so
+        /// one longer than an array is refused for that once it has been priced; a reader
+        /// that streams the large form lifts that (#226).
+        /// </para>
+        /// </remarks>
+        private static T ReadLarge<T>(
+            Stream stream, byte[] first, StructureId expected, ReadBudget budget, PayloadPrice price,
+            Func<ReadOnlySpan<byte>, ulong>? supplied, HashCheck checkHash, PayloadParse<T> parse)
+        {
+            Span<byte> header = stackalloc byte[LargeHeaderLength];
+            first.CopyTo(header);
+            ReadExactly(stream, header[HeaderLength..], "rest of the large header");
+            var length = CheckLargeHeader(header, expected, out var version, out var hash);
+            var envelope = EnvelopeCost(length);
+
+            // The header is vouched for by its own checksum, so the hash it names is
+            // checked now, before anything is priced, as an ordinary header's is once its
+            // checksum has vouched for it.
+            checkHash(hash, supplied);
+
+            var pricing = !budget.IsSettled;
+            if (pricing)
+            {
+                budget.Price(envelope);
+                if (budget.Charged > budget.Limit)
+                {
+                    PriceUnheld(stream, length, version, budget, price);
+                    throw ChecksumNotReached(budget.Refusal(budget.Charged), expected);
+                }
+            }
+            else
+            {
+                budget.Charge(envelope);
+            }
+
+            if (length > (ulong)Array.MaxLength)
+            {
+                throw new InvalidDataException(
+                    $"Payload claims a length of {length} bytes, which cannot be read " +
+                    "into a single array.");
+            }
+
+            var payload = ReadExactly(stream, (int)length, "payload");
+            var crc = new Crc32();
+            crc.Append(header[MagicLength..LargeFieldsLength]);
+
+            T structure;
+            try
+            {
+                if (pricing)
+                {
+                    PriceHeld(payload, version, budget, price, envelope);
+                }
+
+                var reader = new PayloadReader(payload, budget);
+                structure = parse(ref reader, version, hash, supplied);
+                reader.ExpectEnd();
+            }
+            catch (InvalidDataException refusal)
+            {
+                throw ChecksumNotReached(refusal, expected);
+            }
+
+            var checksum = ReadExactly(stream, ChecksumLength, "checksum");
+            crc.Append(payload);
+
+            var expectedCrc = crc.GetCurrentHashAsUInt32();
+            var actualCrc = BinaryPrimitives.ReadUInt32LittleEndian(checksum);
+            if (expectedCrc != actualCrc)
+            {
+                throw new InvalidDataException(
+                    $"The checksum at the end of the payload does not match: expected " +
+                    $"{expectedCrc:X8} and found {actualCrc:X8}. The data has been corrupted " +
+                    $"or truncated, and the {expected} read from it has been discarded.");
+            }
+
+            return structure;
+        }
+
+        /// <summary>
+        /// A refusal of a payload in the large form made before its checksum was reached,
+        /// saying so: what was refused may be damage the checksum would have named.
+        /// </summary>
+        /// <remarks>
+        /// A refusal for the read's budget keeps its <see cref="ReadBudgetExceededException"/>
+        /// as the inner exception, which is how a caller tells it from the rest; any other
+        /// becomes the inner exception itself.
+        /// </remarks>
+        private static InvalidDataException ChecksumNotReached(InvalidDataException refusal, StructureId expected)
+        {
+            var message =
+                $"{refusal.Message} The {expected} is in the large form, whose checksum follows " +
+                "its payload, and that checksum was not reached, so whether the bytes were " +
+                "damaged is not known.";
+
+            return refusal.InnerException is ReadBudgetExceededException budget
+                ? new InvalidDataException(message, budget)
+                : new InvalidDataException(message, refusal);
         }
 
         /// <summary>
@@ -578,10 +821,9 @@ namespace ProbabilisticDataStructures
         /// </para>
         /// </remarks>
         private static byte[] Read(
-            Stream stream, StructureId expected, out HashId hash, out ushort version,
+            Stream stream, byte[] header, StructureId expected, out HashId hash, out ushort version,
             ReadBudget budget, PayloadPrice price, Func<ReadOnlySpan<byte>, ulong>? supplied, HashCheck checkHash)
         {
-            var header = ReadExactly(stream, HeaderLength, "header");
             var length = CheckHeader(header, expected, out version, out hash);
             var envelope = EnvelopeCost(length);
 
@@ -626,23 +868,34 @@ namespace ProbabilisticDataStructures
 
             if (pricing)
             {
-                var reader = new PayloadReader(payload, budget);
-                try
-                {
-                    price(ref reader, version);
-                }
-                catch (InvalidDataException)
-                {
-                    // Malformed somewhere past what has been priced. Its reader refuses it
-                    // there, or before, with its own explanation, unless what was priced up
-                    // to there is already more than the budget.
-                }
-
-                budget.Settle();
-                budget.Charge(envelope);
+                PriceHeld(payload, version, budget, price, envelope);
             }
 
             return payload;
+        }
+
+        /// <summary>
+        /// Prices a held payload's read with the structure's own price, then admits the
+        /// read at that price or refuses it, and charges the envelope, which was priced
+        /// before the payload was held, against it.
+        /// </summary>
+        private static void PriceHeld(
+            byte[] payload, ushort version, ReadBudget budget, PayloadPrice price, long envelope)
+        {
+            var reader = new PayloadReader(payload, budget);
+            try
+            {
+                price(ref reader, version);
+            }
+            catch (InvalidDataException)
+            {
+                // Malformed somewhere past what has been priced. Its reader refuses it
+                // there, or before, with its own explanation, unless what was priced up
+                // to there is already more than the budget.
+            }
+
+            budget.Settle();
+            budget.Charge(envelope);
         }
 
         /// <summary>
@@ -656,9 +909,9 @@ namespace ProbabilisticDataStructures
         /// priced as far as it goes.
         /// </remarks>
         private static void PriceUnheld(
-            Stream stream, uint length, ushort version, ReadBudget budget, PayloadPrice price)
+            Stream stream, ulong length, ushort version, ReadBudget budget, PayloadPrice price)
         {
-            var reader = new PayloadReader(new PayloadSource(stream), length, budget);
+            var reader = new PayloadReader(new PayloadSource(stream), (long)length, budget);
             try
             {
                 price(ref reader, version);
@@ -670,11 +923,19 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Checks an envelope's header, as its reader does and as a price looking into a
-        /// nested one does, and returns the payload length it claims.
+        /// Checks an envelope's magic, the one thing read before anything else, and says
+        /// whether its version field carries <see cref="LargeFormFlag"/>: whether its header
+        /// is the large form's, which is longer, and has a checksum of its own.
         /// </summary>
-        private static uint CheckHeader(
-            ReadOnlySpan<byte> header, StructureId expected, out ushort version, out HashId hash)
+        /// <param name="header">At least the first <see cref="HeaderLength"/> bytes of the envelope.</param>
+        /// <remarks>
+        /// The flag is read before the large header's checksum is checked, unavoidably,
+        /// since it says how much header there is to check. A flag flipped on in an
+        /// ordinary header has that header read as a large one, whose checksum then fails;
+        /// one flipped off in a large header has it read as an ordinary one, which the
+        /// ordinary checksum, over other bytes, refuses.
+        /// </remarks>
+        private static bool IsLargeHeader(ReadOnlySpan<byte> header)
         {
             if (!header.Slice(0, MagicLength).SequenceEqual(Magic))
             {
@@ -683,31 +944,19 @@ namespace ProbabilisticDataStructures
                     "payload; its first bytes are not the expected marker.");
             }
 
+            return (BinaryPrimitives.ReadUInt16LittleEndian(header.Slice(4)) & LargeFormFlag) != 0;
+        }
+
+        /// <summary>
+        /// Checks an ordinary envelope's header, after <see cref="IsLargeHeader"/>, as its
+        /// reader does and as a price looking into a nested one does, and returns the
+        /// payload length it claims.
+        /// </summary>
+        private static uint CheckHeader(
+            ReadOnlySpan<byte> header, StructureId expected, out ushort version, out HashId hash)
+        {
             version = BinaryPrimitives.ReadUInt16LittleEndian(header.Slice(4));
-
-            // Before the structure is compared, as it always was: a version this library
-            // has never heard of may lay the header out differently, and then there is
-            // no structure id to trust.
-            if (version == 0 || version > MaxSupportedVersion)
-            {
-                throw RefuseVersion(expected, version);
-            }
-
-            var structure = (StructureId)BinaryPrimitives.ReadUInt16LittleEndian(header.Slice(6));
-            if (structure != expected)
-            {
-                throw new InvalidDataException(
-                    $"Payload holds a {Describe(structure)} and was read as a " +
-                    $"{Describe(expected)}.");
-            }
-
-            // After it, because which versions are acceptable depends on which structure
-            // this is. A version some other structure defined is not an older or newer
-            // layout of this one, and reading it as one is a guess.
-            if (!ReadableVersions(expected).Contains(version))
-            {
-                throw RefuseVersion(expected, version);
-            }
+            CheckVersionAndStructure(header, expected, version, large: false);
 
             hash = (HashId)BinaryPrimitives.ReadUInt16LittleEndian(header.Slice(8));
 
@@ -723,11 +972,84 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Checks a large-form header, all <see cref="LargeHeaderLength"/> bytes of it, after
+        /// <see cref="IsLargeHeader"/>: its checksum first, and then, as an ordinary header
+        /// is checked, the version without its flag, the structure and the hash, and returns
+        /// the payload length it claims.
+        /// </summary>
+        /// <remarks>
+        /// Nothing the checksum covers is used before it has matched, so a damaged length
+        /// or structure id is refused as damage and never acted on, which is what the
+        /// ordinary envelope's single checksum ensures for its own header.
+        /// </remarks>
+        private static ulong CheckLargeHeader(
+            ReadOnlySpan<byte> header, StructureId expected, out ushort version, out HashId hash)
+        {
+            var expectedCrc = Crc32.HashToUInt32(header[MagicLength..LargeFieldsLength]);
+            var actualCrc = BinaryPrimitives.ReadUInt32LittleEndian(header[LargeFieldsLength..]);
+            if (expectedCrc != actualCrc)
+            {
+                throw new InvalidDataException(
+                    $"The large form's header checksum does not match: expected {expectedCrc:X8} " +
+                    $"and found {actualCrc:X8}. The header has been corrupted or truncated, and " +
+                    "none of its fields was used.");
+            }
+
+            version = (ushort)(BinaryPrimitives.ReadUInt16LittleEndian(header[4..]) & ~LargeFormFlag);
+            CheckVersionAndStructure(header, expected, version, large: true);
+
+            hash = (HashId)BinaryPrimitives.ReadUInt16LittleEndian(header[8..]);
+
+            // A stream's length and position are a long, and so is every offset a reader
+            // works out in one.
+            var length = BinaryPrimitives.ReadUInt64LittleEndian(header[10..]);
+            if (length > long.MaxValue)
+            {
+                throw new InvalidDataException(
+                    $"Payload claims a length of {length} bytes, more than a stream can hold.");
+            }
+
+            return length;
+        }
+
+        /// <summary>
+        /// Refuses a version the structure being read never defined, a later one or 0
+        /// included, and a header naming another structure, in that order.
+        /// </summary>
+        private static void CheckVersionAndStructure(
+            ReadOnlySpan<byte> header, StructureId expected, ushort version, bool large)
+        {
+            // Before the structure is compared, as it always was: a version this library
+            // has never heard of may lay the header out differently, and then there is
+            // no structure id to trust.
+            if (version == 0 || version > MaxSupportedVersion)
+            {
+                throw RefuseVersion(expected, version, large);
+            }
+
+            var structure = (StructureId)BinaryPrimitives.ReadUInt16LittleEndian(header.Slice(6));
+            if (structure != expected)
+            {
+                throw new InvalidDataException(
+                    $"Payload holds a {Describe(structure)} and was read as a " +
+                    $"{Describe(expected)}.");
+            }
+
+            // After it, because which versions are acceptable depends on which structure
+            // this is. A version some other structure defined is not an older or newer
+            // layout of this one, and reading it as one is a guess.
+            if (!ReadableVersions(expected).Contains(version))
+            {
+                throw RefuseVersion(expected, version, large);
+            }
+        }
+
+        /// <summary>
         /// The refusal for a format version the structure being read does not define,
         /// which names the structure, the version it was handed and the versions it
-        /// does read.
+        /// does read; for the large form, the version without its flag.
         /// </summary>
-        private static InvalidDataException RefuseVersion(StructureId expected, ushort version)
+        private static InvalidDataException RefuseVersion(StructureId expected, ushort version, bool large)
         {
             var reads = DescribeVersions(ReadableVersions(expected));
 
@@ -738,8 +1060,9 @@ namespace ProbabilisticDataStructures
                     : $"{expected} has never been written at that version, so the " +
                       "header does not describe a payload this library produced.";
 
+            var form = large ? ", in the large form" : "";
             return new InvalidDataException(
-                $"Payload is format version {version}, and {expected} is read at " +
+                $"Payload is format version {version}{form}, and {expected} is read at " +
                 $"{reads}. {why}");
         }
 
@@ -988,14 +1311,21 @@ namespace ProbabilisticDataStructures
         /// counted only once the one it holds is an <see cref="IPayloadBody"/>, and the
         /// cast says so if it is not.
         /// </para>
+        /// <para>
+        /// The envelope counted is the one the inner structure's own write will choose, by
+        /// <see cref="IsLargeForm"/> on the inner payload's length, which is the length
+        /// its body has just added to the count.
+        /// </para>
         /// </remarks>
         internal static void WriteNested<T>(PayloadWriter payload, T structure)
             where T : IBinaryPersistable<T>
         {
             if (payload.IsCounting)
             {
-                payload.BeginBlock(sizeof(uint) + EnvelopeLength);
+                var before = payload.Length;
                 ((IPayloadBody)structure).WritePayload(payload);
+                var inner = payload.Length - before;
+                payload.BeginBlock(sizeof(uint) + (IsLargeForm(inner) ? LargeEnvelopeLength : EnvelopeLength));
                 return;
             }
 
@@ -1033,8 +1363,8 @@ namespace ProbabilisticDataStructures
         /// envelope's payload and buffers, and whatever the nested structure's own price
         /// says, read from the nested payload as it lies inside this one -- the same
         /// sums, in the same order, that the nested read charges. Its header is checked
-        /// as its reader checks it, so a nested envelope that is not the structure it
-        /// should be stops the price where the read will stop.
+        /// as its reader checks it, in either form, so a nested envelope that is not the
+        /// structure it should be stops the price where the read will stop.
         /// </remarks>
         internal static void PriceNested(ref PayloadReader reader, StructureId nested, PayloadPrice price)
         {
@@ -1042,10 +1372,27 @@ namespace ProbabilisticDataStructures
             reader.Budget.Price(NestedReadCost);
 
             var envelope = reader.Slice(run);
-            var length = CheckHeader(envelope.ReadSpan(HeaderLength), nested, out var version, out _);
+
+            // Copied out a piece at a time: a payload that is not held hands each piece
+            // back in a buffer the next one overwrites.
+            Span<byte> header = stackalloc byte[LargeHeaderLength];
+            envelope.ReadSpan(HeaderLength).CopyTo(header);
+
+            ulong length;
+            ushort version;
+            if (IsLargeHeader(header))
+            {
+                envelope.ReadSpan(LargeHeaderLength - HeaderLength).CopyTo(header[HeaderLength..]);
+                length = CheckLargeHeader(header, nested, out version, out _);
+            }
+            else
+            {
+                length = CheckHeader(header, nested, out version, out _);
+            }
+
             envelope.Budget.Price(EnvelopeCost(length));
 
-            var payload = envelope.Slice((int)length);
+            var payload = envelope.Slice((long)length);
             price(ref payload, version);
             envelope.SkipRest();
         }
@@ -1082,7 +1429,11 @@ namespace ProbabilisticDataStructures
         /// allocates: the payload, the header and checksum buffers, and the checksum's
         /// state.
         /// </summary>
-        internal static long EnvelopeCost(uint length) => ReadBudget.Sum(
+        /// <remarks>
+        /// The same for either form, while both hold the payload: the rest of a large
+        /// header is read onto the stack, beside the ordinary header's buffer.
+        /// </remarks>
+        internal static long EnvelopeCost(ulong length) => ReadBudget.Sum(
             ReadBudget.ArrayOf(length, 1),
             ReadBudget.ArrayOf(HeaderLength, 1),
             ReadBudget.ArrayOf(ChecksumLength, 1),
@@ -1107,15 +1458,37 @@ namespace ProbabilisticDataStructures
                 var n = stream.Read(buffer, read, count - read);
                 if (n == 0)
                 {
-                    throw new InvalidDataException(
-                        $"The stream ended after {read} of the {count} bytes the " +
-                        $"{what} needs. The data has been truncated.");
+                    throw Truncated(read, count, what);
                 }
                 read += n;
             }
 
             return buffer;
         }
+
+        /// <summary>
+        /// Fills a few bytes on the stack, the rest of a large header. Only for a few: a
+        /// stream that implements only the array overload of <c>Read</c> is handed a rented
+        /// array as long as the span.
+        /// </summary>
+        private static void ReadExactly(Stream stream, Span<byte> buffer, string what)
+        {
+            var read = 0;
+
+            while (read < buffer.Length)
+            {
+                var n = stream.Read(buffer[read..]);
+                if (n == 0)
+                {
+                    throw Truncated(read, buffer.Length, what);
+                }
+                read += n;
+            }
+        }
+
+        private static InvalidDataException Truncated(int read, int count, string what) => new(
+            $"The stream ended after {read} of the {count} bytes the {what} needs. The data " +
+            "has been truncated.");
 
         private static string Describe(StructureId structure)
         {

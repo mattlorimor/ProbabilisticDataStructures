@@ -392,14 +392,18 @@ namespace ProbabilisticDataStructures
         /// Over a held payload this reader moves past the slice at once. Over one that is
         /// not held both read from the same stream, so this one follows wherever the slice
         /// leaves it, and the slice has to be skipped to its end before this one goes on.
+        /// <para>
+        /// The length is taken in 64 bits, as a nested large-form envelope claims its own,
+        /// and held to what remains before it is narrowed.
+        /// </para>
         /// </remarks>
-        internal PayloadReader Slice(int length)
+        internal PayloadReader Slice(long length)
         {
             RequireAhead(length);
             if (this.source is null)
             {
-                var slice = new PayloadReader(this.payload.Slice(this.offset, length), this.Budget);
-                this.offset += length;
+                var slice = new PayloadReader(this.payload.Slice(this.offset, (int)length), this.Budget);
+                this.offset += (int)length;
                 return slice;
             }
 
