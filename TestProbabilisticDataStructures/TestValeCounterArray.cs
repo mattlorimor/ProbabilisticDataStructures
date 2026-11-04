@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 
@@ -554,6 +555,85 @@ namespace TestProbabilisticDataStructures
             array.Set(2 * countersPerChunk, 9);
             CollectionAssert.AreEqual(held, CountsOf(copy), "a write to the array changed the copy");
             AssertAlike(array, array.Copy(), "a copy of the array as it now is");
+        }
+
+        /// <summary>
+        /// Asked before each increment of a long run whether the increment will move its chunk
+        /// to a tails array, the array answers what the increment then does, at every kind of
+        /// counter the run reaches: a stub with room, a full stub whose longer extension fits
+        /// and one whose extension spills, a full stub in a chunk already on tails, and a
+        /// counter at the largest count.
+        /// </summary>
+        /// <remarks>
+        /// The sketch lays its rows out again, building them first, at the add whose increments
+        /// would put too many chunks on tails, so it has to know that before it takes them; the
+        /// answer is checked against the move itself, not against a second reading of the rule.
+        /// Each kind is counted, and each must have been seen, so a run that never spilled a
+        /// chunk, or never filled a stub, fails rather than agreeing about nothing. The
+        /// tunings are the default, the narrowest stubs with the most counters, which spill
+        /// soonest, and a pool wide enough that only longer extensions spill it.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(C, S)]
+        [DataRow(ValeCounterArray.MaxCountersPerChunk, ValeCounterArray.MinStubBits)]
+        [DataRow(40, 6)]
+        public void TestAnIncrementSaysBeforehandWhetherItMovesItsChunkToTails(
+            int countersPerChunk, int stubBits)
+        {
+            const int Chunks = 64;
+            const int Steps = 400_000;
+            var array = new ValeCounterArray(Chunks * countersPerChunk, countersPerChunk, stubBits);
+            var mask = (1UL << stubBits) - 1;
+            var onTails = new System.Collections.Generic.HashSet<int>();
+
+            // One counter in every eighth chunk starts at the largest count, where an increment
+            // changes nothing; at narrow stubs its extension alone spills the chunk.
+            for (var chunk = 0; chunk < Chunks; chunk += 8)
+            {
+                var before = array.ChunksWithTails;
+                array.Set(chunk * countersPerChunk + 1, ulong.MaxValue);
+                if (array.ChunksWithTails > before)
+                {
+                    onTails.Add(chunk);
+                }
+            }
+
+            const int Roomy = 0, Fits = 1, Spills = 2, OnTails = 3, Largest = 4;
+            var seen = new int[5];
+            var wrong = new System.Collections.Generic.List<string>();
+            var random = new Random(242);
+            for (var step = 0; step < Steps; step++)
+            {
+                var j = random.Next(array.Count);
+                var chunk = j / countersPerChunk;
+                var value = array.Get(j);
+
+                var predicted = array.IncrementMovesToTails(j);
+                var before = array.ChunksWithTails;
+                array.Increment(j);
+                var moved = array.ChunksWithTails - before;
+
+                if (moved != (predicted ? 1 : 0) && wrong.Count < 10)
+                {
+                    wrong.Add($"step {step}, counter {j} at {value}: predicted {predicted}, moved {moved}");
+                }
+
+                var kind = value == ulong.MaxValue ? Largest
+                    : (value & mask) != mask ? Roomy
+                    : onTails.Contains(chunk) ? OnTails
+                    : moved == 1 ? Spills
+                    : Fits;
+                seen[kind]++;
+                if (moved == 1)
+                {
+                    onTails.Add(chunk);
+                }
+            }
+
+            Assert.AreEqual(0, wrong.Count, string.Join(Environment.NewLine, wrong));
+            var tally = $"roomy {seen[Roomy]}, fits {seen[Fits]}, spills {seen[Spills]}, " +
+                $"on tails {seen[OnTails]}, largest {seen[Largest]}";
+            Assert.IsTrue(seen.All(n => n > 0), $"a kind of counter went unseen: {tally}");
         }
 
         /// <summary>

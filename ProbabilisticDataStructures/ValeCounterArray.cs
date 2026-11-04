@@ -403,21 +403,8 @@ namespace ProbabilisticDataStructures
                 return;
             }
 
-            ReadPool(chunk);
-            var start = ExtensionStart(Rank(chunk, i));
-            var used = TotalPoolBits();
-
-            var was = 0;
-            if (had)
-            {
-                ValeCounter.DecodeExtension(_pool, start, _poolBits, out was);
-            }
-
-            var wanted = wants
-                ? ValeCounter.ExtensionLength(overflow) * ValeCounter.FragmentBits
-                : 0;
-
-            if (used - was + wanted > _poolBits)
+            if (Outgrows(chunk, i, overflow, had, wants,
+                out var start, out var used, out var was, out var wanted))
             {
                 // The pool cannot hold this. Everything in it is decanted into a tails
                 // array, which has to happen before the pool is disturbed.
@@ -439,6 +426,64 @@ namespace ProbabilisticDataStructures
             }
 
             WritePool(chunk);
+        }
+
+        /// <summary>
+        /// Whether the pool of a chunk that is not on tails is too small for counter
+        /// <paramref name="i"/>'s high bits to become <paramref name="overflow"/>, with the
+        /// pool read into the scratch buffer, where the counter's extension starts, how much of
+        /// the pool is in use, and how many bits the extension takes now and would take.
+        /// </summary>
+        private bool Outgrows(int chunk, int i, ulong overflow, bool had, bool wants,
+            out int start, out int used, out int was, out int wanted)
+        {
+            ReadPool(chunk);
+            start = ExtensionStart(Rank(chunk, i));
+            used = TotalPoolBits();
+
+            was = 0;
+            if (had)
+            {
+                ValeCounter.DecodeExtension(_pool, start, _poolBits, out was);
+            }
+
+            wanted = wants
+                ? ValeCounter.ExtensionLength(overflow) * ValeCounter.FragmentBits
+                : 0;
+
+            return used - was + wanted > _poolBits;
+        }
+
+        /// <summary>
+        /// Whether <see cref="Increment"/> at this counter would move its chunk onto a tails
+        /// array, which is the one thing an increment can allocate. It changes no counter.
+        /// </summary>
+        /// <remarks>
+        /// It takes the increment's own steps and the pool's own test. A stub with room takes
+        /// the add where it lies; a chunk already on tails has nowhere further to go; a counter
+        /// at the largest count stays there. What is left is a full stub, which carries into
+        /// the counter's extension, so the counter wants one, and the question is whether the
+        /// pool holds it at the count one higher.
+        /// </remarks>
+        internal bool IncrementMovesToTails(int index)
+        {
+            var chunk = ChunkOf(index, out var i);
+            var at = ChunkStart(chunk);
+            if (ReadBits(_words, at + _stubBase + i * _stubBits, _stubBits) != _stubMask
+                || _tails.ContainsKey(chunk))
+            {
+                return false;
+            }
+
+            var value = Get(index);
+            if (value == ulong.MaxValue)
+            {
+                return false;
+            }
+
+            var had = ReadBits(_words, at + i, 1) != 0;
+            return Outgrows(chunk, i, ValeCounter.OverflowOf(value + 1, _stubBits), had, true,
+                out _, out _, out _, out _);
         }
 
         /// <summary>

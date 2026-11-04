@@ -389,7 +389,9 @@ namespace ProbabilisticDataStructures
         /// most a sketch allocates at once, eight bytes a counter before they are packed, and
         /// if it cannot get everything it throws the <see cref="OutOfMemoryException"/> with
         /// the sketch as it was before the add: the key is not counted, so adding it again
-        /// counts it once.
+        /// counts it once. So does an add that crowds the rows, by putting more than three in
+        /// a hundred of their chunks on tails arrays, into being laid out again: it builds them
+        /// laid out, the key counted, before it changes anything.
         /// </para>
         /// </remarks>
         /// <param name="data">The data to add.</param>
@@ -438,7 +440,22 @@ namespace ProbabilisticDataStructures
                 return this;
             }
 
-            var onTailsBefore = ChunksOnTails();
+            // So does the add that crowds the rows into being laid out again, by moving their
+            // chunks to tails arrays: it is told by asking each row before any is changed.
+            var moving = 0;
+            for (var i = 0; i < this.rows.Length; i++)
+            {
+                if (this.rows[i].IncrementMovesToTails(ColumnOf(kernel, i)))
+                {
+                    moving++;
+                }
+            }
+
+            if (moving > 0 && Crowded(ChunksOnTails() + moving))
+            {
+                Repack(kernel);
+                return this;
+            }
 
             for (var i = 0; i < this.rows.Length; i++)
             {
@@ -448,14 +465,16 @@ namespace ProbabilisticDataStructures
             // The count stops at the largest a ulong holds, as a counter does. It wrapped
             // to nought, and took the total, the expected error and the schedule of
             // doublings back to their start with it.
-            if (this.count != ulong.MaxValue)
-            {
-                this.count++;
-            }
-
-            RetuneIfCrowded(onTailsBefore);
+            this.count = OneMore(this.count);
             return this;
         }
+
+        /// <summary>
+        /// One more than a count, stopping at the largest a <c>ulong</c> holds, as an
+        /// increment of a counter does.
+        /// </summary>
+        private static ulong OneMore(ulong count) =>
+            count == ulong.MaxValue ? count : count + 1;
 
         /// <summary>
         /// Takes the data back out of the sketch.
@@ -1075,9 +1094,7 @@ namespace ProbabilisticDataStructures
                 // Both copies of the key's counter, stopping at the largest count as an
                 // increment does.
                 var column = ColumnOf(kernel, i);
-                var counted = values[i][column] == ulong.MaxValue
-                    ? ulong.MaxValue
-                    : values[i][column] + 1;
+                var counted = OneMore(values[i][column]);
                 values[i][column] = counted;
                 values[i][column + this.width] = counted;
             }
@@ -1191,18 +1208,33 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Lays the counters out again at their width, at a tuning suited to what they now
-        /// hold.
+        /// Takes the add of a key that crowds the rows, and lays the counters out again at
+        /// their width, the key counted, at a tuning suited to what they then hold.
         /// </summary>
         /// <remarks>
-        /// The rows are built before they are put in place, so a repacking that runs out of
-        /// memory leaves them as they were packed. This used to double the rows as well, and
-        /// set the width before it built them, so a doubling that failed building them left
-        /// the width doubled over rows that were not.
+        /// The rows are built, the key's counters included, before anything is changed, so an
+        /// add whose repacking runs out of memory leaves the sketch as it was, and the add tried
+        /// again counts the key once. Until #242 the add took its increments in the rows first,
+        /// moving the crowded chunks to tails arrays as it went, and counted the key, and only
+        /// then laid the rows out, so a failure left the key counted though the add threw.
+        /// Before #213 this doubled the rows as well, and set the width before it built them,
+        /// so a doubling that failed building them left the width doubled over rows that were
+        /// not.
         /// </remarks>
-        private void Retune()
+        private void Repack(in HashKernelReturnValue kernel)
         {
-            Install(LayOut(CountsAt(this.width), this.width));
+            var values = CountsAt(this.width);
+            for (var i = 0; i < this.rows.Length; i++)
+            {
+                var column = ColumnOf(kernel, i);
+                values[i][column] = OneMore(values[i][column]);
+            }
+
+            var laidOut = LayOut(values, this.width);
+
+            // Built; from here the sketch is changed, and nothing allocates.
+            this.count = OneMore(this.count);
+            Install(laidOut);
         }
 
         /// <summary>
@@ -1308,14 +1340,11 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Lays the counters out again if the add just made has pushed too many chunks
-        /// onto tails arrays.
+        /// Whether this many chunks on tails arrays, across every row, is too many: an add
+        /// that puts a chunk on tails and leaves this many lays the counters out again.
         /// </summary>
-        /// <param name="onTailsBefore">
-        /// How many chunks were on tails before the add, from <see cref="ChunksOnTails"/>.
-        /// </param>
         /// <remarks>
-        /// Only an add that has put a chunk on tails can call for this. Between layouts
+        /// Only an add that puts a chunk on tails can call for this. Between layouts
         /// nothing else puts one there, so a sketch already past the fraction before an
         /// add was left past it by its last layout -- which is what the fallback tuning
         /// does, when no tuning meets the bound <see cref="Tune(ReadOnlySpan{long})"/> sets
@@ -1323,10 +1352,16 @@ namespace ProbabilisticDataStructures
         /// again picks the same tuning and puts the same chunks back on tails, so asking
         /// after every add laid out the whole sketch on every add, for nothing. Where every
         /// layout leaves no more than the fraction on tails, as an ordinary sketch's does,
-        /// an add can take the sketch past it only by putting a chunk on tails, so this
-        /// lays it out again at exactly the adds it always did.
+        /// an add can take the sketch past it only by putting a chunk on tails, so the
+        /// counters are laid out again at exactly the adds they always were.
+        /// <para>
+        /// The add asks each row whether its increment would put a chunk on tails, and asks
+        /// this of the count it would leave, before it changes anything. It used to take the
+        /// increments, count again and then ask, and the answer is the same: each row's
+        /// increment moves at most its own chunk, and moves it exactly when the row says so.
+        /// </para>
         /// </remarks>
-        private void RetuneIfCrowded(int onTailsBefore)
+        private bool Crowded(int onTails)
         {
             var chunks = 0;
             foreach (var row in this.rows)
@@ -1334,11 +1369,7 @@ namespace ProbabilisticDataStructures
                 chunks += row.ChunkCount;
             }
 
-            var onTails = ChunksOnTails();
-            if (onTails > onTailsBefore && onTails > chunks * TailsFractionBeforeRetuning)
-            {
-                Retune();
-            }
+            return onTails > chunks * TailsFractionBeforeRetuning;
         }
 
         /// <summary>
