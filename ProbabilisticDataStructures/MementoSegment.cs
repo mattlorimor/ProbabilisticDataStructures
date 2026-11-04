@@ -511,6 +511,13 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Refuses a table whose metadata is inconsistent, or whose slots used are not its
+        /// count, before any run in it is walked. See <see cref="QuotientTable.CheckMetadata"/>.
+        /// </summary>
+        internal void CheckMetadata(int table) =>
+            QuotientTable.CheckMetadata(this.Data, this.bitsPerSlot, this.Slots, this.Count, table);
+
+        /// <summary>
         /// Refuses a table holding a run whose boxes do not decode, so that a filter read
         /// from a payload answers every query without the codec's backstop firing.
         /// </summary>

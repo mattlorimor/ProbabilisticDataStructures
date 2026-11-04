@@ -593,8 +593,11 @@ namespace ProbabilisticDataStructures
                     data[w] = reader.ReadUInt64();
                 }
 
-                filter.Segments.Add(InfiniSegment.Restore(
-                    quotientBits, fingerprintBits, count, data));
+                // Every walk of a table rests on its metadata being consistent, and the
+                // expansion on its count being its entries.
+                var segment = InfiniSegment.Restore(quotientBits, fingerprintBits, count, data);
+                segment.CheckMetadata(i);
+                filter.Segments.Add(segment);
             }
 
             reader.ExpectEnd();

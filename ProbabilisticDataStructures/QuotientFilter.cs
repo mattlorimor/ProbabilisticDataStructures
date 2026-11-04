@@ -912,6 +912,9 @@ namespace ProbabilisticDataStructures
                     bytes.AsSpan(i * sizeof(ulong)));
             }
 
+            // Every walk of the table rests on its metadata being consistent, and on the count
+            // being its entries, which the full check in Add relies on.
+            QuotientTable.CheckMetadata(filter.data, filter.bitsPerSlot, filter.slots, count, -1);
             filter.count = count;
             return filter;
         }

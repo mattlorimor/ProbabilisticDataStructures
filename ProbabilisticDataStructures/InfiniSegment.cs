@@ -453,6 +453,13 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Refuses a table whose metadata is inconsistent, or whose entries are not its
+        /// count, before any run in it is walked. See <see cref="QuotientTable.CheckMetadata"/>.
+        /// </summary>
+        internal void CheckMetadata(int table) =>
+            QuotientTable.CheckMetadata(this.Data, this.bitsPerSlot, this.Slots, this.Count, table);
+
+        /// <summary>
         /// Every entry the segment holds, paired with the quotient that owns it, read from
         /// the table as the walk reaches it.
         /// </summary>
