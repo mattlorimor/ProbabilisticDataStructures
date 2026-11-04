@@ -12,7 +12,7 @@ namespace ProbabilisticDataStructures
     /// documents are near-duplicates when their fingerprints differ in few bits, so the
     /// whole comparison is an exclusive-or and a bit count.
     /// </remarks>
-    public sealed class SimHashSignature : IBinaryPersistable<SimHashSignature>
+    public sealed class SimHashSignature : IBinaryPersistable<SimHashSignature>, IPayloadBody
     {
         /// <summary>
         /// Wraps a fingerprint that has already been computed, or stored elsewhere.
@@ -37,21 +37,16 @@ namespace ProbabilisticDataStructures
         /// Writes this signature to a stream, in the format documented in FORMAT.md.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt64(this.Value);
 
             // Named rather than left open, as with a MinHash signature and for the same
             // reason: a fingerprint only means anything against another built the same
             // way, and there is no overload that lets one be built differently.
-            PersistenceFormat.Write(
-                stream,
-                StructureId.SimHashSignature,
-                HashId.XxHash3_64,
-                payload.WrittenSpan);
+            return new(StructureId.SimHashSignature, HashId.XxHash3_64);
         }
 
         /// <summary>

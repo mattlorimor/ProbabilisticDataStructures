@@ -43,7 +43,7 @@ namespace ProbabilisticDataStructures
     /// are. A filter read back keeps the scheme its payload was placed with, and the two
     /// schemes do not merge.
     /// </remarks>
-    public class CountingBloomFilter : IFilter, IBinaryPersistable<CountingBloomFilter>
+    public class CountingBloomFilter : IFilter, IBinaryPersistable<CountingBloomFilter>, IPayloadBody
     {
         /// <summary>
         /// Filter data
@@ -353,22 +353,18 @@ namespace ProbabilisticDataStructures
         /// Writes this filter to a stream, in the format documented in FORMAT.md.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.m);
             payload.WriteUInt32(this.k);
             BitPlacement.Write(payload, this.Placement);
             payload.WriteUInt64(this.count);
             PersistenceFormat.WriteBuckets(payload, this.Buckets);
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.CountingBloomFilter,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan,
+            return new(
+                StructureId.CountingBloomFilter, PersistenceFormat.Identify(this.Hash),
                 PersistenceFormat.PlacementVersion);
         }
 

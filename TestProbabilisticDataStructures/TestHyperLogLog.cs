@@ -26,6 +26,19 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestHyperLogLog
     {
+        /// <summary>
+        /// The register count and the registers as one run, which is as long as the
+        /// estimator has registers whatever they hold.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of("16 registers, empty", new HyperLogLog(16));
+
+            var filled = new HyperLogLog(1024);
+            for (var i = 0; i < 5000; i++) filled.Add(System.Text.Encoding.ASCII.GetBytes($"item-{i}"));
+            yield return PayloadState.Of("1,024 registers, filled", filled);
+        }
+
         private double geterror(UInt64 actual, UInt64 estimate)
         {
             return ((float)estimate - (float)actual) / (float)actual;

@@ -231,43 +231,28 @@ namespace TestProbabilisticDataStructures
         /// </remarks>
         private static readonly (StructureId Id, string Why)[] NotYetCounted =
         {
-            (StructureId.BloomFilter, NoBody),
 
-            (StructureId.CountingBloomFilter, NoBody),
 
-            (StructureId.DeletableBloomFilter, NoBody),
 
-            (StructureId.PartitionedBloomFilter, NoBody),
 
-            (StructureId.ScalableBloomFilter, NoBody),
 
-            (StructureId.StableBloomFilter, NoBody),
 
-            (StructureId.InverseBloomFilter, NoBody),
 
-            (StructureId.CuckooBloomFilter, NoBody),
 
-            (StructureId.HyperLogLog, NoBody),
 
-            (StructureId.MinHashSignature, NoBody),
 
             (StructureId.BinaryFuseFilter, NoBody),
 
 
-            (StructureId.HyperLogLogPlus, NoBody),
 
             (StructureId.QuotientFilter, NoBody),
 
-            (StructureId.ThetaSketch, NoBody),
 
-            (StructureId.SimHashSignature, NoBody),
 
             (StructureId.BloomierFilter, NoBody),
 
 
-            (StructureId.VarOpt, NoBody),
 
-            (StructureId.UltraLogLog, NoBody),
 
             (StructureId.Grafite, NoBody),
 
@@ -276,13 +261,23 @@ namespace TestProbabilisticDataStructures
             (StructureId.MementoFilter, NoBody),
 
 
-            (StructureId.TupleSketch, NoBody),
 
 
         };
 
         private const string NoBody =
             "not yet an IPayloadBody, so its WriteTo writes without counting first (#216)";
+
+        /// <summary>
+        /// The structures whose payload is one length whatever they hold, so that their
+        /// states cannot reach two. Each is checked: its states must write one length, or
+        /// its line here is stale, and must differ in what they write, or nothing they hold
+        /// was varied.
+        /// </summary>
+        private static readonly (StructureId Id, string Why)[] OneLength =
+        {
+            (StructureId.SimHashSignature, "a fingerprint, one ulong whatever it was built from"),
+        };
 
         /// <summary>
         /// Every structure with a body is counted by its own <c>WriteTo</c>, once, before it
@@ -308,6 +303,7 @@ namespace TestProbabilisticDataStructures
         public void TestEveryStructureWithABodyIsCountedByItsWriteToAtTheLengthItWrites()
         {
             var lengths = new Dictionary<StructureId, HashSet<long>>();
+            var payloads = new Dictionary<StructureId, HashSet<string>>();
             var states = 0;
 
             foreach (var state in AllStates())
@@ -347,17 +343,42 @@ namespace TestProbabilisticDataStructures
                 }
 
                 seen.Add(own[0].Length);
+                if (!payloads.TryGetValue(id, out var held))
+                {
+                    payloads[id] = held = new HashSet<string>(StringComparer.Ordinal);
+                }
+
+                held.Add(Convert.ToHexString(bytes));
                 states++;
             }
 
             Assert.IsGreaterThan(0, states, "no states were found, so nothing was counted");
 
-            // A structure whose states all write one length could be counted by a constant.
+            // A structure whose states all write one length could be counted by a constant,
+            // unless its layout is one length: then its states differ in what they hold.
             foreach (var (id, seen) in lengths)
             {
-                Assert.IsGreaterThan(1, seen.Count,
-                    $"every state of {id} writes {seen.First():N0} bytes, so nothing the count " +
-                    "depends on was varied");
+                var oneLength = OneLength.Where(o => o.Id == id).Select(o => o.Why).SingleOrDefault();
+                if (oneLength is null)
+                {
+                    Assert.IsGreaterThan(1, seen.Count,
+                        $"every state of {id} writes {seen.First():N0} bytes, so nothing the count " +
+                        "depends on was varied");
+                    continue;
+                }
+
+                Assert.HasCount(1, seen,
+                    $"{id} is exempt from two lengths as {oneLength}, and its states write " +
+                    $"{seen.Count}: delete its line in OneLength");
+                Assert.IsGreaterThan(1, payloads[id].Count,
+                    $"{id} is exempt from two lengths as {oneLength}, and its states all write " +
+                    "the same bytes, so nothing they hold was varied");
+            }
+
+            foreach (var (id, why) in OneLength)
+            {
+                Assert.IsTrue(lengths.ContainsKey(id),
+                    $"{id} is exempt from two lengths as {why}, and gives no states");
             }
 
             foreach (var (id, why) in NotYetCounted)

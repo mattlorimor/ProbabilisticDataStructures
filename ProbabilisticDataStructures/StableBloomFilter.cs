@@ -39,7 +39,7 @@ namespace ProbabilisticDataStructures
     /// filter read back keeps the scheme its payload was placed with, and
     /// <see cref="Reset"/> keeps it too.
     /// </remarks>
-    public class StableBloomFilter : IFilter, IBinaryPersistable<StableBloomFilter>
+    public class StableBloomFilter : IFilter, IBinaryPersistable<StableBloomFilter>, IPayloadBody
     {
         /// <summary>
         /// Filter data
@@ -415,11 +415,10 @@ namespace ProbabilisticDataStructures
         /// Writes this filter to a stream, in the format documented in FORMAT.md.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.M);
             payload.WriteUInt32(this.k);
             payload.WriteUInt32(this.p);
@@ -428,11 +427,8 @@ namespace ProbabilisticDataStructures
             payload.WriteUInt64(this.random.State);
             payload.WriteUInt64(this.originalRandomState);
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.StableBloomFilter,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan,
+            return new(
+                StructureId.StableBloomFilter, PersistenceFormat.Identify(this.Hash),
                 PersistenceFormat.PlacementVersion);
         }
 

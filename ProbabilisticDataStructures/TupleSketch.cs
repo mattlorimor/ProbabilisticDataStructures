@@ -28,7 +28,7 @@ namespace ProbabilisticDataStructures
     /// deduplicates as it goes, at a size that does not grow with the stream.
     /// </para>
     /// </remarks>
-    public class TupleSketch : IBinaryPersistable<TupleSketch>
+    public class TupleSketch : IBinaryPersistable<TupleSketch>, IPayloadBody
     {
         private uint nominalEntries;
 
@@ -569,13 +569,13 @@ namespace ProbabilisticDataStructures
         /// Writes the sketch to a stream.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
+            // Compacted when counted, so the count and the write see the same keys.
             this.EnsureCompact();
 
-            var payload = new PayloadWriter();
             payload.WriteUInt32(this.nominalEntries);
             payload.WriteByte((byte)this.policy);
             payload.WriteUInt64(this.theta);
@@ -584,20 +584,22 @@ namespace ProbabilisticDataStructures
             // Keys first and then summaries, rather than interleaved, so that a payload
             // whose keys are not in increasing order is detectably not one of these
             // without having to step over the values between them.
-            for (var i = 0; i < this.held; i++)
+            if (payload.BeginBlock((long)this.held * sizeof(ulong)))
             {
-                payload.WriteUInt64(this.values[i]);
+                for (var i = 0; i < this.held; i++)
+                {
+                    payload.WriteUInt64(this.values[i]);
+                }
             }
-            for (var i = 0; i < this.held; i++)
+            if (payload.BeginBlock((long)this.held * sizeof(double)))
             {
-                payload.WriteDouble(this.summaries[i]);
+                for (var i = 0; i < this.held; i++)
+                {
+                    payload.WriteDouble(this.summaries[i]);
+                }
             }
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.TupleSketch,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+            return new(StructureId.TupleSketch, PersistenceFormat.Identify(this.Hash));
         }
 
         /// <summary>
