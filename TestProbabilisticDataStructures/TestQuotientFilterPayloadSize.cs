@@ -54,12 +54,15 @@ namespace TestProbabilisticDataStructures
         /// large to build here, so a small filter claims the two widths that size its table.
         /// The payload is three counts and the run's length, sixteen bytes, and eight a word;
         /// the table's bytes are past <c>int.MaxValue</c> in each, which is where the count
-        /// wrapped when it was an <c>int</c>.
+        /// wrapped when it was an <c>int</c>. At 2^31 slots of thirteen bits they are 2^32 and
+        /// sixteen, which is sixteen in 32 bits: a run's length worked out in a <c>uint</c>
+        /// would call that table nearly empty.
         /// </summary>
         [TestMethod]
         [DataRow(31u, 5u, 268_435_458L)]
         [DataRow(30u, 13u, 268_435_458L)]
         [DataRow(30u, 15u, 301_989_890L)]
+        [DataRow(31u, 13u, 536_870_914L)]
         public void TestATableTooLargeToWriteIsRefusedNamingTheSize(
             uint quotientBits, uint remainderBits, long words)
         {
@@ -83,6 +86,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         [DataRow(1_610_612_736u, 0.07, 31, 4, true)]
         [DataRow(1_610_612_736u, 0.04, 31, 5, false)]
+        [DataRow(1_610_612_736u, 0.0002, 31, 13, false)]
         [DataRow(805_306_368u, 0.0003, 30, 12, true)]
         [DataRow(805_306_368u, 0.0002, 30, 13, false)]
         [DataRow(805_306_368u, 0.00005, 30, 15, false)]
