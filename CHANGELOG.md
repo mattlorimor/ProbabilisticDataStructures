@@ -103,7 +103,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   First the structure's price walks it, reading the fields the price depends on and seeking
   over the rest, so that the read is priced whole before anything is allocated and a budget
   of the total a refusal names loads it. A structure whose price depends on every field it
-  holds reads all of them in that pass. Then the reader reads it from its first byte again,
+  holds reads all of them in that pass. A `SublimeCountMinSketch` written before format
+  version 10 would be one, since its price reads every counter for their tuning; this
+  release writes version 10 (below), whose price reads the tuning and seeks past the
+  counters. Then the reader reads it from its first byte again,
   each run straight into the array that keeps it, the checksum carried on over every byte
   and compared at the end. In the suite, each structure read from the large form allocated
   its payload's size less, within 96 bytes, than the same structure read from the ordinary

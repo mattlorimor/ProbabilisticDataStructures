@@ -482,9 +482,11 @@ skipped, to name the total, before its checksum could be checked. One in the lar
 never held either. It is priced in a first pass over its stream, which reads the fields
 the structure's price depends on and seeks over the rest, and then read in a second, so it
 is priced before its checksum is reached, which follows it, and a refusal of it says so. A
-structure whose price depends on every field it holds is read whole by that first pass. A
-payload that ends early, or whose fields are not ones its reader accepts, is priced as far
-as it goes.
+structure whose price depends on every field it holds is read whole by that first pass, as
+a `SublimeCountMinSketch` payload from before version 10 would be: its counters are the only
+record of the tuning its price needs. From version 10 it stores the tuning, and the first
+pass seeks past its counters. A payload that ends early, or whose fields are not ones its
+reader accepts, is priced as far as it goes.
 
 The hash id is checked before anything is priced: after the checksum when the payload is
 held, as the header states it when it is not, and in the large form after the header's own

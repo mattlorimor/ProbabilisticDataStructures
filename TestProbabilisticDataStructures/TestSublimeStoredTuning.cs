@@ -247,6 +247,22 @@ namespace TestProbabilisticDataStructures
                 $"the price named {why.RequiredBytes} bytes and the read was charged {charged}");
             Assert.AreEqual(charged, spent,
                 $"the read was priced at {charged} bytes and its reader charged {spent}");
+
+            // The large form's first pass is this price (#226), after the large header: refused
+            // under nothing, it has read the same fields and sought past the same counters.
+            var large = LargeForm.WriteLarge(sketch);
+            var largeStream = new Counting(large);
+            Assert.IsTrue(RefusedForBudget(
+                    () => SublimeCountMinSketch.ReadFrom(largeStream, new ReadOptions(0)), out var largeWhy),
+                "the sample in the large form loaded under a budget of nothing");
+            Console.WriteLine(
+                $"[SUBLIME-PRICE] large form: read {largeStream.BytesRead}, sought past {largeStream.SoughtPast}, " +
+                $"total {largeWhy!.RequiredBytes}");
+            Assert.AreEqual(PersistenceFormat.LargeHeaderLength + fields, largeStream.BytesRead,
+                $"the large form's first pass read {largeStream.BytesRead} bytes, and its header and fields are " +
+                $"{PersistenceFormat.LargeHeaderLength + fields}");
+            Assert.AreEqual(counterBytes, largeStream.SoughtPast,
+                $"the large form's first pass sought past {largeStream.SoughtPast} bytes, and the counters are {counterBytes}");
         }
 
         /// <summary>
