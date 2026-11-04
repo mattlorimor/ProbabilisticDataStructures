@@ -153,6 +153,22 @@ namespace TestProbabilisticDataStructures
         private const ulong WideFrom = 1UL << 27;
 
         /// <summary>
+        /// The run a top-k's <c>WriteTo</c> declares for its count-min sketch claiming
+        /// <paramref name="depth"/> rows of <paramref name="width"/> cells, read from the
+        /// stream after the large form's header and the top-k's two fields; zero if the
+        /// top-k was not written in the large form.
+        /// </summary>
+        private static long NestedRunWritten(uint width, uint depth)
+        {
+            var topK = new TopK(0.5, 0.5, 3);
+            topK.Add(Encoding.ASCII.GetBytes("a"));
+            var left = TestLargeEnvelopeWriting.WrittenClaimingSketch(topK, width, depth);
+            return LargeForm.IsLarge(left)
+                ? (long)System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(left.AsSpan(PersistenceFormat.LargeHeaderLength + 8))
+                : 0;
+        }
+
+        /// <summary>
         /// The most items a 1% filter is sized for while it is still short of
         /// <see cref="WideFrom"/> bits.
         /// </summary>
@@ -608,10 +624,11 @@ namespace TestProbabilisticDataStructures
                 CountMinAtWideFrom(2) == 2_147_483_681 && CountMinAtWideFrom(2) > MaxPayload
                 && CountMinAtWideFrom(1) <= MaxPayload),
             // The sketch is nested whole, so the run is its envelope, in the large form at
-            // that length, and its payload.
-            new Claim("a `TopK` over two rows that wide cannot be written at all yet, since its sketch is a run longer than any payload holds", () =>
-                CountMinAtWideFrom(2) + PersistenceFormat.LargeEnvelopeLength > PayloadWriter.LongestRun
-                && PayloadWriter.LongestRun == Array.MaxLength),
+            // that length, and its payload; the top-k's write reaches the run's length.
+            new Claim("a `TopK` over two rows that wide is written in the large form, its sketch's envelope a run longer than one array, with a `u64` length", () =>
+                NestedRunWritten((uint)WideFrom, 2) is var run
+                && run == CountMinAtWideFrom(2) + PersistenceFormat.LargeEnvelopeLength
+                && run > Array.MaxLength),
             new Claim("Two rows of a `PrivateCountMinSketch` that wide are 2,147,483,673 bytes", () =>
                 PrivateAtWideFrom(2) == 2_147_483_673 && PrivateAtWideFrom(2) > MaxPayload
                 && PrivateAtWideFrom(1) <= MaxPayload),
@@ -759,23 +776,31 @@ namespace TestProbabilisticDataStructures
                 return Assert.Throws<InvalidOperationException>(
                     () => PayloadWriter.GrownCapacity(1000, int.MaxValue - 1, 10)) is not null;
             }),
-            // The same shapes with a run past the longest are refused for the run by both,
-            // with nothing written: a count sketch's cells and an invertible table's counts,
-            // each one run, and 2^31 slots of five bits, what a quotient filter for 1.6
-            // billion items at 4% is.
-            new Claim("What neither writes yet is a single run longer than `Array.MaxLength` bytes, the most a reader takes into one array", () =>
+            // Shapes with a run past one array, set about in the large form by WriteTo,
+            // declaring the count with u64 runs, and refused only by ToByteArray: a count
+            // sketch's cells of 4,000,000,000 bytes and an invertible table's counts of
+            // 2,400,000,000, each one run, and 2^31 slots of five bits, 2,147,483,664 bytes,
+            // what a quotient filter for 1.6 billion items at 4% is; and a top-k whose
+            // sketch's envelope is a run of 2,147,483,603 bytes, its length in the stream.
+            new Claim("In the large form a run's length is a `u64`, so a table written as one run, or a structure held inside another, can pass `Array.MaxLength` bytes, the most one array holds, and `WriteTo` writes it", () =>
             {
                 var countSketch = new CountSketch(0.5, 0.5);
-                TestPayloadCount.AssertRunRefusedWhileClaiming(countSketch, 4_000_000_000,
+                TestPayloadCount.AssertStreamedWhileClaiming(countSketch, 4_000_000_012, 4_000_000_016,
                     (countSketch, "width", 100_000_000u), (countSketch, "depth", 5u));
                 var table = new InvertibleBloomLookupTable(4, 4);
-                TestPayloadCount.AssertRunRefusedWhileClaiming(table, 2_400_000_000, (table, "cells", 300_000_000u));
+                TestPayloadCount.AssertStreamedWhileClaiming(table, 6_000_000_020, 6_000_000_032, (table, "cells", 300_000_000u));
                 var quotient = new QuotientFilter(100, 0.01);
-                TestPayloadCount.AssertRunRefusedWhileClaiming(quotient, 2_147_483_664,
+                TestPayloadCount.AssertStreamedWhileClaiming(quotient, 2_147_483_680, 2_147_483_684,
                     (quotient, "quotientBits", 31u), (quotient, "remainderBits", 5u));
 
-                return PayloadWriter.LongestRun == Array.MaxLength;
+                return NestedRunWritten(268_435_443, 1) == 2_147_483_603
+                    && new[] { 4_000_000_000L, 2_400_000_000, 2_147_483_664, 2_147_483_603 }.All(run => run > Array.MaxLength);
             }),
+            // A run and its length are inside the payload, which the ordinary envelope holds
+            // to less than one array.
+            new Claim("In the ordinary envelope no run is that long: the payload around it is shorter", () =>
+                MaxPayload < Array.MaxLength && PayloadWriter.LongestRun == Array.MaxLength
+                && PersistenceFormat.LargeFormThreshold == MaxPayload),
 
             // ---- BloomFilter -------------------------------------------------------------
             new Claim("`m ≈ 1.44 · n · log2(1/fp)` bits", () =>

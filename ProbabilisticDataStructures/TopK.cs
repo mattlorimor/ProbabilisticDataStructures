@@ -337,7 +337,8 @@ namespace ProbabilisticDataStructures
             _ = reader.ReadUInt32();
             CheckRoom(k);
 
-            var sketch = PersistenceFormat.ReadNested<CountMinSketch>(ref reader, hash);
+            var sketch = PersistenceFormat.ReadNested(
+                ref reader, hash, StructureId.CountMinSketch, PersistenceFormat.CheckResolvable, CountMinSketch.ReadPayload);
 
             // Sized by what is held, not by k: the heap grows as elements arrive, so a
             // structure read back behaves as it did, and a large k costs nothing until

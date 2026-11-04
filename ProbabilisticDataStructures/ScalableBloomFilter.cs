@@ -583,7 +583,9 @@ namespace ProbabilisticDataStructures
             var filters = new List<PartitionedBloomFilter>((int)filterCount);
             for (uint i = 0; i < filterCount; i++)
             {
-                filters.Add(PersistenceFormat.ReadNested<PartitionedBloomFilter>(ref reader, hash));
+                filters.Add(PersistenceFormat.ReadNested(
+                    ref reader, hash, StructureId.PartitionedBloomFilter, PersistenceFormat.CheckResolvable,
+                    PartitionedBloomFilter.ReadPayload));
             }
 
             reader.ExpectEnd();

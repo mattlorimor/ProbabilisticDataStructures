@@ -90,12 +90,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   part-way can leave the beginning of an envelope in the stream, which a reader refuses by
   its length or its checksum; `WriteTo`'s documentation says so. `ToByteArray` of such a
   structure throws an `InvalidOperationException` before writing anything, naming the
-  payload's size and saying to write it with `WriteTo(Stream)` instead. One limit stays: no
-  single run in a payload, such as a table written whole or a structure held inside another,
-  can be longer than one array, 2,147,483,591 bytes, yet, since a reader reads a run into
-  one. A structure held inside another in the large form is such a run. A structure that
-  would need one is refused by `WriteTo` and `ToByteArray` alike, naming the run, before
-  anything is written. (#225, #229)
+  payload's size and saying to write it with `WriteTo(Stream)` instead. A run in the payload
+  longer than one array, such as a table written whole or a structure held inside another,
+  is written too, with a `u64` length (#228, below). (#225, #229)
 
 - **A payload in the large form is read from its stream, not held.** The large form was read
   into one array, as the ordinary envelope is, so a read refused one longer than an array
@@ -104,18 +101,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   over the rest, so that the read is priced whole before anything is allocated and a budget
   of the total a refusal names loads it. A structure whose price depends on every field it
   holds reads all of them in that pass. Then the reader reads it from its first byte again,
-  each run straight into the array that keeps it, the checksum carried on over every byte
+  each run straight into the storage that keeps it, the checksum carried on over every byte
   and compared at the end. In the suite, each structure read from the large form allocated
   its payload's size less, within 96 bytes, than the same structure read from the ordinary
-  envelope, and a structure that holds others about twice that, since the envelopes it holds
-  are streamed too. The stream has to be one that can seek. From one that cannot, the large form
-  is refused with a `NotSupportedException`, once the header's checksum has held and before
-  the hash is checked, saying to copy it to a file or another stream that can seek first. A
-  length past what the stream holds is refused as truncated before it is priced. A run whose
-  length prefix claims more than one array holds is refused for that, in either form, where
-  a claim between the largest array and `int.MaxValue` was refused as the payload ending. A
-  payload that fits the ordinary envelope is read as before: held, and its checksum checked
-  before it is parsed. (#226, #227)
+  envelope, and a structure that holds others, or reads a run in pieces (#228, below), more
+  than that, since the ordinary read copies those runs out too. The stream has to be one
+  that can seek. From one that cannot, the large form is refused with a
+  `NotSupportedException`, once the header's checksum has held and before the hash is
+  checked, saying to copy it to a file or another stream that can seek first. A
+  length past what the stream holds is refused as truncated before it is priced. A run read
+  into one array whose length prefix claims more than one array holds is refused for that,
+  in either form, where a claim between the largest array and `int.MaxValue` was refused as
+  the payload ending. A payload that fits the ordinary envelope is read as before: held, and
+  its checksum checked before it is parsed. (#226, #227)
+
+- **In the large form every run's length is a `u64`, so a run can pass one array.** Every
+  length-prefixed run in a payload in the large form, the run that holds a nested envelope
+  included, carries a `u64` length where the ordinary envelope's is a `u32`. A payload that
+  fits the ordinary envelope is written byte for byte as before, and every payload in the
+  ordinary envelope reads as it did. `WriteTo` counts a payload with `u32` runs, which
+  chooses the envelope as before, and one past the ordinary envelope's ceiling again with
+  `u64` runs, which is the length its header declares. So a table written as one run longer than `Array.MaxLength`
+  bytes, such as a quotient filter's at 2^31 slots of five bits, a count sketch's cells, a
+  DDSketch store's counts or an invertible table's counts and hash sums, is written, where it
+  was refused naming the run, and a `TopK` whose count-min sketch's envelope passes one array
+  is written too. A nested envelope is written straight into the outer payload, its header,
+  payload and checksum, rather than built in a `MemoryStream` and copied out: in the suite,
+  a top-k whose sketch's envelope is 2,174,691 bytes allocated 66,176 bytes writing the
+  large form, with that envelope in either form, where with it in the large form it
+  allocated 10,631,776. A reader of the large form reads a nested envelope from the outer
+  stream, checking its header as its own reader does and its checksum at its end, and reads
+  a run its structure unpacks into storage of its own, those four tables, in pieces of
+  64 KiB straight into that storage. A run read into one array is refused past one array as before, and a DDSketch
+  store claiming more counts than one array holds is refused as that. (#228)
 
 ### Changed
 

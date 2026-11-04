@@ -151,7 +151,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private InvertibleBloomLookupTable(
             int keySize, Func<ReadOnlySpan<byte>, ulong>? hash, uint cells,
-            byte[]? keySums = null)
+            byte[]? keySums = null, long[]? counts = null, ulong[]? hashSums = null)
         {
             if (keySize <= 0)
             {
@@ -165,12 +165,11 @@ namespace ProbabilisticDataStructures
             this.cells = cells;
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
 
-            this.counts = new long[this.cells];
-
-            // A reader that already holds the keys, at the length its cell count implies,
-            // hands them over rather than have them allocated and then replaced.
+            // A reader that already holds the counts, keys and hashes, at the lengths its cell
+            // count implies, hands them over rather than have them allocated and then replaced.
+            this.counts = counts ?? new long[this.cells];
             this.keySums = keySums ?? new byte[(long)this.cells * keySize];
-            this.hashSums = new ulong[this.cells];
+            this.hashSums = hashSums ?? new ulong[this.cells];
         }
 
         /// <summary>
@@ -701,27 +700,46 @@ namespace ProbabilisticDataStructures
 
             var cells = reader.ReadUInt32();
             var keySize = (int)reader.ReadUInt32();
-            var counts = reader.ReadBytes();
-            var keySums = reader.ReadBytes();
-            var hashes = reader.ReadBytes();
-            reader.ExpectEnd();
-            CheckShape(cells, keySize, counts.LongLength, keySums.LongLength, hashes.LongLength);
+            var keyBytes = (long)cells * keySize;
+            var wordBytes = (long)cells * sizeof(long);
 
-            // Counts and hash sums are unpacked into arrays of their own; the key sums
-            // are the run already copied.
-            budget.Charge(UnpackedCost(cells));
-            var table = new InvertibleBloomLookupTable(
-                keySize, PersistenceFormat.ResolveOrThrow(hashId, hash), cells, keySums);
-
-            for (var cell = 0; cell < cells; cell++)
+            // Counts and hash sums are unpacked into arrays of their own, each from its run,
+            // which in the large form can be longer than one array (#228): read in pieces,
+            // straight into the array, when the payload is not held, and copied out whole
+            // when it is. The key sums are the run as it is read. Each run is held to the
+            // shape as it comes, the ones still to come taken to be as the shape says.
+            var counted = reader.BeginWords();
+            CheckShape(cells, keySize, counted, keyBytes, wordBytes);
+            budget.Charge(ReadBudget.ArrayOf(cells, sizeof(long)));
+            var counts = new long[cells];
+            for (var cell = 0; cell < counts.Length;)
             {
-                table.counts[cell] = BinaryPrimitives.ReadInt64LittleEndian(
-                    counts.AsSpan(cell * sizeof(long)));
-                table.hashSums[cell] = BinaryPrimitives.ReadUInt64LittleEndian(
-                    hashes.AsSpan(cell * sizeof(ulong)));
+                var piece = reader.ReadWords();
+                for (var at = 0; at < piece.Length; at += sizeof(long))
+                {
+                    counts[cell++] = BinaryPrimitives.ReadInt64LittleEndian(piece[at..]);
+                }
             }
 
-            return table;
+            var keySums = reader.ReadBytes();
+            CheckShape(cells, keySize, counted, keySums.LongLength, wordBytes);
+
+            var hashed = reader.BeginWords();
+            CheckShape(cells, keySize, counted, keySums.LongLength, hashed);
+            budget.Charge(ReadBudget.ArrayOf(cells, sizeof(ulong)));
+            var hashSums = new ulong[cells];
+            for (var cell = 0; cell < hashSums.Length;)
+            {
+                var piece = reader.ReadWords();
+                for (var at = 0; at < piece.Length; at += sizeof(ulong))
+                {
+                    hashSums[cell++] = BinaryPrimitives.ReadUInt64LittleEndian(piece[at..]);
+                }
+            }
+
+            reader.ExpectEnd();
+            return new InvertibleBloomLookupTable(
+                keySize, PersistenceFormat.ResolveOrThrow(hashId, hash), cells, keySums, counts, hashSums);
         }
 
         /// <summary>
@@ -733,9 +751,9 @@ namespace ProbabilisticDataStructures
         {
             var cells = reader.ReadUInt32();
             var keySize = (int)reader.ReadUInt32();
-            var counts = reader.SkipBytes();
+            var counts = reader.SkipWords();
             var keySums = reader.SkipBytes();
-            var hashes = reader.SkipBytes();
+            var hashes = reader.SkipWords();
             reader.ExpectEnd();
             CheckShape(cells, keySize, counts, keySums, hashes);
             reader.Budget.Price(UnpackedCost(cells));

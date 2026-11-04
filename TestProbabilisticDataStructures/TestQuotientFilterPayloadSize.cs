@@ -14,11 +14,11 @@ namespace TestProbabilisticDataStructures
     /// length, and the write failed with an OverflowException from the allocation. The
     /// constructor builds such tables: 2^31 slots at five bits of remainder is 268,435,458
     /// words, and so is 2^30 slots at thirteen. They are what a filter for 1.6 billion items
-    /// at 3% is, or for 805 million at 0.012%. Such a filter can be built and used and
-    /// cannot be written, since its table is one run, longer than any run a payload holds,
-    /// and that is a thing the writer says clearly rather than as an overflow: its
-    /// <c>WriteTo</c> counts the payload from the two widths before anything is built
-    /// (#216). The table is too large
+    /// at 3% is, or for 805 million at 0.012%. Such a filter's table is one run, longer than
+    /// one array: <c>ToByteArray</c> refuses it, which the writer says clearly rather than as
+    /// an overflow, and <c>WriteTo</c> writes it in the large form, where the run's length is
+    /// a <c>u64</c> (#228). Its <c>WriteTo</c> counts the payload from the two widths before
+    /// anything is built (#216). The table is too large
     /// to build in a test, so a small filter claims the widths and the count is reached
     /// through them.
     /// </remarks>

@@ -448,8 +448,8 @@ namespace TestProbabilisticDataStructures
         private const long StreamedOverhead = 512;
 
         /// <summary>
-        /// Every structure's read in the large form allocates at least its payload's size less
-        /// than the ordinary envelope's read of the same structure, which holds its payload:
+        /// Every structure's read in the large form allocates at least its ordinary payload's
+        /// size less than the ordinary envelope's read of the same structure, which holds it:
         /// the large form is read from the stream, not into an array first. The roster is
         /// <see cref="StructureId"/>, through the budget samples.
         /// </summary>
@@ -473,7 +473,7 @@ namespace TestProbabilisticDataStructures
                 }
 
                 var large = TestReadBudget.InTheLargeForm(sample).Bytes;
-                var payload = (long)large.Length - PersistenceFormat.LargeEnvelopeLength;
+                var payload = (long)sample.Bytes.Length - PersistenceFormat.EnvelopeLength;
 
                 var held = TestReadBudget.Allocated(() => sample.Read(sample.Bytes, ReadOptions.Unlimited));
                 var streamed = TestReadBudget.Allocated(() => sample.Read(large, ReadOptions.Unlimited));
@@ -1082,7 +1082,7 @@ namespace TestProbabilisticDataStructures
                 }
 
                 var sample = samples[id];
-                var payload = (long)larges[id].Length - PersistenceFormat.LargeEnvelopeLength;
+                var payload = (long)sample.Bytes.Length - PersistenceFormat.EnvelopeLength;
                 var inPieces = runs.Sum(r => r.Length);
                 var held = TestReadBudget.Allocated(() => sample.Read(sample.Bytes, ReadOptions.Unlimited));
                 var streamed = WithPieces(Piece, () => TestReadBudget.Allocated(() => sample.Read(larges[id], ReadOptions.Unlimited)));
@@ -1114,6 +1114,69 @@ namespace TestProbabilisticDataStructures
             return Assert.ThrowsExactly<InvalidDataException>(
                 () => sample.Read(LargeForm.Reseal(claimed), ReadOptions.Unlimited),
                 $"{sample.Name} with a run claiming a byte past one array was read");
+        }
+
+        /// <summary>
+        /// A DDSketch keeps each store's counts in one array, so a run of more counts than an
+        /// array holds, which the large form's <c>u64</c> length lets a payload claim (#228), is
+        /// refused as that, by name, with nothing its size allocated; a run of exactly as many
+        /// counts is a span the store takes, and one of 2^32 counts from the lowest index is
+        /// refused rather than read as none.
+        /// </summary>
+        /// <remarks>
+        /// A sketch of one value, in the large form, its positive store's run claiming a count
+        /// past one array and its header the payload that makes, on a stream that claims as
+        /// much and holds zeros past the run's length. Read unlimited, so unpriced, the run is
+        /// begun, with the piece it would be read through, and refused before the store's
+        /// window is made, so the read allocates that piece and a refusal. Before the check, the span passed the store's
+        /// index check from the index of one, was priced, and the window was asked for an
+        /// array no runtime makes. The edges are the span itself, worked out by the store's
+        /// own reckoning, since a run of as many counts as an array holds is seventeen
+        /// gigabytes to read; from <c>int.MinValue</c>, a span of 2^32 ends at
+        /// <c>int.MaxValue</c>, and in an <c>int</c> it is nought.
+        /// </remarks>
+        [TestMethod]
+        public void TestADDSketchRunOfMoreCountsThanOneArrayHoldsIsRefusedAsThat()
+        {
+            var sketch = new DDSketch(0.01);
+            sketch.Add(1.0);
+            var bytes = LargeForm.WriteLarge(sketch);
+
+            // Five eight-byte fields, then the positive store's lowest index and its run.
+            const int prefix = PersistenceFormat.LargeHeaderLength + 5 * 8 + 4;
+            var minIndex = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(prefix - 4));
+            var run = (long)BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(prefix));
+            Assert.AreEqual(8L, run, "the sketch of one value does not hold one count");
+            var counts = (long)Array.MaxLength + 1;
+            Assert.IsLessThanOrEqualTo((long)int.MaxValue, minIndex + counts - 1,
+                "the claimed span runs past the largest index, which refuses it for that instead");
+
+            var payload = bytes.Length - PersistenceFormat.LargeEnvelopeLength - run + 8 * counts;
+            var claiming = (byte[])bytes.Clone();
+            BinaryPrimitives.WriteUInt64LittleEndian(claiming.AsSpan(prefix), (ulong)(8 * counts));
+            BinaryPrimitives.WriteUInt64LittleEndian(claiming.AsSpan(10), (ulong)payload);
+            var head = SealHeader(claiming)[..(prefix + 8)];
+
+            InvalidDataException refused = null;
+            var allocated = TestReadBudget.Allocated(() => refused = Assert.ThrowsExactly<InvalidDataException>(
+                () => DDSketch.ReadFrom(new Sparse(head, PersistenceFormat.LargeEnvelopeLength + payload), ReadOptions.Unlimited),
+                $"a DDSketch whose store claims {counts:N0} counts was read"));
+            StringAssert.Contains(refused.Message, $"are {counts} counts, more than the one array", refused.Message);
+            Assert.IsLessThan(PayloadSource.PieceLength + 64L * 1024, allocated, $"the refusal allocated {allocated:N0} bytes");
+
+            var spanOf = typeof(DDSketch).GetNestedType("Store", System.Reflection.BindingFlags.NonPublic)!
+                .GetMethod("SpanOf", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            int SpanOf(int from, long length) => (int)spanOf.Invoke(null, [from, length, "positive"])!;
+            void Refused(int from, long length, string why)
+            {
+                var thrown = Assert.ThrowsExactly<System.Reflection.TargetInvocationException>(() => SpanOf(from, length), why);
+                Assert.IsInstanceOfType<InvalidDataException>(thrown.InnerException, why);
+                StringAssert.Contains(thrown.InnerException.Message, "more than the one array", why);
+            }
+
+            Assert.AreEqual(Array.MaxLength, SpanOf(0, 8L * Array.MaxLength), "a span of one array's counts was refused");
+            Refused(0, 8 * counts, "a span of a count past one array was taken");
+            Refused(int.MinValue, 8L << 32, "a span of 2^32 counts from the lowest index was taken");
         }
 
         /// <summary>

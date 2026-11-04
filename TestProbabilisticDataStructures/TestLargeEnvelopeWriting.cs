@@ -454,7 +454,7 @@ namespace TestProbabilisticDataStructures
                     $"in {form}, a run of exactly the longest does not read back");
             }
 
-            WithLongestRun(run - 1, () =>
+            var larges = WithLongestRun(run - 1, () =>
             {
                 using var stream = new MemoryStream();
                 var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
@@ -470,15 +470,15 @@ namespace TestProbabilisticDataStructures
                     "in the ordinary envelope, ToByteArray wrote a run a byte past the longest");
                 StringAssert.Contains(array.Message, run.ToString("N0"));
 
-                foreach (var large in new[] { Under(0, () => Write(filter)), Under(0, () => filter.ToByteArray()) })
-                {
-                    Assert.IsTrue(LargeForm.IsLarge(large), "the filter under a threshold of nothing was not written in the large form");
-                    CollectionAssert.AreEqual(ordinary, Persistence.FromByteArray<BloomFilter>(large).ToByteArray(),
-                        "in the large form, a run a byte past the ordinary envelope's longest does not read back");
-                }
-
-                return 0;
+                return new[] { Under(0, () => Write(filter)), Under(0, () => filter.ToByteArray()) };
             });
+
+            foreach (var large in larges)
+            {
+                Assert.IsTrue(LargeForm.IsLarge(large), "the filter under a threshold of nothing was not written in the large form");
+                CollectionAssert.AreEqual(ordinary, Persistence.FromByteArray<BloomFilter>(large).ToByteArray(),
+                    "in the large form, a run a byte past the ordinary envelope's longest does not read back");
+            }
 
             CollectionAssert.AreEqual(ordinary, filter.ToByteArray(), "the filter writes differently after the refusals");
         }
@@ -518,7 +518,8 @@ namespace TestProbabilisticDataStructures
                     {
                         var large = Write(topK);
                         Assert.IsTrue(LargeForm.IsLarge(large), "the top-k under a threshold of nothing was not in the large form");
-                        CollectionAssert.AreEqual(expected, Write(Persistence.FromByteArray<TopK>(large)),
+                        Assert.AreEqual(1, LargeForm.NestedLarge(large), "the top-k's sketch was not in the large form inside it");
+                        CollectionAssert.AreEqual(large, Write(Persistence.FromByteArray<TopK>(large)),
                             "in the large form, a top-k whose sketch's envelope is a byte past the longest run does not read back");
                         return 0;
                     }
@@ -566,6 +567,7 @@ namespace TestProbabilisticDataStructures
             foreach (var (threshold, form) in new[] { (0L, "in the large form"), (payload - 1, "ordinary") })
             {
                 var allocated = LargeForm.Below(threshold, () => LeastAllocated(() => topK.WriteTo(Stream.Null)));
+                Console.WriteLine($"[NESTED WRITE] sketch {form}: envelope {nested:N0}, top-k's write allocated {allocated:N0}");
                 Assert.IsLessThan(bound, allocated,
                     $"a top-k whose sketch's envelope, {form}, is {nested:N0} bytes allocated {allocated:N0} writing the large form");
 
@@ -592,8 +594,9 @@ namespace TestProbabilisticDataStructures
         /// <remarks>
         /// No payload that size is built. A count-min sketch is made to claim one row of the
         /// width given, a payload of 33 bytes and eight a cell; its body writes the cells it
-        /// holds, so the top-k's write ends short of its count and is refused for that, the
-        /// top-k's own refusal. A buffer of eight bytes sends each field on as it is written.
+        /// holds and then reads past them, throwing <see cref="IndexOutOfRangeException"/>,
+        /// by which point everything asserted on has gone to the stream. A buffer of eight
+        /// bytes sends each field on as it is written.
         /// <list type="bullet">
         /// <item>268,435,442 cells: a sketch payload of 2,147,483,569 bytes, which the ordinary
         /// envelope holds, so its envelope is 2,147,483,587 bytes, within one array.</item>
@@ -616,7 +619,6 @@ namespace TestProbabilisticDataStructures
             var elements = new[] { "a", "bb" };
             var topK = new TopK(0.5, 0.5, 3);
             foreach (var element in elements) topK.Add(Key(element));
-            var sketch = Cms(topK);
 
             var sketchPayload = 33 + 8L * width;
             var nestedLarge = sketchPayload > PersistenceFormat.MaxPayloadLength;
@@ -628,28 +630,7 @@ namespace TestProbabilisticDataStructures
             var counted = 8 + 8 + run + 4 + elements.Sum(e => 8 + e.Length + 8);
             Assert.IsGreaterThan((long)PersistenceFormat.MaxPayloadLength, counted, "the top-k is not past the ordinary envelope");
 
-            var shape = typeof(CountMinSketch);
-            var widthMember = shape.GetProperty("Width", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance)!;
-            var depthMember = shape.GetProperty("Depth", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance)!;
-            var heldWidth = widthMember.GetValue(sketch)!;
-            var heldDepth = depthMember.GetValue(sketch)!;
-            widthMember.SetValue(sketch, width);
-            depthMember.SetValue(sketch, 1u);
-
-            var recording = new RecordingStream();
-            try
-            {
-                var ex = WithBuffer(8, () => Assert.ThrowsExactly<InvalidOperationException>(() => topK.WriteTo(recording),
-                    $"a top-k claiming a sketch of {width:N0} cells was written whole"));
-                StringAssert.Contains(ex.Message, $"The TopK counted a payload of {counted:N0} bytes", ex.Message);
-            }
-            finally
-            {
-                widthMember.SetValue(sketch, heldWidth);
-                depthMember.SetValue(sketch, heldDepth);
-            }
-
-            var left = recording.ToArray();
+            var left = WrittenClaimingSketch(topK, width, 1);
             Assert.IsTrue(LargeForm.IsLarge(left), "the top-k's header is not the large form's");
             Assert.AreEqual((ulong)counted, BinaryPrimitives.ReadUInt64LittleEndian(left.AsSpan(10)), "the header does not declare the count");
 
@@ -673,6 +654,38 @@ namespace TestProbabilisticDataStructures
                 Assert.AreEqual(Crc32.HashToUInt32(inner[4..18]), BinaryPrimitives.ReadUInt32LittleEndian(inner[18..]),
                     "the sketch's large header does not carry its own checksum");
             }
+        }
+
+        /// <summary>
+        /// What a top-k's <c>WriteTo</c> sends to the stream, a field at a time, with its
+        /// count-min sketch claiming <paramref name="depth"/> rows of <paramref name="width"/>
+        /// cells, before the sketch's body reads past the cells it holds and throws
+        /// <see cref="IndexOutOfRangeException"/>; the sketch's shape is then put back.
+        /// </summary>
+        internal static byte[] WrittenClaimingSketch(TopK topK, uint width, uint depth)
+        {
+            var sketch = Cms(topK);
+            var shape = typeof(CountMinSketch);
+            var widthMember = shape.GetProperty("Width", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance)!;
+            var depthMember = shape.GetProperty("Depth", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance)!;
+            var heldWidth = widthMember.GetValue(sketch)!;
+            var heldDepth = depthMember.GetValue(sketch)!;
+            widthMember.SetValue(sketch, width);
+            depthMember.SetValue(sketch, depth);
+
+            var recording = new RecordingStream();
+            try
+            {
+                WithBuffer(8, () => Assert.ThrowsExactly<IndexOutOfRangeException>(() => topK.WriteTo(recording),
+                    $"a top-k claiming a sketch of {depth} rows of {width:N0} cells was not refused, or did not reach the cells it does not hold"));
+            }
+            finally
+            {
+                widthMember.SetValue(sketch, heldWidth);
+                depthMember.SetValue(sketch, heldDepth);
+            }
+
+            return recording.ToArray();
         }
 
         private static CountMinSketch Cms(TopK topK) =>

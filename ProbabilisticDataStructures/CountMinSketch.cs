@@ -491,7 +491,7 @@ namespace ProbabilisticDataStructures
         /// Reads the payload of the envelope <c>Read</c> opened, once the envelope has
         /// been checked. See <see cref="PayloadParse{T}"/>.
         /// </summary>
-        private static CountMinSketch ReadPayload(
+        internal static CountMinSketch ReadPayload(
             ref PayloadReader reader, ushort version, HashId hashId,
             Func<ReadOnlySpan<byte>, ulong>? hash)
         {

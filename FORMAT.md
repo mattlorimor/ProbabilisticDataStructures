@@ -51,10 +51,13 @@ it.
 
 The version field's high bit, `0x8000`, marks the large form, and the format version is
 the other fifteen bits: a `BloomFilter` at version 8 in the large form carries `0x8008`.
-The flag says only which envelope holds the payload. The payload inside is the one the
-ordinary envelope would hold at that version, as the sections below lay it out, and a
-structure reads the same versions in either form. A structure nested in another is in
-whichever form its own payload's length calls for.
+The flag says which envelope holds the payload, and one thing about the payload inside:
+every `bytes` length in it is a `u64`, where the ordinary envelope's is a `u32`, so a run
+can be longer than one array. The payload is otherwise the one the ordinary envelope would
+hold at that version, as the sections below lay it out, and a structure reads the same
+versions in either form. A structure nested in another is in whichever form its own
+payload's length calls for, and the runs in its payload have that form's lengths, whatever
+form the payload around it is in; the run that holds it has the outer form's.
 
 A release that does not know the large form checks the magic and then, as every release
 from 3.2.0 on does, refuses a version above its own highest before it reads anything
@@ -82,20 +85,28 @@ reached, because what was refused may be damage the checksum would have named.
 This library reads the large form without holding the payload, so it reads one longer than
 any array. It reads the payload twice. First it prices the read, reading the fields that
 the structure's price depends on and seeking over the rest. Then it goes back to the
-payload's first byte and reads it, each run straight into the array that keeps it, carrying
-the final checksum on over every byte as it goes. So a stream it reads the large form from
-has to be one that can seek: from one that cannot, the large form is refused with a
-`NotSupportedException`, once the header's checksum has held, saying to copy it to a file
-or another stream that can seek first. A length past what the stream holds is refused
+payload's first byte and reads it, each run straight into the array that keeps it, or, where
+its structure unpacks the run into storage of its own, a piece at a time into that storage,
+carrying the final checksum on over every byte as it goes. A structure nested in it is read
+from the same stream, its header checked as its own reader checks it, and its own final
+checksum carried on over its payload beside the outer one and compared at its end. So a
+stream it reads the large form from has to be one that can seek: from one that cannot, the
+large form is refused with a `NotSupportedException`, once the header's checksum has held,
+saying to copy it to a file or another stream that can seek first. A length past what the stream holds is refused
 before anything is priced. It writes the large form for a payload past the ordinary
 envelope's ceiling, and for no other, as the payload is produced: the header first, with
 the length counted beforehand from the layout, then the payload a piece at a time, the
-final checksum carried on over each piece as it goes, then that checksum. Nothing the
+final checksum carried on over each piece as it goes, then that checksum. The length is
+counted twice: first with every run's length a `u32`, which says whether the payload fits
+the ordinary envelope, and then, for one that does not, with every run's length a `u64`,
+which is the length the header declares. A structure nested in it is written into the same
+stream as it is produced, its envelope's header, payload and checksum. Nothing the
 length of the payload is held, and the large form is written only to a stream, never
 returned as one array. A write that fails part-way can leave the beginning of an envelope
-in its stream, which a reader refuses for its length or its checksum. No single run, a
-`bytes` field, is written longer than one array holds, 2,147,483,591 bytes, in either form
-yet, as [Sizes](#sizes) describes.
+in its stream, which a reader refuses for its length or its checksum. In the ordinary
+envelope no run, a `bytes` field, is longer than one array holds, 2,147,483,591 bytes,
+since the payload around it is shorter; in the large form one can be, as [Sizes](#sizes)
+describes.
 
 ### Format versions
 
@@ -334,9 +345,10 @@ A structure held by another is written as a `bytes` run holding its **own comple
 envelope** — magic, version, structure id, hash id, payload and checksum — rather than
 being flattened into the outer payload.
 
-That costs eighteen bytes per nested structure, against payloads measured in tens of
-thousands, and buys three things. The inner structure names its own hash, so a composite
-cannot silently disagree with itself about hashing. The outer envelope names one too,
+That costs eighteen bytes per nested structure, twenty-six for one whose own payload is
+in the large form, against payloads measured in tens of thousands, and buys three things.
+The inner structure names its own hash, so a composite cannot silently disagree with
+itself about hashing. The outer envelope names one too,
 the hash of the first structure it holds, and a reader checks both. It can be pulled out of the outer
 payload and read on its own. And the outer structure can change what it holds without
 the inner layout being part of that change.
@@ -422,13 +434,13 @@ so; it does not read the short table as the filter it was meant to be. Any other
 disagrees with the count is refused as corrupt. Sizes that did not wrap are unchanged, and
 read as they always did.
 
-A quotient filter's table can be larger than a payload holds: 2^31 slots at five bits of
-remainder, or 2^30 at thirteen, is 268,435,458 words, and the ordinary envelope carries at
-most 268,435,444. The table is one run, and no run is written longer than one array holds,
-2,147,483,591 bytes, which is fewer words than those, so such a filter can be built and used
-and not written, in either form: `WriteTo` says so with the `InvalidOperationException` that
-refuses the run, before anything is written. Releases up to 6.2.0 failed with an
-`OverflowException` from computing the table's length in 32 bits.
+A quotient filter's table can be larger than the ordinary envelope holds: 2^31 slots at
+five bits of remainder, or 2^30 at thirteen, is 268,435,458 words, and the ordinary envelope
+carries at most 268,435,444. The table is one run, longer than one array holds,
+2,147,483,591 bytes, so `ToByteArray` refuses such a filter and `WriteTo` writes it in the
+large form, where the run's length is a `u64`; a reader of the large form takes the table
+in pieces into the filter's own. Releases up to 6.2.0 failed with an `OverflowException`
+from computing the table's length in 32 bits.
 
 A size below its limit can still be refused for not being in the payload. Where a reader
 allocates for a count, it first checks that the bytes left could hold that many, so what
@@ -446,19 +458,23 @@ array together with the envelope's eighteen bytes, so it is at most 2,147,483,57
 the largest array, 2,147,483,591, less those. A larger one is written in
 [the large form](#the-large-form), to a stream: `ToByteArray` of a structure whose payload
 would be larger throws an `InvalidOperationException` saying how large the payload would
-have been, and the structure is untouched. In either form a run is written no longer than
-2,147,483,591 bytes, the most a reader takes into one array, so a structure that would
-need a longer one can be built but not written yet, and `WriteTo` refuses it the same way,
-naming the run. A structure held inside another in the large form is such a run, since its
-envelope is longer than the ordinary ceiling. A reader refuses an ordinary envelope's length
-field, or a run's, above 2,147,483,591, what one array holds, before allocating for it, and
-the large form's length past what its stream holds.
+have been, and the structure is untouched. In the ordinary envelope no run is longer than
+2,147,483,591 bytes, the most a reader takes into one array, since the payload around it is
+shorter. In the large form a run's length is a `u64`, so a longer one is written: a table
+written as one run, or a structure held inside another whose own envelope is in the large
+form. A reader refuses an ordinary envelope's length field, or a run's, above
+2,147,483,591, what one array holds, before allocating for it. In the large form it refuses
+a run longer than the payload has left, and one longer than one array where the run is read
+into one array; a run its structure unpacks into storage of its own is read in pieces into
+that, and one longer than that storage holds is refused by its structure. It refuses the
+large form's length past what its stream holds.
 
 ### Read budget
 
 Every read has a budget: the most memory, in bytes, reading one payload may allocate — the
-payload itself where it is held, the copies made of runs within it, the structure, and any
-structure nested inside it, all from one allowance. A reader prices the whole read before
+payload itself where it is held, the copies made of runs within it, or the piece a run is
+read through where the payload is not held, the structure, and any structure nested inside
+it, all from one allowance. A reader prices the whole read before
 allocating anything a payload claims: from the envelope's length where the payload is held,
 and the fields that size the structure, read in the order the structure's reader reads
 them, and for a nested structure from its own envelope and fields where they lie inside the

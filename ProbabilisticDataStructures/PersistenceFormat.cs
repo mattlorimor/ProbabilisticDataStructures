@@ -516,9 +516,10 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
         /// <exception cref="InvalidOperationException">
-        /// The payload holds a run longer than <see cref="PayloadWriter.LongestRun"/>, or would
-        /// be longer than a stream holds, which the count refuses with nothing written; or the
-        /// body wrote a different payload from the one it counted.
+        /// The payload would be longer than a stream holds, or, in the ordinary envelope,
+        /// holds a run longer than <see cref="PayloadWriter.LongestRun"/>, which the count
+        /// refuses with nothing written; or the body wrote a different payload from the one
+        /// it counted.
         /// </exception>
         /// <remarks>
         /// The count is the exact length of the payload, from the layout the body writes,
@@ -529,7 +530,9 @@ namespace ProbabilisticDataStructures
         /// <para>
         /// The count also chooses the envelope: the large form for a payload past
         /// <see cref="LargeFormThreshold"/>, and the ordinary one, as it always was, for
-        /// any other. An ordinary payload is built whole before anything is written, so a
+        /// any other. That count is made with every run's length the ordinary envelope's
+        /// <c>u32</c>; for the large form the body is counted again with every run's length a
+        /// <c>u64</c> (#228), and that is the length declared (<see cref="CountBody"/>). An ordinary payload is built whole before anything is written, so a
         /// write refused for any reason, the two passes disagreeing included, writes
         /// nothing. A payload in the large form can be longer than any array, so it is
         /// written as the body produces it (#225): the header first, declaring the counted
@@ -547,8 +550,8 @@ namespace ProbabilisticDataStructures
         {
             ArgumentNullException.ThrowIfNull(stream);
 
-            var (header, length) = Count(structure);
-            Write(stream, structure, header, length);
+            var (header, ordinary, length) = Count(structure);
+            Write(stream, structure, header, ordinary, length);
         }
 
         /// <summary>
@@ -563,37 +566,68 @@ namespace ProbabilisticDataStructures
         /// <remarks>
         /// Past <see cref="MaxPayloadLength"/> a payload is in the large form, and the
         /// envelope around it is longer than any array, so it is refused here, naming its
-        /// size and the stream it can be written to (#229). The count is made once, and
-        /// the write is given it.
+        /// size in the ordinary envelope and the stream it can be written to (#229). The
+        /// count is made once, and the write is given it.
         /// </remarks>
         internal static byte[] ToByteArray(IPayloadBody structure)
         {
-            var (header, length) = Count(structure);
-            CheckPayloadLength(length);
+            var (header, ordinary, length) = Count(structure);
+            CheckPayloadLength(ordinary);
 
             using var stream = new MemoryStream();
-            Write(stream, structure, header, length);
+            Write(stream, structure, header, ordinary, length);
             return stream.ToArray();
         }
 
         /// <summary>
-        /// Counts a body, and tells <see cref="Counted"/> what it counted.
+        /// Counts a body, and tells <see cref="Counted"/> the length its envelope declares.
         /// </summary>
-        private static (EnvelopeHeader Header, long Length) Count(IPayloadBody structure)
+        private static (EnvelopeHeader Header, long Ordinary, long Length) Count(IPayloadBody structure)
         {
-            var counter = PayloadWriter.Counter();
-            var header = structure.WritePayload(counter);
-            Counted?.Invoke(structure, counter.Length);
-            return (header, counter.Length);
+            var counted = CountBody(structure);
+            Counted?.Invoke(structure, counted.Length);
+            return counted;
         }
 
         /// <summary>
-        /// Writes a body counted at <paramref name="length"/> bytes in the envelope that
-        /// length calls for.
+        /// Counts a body for the envelope its length calls for: its length in the ordinary
+        /// envelope, with each run's length a <c>u32</c>, and the length its envelope
+        /// declares, which is that one for the ordinary envelope and, for the large form, the
+        /// count again with each run's length a <c>u64</c> (#228).
         /// </summary>
-        private static void Write(Stream stream, IPayloadBody structure, EnvelopeHeader header, long length)
+        /// <exception cref="InvalidOperationException">
+        /// The payload is ordinary and holds a run longer than
+        /// <see cref="PayloadWriter.LongestRun"/>, or is longer than a stream holds.
+        /// </exception>
+        /// <remarks>
+        /// The form is chosen by the first count, as it always was, so a payload that fits
+        /// the ordinary envelope is written in it byte for byte as before, even where its
+        /// runs widened would not fit. The second count is never the shorter, so a payload
+        /// chosen for the large form by the first stays past the threshold by the second.
+        /// </remarks>
+        private static (EnvelopeHeader Header, long Ordinary, long Length) CountBody(IPayloadBody structure)
         {
-            if (IsLargeForm(length))
+            var narrow = PayloadWriter.Counter();
+            var header = structure.WritePayload(narrow);
+            if (!IsLargeForm(narrow.Length))
+            {
+                PayloadWriter.CheckRun(narrow.LongestCounted);
+                return (header, narrow.Length, narrow.Length);
+            }
+
+            var wide = PayloadWriter.Counter(wide: true);
+            structure.WritePayload(wide);
+            return (header, narrow.Length, wide.Length);
+        }
+
+        /// <summary>
+        /// Writes a body in the envelope its count in the ordinary one,
+        /// <paramref name="ordinary"/>, calls for, declaring <paramref name="length"/>.
+        /// </summary>
+        private static void Write(
+            Stream stream, IPayloadBody structure, EnvelopeHeader header, long ordinary, long length)
+        {
+            if (IsLargeForm(ordinary))
             {
                 WriteLarge(stream, structure, header, length);
                 return;
@@ -665,17 +699,37 @@ namespace ProbabilisticDataStructures
         internal static Crc32 WriteLargeHeader(Stream stream, EnvelopeHeader header, ulong length)
         {
             Span<byte> bytes = stackalloc byte[LargeHeaderLength];
+            var crc = LayOutHeader(bytes, header, length, large: true);
+            stream.Write(bytes);
+            return crc;
+        }
+
+        /// <summary>
+        /// Lays out an envelope's header for a payload of <paramref name="length"/> bytes at
+        /// the start of <paramref name="bytes"/>, in the large form, its own checksum included,
+        /// or in the ordinary one, and returns the checksum begun over the fields the final
+        /// checksum covers, for the payload to be appended to as it is written.
+        /// </summary>
+        private static Crc32 LayOutHeader(Span<byte> bytes, EnvelopeHeader header, ulong length, bool large)
+        {
             Magic.CopyTo(bytes);
-            BinaryPrimitives.WriteUInt16LittleEndian(bytes[4..], (ushort)(header.Version | LargeFormFlag));
+            BinaryPrimitives.WriteUInt16LittleEndian(bytes[4..], large ? (ushort)(header.Version | LargeFormFlag) : header.Version);
             BinaryPrimitives.WriteUInt16LittleEndian(bytes[6..], (ushort)header.Structure);
             BinaryPrimitives.WriteUInt16LittleEndian(bytes[8..], (ushort)header.Hash);
-            BinaryPrimitives.WriteUInt64LittleEndian(bytes[10..], length);
 
             var crc = new Crc32();
-            crc.Append(bytes[MagicLength..LargeFieldsLength]);
-            BinaryPrimitives.WriteUInt32LittleEndian(bytes[LargeFieldsLength..], crc.GetCurrentHashAsUInt32());
+            if (large)
+            {
+                BinaryPrimitives.WriteUInt64LittleEndian(bytes[10..], length);
+                crc.Append(bytes[MagicLength..LargeFieldsLength]);
+                BinaryPrimitives.WriteUInt32LittleEndian(bytes[LargeFieldsLength..], crc.GetCurrentHashAsUInt32());
+            }
+            else
+            {
+                BinaryPrimitives.WriteUInt32LittleEndian(bytes[10..], (uint)length);
+                crc.Append(bytes[MagicLength..HeaderLength]);
+            }
 
-            stream.Write(bytes);
             return crc;
         }
 
@@ -830,13 +884,13 @@ namespace ProbabilisticDataStructures
                 else
                 {
                     budget.Price(envelope);
-                    PriceUnheld(source, length, version, budget, price);
+                    PriceUnheld(source, length, version, budget, price, large: true);
                     budget.Settle();
                     budget.Charge(envelope);
                 }
 
                 source.Restart(start, crc);
-                var reader = new PayloadReader(source, (long)length, budget);
+                var reader = new PayloadReader(source, (long)length, budget, wide: true, streamed: true);
                 structure = parse(ref reader, version, hash, supplied);
                 reader.ExpectEnd();
             }
@@ -999,12 +1053,15 @@ namespace ProbabilisticDataStructures
         /// Its checksum cannot be checked without reading it all, so the price rests on
         /// fields nothing has vouched for, as the refusal it names always did. A payload
         /// that ends early, or is malformed before its sizes have all been read, is
-        /// priced as far as it goes.
+        /// priced as far as it goes. In the large form, <paramref name="large"/>, a run's
+        /// length is a <c>u64</c>, and what is priced is a read that holds no payload; the
+        /// ordinary one is priced as its read, which holds the payload, allocates.
         /// </remarks>
         private static void PriceUnheld(
-            PayloadSource source, ulong length, ushort version, ReadBudget budget, PayloadPrice price)
+            PayloadSource source, ulong length, ushort version, ReadBudget budget, PayloadPrice price,
+            bool large = false)
         {
-            var reader = new PayloadReader(source, (long)length, budget);
+            var reader = new PayloadReader(source, (long)length, budget, wide: large, streamed: large);
             try
             {
                 price(ref reader, version);
@@ -1398,56 +1455,181 @@ namespace ProbabilisticDataStructures
         /// read on its own; and the outer structure can change what it holds without
         /// the inner layout being part of that change.
         /// <para>
-        /// A counter counts the inner structure through its own body, as its own
-        /// <c>WriteTo</c> would, with nothing built: the run's length prefix, the
-        /// envelope, and the payload inside it. So a structure that holds another is
-        /// counted only once the one it holds is an <see cref="IPayloadBody"/>, and the
-        /// cast says so if it is not.
+        /// The inner structure is counted through its own body, as its own <c>WriteTo</c>
+        /// would count it, with nothing built (<see cref="CountNested"/>), and its envelope
+        /// is the one that count calls for, in the large form if its payload is past the
+        /// threshold, whatever the outer one is in. The run is that envelope, counted as a run of the outer payload, so in
+        /// the ordinary envelope it is held to <see cref="PayloadWriter.LongestRun"/> as any
+        /// run is, and in the large form its length is a <c>u64</c> (#228). So a structure
+        /// that holds another is counted only once the one it holds is an
+        /// <see cref="IPayloadBody"/>, and the cast says so if it is not.
         /// </para>
         /// <para>
-        /// The envelope counted is the one the inner structure's own write will choose, by
-        /// <see cref="IsLargeForm"/> on the inner payload's length, which is the length
-        /// its body has just added to the count. The run is the envelope and the payload
-        /// together, and is held to <see cref="PayloadWriter.LongestRun"/> as any run is,
-        /// here in the count, since the count does not begin it as one.
+        /// The envelope is written into the outer payload as it is produced: its header, its
+        /// payload by its own body, with its checksum carried over each byte the writer
+        /// takes, and that checksum. Nothing the size of it is held, so a nested envelope in
+        /// the large form is streamed with the payload around it, and one past one array is
+        /// written at all; through a <see cref="MemoryStream"/> and a copy out of it, as it
+        /// was, it could be no longer than one array. The ordinary envelope is written the
+        /// same way, into the buffer that holds the outer payload, and its bytes are what
+        /// they were.
         /// </para>
         /// </remarks>
         internal static void WriteNested<T>(PayloadWriter payload, T structure)
             where T : IBinaryPersistable<T>
         {
-            if (payload.IsCounting)
+            var body = (IPayloadBody)structure;
+            var (header, large, length) = payload.IsCounting
+                ? CountNested(payload, body)
+                : CountNested(PayloadWriter.Counter(), body);
+            if (!payload.BeginRun((large ? LargeEnvelopeLength : EnvelopeLength) + length))
             {
-                var before = payload.Length;
-                ((IPayloadBody)structure).WritePayload(payload);
-                var inner = payload.Length - before;
-                var envelope = IsLargeForm(inner) ? LargeEnvelopeLength : EnvelopeLength;
-                PayloadWriter.CheckRun(envelope + inner);
-                payload.BeginBlock(sizeof(uint) + envelope);
                 return;
             }
 
-            using var buffer = new MemoryStream();
-            structure.WriteTo(buffer);
-            payload.WriteBytes(buffer.ToArray());
+            Span<byte> head = stackalloc byte[LargeHeaderLength];
+            var crc = LayOutHeader(head, header, (ulong)length, large);
+            payload.WriteRaw(head[..(large ? LargeHeaderLength : HeaderLength)]);
+
+            payload.BeginChecksum(crc);
+            var outer = payload.IsWide;
+            payload.IsWide = large;
+            body.WritePayload(payload);
+            payload.IsWide = outer;
+            payload.EndChecksum();
+
+            payload.WriteUInt32(crc.GetCurrentHashAsUInt32());
         }
 
         /// <summary>
-        /// Reads a structure written by <see cref="WriteNested"/>.
+        /// Counts a nested body into <paramref name="counter"/> and takes it out again,
+        /// returning what the body says it is, whether its envelope is in the large form, and
+        /// the payload that envelope declares, its runs as wide as its own form makes them.
         /// </summary>
-        internal static T ReadNested<T>(ref PayloadReader reader, Func<ReadOnlySpan<byte>, ulong>? hash)
+        /// <remarks>
+        /// The form is chosen by the count with every run a <c>u32</c>, as
+        /// <see cref="CountBody"/> chooses it, and a payload in the large form is counted
+        /// again with <c>u64</c> runs, as it is written. So a nested envelope counts as it is
+        /// written, whatever the runs of the payload around it are counted at: in the count
+        /// that chooses the outer form, a nested envelope in the large form makes that
+        /// payload past the threshold either way. Counted into the counter that asked, not
+        /// one of its own, so a count builds nothing per nested structure, and the nested
+        /// runs count toward its longest; none is longer than the nested envelope's own
+        /// run, so that longest is what it was.
+        /// </remarks>
+        private static (EnvelopeHeader Header, bool Large, long Length) CountNested(PayloadWriter counter, IPayloadBody body)
+        {
+            var wide = counter.IsWide;
+            var before = counter.Length;
+            counter.IsWide = false;
+            var header = body.WritePayload(counter);
+            var length = counter.Length - before;
+            var large = IsLargeForm(length);
+            if (large)
+            {
+                counter.Rewind(before);
+                counter.IsWide = true;
+                body.WritePayload(counter);
+                length = counter.Length - before;
+            }
+
+            counter.IsWide = wide;
+            counter.Rewind(before);
+            return (header, large, length);
+        }
+
+        /// <summary>
+        /// Reads a structure written by <see cref="WriteNested"/>, a
+        /// <paramref name="nested"/> whose payload <paramref name="parse"/> reads, once the
+        /// hash its header names has passed <paramref name="checkHash"/>.
+        /// </summary>
+        /// <remarks>
+        /// From a held payload, the ordinary envelope's, the run is copied out and read
+        /// through a <see cref="MemoryStream"/> of its own by the structure's
+        /// <c>ReadFrom</c>, as it always was, so that what that read allocates and is charged,
+        /// and the capacities documented from those charges, are unchanged; a run there is
+        /// never past one array. In a read that holds no payload, the large form's, the
+        /// envelope is read from this reader, in either form: its header checked as its own
+        /// reader checks it, its payload read by <paramref name="parse"/> with its checksum
+        /// carried over each byte, and that checksum compared once the payload has been read,
+        /// as the large form's own is. Nothing the size of it is held, so a nested envelope
+        /// past one array is read at all (#228). The run is held to the envelope: a byte
+        /// after it is refused as left over.
+        /// </remarks>
+        internal static T ReadNested<T>(
+            ref PayloadReader reader, Func<ReadOnlySpan<byte>, ulong>? hash, StructureId nested,
+            HashCheck checkHash, PayloadParse<T> parse)
             where T : IBinaryPersistable<T>
         {
-            var bytes = reader.ReadBytes();
-            using var buffer = new MemoryStream(bytes, writable: false);
+            if (!reader.IsStreamed)
+            {
+                var bytes = reader.ReadBytes();
+                using var buffer = new MemoryStream(bytes, writable: false);
 
-            // The nested structure draws on the same allowance as the one around it, so
-            // that a composite cannot spend its budget once per part. The run it was
-            // copied from is charged by ReadBytes; this is the stream and options around
-            // it, and the nested envelope then charges its own payload. All of it was
-            // priced with the structure around it, by PriceNested.
-            reader.Budget.Charge(NestedReadCost);
-            var options = new ReadOptions(reader.Budget);
-            return hash is null ? T.ReadFrom(buffer, options) : T.ReadFrom(buffer, hash, options);
+                // The nested structure draws on the same allowance as the one around it, so
+                // that a composite cannot spend its budget once per part. The run it was
+                // copied from is charged by ReadBytes; this is the stream and options around
+                // it, and the nested envelope then charges its own payload. All of it was
+                // priced with the structure around it, by PriceNested.
+                reader.Budget.Charge(NestedReadCost);
+                var options = new ReadOptions(reader.Budget);
+                return hash is null ? T.ReadFrom(buffer, options) : T.ReadFrom(buffer, hash, options);
+            }
+
+            var run = reader.BeginEnvelopeRun();
+            reader.Budget.Charge(PayloadSource.NestedChecksumCost);
+            var envelope = reader.Slice(run);
+
+            Span<byte> header = stackalloc byte[LargeHeaderLength];
+            var (length, version, hashId, large) = ReadNestedHeader(ref envelope, header, nested);
+            checkHash(hashId, hash);
+
+            var crc = new Crc32();
+            crc.Append(header[MagicLength..(large ? LargeFieldsLength : HeaderLength)]);
+            envelope.BeginChecksum(crc);
+            var payload = envelope.Slice((long)length, large);
+            var structure = parse(ref payload, version, hashId, hash);
+            payload.ExpectEnd();
+            envelope.EndChecksum();
+
+            var expected = crc.GetCurrentHashAsUInt32();
+            var actual = BinaryPrimitives.ReadUInt32LittleEndian(envelope.ReadSpan(ChecksumLength));
+            if (expected != actual)
+            {
+                throw new InvalidDataException(
+                    $"The {nested} nested in this payload does not match its own checksum: expected " +
+                    $"{expected:X8} and found {actual:X8}. Its bytes have been corrupted, and the " +
+                    $"{nested} read from them has been discarded.");
+            }
+
+            envelope.ExpectEnd();
+            return structure;
+        }
+
+        /// <summary>
+        /// Reads and checks a nested envelope's header, in either form, into
+        /// <paramref name="header"/>, as its own reader checks it: the large header's
+        /// checksum first, then the version, the structure and the length.
+        /// </summary>
+        /// <remarks>
+        /// Copied out a piece at a time: a payload that is not held hands each piece back in
+        /// a buffer the next one overwrites.
+        /// </remarks>
+        private static (ulong Length, ushort Version, HashId Hash, bool Large) ReadNestedHeader(
+            ref PayloadReader envelope, scoped Span<byte> header, StructureId nested)
+        {
+            envelope.ReadSpan(HeaderLength).CopyTo(header);
+
+            ushort version;
+            HashId hash;
+            if (IsLargeHeader(header))
+            {
+                envelope.ReadSpan(LargeHeaderLength - HeaderLength).CopyTo(header[HeaderLength..]);
+                var length = CheckLargeHeader(header, nested, out version, out hash);
+                return (length, version, hash, true);
+            }
+
+            return (CheckHeader(header, nested, out version, out hash), version, hash, false);
         }
 
         /// <summary>
@@ -1456,40 +1638,39 @@ namespace ProbabilisticDataStructures
         /// past it.
         /// </summary>
         /// <remarks>
-        /// The run the nested read copies, the stream and options around it, the nested
-        /// envelope's payload and buffers, and whatever the nested structure's own price
-        /// says, read from the nested payload as it lies inside this one -- the same
-        /// sums, in the same order, that the nested read charges. Its header is checked
-        /// as its reader checks it, in either form, so a nested envelope that is not the
-        /// structure it should be stops the price where the read will stop.
+        /// From a held payload: the run the nested read copies, the stream and options around
+        /// it, and the nested envelope's payload and buffers. In a read that holds no payload:
+        /// the checksum carried over the envelope, and nothing of its size. Then whatever the
+        /// nested structure's own price says, read from the nested payload as it lies inside
+        /// this one, its runs as wide as its own form makes them -- the same sums that the
+        /// nested read charges. Its header is checked as its reader checks it, in either
+        /// form, so a nested envelope that is not the structure it should be stops the price
+        /// where the read will stop.
         /// </remarks>
         internal static void PriceNested(ref PayloadReader reader, StructureId nested, PayloadPrice price)
         {
-            var run = reader.PriceBytes();
-            reader.Budget.Price(NestedReadCost);
-
-            var envelope = reader.Slice(run);
-
-            // Copied out a piece at a time: a payload that is not held hands each piece
-            // back in a buffer the next one overwrites.
-            Span<byte> header = stackalloc byte[LargeHeaderLength];
-            envelope.ReadSpan(HeaderLength).CopyTo(header);
-
-            ulong length;
-            ushort version;
-            if (IsLargeHeader(header))
+            var streamed = reader.IsStreamed;
+            long run;
+            if (streamed)
             {
-                envelope.ReadSpan(LargeHeaderLength - HeaderLength).CopyTo(header[HeaderLength..]);
-                length = CheckLargeHeader(header, nested, out version, out _);
-                envelope.Budget.Price(LargeEnvelopeCost);
+                run = reader.BeginEnvelopeRun();
+                reader.Budget.Price(PayloadSource.NestedChecksumCost);
             }
             else
             {
-                length = CheckHeader(header, nested, out version, out _);
-                envelope.Budget.Price(EnvelopeCost(length));
+                run = reader.PriceBytes();
+                reader.Budget.Price(NestedReadCost);
             }
 
-            var payload = envelope.Slice((long)length);
+            var envelope = reader.Slice(run);
+            Span<byte> header = stackalloc byte[LargeHeaderLength];
+            var (length, version, _, large) = ReadNestedHeader(ref envelope, header, nested);
+            if (!streamed)
+            {
+                envelope.Budget.Price(large ? LargeEnvelopeCost : EnvelopeCost(length));
+            }
+
+            var payload = envelope.Slice((long)length, large);
             price(ref payload, version);
             envelope.SkipRest();
         }

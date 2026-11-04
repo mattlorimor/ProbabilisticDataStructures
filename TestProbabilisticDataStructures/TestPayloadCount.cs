@@ -112,8 +112,9 @@ namespace TestProbabilisticDataStructures
         /// as its own write would frame it, and that envelope is a run of 2,147,483,603 bytes,
         /// longer than one array. The two rows straddle that choice. Both top-k payloads are
         /// past the ceiling, so <c>WriteTo</c> writes them in the large form, where the
-        /// sketch's run and every element's have a <c>u64</c> length (#228), and the count
-        /// declared is longer by four bytes for each.
+        /// sketch's run and every element's have a <c>u64</c> length (#228); the claimed
+        /// sketch's body would read cells it does not hold, so that write is
+        /// <see cref="TestLargeEnvelopeWriting.TestTheWindowWhereANestedEnvelopeOutgrewItsMemoryStreamIsWritten"/>'s.
         /// </summary>
         [TestMethod]
         [DataRow(268_435_442u, 2_147_483_630L)]
@@ -135,8 +136,7 @@ namespace TestProbabilisticDataStructures
             foreach (var element in elements) topK.Add(System.Text.Encoding.ASCII.GetBytes(element));
             var sketch = (CountMinSketch)typeof(TopK).GetProperty("Cms", Fields)!.GetValue(topK)!;
 
-            AssertStreamedWhileClaiming(topK, payload, payload + 4 + 4L * elements.Length,
-                (sketch, "Width", width), (sketch, "Depth", 1u));
+            AssertStreamedWhileClaiming(topK, payload, null, (sketch, "Width", width), (sketch, "Depth", 1u));
         }
 
         /// <summary>
@@ -549,10 +549,8 @@ namespace TestProbabilisticDataStructures
         /// <remarks>
         /// <c>ToByteArray</c>, because a payload past one array is written by <c>WriteTo</c>
         /// in the large form, streamed (#225), and a byte array is the one thing that cannot
-        /// hold it (#229). <c>WriteTo</c> of a claimed shape is not tried: it would set about
-        /// writing a payload of the size claimed. A shape with one run past the longest a
-        /// payload holds is refused for that instead, by both, and is
-        /// <see cref="AssertRunRefusedWhileClaiming"/>'s.
+        /// hold it (#229). <c>WriteTo</c> of a claimed shape sets about writing a payload of
+        /// the size claimed, and is <see cref="AssertStreamedWhileClaiming"/>'s.
         /// </remarks>
         internal static void AssertRefusedWhileClaiming<T>(
             T structure, long payload, params (object Owner, string Member, object Claimed)[] shape)
@@ -575,46 +573,6 @@ namespace TestProbabilisticDataStructures
                 Assert.IsLessThan(RefusalAllocates, allocated,
                     $"the refusal allocated {allocated:N0} bytes: the payload was built, or " +
                     "begun, before its size was checked");
-            });
-        }
-
-        /// <summary>
-        /// Has the structure claim a shape with a run longer than the longest a payload
-        /// holds, asserts both its <c>WriteTo</c> and its <c>ToByteArray</c> refuse it for
-        /// that run, before anything is written or built, and puts the shape back.
-        /// </summary>
-        /// <param name="structure">The structure written.</param>
-        /// <param name="run">The run's length, which the refusal must name.</param>
-        /// <param name="shape">As <see cref="AssertRefusedWhileClaiming"/> takes it.</param>
-        internal static void AssertRunRefusedWhileClaiming<T>(
-            T structure, long run, params (object Owner, string Member, object Claimed)[] shape)
-            where T : IBinaryPersistable<T>
-        {
-            Assert.IsGreaterThan(PayloadWriter.LongestRun, run, "the row's run is not past the longest");
-
-            WhileClaiming(structure, shape, () =>
-            {
-                using var stream = new MemoryStream();
-                foreach (var (how, write) in new (string, Action)[]
-                {
-                    ("WriteTo", () => structure.WriteTo(stream)),
-                    ("ToByteArray", () => structure.ToByteArray()),
-                })
-                {
-                    var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-                    var ex = Assert.ThrowsExactly<InvalidOperationException>(write,
-                        $"{how} of a {typeof(T).Name} holding a run of {run:N0} bytes was not refused");
-                    var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
-
-                    StringAssert.Contains(ex.Message, $"a run of {run:N0} bytes",
-                        $"{how}'s refusal should name the run: {ex.Message}");
-                    StringAssert.Contains(ex.Message, PayloadWriter.LongestRun.ToString("N0"),
-                        $"{how}'s refusal should name the longest run: {ex.Message}");
-                    Assert.AreEqual(0L, stream.Length, $"{how} wrote to the stream before refusing");
-                    Assert.IsLessThan(RefusalAllocates, allocated,
-                        $"{how}'s refusal allocated {allocated:N0} bytes: the payload was built, or " +
-                        "begun, before its run was checked");
-                }
             });
         }
 

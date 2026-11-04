@@ -47,10 +47,10 @@ its payload in the large form of the envelope ([FORMAT.md](FORMAT.md#the-large-f
 which releases up to 6.2.0 refuse, as the payload is produced, so that nothing the size of
 the payload is held. `ToByteArray` of a structure built larger than that throws an
 `InvalidOperationException` naming the size it would be and the size one can be, with the
-structure unchanged, and says to write it with `WriteTo` instead. What neither writes yet
-is a single run longer than `Array.MaxLength` bytes, the most a reader takes into one array:
-a table written as one run, or a structure held inside another. Both refuse one before
-writing anything, naming the run. The figure in this column is worked out from the payload
+structure unchanged, and says to write it with `WriteTo` instead. In the large form a
+run's length is a `u64`, so a table written as one run, or a structure held inside another,
+can pass `Array.MaxLength` bytes, the most one array holds, and `WriteTo` writes it. In the
+ordinary envelope no run is that long: the payload around it is shorter. The figure in this column is worked out from the payload
 each structure writes, so it follows the layouts in [FORMAT.md](FORMAT.md). A read of a
 payload in the ordinary envelope is charged at least twice the payload, which is why the
 default budget reads payloads of up to about half a gigabyte. A payload in the large form is
@@ -138,8 +138,8 @@ and two of a `HeavyKeeper`, its default depth, 2,684,354,601. A `TopK` writes it
 sketch inside its own payload, as one run, and two of the private sketches a `DpswSketch`
 holds are 2,147,483,698 bytes at that width before anything else it writes. So a sketch
 placed with 64-bit values saves as one array with one row only, and a `DpswSketch` only
-while it holds one sketch; a `TopK` over two rows that wide cannot be written at all yet,
-since its sketch is a run longer than any payload holds. Every save of these is written at
+while it holds one sketch; a `TopK` over two rows that wide is written in the large form,
+its sketch's envelope a run longer than one array, with a `u64` length. Every save of these is written at
 format version 9, which records the placement in a byte of its own, and in a sketch's
 payload that byte is 1 only beside a single row. One
 read from a payload written before keeps the 32-bit placement whatever its width, and

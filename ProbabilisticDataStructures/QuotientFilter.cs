@@ -893,8 +893,11 @@ namespace ProbabilisticDataStructures
             var quotientBits = reader.ReadUInt32();
             var remainderBits = reader.ReadUInt32();
             var count = reader.ReadUInt32();
-            var bytes = reader.ReadBytes();
-            reader.ExpectEnd();
+
+            // The table's words are one run, which in the large form can be longer than one
+            // array (#228): read in pieces, straight into the table, when the payload is not
+            // held, and copied out whole when it is.
+            var stored = reader.BeginWords();
             CheckWidths(quotientBits, remainderBits);
 
             // The table is allocated whole, from the two widths alone, before the bytes
@@ -908,19 +911,24 @@ namespace ProbabilisticDataStructures
                     $"Filter claims {count} entries and has {filter.slots} slots.");
             }
 
-            if (bytes.Length != BytesOf(filter.data.Length))
+            if (stored != BytesOf(filter.data.Length))
             {
                 throw new InvalidDataException(
                     $"Filter has {filter.slots} slots of {filter.bitsPerSlot} bits, " +
                     $"needing {BytesOf(filter.data.Length)} bytes, and carries " +
-                    $"{bytes.Length}.");
+                    $"{stored}.");
             }
 
-            for (var i = 0; i < filter.data.Length; i++)
+            for (var word = 0; word < filter.data.Length;)
             {
-                filter.data[i] = BinaryPrimitives.ReadUInt64LittleEndian(
-                    bytes.AsSpan(i * sizeof(ulong)));
+                var piece = reader.ReadWords();
+                for (var at = 0; at < piece.Length; at += sizeof(ulong))
+                {
+                    filter.data[word++] = BinaryPrimitives.ReadUInt64LittleEndian(piece[at..]);
+                }
             }
+
+            reader.ExpectEnd();
 
             // Every walk of the table rests on its metadata being consistent, and on the count
             // being its entries, which the full check in Add relies on.
@@ -931,15 +939,16 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the copy of the
-        /// stored table, and the table it is unpacked into, sized by the two widths alone.
-        /// See <see cref="PayloadPrice"/>.
+        /// stored table, or the piece it is read in from a payload that is not held, and the
+        /// table it is unpacked into, sized by the two widths alone. See
+        /// <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
             var quotientBits = reader.ReadUInt32();
             var remainderBits = reader.ReadUInt32();
             reader.ReadUInt32();
-            reader.SkipBytes();
+            reader.SkipWords();
             reader.ExpectEnd();
             CheckWidths(quotientBits, remainderBits);
             reader.Budget.Price(TableCost(quotientBits, remainderBits));

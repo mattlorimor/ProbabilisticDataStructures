@@ -394,17 +394,13 @@ namespace ProbabilisticDataStructures
         /// Writes the sketch to a stream.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        /// <exception cref="InvalidOperationException">
-        /// One sign's buckets would be a run longer than
-        /// <see cref="PayloadWriter.LongestRun"/>, which a sketch holding enough buckets of
-        /// that sign can be: the counts are eight bytes a bucket, and each sign's are one
-        /// run. The sketch is intact and can still be used, and nothing is written.
-        /// </exception>
         /// <remarks>
         /// The payload is counted first, by the writes that write it. The two signs share
-        /// the one payload, and a payload past what the ordinary envelope holds is written in
-        /// the large form, so it is each sign's run that is held to a limit, and the two
-        /// together only by <see cref="Persistence.ToByteArray{T}"/>, which returns one array.
+        /// the one payload, and each sign's counts are one run, eight bytes a bucket. A
+        /// payload past what the ordinary envelope holds is written in the large form, where
+        /// a run's length is a <c>u64</c> (#228), so a sign's run can be longer than one array
+        /// of bytes, and the payload is held to one array only by
+        /// <see cref="Persistence.ToByteArray{T}"/>, which returns one.
         /// </remarks>
         public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
@@ -763,11 +759,12 @@ namespace ProbabilisticDataStructures
                 // below one.
                 payload.WriteUInt32(unchecked((uint)this.MinIndex));
 
-                // A counter counts the run whole here, however long. A writer is given it
-                // only once the count has refused a run longer than a payload holds, which is
-                // far fewer buckets than an int holds, so the cast and the offsets below cannot
-                // overflow; the checked cast is there so that a write that had not been
-                // counted would fail rather than write a short run.
+                // A counter counts the run whole here, however long. The run is the store's
+                // own window, one array of counts, so its span is at most an array's length
+                // and fits an int, and the offsets below are worked out in 64 bits; the
+                // checked cast is there so that a span the window could not hold would fail
+                // rather than write a short run. In the large form the run can be longer than
+                // one array of bytes (#228).
                 if (payload.BeginRun(BytesOf(this.Span)))
                 {
                     var span = checked((int)this.Span);
@@ -783,10 +780,13 @@ namespace ProbabilisticDataStructures
                 var minIndex = unchecked((int)reader.ReadUInt32());
 
                 // Length-prefixed, so a payload cannot claim more buckets than it
-                // carries: the read fails before anything is allocated for them.
-                var bytes = reader.ReadBytes();
+                // carries: the read fails before anything is allocated for them. The run
+                // can be longer than one array in the large form (#228), so it is read in
+                // pieces, straight into the window, when the payload is not held, and
+                // copied out whole when it is.
+                var length = reader.BeginWords();
 
-                var span = SpanOf(minIndex, bytes.Length, which);
+                var span = SpanOf(minIndex, length, which);
                 var store = new Store();
 
                 if (span == 0)
@@ -801,24 +801,27 @@ namespace ProbabilisticDataStructures
                 reader.Budget.Charge(ReadBudget.ArrayOf((ulong)span, sizeof(ulong)));
                 store.Reserve(minIndex, span);
 
-                for (var i = 0; i < span; i++)
+                for (var i = 0; i < span;)
                 {
-                    var amount = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(
-                        bytes.AsSpan(i * sizeof(ulong)));
-
-                    if (amount != 0)
+                    var piece = reader.ReadWords();
+                    for (var at = 0; at < piece.Length; at += sizeof(ulong), i++)
                     {
-                        // A run whose counts pass what one count holds wraps the store's
-                        // total, and a store whose total wrapped to zero reports itself
-                        // empty with its bounds and counts still set.
-                        if (amount > ulong.MaxValue - store.Total)
-                        {
-                            throw new InvalidDataException(
-                                $"The {which} buckets hold more than {ulong.MaxValue} " +
-                                "values on their own, which is more than a sketch can count.");
-                        }
+                        var amount = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(piece[at..]);
 
-                        store.Add(minIndex + i, amount);
+                        if (amount != 0)
+                        {
+                            // A run whose counts pass what one count holds wraps the store's
+                            // total, and a store whose total wrapped to zero reports itself
+                            // empty with its bounds and counts still set.
+                            if (amount > ulong.MaxValue - store.Total)
+                            {
+                                throw new InvalidDataException(
+                                    $"The {which} buckets hold more than {ulong.MaxValue} " +
+                                    "values on their own, which is more than a sketch can count.");
+                            }
+
+                            store.Add(minIndex + i, amount);
+                        }
                     }
                 }
 
@@ -826,13 +829,14 @@ namespace ProbabilisticDataStructures
             }
 
             /// <summary>
-            /// Prices what <see cref="ReadFrom"/> allocates: the copy of the run, and the
-            /// window it is restored into.
+            /// Prices what <see cref="ReadFrom"/> allocates: the copy of the run, or the
+            /// piece it is read in from a payload that is not held, and the window it is
+            /// restored into.
             /// </summary>
             internal static void Price(ref PayloadReader reader, string which)
             {
                 var minIndex = unchecked((int)reader.ReadUInt32());
-                var span = SpanOf(minIndex, reader.SkipBytes(), which);
+                var span = SpanOf(minIndex, reader.SkipWords(), which);
                 if (span > 0)
                 {
                     reader.Budget.Price(ReadBudget.ArrayOf((ulong)span, sizeof(ulong)));
@@ -843,7 +847,12 @@ namespace ProbabilisticDataStructures
             /// How many buckets a run of <paramref name="length"/> bytes starting at
             /// <paramref name="minIndex"/> holds, after checking it can be read as them.
             /// </summary>
-            private static int SpanOf(int minIndex, int length, string which)
+            /// <remarks>
+            /// The window is one array of counts, so a run of more counts than an array
+            /// holds is refused: a held payload never carried one, since its run was read
+            /// into one array of bytes, and in the large form one can claim it (#228).
+            /// </remarks>
+            private static int SpanOf(int minIndex, long length, string which)
             {
                 if (length % sizeof(ulong) != 0)
                 {
@@ -853,6 +862,13 @@ namespace ProbabilisticDataStructures
                 }
 
                 var span = length / sizeof(ulong);
+                if (span > Array.MaxLength)
+                {
+                    throw new InvalidDataException(
+                        $"The {which} buckets are {span} counts, more than the one array " +
+                        $"they are held in can hold, {Array.MaxLength}.");
+                }
+
                 if (span > 0 && (long)minIndex + span - 1 > int.MaxValue)
                 {
                     throw new InvalidDataException(
@@ -860,7 +876,7 @@ namespace ProbabilisticDataStructures
                         "largest index a bucket can have.");
                 }
 
-                return span;
+                return (int)span;
             }
 
             internal void Merge(Store other)

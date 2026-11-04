@@ -18,9 +18,10 @@ namespace TestProbabilisticDataStructures
     /// something small and positive, and the loop that filled it ran off the end instead.
     /// Such a sketch can be built and used: the constructor allows a run of
     /// <see cref="Array.MaxLength"/> buckets, 16 GiB of counts. It cannot be made a byte
-    /// array, since its payload would not fit one, and from 2^28 buckets of one sign it
-    /// cannot be written at all yet, since that sign's run is longer than any run a payload
-    /// holds; both are things the payload writer says clearly rather than as an overflow.
+    /// array, since its payload would not fit one, which the payload writer says clearly
+    /// rather than as an overflow, and from 2^28 buckets of one sign that sign's run is
+    /// longer than one array, which the large form, where a run's length is a <c>u64</c>,
+    /// writes to a stream (#228).
     /// A run that long is not something a test builds -- the smallest unwritable one is
     /// two gibibytes of counts, and holding it in memory is the cost of building it -- so the
     /// write path is run on a sketch whose store has been told it spans more than it holds,

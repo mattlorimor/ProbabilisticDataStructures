@@ -22,11 +22,11 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
         /// <exception cref="InvalidOperationException">
-        /// The structure is too large to write: one run in its payload, such as a table
-        /// written whole or a structure held inside it, would be longer than
-        /// <c>int.MaxValue</c> bytes, the most a reader takes into one array; or the
-        /// payload would be longer than a stream holds. Either is found before anything is
-        /// written, and the structure is unchanged.
+        /// The structure is too large to write: its payload would be longer than a stream
+        /// holds. That is found before anything is written, and the structure is unchanged.
+        /// A run in the payload, such as a table written whole or a structure held inside
+        /// it, is no reason: in the large form a run's length is a <c>u64</c>, so one can be
+        /// longer than one array.
         /// </exception>
         /// <remarks>
         /// A payload of up to 2,147,483,573 bytes, which fits the ordinary envelope, is
