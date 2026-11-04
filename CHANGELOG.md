@@ -1729,10 +1729,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same fault. It took its record off before it allocated the folded rows and set the
   width before it packed them, so a failure lost the record, and with it any folding back,
   or left the width halved over rows that were not. It now builds the folded rows first
-  too, and a failure leaves the rows, the width and the record as they were. The removal
-  that called for the folding is taken, as before, and the next removal folds. A sketch
+  too, and a failure leaves the rows, the width and the record as they were. A sketch
   that gets its memory is unchanged, in memory and on the wire, and so is the format.
   (#213)
+
+- **Four more ways a `SublimeCountMinSketch` that ran out of memory was left partly
+  changed.** The `Add` that doubles the rows took its key's increments in the old rows, which
+  it keeps to fold back by, after it had built the doubled ones. An increment allocates when
+  it moves a chunk to a tails array, and one that failed there left the rows before it
+  counted and, in its own row, a counter with its stub written and its high bits not. The
+  record is now a copy of the old rows with the key counted in it, built with the doubled
+  rows, and what follows only puts them in place. It is built once nothing holds the plain
+  counts the doubled rows were packed from, and needs no more memory than before: five rows
+  of 2^22 counters double under the same smallest heap limit as they did, 373 MiB with the
+  default collector, where building the copy before the doubled rows needed 392. A `Remove`
+  that folded the rows back took the key out before it built the folded rows, so a failure
+  left the key removed though the `Remove` threw, and removing it again took it out twice;
+  the folded rows are now built with the key taken out of them, before anything changes. An
+  `Add` that put enough chunks on tails arrays to have the rows laid out again counted its
+  key first. It now takes at once the increments that stop at a stub with room, which can
+  neither allocate nor move a chunk, asks each other row beforehand whether its increment
+  will put a chunk on tails, and if they will crowd the rows takes the first back and builds
+  the new layout, the key counted, from the sketch as it was. Measured on five rows of 2^16
+  counters, an add takes 80 ns where it took 77. A `Reset` set the starting width and then
+  replaced the rows one at a time, so a failure left rows of the old width under the new
+  one and a sketch its writer refused to write; it now builds its rows first. Each of these
+  now throws the `OutOfMemoryException` with the sketch exactly as it was, and trying again
+  adds or removes the key once. No key raises different counters, and nothing a sketch
+  writes changes. (#242)
 
 - **A read refused for its budget named a number that did not load it.**
   `ReadBudgetExceededException.RequiredBytes` was the running total at the allocation
