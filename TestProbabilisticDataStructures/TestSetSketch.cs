@@ -18,6 +18,34 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestSetSketch
     {
+        /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: the
+        /// register count sizes it, and the second construction adds a byte and writes the
+        /// later version, so each construction at one register and at several.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            foreach (var variant in new[] { SetSketchVariant.SetSketch1, SetSketchVariant.SetSketch2 })
+            {
+                var version = variant == SetSketchVariant.SetSketch1
+                    ? PersistenceFormat.DefaultVersion
+                    : PersistenceFormat.SetSketchVariantVersion;
+
+                foreach (var registers in new[] { 1, 8 })
+                {
+                    yield return PayloadState.Of($"{variant}, {registers} registers, empty",
+                        Built(registers, variant), version);
+
+                    var filled = Built(registers, variant);
+                    for (var i = 0; i < 40; i++) filled.Add(Encoding.ASCII.GetBytes($"w{i}"));
+                    yield return PayloadState.Of($"{variant}, {registers} registers, filled", filled, version);
+                }
+            }
+
+            static SetSketch Built(int registers, SetSketchVariant variant) =>
+                new(registers, SetSketch.DefaultBase, SetSketch.DefaultRate, SetSketch.DefaultQ, null, variant);
+        }
+
         private const int M = 4096;
 
         /// <summary>The error a cardinality estimate is expected to have.</summary>

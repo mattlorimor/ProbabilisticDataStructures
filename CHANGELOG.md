@@ -349,6 +349,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`WriteTo` of a structure too large to write now refuses it, by its whole size, before
+  allocating anything for the payload: `CountSketch`, `InvertibleBloomLookupTable`,
+  `SetSketch`, `BloomFilter64`, `CountMinSketch` and `TopK` so far.** Each runs its own
+  payload layout through a counting writer first, which builds nothing, and a payload past
+  2,147,483,573 bytes is refused with the `InvalidOperationException` that names the size
+  it would have been. A `CountSketch` staged its cells in one array before any size was
+  checked: past 268,435,448 cells that array is longer than a runtime holds, and the write
+  threw an `OutOfMemoryException` (268,435,449 cells), or an `OverflowException` from
+  2^28 cells (five rows of 100,000,000, what ε 0.0001 at δ 1% builds), and from 268,435,446
+  cells it was refused correctly after building a two-gibibyte array. An
+  `InvertibleBloomLookupTable` with keys under eight bytes, the only ones its constructor
+  builds that many cells for, failed the same two ways, from two such arrays. The others
+  wrote a field or a run at a time, and only the buffer's growth checked a size: at the
+  first write past the ceiling, once the buffer had been grown and copied up to it, naming
+  the length at that write rather than the payload's. The largest `SetSketch`,
+  4,294,967,206 bytes, is now refused by that figure. A `TopK`
+  counts the sketch inside it through the sketch's own layout. The bytes written are
+  unchanged, and a payload that fits is now built into a buffer allocated once, at its
+  counted size. (#216)
+
 - **A `CountMinSketch` counter, and its total, wrapped to nought at 2^64 instead of
   stopping at `ulong.MaxValue`, so `Merge` could take an estimate to 0.** A wrapped counter
   makes `Count(key)` an undercount, which a Count-Min sketch never gives, and

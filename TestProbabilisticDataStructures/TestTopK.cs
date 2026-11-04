@@ -9,6 +9,33 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestTopK
     {
+        /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: the sketch
+        /// inside is counted through its own body, and the heap's elements are written at
+        /// their own lengths, so a heap of elements of different lengths, empty, partly
+        /// held and full after evictions, around a narrow and a wide sketch.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of("empty", new TopK(0.1, 0.5, 3));
+
+            var partial = new TopK(0.1, 0.5, 3);
+            partial.Add(Encoding.ASCII.GetBytes("a"));
+            partial.Add(Encoding.ASCII.GetBytes("a fair bit longer than the first"));
+            yield return PayloadState.Of("two elements of different lengths", partial);
+
+            foreach (var placement in new[] { Placement.Narrow, Placement.Wide })
+            {
+                var full = new TopK(0.01, 0.01, 4, null, placement);
+                for (var i = 0; i < 300; i++)
+                {
+                    full.Add(Encoding.ASCII.GetBytes(new string('x', 1 + i % 23) + (i % 11)));
+                }
+
+                yield return PayloadState.Of($"full after evictions, {placement}", full);
+            }
+        }
+
         private static byte[] BOB_BYTES = Encoding.ASCII.GetBytes("bob");
         private static byte[] TYLER_BYTES = Encoding.ASCII.GetBytes("tyler");
         private static byte[] FRED_BYTES = Encoding.ASCII.GetBytes("fred");

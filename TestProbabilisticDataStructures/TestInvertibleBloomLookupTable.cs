@@ -12,6 +12,34 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestInvertibleBloomLookupTable
     {
+        /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: the key
+        /// size sizes one of the three runs, so keys from one byte, and a subtracted table,
+        /// whose counts are negative.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            foreach (var keySize in new[] { 1, 7, 8, 13 })
+            {
+                yield return PayloadState.Of($"{keySize}-byte keys, empty",
+                    new InvertibleBloomLookupTable(4, keySize));
+
+                var table = new InvertibleBloomLookupTable(4, keySize);
+                var other = new InvertibleBloomLookupTable(4, keySize);
+                for (var i = 0; i < 5; i++)
+                {
+                    var key = new byte[keySize];
+                    key[0] = (byte)(i + 1);
+                    table.Add(key);
+                    key[^1] ^= 0x80;
+                    other.Add(key);
+                }
+
+                yield return PayloadState.Of($"{keySize}-byte keys, filled", table);
+                yield return PayloadState.Of($"{keySize}-byte keys, subtracted", other.Subtract(table));
+            }
+        }
+
         private static byte[] Key(long i)
         {
             var key = new byte[8];

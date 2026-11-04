@@ -726,8 +726,25 @@ namespace TestProbabilisticDataStructures
                 return Enumerable.Range(0, 200).All(i => widest.Test((ulong)i * 7919))
                     && Assert.Throws<ArgumentOutOfRangeException>(() => new MementoFilter(1UL << 32, 29)).ParamName == "fingerprintBits";
             }),
+            // A structure whose WriteTo counts its payload first (#216), made to claim a shape
+            // past the ceiling, is refused naming the whole payload and the ceiling before
+            // anything is built for it, and writes what it wrote before once the shape is put
+            // back; TestPayloadCount holds every structure with a body to being counted by its
+            // WriteTo. The quotient filter sizes its own, and the buffer's growth is what
+            // refuses a payload of a writer that does not count yet.
             new Claim("`WriteTo` of one throws an `InvalidOperationException` naming the size it would be and the size one can be, with the structure unchanged", () =>
             {
+                var fields = BindingFlags.NonPublic | BindingFlags.Instance;
+                TestPayloadCount.AssertRefusedWhileClaiming(new CountSketch(0.5, 0.5),
+                    new[] { typeof(CountSketch).GetField("width", fields)!, typeof(CountSketch).GetField("depth", fields)! },
+                    new object[] { 100_000_000u, 5u }, 4_000_000_012);
+                TestPayloadCount.AssertRefusedWhileClaiming(new InvertibleBloomLookupTable(4, 4),
+                    new[] { typeof(InvertibleBloomLookupTable).GetField("cells", fields)! },
+                    new object[] { 300_000_000u }, 6_000_000_020);
+                TestPayloadCount.AssertRefusedWhileClaiming(new SetSketch(8),
+                    new[] { typeof(SetSketch).GetField("m", fields)! },
+                    new object[] { Array.MaxLength }, 4_294_967_206);
+
                 var ex = Assert.Throws<InvalidOperationException>(
                     () => QuotientFilter.CheckWritable((int)((MaxPayload - 16) / 8) + 1));
                 return ex.Message.Contains(MaxPayload.ToString("N0"), StringComparison.Ordinal)

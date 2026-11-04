@@ -8,6 +8,24 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestCountMinSketch
     {
+        /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: the length
+        /// is the shape's, so the coarsest and a wider, deeper one, and both placements,
+        /// which write their own byte.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            var version = PersistenceFormat.ColumnPlacementVersion;
+            yield return PayloadState.Of("coarsest, empty", new CountMinSketch(0.5, 0.5), version);
+
+            foreach (var placement in new[] { Placement.Narrow, Placement.Wide })
+            {
+                var sketch = new CountMinSketch(0.1, 0.01, null, placement);
+                for (var i = 0; i < 200; i++) sketch.Add(Encoding.ASCII.GetBytes($"w{i % 30}"));
+                yield return PayloadState.Of($"28 x 5, {placement}, filled", sketch, version);
+            }
+        }
+
         private static byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
         private static byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
         private static byte[] C_BYTES = Encoding.ASCII.GetBytes("c");

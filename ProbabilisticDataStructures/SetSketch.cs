@@ -49,7 +49,7 @@ namespace ProbabilisticDataStructures
     /// cardinality to be estimated at all.
     /// </para>
     /// </remarks>
-    public class SetSketch : IBinaryPersistable<SetSketch>
+    public class SetSketch : IBinaryPersistable<SetSketch>, IPayloadBody
     {
         /// <summary>
         /// The register values, each in the range nought to q + 1.
@@ -710,11 +710,10 @@ namespace ProbabilisticDataStructures
         /// should be.
         /// </remarks>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteDouble(this.b);
             payload.WriteDouble(this.a);
             payload.WriteUInt32((uint)this.m);
@@ -733,17 +732,16 @@ namespace ProbabilisticDataStructures
                 version = PersistenceFormat.SetSketchVariantVersion;
             }
 
-            foreach (var register in this.registers)
+            // As many as the header says, two bytes each.
+            if (payload.BeginBlock(2L * this.m))
             {
-                payload.WriteUInt16(register);
+                foreach (var register in this.registers)
+                {
+                    payload.WriteUInt16(register);
+                }
             }
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.SetSketch,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan,
-                version);
+            return new(StructureId.SetSketch, PersistenceFormat.Identify(this.Hash), version);
         }
 
         /// <summary>

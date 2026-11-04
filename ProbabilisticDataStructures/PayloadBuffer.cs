@@ -5,18 +5,68 @@ using System.IO;
 namespace ProbabilisticDataStructures
 {
     /// <summary>
-    /// Builds a payload as a growable little-endian byte buffer.
+    /// Builds a payload as a growable little-endian byte buffer, or counts one.
     /// </summary>
     /// <remarks>
     /// Little-endian throughout, and explicitly so, because the layout is a file format
     /// rather than a memory dump: a payload written on one machine has to read the same
     /// on another. BinaryPrimitives is used in preference to BitConverter for that
     /// reason, since BitConverter follows whatever the running architecture does.
+    /// <para>
+    /// A writer from <see cref="Counter"/> stores nothing. It adds up, in 64 bits, how long
+    /// the same writes would make the payload, so a structure's body run through it is
+    /// sized by its own layout, with nothing built, before a writer that stores it is
+    /// allocated (<see cref="IPayloadBody"/>). A run whose length is known before its bytes
+    /// are, such as a table held in some other form than bytes, is begun with
+    /// <see cref="BeginRun"/>: counted whole there, it costs the count nothing however long
+    /// it is.
+    /// </para>
     /// </remarks>
     internal sealed class PayloadWriter
     {
-        private byte[] buffer = new byte[256];
+        private byte[] buffer;
         private int length;
+
+        // A counter's: what the writes so far would have written. Its buffer is the
+        // scratch a field is written into to be counted, and nothing reads it.
+        private readonly bool counting;
+        private long counted;
+
+        internal PayloadWriter()
+            : this(256)
+        {
+        }
+
+        /// <summary>
+        /// A writer whose buffer starts at <paramref name="capacity"/> bytes: a payload's
+        /// counted length, so that it is allocated once, at the size it ends at.
+        /// </summary>
+        internal PayloadWriter(int capacity)
+        {
+            this.buffer = new byte[capacity];
+        }
+
+        private PayloadWriter(bool counting)
+        {
+            this.buffer = new byte[sizeof(ulong)];
+            this.counting = counting;
+        }
+
+        /// <summary>
+        /// A writer that stores nothing and counts what it is given.
+        /// </summary>
+        internal static PayloadWriter Counter() => new(counting: true);
+
+        /// <summary>
+        /// Whether this writer counts rather than stores.
+        /// </summary>
+        internal bool IsCounting => this.counting;
+
+        /// <summary>
+        /// How long the payload is: the bytes written, or, for a counter, the bytes the
+        /// same writes would have written.
+        /// </summary>
+        internal long Length => this.counting ? this.counted : this.length;
 
         internal ReadOnlySpan<byte> WrittenSpan => this.buffer.AsSpan(0, this.length);
 
@@ -40,6 +90,11 @@ namespace ProbabilisticDataStructures
             BinaryPrimitives.WriteUInt64LittleEndian(Reserve(8), value);
         }
 
+        internal void WriteInt64(long value)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(Reserve(8), value);
+        }
+
         internal void WriteDouble(double value)
         {
             BinaryPrimitives.WriteDoubleLittleEndian(Reserve(8), value);
@@ -50,8 +105,59 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal void WriteBytes(ReadOnlySpan<byte> value)
         {
-            WriteUInt32((uint)value.Length);
-            value.CopyTo(Reserve(value.Length));
+            if (BeginRun(value.Length))
+            {
+                value.CopyTo(Reserve(value.Length));
+            }
+        }
+
+        /// <summary>
+        /// Writes bytes as they are, with no length prefix: the bytes of a run begun with
+        /// <see cref="BeginRun"/>, or of a block begun with <see cref="BeginBlock"/>.
+        /// </summary>
+        internal void WriteRaw(ReadOnlySpan<byte> value)
+        {
+            if (BeginBlock(value.Length))
+            {
+                value.CopyTo(Reserve(value.Length));
+            }
+        }
+
+        /// <summary>
+        /// Writes the length prefix of a run whose bytes the caller then writes itself,
+        /// and says whether to write them.
+        /// </summary>
+        /// <param name="length">How many bytes the run holds, known before any is written.</param>
+        /// <returns>
+        /// False from a counter, which has counted the run whole here, its prefix and its
+        /// bytes, so that the caller skips them and the count builds nothing however long
+        /// the run is. True otherwise, and the caller then writes exactly
+        /// <paramref name="length"/> bytes.
+        /// </returns>
+        /// <remarks>
+        /// The length is taken in 64 bits so that a counter can count a run longer than
+        /// a payload holds, which is how such a payload comes to be refused naming its
+        /// whole size.
+        /// </remarks>
+        internal bool BeginRun(long length)
+        {
+            WriteUInt32((uint)length);
+            return BeginBlock(length);
+        }
+
+        /// <summary>
+        /// As <see cref="BeginRun"/>, for bytes with no length prefix before them: fields
+        /// whose total length is known before they are written.
+        /// </summary>
+        internal bool BeginBlock(long length)
+        {
+            if (this.counting)
+            {
+                this.counted += length;
+                return false;
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -91,6 +197,13 @@ namespace ProbabilisticDataStructures
 
         private Span<byte> Reserve(int count)
         {
+            if (this.counting)
+            {
+                // Only a field reaches here from a counter, so the scratch holds it.
+                this.counted += count;
+                return this.buffer.AsSpan(0, count);
+            }
+
             var capacity = GrownCapacity(this.buffer.Length, this.length, count);
             if (capacity != this.buffer.Length)
             {

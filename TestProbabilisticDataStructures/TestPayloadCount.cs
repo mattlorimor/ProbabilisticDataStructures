@@ -1,4 +1,6 @@
 using System;
+using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -132,10 +134,233 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The structures whose <c>WriteTo</c> does not yet count its payload first. Each is
+        /// checked: one that has a body has been converted, and its line here is stale.
+        /// </summary>
+        /// <remarks>
+        /// One line each with a blank line between, because the branches converting
+        /// structures delete their lines in parallel and git conflicts on adjacent ones.
+        /// Converting a structure is deleting its line here, not the blank, and giving it
+        /// states (<see cref="PayloadState"/>) in its own test class.
+        /// </remarks>
+        private static readonly (StructureId Id, string Why)[] NotYetCounted =
+        {
+            (StructureId.BloomFilter, NoBody),
+
+            (StructureId.CountingBloomFilter, NoBody),
+
+            (StructureId.DeletableBloomFilter, NoBody),
+
+            (StructureId.PartitionedBloomFilter, NoBody),
+
+            (StructureId.ScalableBloomFilter, NoBody),
+
+            (StructureId.StableBloomFilter, NoBody),
+
+            (StructureId.InverseBloomFilter, NoBody),
+
+            (StructureId.CuckooBloomFilter, NoBody),
+
+            (StructureId.HyperLogLog, NoBody),
+
+            (StructureId.MinHashSignature, NoBody),
+
+            (StructureId.BinaryFuseFilter, NoBody),
+
+            (StructureId.DDSketch, NoBody),
+
+            (StructureId.HyperLogLogPlus, NoBody),
+
+            (StructureId.QuotientFilter, NoBody),
+
+            (StructureId.ThetaSketch, NoBody),
+
+            (StructureId.SimHashSignature, NoBody),
+
+            (StructureId.BloomierFilter, NoBody),
+
+            (StructureId.HeavyKeeper, NoBody),
+
+            (StructureId.VarOpt, NoBody),
+
+            (StructureId.UltraLogLog, NoBody),
+
+            (StructureId.Grafite, NoBody),
+
+            (StructureId.InfiniFilter, NoBody),
+
+            (StructureId.MementoFilter, NoBody),
+
+            (StructureId.SublimeCountMinSketch, NoBody),
+
+            (StructureId.TupleSketch, NoBody),
+
+            (StructureId.PrivateCountMinSketch, NoBody),
+
+            (StructureId.DpswSketch, NoBody),
+        };
+
+        private const string NoBody =
+            "not yet an IPayloadBody, so its WriteTo writes without counting first (#216)";
+
+        /// <summary>
+        /// Every structure with a body is counted by its own <c>WriteTo</c>, once, before it
+        /// writes, at exactly the length of the payload it then writes, in every state its
+        /// test class gives, at the version that state says it writes.
+        /// </summary>
+        /// <remarks>
+        /// The count is watched as <c>WriteTo</c> makes it, through
+        /// <see cref="PersistenceFormat.Counted"/>, rather than made again here: a body
+        /// counted by a test and never by the write would vouch for a check that does not
+        /// run. The real length is what <see cref="CapacityRows"/> takes a payload to be,
+        /// the bytes less the envelope's eighteen.
+        /// <para>
+        /// The roster is <see cref="StructureId"/>. A structure is covered by giving it
+        /// states, in a static method returning <see cref="PayloadState"/>s anywhere in this
+        /// assembly, which only a structure with a body can, and exempt until then. An
+        /// exemption is checked by reflection: a structure exempt for having no body, that
+        /// has one, fails as loudly as one that is neither covered nor exempt.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestEveryStructureWithABodyIsCountedByItsWriteToAtTheLengthItWrites()
+        {
+            var lengths = new Dictionary<StructureId, HashSet<long>>();
+            var states = 0;
+
+            foreach (var state in AllStates())
+            {
+                var counts = new List<(IPayloadBody Body, long Length)>();
+                byte[] bytes;
+                PersistenceFormat.Counted = (body, length) => counts.Add((body, length));
+                try
+                {
+                    bytes = state.Write();
+                }
+                finally
+                {
+                    PersistenceFormat.Counted = null;
+                }
+
+                var id = (StructureId)BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(6));
+                var name = $"{id}, {state.Name}";
+                Assert.AreEqual(id.ToString(), state.Structure.GetType().Name,
+                    $"{name}: the envelope names another structure");
+
+                var own = counts.Where(c => ReferenceEquals(c.Body, state.Structure)).ToArray();
+                Assert.HasCount(1, own,
+                    $"{name}: its WriteTo did not count its own payload, once, before writing it");
+                Assert.AreEqual(bytes.Length - (long)PersistenceFormat.EnvelopeLength, own[0].Length,
+                    $"{name}: counted {own[0].Length:N0} bytes and wrote {bytes.Length - 18:N0}");
+                Assert.AreEqual(state.Version, BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(4)),
+                    $"{name}: written at another version than the state says");
+
+                if (!lengths.TryGetValue(id, out var seen))
+                {
+                    lengths[id] = seen = new HashSet<long>();
+                }
+
+                seen.Add(own[0].Length);
+                states++;
+            }
+
+            Assert.IsGreaterThan(0, states, "no states were found, so nothing was counted");
+
+            // A structure whose states all write one length could be counted by a constant.
+            foreach (var (id, seen) in lengths)
+            {
+                Assert.IsGreaterThan(1, seen.Count,
+                    $"every state of {id} writes {seen.First():N0} bytes, so nothing the count " +
+                    "depends on was varied");
+            }
+
+            foreach (var (id, why) in NotYetCounted)
+            {
+                Assert.IsFalse(typeof(IPayloadBody).IsAssignableFrom(TypeOf(id)),
+                    $"{id} is exempt as {why}, and it has a body: delete its exemption and " +
+                    "give it states");
+            }
+
+            StructureRoster.AssertCoversEveryStructure("payload count", lengths.Keys, NotYetCounted);
+        }
+
+        /// <summary>
+        /// A body that counts one payload and writes another is refused, with nothing
+        /// written, whether it is the length or the version that differs: the envelope would
+        /// otherwise frame what was written under a size and version nobody checked.
+        /// </summary>
+        [TestMethod]
+        [DataRow(1, PersistenceFormat.DefaultVersion, "wrote 5 bytes")]
+        [DataRow(-1, PersistenceFormat.DefaultVersion, "wrote 3 bytes")]
+        [DataRow(0, PersistenceFormat.SetSketchVariantVersion, "version 4")]
+        public void TestABodyThatWritesOtherThanItCountedIsRefused(
+            int moreWritten, int versionWritten, string named)
+        {
+            var body = new Inconsistent(moreWritten, (ushort)versionWritten);
+            using var stream = new MemoryStream();
+
+            var ex = Assert.ThrowsExactly<InvalidOperationException>(
+                () => PersistenceFormat.Write(stream, body));
+
+            StringAssert.Contains(ex.Message, "counted a payload of 4 bytes, version 1",
+                "the refusal should say what was counted");
+            StringAssert.Contains(ex.Message, named, "the refusal should say what was written");
+            Assert.AreEqual(0L, stream.Length, "an inconsistent body was written");
+
+            // And the same body agreeing with itself writes.
+            PersistenceFormat.Write(stream, new Inconsistent(0, PersistenceFormat.DefaultVersion));
+            Assert.AreEqual(4L + PersistenceFormat.EnvelopeLength, stream.Length);
+        }
+
+        /// <summary>
+        /// Four bytes when counted, and four more or fewer, at another version or not, when
+        /// written.
+        /// </summary>
+        private sealed class Inconsistent(int moreWritten, ushort versionWritten) : IPayloadBody
+        {
+            public EnvelopeHeader WritePayload(PayloadWriter payload)
+            {
+                if (payload.IsCounting)
+                {
+                    payload.WriteUInt32(0);
+                    return new(StructureId.CountSketch, HashId.XxHash3_64);
+                }
+
+                for (var i = 0; i < 4 + moreWritten; i++) payload.WriteByte(0);
+                return new(StructureId.CountSketch, HashId.XxHash3_64, versionWritten);
+            }
+        }
+
+        /// <summary>
+        /// Every state any test class gives: the static methods of this assembly named
+        /// <c>PayloadStates</c> and returning <see cref="PayloadState"/>s, so that a
+        /// structure's states live with its tests. One misnamed is not found, and its
+        /// structure fails the roster as neither covered nor exempt.
+        /// </summary>
+        private static IEnumerable<PayloadState> AllStates()
+        {
+            var providers = typeof(TestPayloadCount).Assembly.GetTypes()
+                .SelectMany(t => t.GetMethods(BindingFlags.Static | BindingFlags.Public
+                    | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+                .Where(m => m.Name == "PayloadStates"
+                    && m.ReturnType == typeof(IEnumerable<PayloadState>)
+                    && m.GetParameters().Length == 0)
+                .OrderBy(m => m.DeclaringType!.FullName, StringComparer.Ordinal)
+                .ToArray();
+
+            Assert.IsNotEmpty(providers, "no class gives any states");
+
+            return providers.SelectMany(m => (IEnumerable<PayloadState>)m.Invoke(null, null)!);
+        }
+
+        private static Type TypeOf(StructureId id) =>
+            typeof(BloomFilter).Assembly.GetType($"ProbabilisticDataStructures.{id}", throwOnError: true)!;
+
+        /// <summary>
         /// Has the structure claim a shape, asserts its <c>WriteTo</c> refuses it, and puts
         /// the shape back.
         /// </summary>
-        private static void AssertRefusedWhileClaiming<T>(
+        internal static void AssertRefusedWhileClaiming<T>(
             T structure, FieldInfo[] shape, object[] claimed, long payload)
             where T : IBinaryPersistable<T>
         {
@@ -173,5 +398,23 @@ namespace TestProbabilisticDataStructures
         }
 
         private static byte[] Key(int i) => System.Text.Encoding.ASCII.GetBytes($"item-{i}");
+    }
+
+    /// <summary>
+    /// A structure with a body, in a state whose payload
+    /// <see cref="TestPayloadCount.TestEveryStructureWithABodyIsCountedByItsWriteToAtTheLengthItWrites"/>
+    /// holds the count to, and the format version that state is written at.
+    /// </summary>
+    /// <remarks>
+    /// A structure's states are given by a static method in its own test class returning
+    /// these, found by reflection. Give the states the layout depends on: the shapes, the
+    /// contents a length depends on, and each version the writer chooses between.
+    /// </remarks>
+    internal sealed record PayloadState(string Name, IPayloadBody Structure, ushort Version, Func<byte[]> Write)
+    {
+        internal static PayloadState Of<T>(
+            string name, T structure, ushort version = PersistenceFormat.DefaultVersion)
+            where T : IBinaryPersistable<T>, IPayloadBody =>
+            new(name, structure, version, () => structure.ToByteArray());
     }
 }

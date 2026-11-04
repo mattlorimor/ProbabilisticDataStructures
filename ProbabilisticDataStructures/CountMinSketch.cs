@@ -38,7 +38,7 @@ namespace ProbabilisticDataStructures
     /// add its items to a new sketch to have them counted evenly. The two schemes do not
     /// merge.
     /// </remarks>
-    public class CountMinSketch : IBinaryPersistable<CountMinSketch>
+    public class CountMinSketch : IBinaryPersistable<CountMinSketch>, IPayloadBody
     {
         /// <summary>
         /// Count matrix
@@ -383,11 +383,10 @@ namespace ProbabilisticDataStructures
         /// Writes this sketch to a stream, in the format documented in FORMAT.md.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteDouble(this.epsilon);
             payload.WriteDouble(this.delta);
             payload.WriteUInt32(this.Width);
@@ -397,19 +396,18 @@ namespace ProbabilisticDataStructures
 
             // Row by row, each cell little-endian. The matrix is the bulk of a sketch,
             // so this is where a payload's size comes from: depth * width * 8 bytes.
-            for (uint i = 0; i < this.Depth; i++)
+            if (payload.BeginBlock((long)this.Depth * this.Width * sizeof(ulong)))
             {
-                for (uint j = 0; j < this.Width; j++)
+                for (uint i = 0; i < this.Depth; i++)
                 {
-                    payload.WriteUInt64(this.Matrix[i][j]);
+                    for (uint j = 0; j < this.Width; j++)
+                    {
+                        payload.WriteUInt64(this.Matrix[i][j]);
+                    }
                 }
             }
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.CountMinSketch,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan,
+            return new(StructureId.CountMinSketch, PersistenceFormat.Identify(this.Hash),
                 PersistenceFormat.ColumnPlacementVersion);
         }
 

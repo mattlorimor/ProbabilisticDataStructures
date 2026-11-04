@@ -404,6 +404,55 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Told of each payload <see cref="Write(Stream, IPayloadBody)"/> counts, with the
+        /// length counted, on the thread counting it. For the suite, which holds every
+        /// structure with a body to being counted by its own <c>WriteTo</c> at the length it
+        /// then writes; null otherwise.
+        /// </summary>
+        [ThreadStatic]
+        internal static Action<IPayloadBody, long>? Counted;
+
+        /// <summary>
+        /// Writes a structure whose payload is a body: counts the body, refuses a payload
+        /// longer than an envelope holds before anything is allocated for it, then writes
+        /// the body into a buffer of exactly that length and wraps it in its envelope.
+        /// </summary>
+        /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
+        /// <exception cref="InvalidOperationException">
+        /// The payload would be longer than <see cref="MaxPayloadLength"/>, or the body
+        /// wrote a different payload from the one it counted. Nothing is written either way.
+        /// </exception>
+        /// <remarks>
+        /// The count is the exact length of the payload, from the layout the body writes,
+        /// so it is also the length an envelope can declare before the payload follows it.
+        /// The two passes are held to agreeing because a body that counts one payload and
+        /// writes another would otherwise be framed as whatever it wrote, under a size it
+        /// was never checked at.
+        /// </remarks>
+        internal static void Write(Stream stream, IPayloadBody structure)
+        {
+            ArgumentNullException.ThrowIfNull(stream);
+
+            var counter = PayloadWriter.Counter();
+            var header = structure.WritePayload(counter);
+            var length = counter.Length;
+            Counted?.Invoke(structure, length);
+            CheckPayloadLength(length);
+
+            var payload = new PayloadWriter((int)length);
+            var written = structure.WritePayload(payload);
+            if (payload.Length != length || written != header)
+            {
+                throw new InvalidOperationException(
+                    $"The {header.Structure} counted a payload of {length:N0} bytes, version " +
+                    $"{header.Version}, and then wrote {payload.Length:N0} bytes, version " +
+                    $"{written.Version}. Nothing was written: the two have to be one layout.");
+            }
+
+            Write(stream, header.Structure, header.Hash, payload.WrittenSpan, header.Version);
+        }
+
+        /// <summary>
         /// Wraps a payload in the envelope and writes the whole of it to the stream.
         /// </summary>
         internal static void Write(
@@ -872,10 +921,24 @@ namespace ProbabilisticDataStructures
         /// cannot silently disagree with itself about hashing; it can be pulled out and
         /// read on its own; and the outer structure can change what it holds without
         /// the inner layout being part of that change.
+        /// <para>
+        /// A counter counts the inner structure through its own body, as its own
+        /// <c>WriteTo</c> would, with nothing built: the run's length prefix, the
+        /// envelope, and the payload inside it. So a structure that holds another is
+        /// counted only once the one it holds is an <see cref="IPayloadBody"/>, and the
+        /// cast says so if it is not.
+        /// </para>
         /// </remarks>
         internal static void WriteNested<T>(PayloadWriter payload, T structure)
             where T : IBinaryPersistable<T>
         {
+            if (payload.IsCounting)
+            {
+                payload.BeginBlock(sizeof(uint) + EnvelopeLength);
+                ((IPayloadBody)structure).WritePayload(payload);
+                return;
+            }
+
             using var buffer = new MemoryStream();
             structure.WriteTo(buffer);
             payload.WriteBytes(buffer.ToArray());

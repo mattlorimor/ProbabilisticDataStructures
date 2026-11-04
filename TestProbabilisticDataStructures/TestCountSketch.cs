@@ -12,6 +12,23 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestCountSketch
     {
+        /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: the length
+        /// is the shape's, so the coarsest and a deeper one, and cells of either sign.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of("4 x 1, empty", new CountSketch(0.5, 0.5));
+
+            var coarse = new CountSketch(0.5, 0.5);
+            for (var i = 0; i < 40; i++) coarse.Add(Key($"w{i}"), i % 5 - 2);
+            yield return PayloadState.Of("4 x 1, counts of either sign", coarse);
+
+            var deep = new CountSketch(0.1, 0.01);
+            for (var i = 0; i < 200; i++) deep.Add(Key($"w{i}"), i % 7 - 3);
+            yield return PayloadState.Of("100 x 5, counts of either sign", deep);
+        }
+
         private static byte[] Key(string s) => Encoding.ASCII.GetBytes(s);
 
         [TestMethod]
