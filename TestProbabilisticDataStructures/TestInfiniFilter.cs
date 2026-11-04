@@ -28,6 +28,29 @@ namespace TestProbabilisticDataStructures
         private static byte[] Absent(int i) => Encoding.ASCII.GetBytes($"absent-{i}");
 
         /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: each
+        /// segment's widths size its table, so two fingerprints, each empty and expanded: in
+        /// place at thirteen bits, and at two into the chain of segments that fingerprints
+        /// spent by expanding leave.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            foreach (var (fingerprintBits, keys, chained) in new[] { (2, 2_000, true), (13, 400, false) })
+            {
+                var segments = chained ? "several segments" : "one segment";
+                yield return PayloadState.Of($"{fingerprintBits} bits, empty",
+                    new InfiniFilter(initialCapacity: 32, fingerprintBits: fingerprintBits));
+
+                var expanded = new InfiniFilter(initialCapacity: 32, fingerprintBits: fingerprintBits);
+                for (var i = 0; i < keys; i++) expanded.Add(Key(i));
+                Assert.IsGreaterThan(0u, expanded.Expansions, "Premise: the filter expanded.");
+                Assert.AreEqual(chained, expanded.Segments.Count > 1,
+                    $"Premise: the filter expanded into {segments}.");
+                yield return PayloadState.Of($"{fingerprintBits} bits, expanded into {segments}", expanded);
+            }
+        }
+
+        /// <summary>
         /// A fingerprint too short leaves nothing to be accurate with and sends
         /// entries down the chain almost at once; one too long cannot fit beside the
         /// address in a 64-bit hash once the filter has grown.

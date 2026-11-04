@@ -38,6 +38,19 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: the codes,
+        /// the split and the last code size both arrays, so no keys, where there are no
+        /// arrays, a few, and many over a wider universe.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of("no keys", Grafite.Build(Array.Empty<ulong>(), 0.01, 16));
+            yield return PayloadState.Of("three keys", Grafite.Build(new ulong[] { 1, 2, 3 }, 0.01, 16));
+            yield return PayloadState.Of("2,000 keys",
+                Grafite.Build(RandomKeys(2_000, 1UL << 40, 11), 0.001, 64));
+        }
+
+        /// <summary>
         /// A rate of zero or one describes a filter that is either impossible or
         /// pointless.
         /// </summary>

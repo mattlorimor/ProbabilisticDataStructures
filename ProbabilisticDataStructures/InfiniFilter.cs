@@ -42,7 +42,7 @@ namespace ProbabilisticDataStructures
     /// chain grows logarithmically.
     /// </para>
     /// </remarks>
-    public class InfiniFilter : IBinaryPersistable<InfiniFilter>
+    public class InfiniFilter : IBinaryPersistable<InfiniFilter>, IPayloadBody
     {
         /// <summary>
         /// The fraction of slots that may be occupied before the filter doubles.
@@ -460,11 +460,10 @@ namespace ProbabilisticDataStructures
         /// Writes the filter to a stream in the library's persistence format.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt64(this.Added);
             payload.WriteUInt32(this.Expansions);
             payload.WriteUInt32((uint)this.Segments.Count);
@@ -474,18 +473,20 @@ namespace ProbabilisticDataStructures
                 payload.WriteUInt32((uint)segment.QuotientBits);
                 payload.WriteUInt32((uint)segment.FingerprintBits);
                 payload.WriteUInt32(segment.Count);
-                payload.WriteUInt32((uint)segment.Data.Length);
-                foreach (var word in segment.Data)
+
+                // The table's words, counted from the segment's two widths.
+                var words = segment.TableWords;
+                payload.WriteUInt32((uint)words);
+                if (payload.BeginBlock(words * sizeof(ulong)))
                 {
-                    payload.WriteUInt64(word);
+                    foreach (var word in segment.Data)
+                    {
+                        payload.WriteUInt64(word);
+                    }
                 }
             }
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.InfiniFilter,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+            return new(StructureId.InfiniFilter, PersistenceFormat.Identify(this.Hash));
         }
 
         /// <summary>

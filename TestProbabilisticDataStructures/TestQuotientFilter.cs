@@ -14,6 +14,22 @@ namespace TestProbabilisticDataStructures
     {
         private static byte[] Key(string s) => Encoding.ASCII.GetBytes(s);
 
+        /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: the two
+        /// widths size the table, so two splits, each empty and filled.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            foreach (var (n, rate) in new[] { (100u, 0.01), (5_000u, 0.0001) })
+            {
+                yield return PayloadState.Of($"{n} at {rate}, empty", new QuotientFilter(n, rate));
+
+                var filled = new QuotientFilter(n, rate);
+                for (var i = 0; i < n / 2; i++) filled.Add(Key($"k{i}"));
+                yield return PayloadState.Of($"{n} at {rate}, half full", filled);
+            }
+        }
+
         [TestMethod]
         public void TestANewFilterHoldsNothing()
         {

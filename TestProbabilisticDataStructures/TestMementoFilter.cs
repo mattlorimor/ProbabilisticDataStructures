@@ -33,6 +33,31 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: each
+        /// segment's widths and the memento's size its table, so two ranges and fingerprints,
+        /// each empty and expanded: in place at eight bits, and at two into the chain of
+        /// segments that fingerprints spent by expanding leave.
+        /// </summary>
+        internal static IEnumerable<PayloadState> PayloadStates()
+        {
+            foreach (var (range, fingerprintBits, keys, chained) in
+                new[] { (256UL, 2, 2_000, true), (1UL << 20, 8, 400, false) })
+            {
+                var segments = chained ? "several segments" : "one segment";
+                yield return PayloadState.Of($"range {range}, {fingerprintBits} bits, empty",
+                    new MementoFilter(range, fingerprintBits, initialCapacity: 32));
+
+                var expanded = new MementoFilter(range, fingerprintBits, initialCapacity: 32);
+                foreach (var key in RandomKeys(keys, 1L << 40, 7)) expanded.Add(key);
+                Assert.IsGreaterThan(0u, expanded.Expansions, "Premise: the filter expanded.");
+                Assert.AreEqual(chained, expanded.Segments.Count > 1,
+                    $"Premise: the filter expanded into {segments}.");
+                yield return PayloadState.Of(
+                    $"range {range}, {fingerprintBits} bits, expanded into {segments}", expanded);
+            }
+        }
+
+        /// <summary>
         /// A range of one is a point query, which an ordinary filter answers in less
         /// space; beyond 2^32 the mementos cost more than the keys they describe.
         /// </summary>

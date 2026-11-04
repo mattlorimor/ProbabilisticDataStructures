@@ -18,7 +18,7 @@ namespace ProbabilisticDataStructures
     /// along, so the whole fingerprint is recoverable from the table.
     /// </para>
     /// </remarks>
-    public class QuotientFilter : IBinaryPersistable<QuotientFilter>
+    public class QuotientFilter : IBinaryPersistable<QuotientFilter>, IPayloadBody
     {
         /// <summary>The load factor the table is sized for.</summary>
         /// <remarks>
@@ -761,30 +761,24 @@ namespace ProbabilisticDataStructures
         /// widths, so only those are written. A payload cannot then disagree with itself
         /// about the shape of its own table.
         /// </remarks>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.quotientBits);
             payload.WriteUInt32(this.remainderBits);
             payload.WriteUInt32(this.count);
 
-            CheckWritable(this.data.Length);
-            var bytes = new byte[BytesOf(this.data.Length)];
-            for (var i = 0; i < this.data.Length; i++)
+            // One run of the table's words, sized by the two widths.
+            if (payload.BeginRun(TableWords(this.quotientBits, this.remainderBits) * sizeof(ulong)))
             {
-                BinaryPrimitives.WriteUInt64LittleEndian(
-                    bytes.AsSpan(i * sizeof(ulong)), this.data[i]);
+                foreach (var word in this.data)
+                {
+                    payload.WriteUInt64(word);
+                }
             }
 
-            payload.WriteBytes(bytes);
-
-            PersistenceFormat.Write(
-                stream,
-                StructureId.QuotientFilter,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan);
+            return new(StructureId.QuotientFilter, PersistenceFormat.Identify(this.Hash));
         }
 
         /// <summary>
@@ -958,24 +952,6 @@ namespace ProbabilisticDataStructures
         /// wrapped number.
         /// </summary>
         internal static long BytesOf(int words) => (long)words * sizeof(ulong);
-
-        /// <summary>
-        /// The bytes of payload besides the table's: three counts and the length of the
-        /// run of bytes the table is written as.
-        /// </summary>
-        private const int PayloadOverhead = 4 * sizeof(uint);
-
-        /// <summary>
-        /// Refuses a table whose payload would not fit an envelope, with the exception
-        /// the payload writer gives for any structure too large to write.
-        /// </summary>
-        /// <exception cref="InvalidOperationException">
-        /// The payload would be longer than <see cref="PersistenceFormat.MaxPayloadLength"/>.
-        /// </exception>
-        internal static void CheckWritable(int words)
-        {
-            PersistenceFormat.CheckPayloadLength(PayloadOverhead + BytesOf(words));
-        }
 
         /// <summary>
         /// The 64-bit words a table of this split occupies: one slot of remainder and

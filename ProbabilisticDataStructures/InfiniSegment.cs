@@ -61,6 +61,17 @@ namespace ProbabilisticDataStructures
         private ulong slotMask;
         private int fieldBits;
 
+        /// <summary>
+        /// The words a table of 2^<paramref name="quotientBits"/> slots is held in: the
+        /// slots end to end, each the fingerprint's field and the metadata, and two words
+        /// more for the reads and writes that straddle the end.
+        /// </summary>
+        internal static long Words(int quotientBits, int fingerprintBits) =>
+            (((long)(1u << quotientBits) * (fingerprintBits + 1 + MetadataBits)) >> 6) + 2;
+
+        /// <summary>The words of this segment's table, from its two widths.</summary>
+        internal long TableWords => Words(this.QuotientBits, this.FingerprintBits);
+
         internal InfiniSegment(int quotientBits, int fingerprintBits)
         {
             Shape(quotientBits, fingerprintBits);
@@ -79,7 +90,7 @@ namespace ProbabilisticDataStructures
             this.fieldBits = fingerprintBits + 1;
             this.bitsPerSlot = this.fieldBits + MetadataBits;
             this.slotMask = (1UL << this.bitsPerSlot) - 1;
-            this.Data = new ulong[(((long)this.Slots * this.bitsPerSlot) >> 6) + 2];
+            this.Data = new ulong[Words(quotientBits, fingerprintBits)];
         }
 
         /// <summary>
