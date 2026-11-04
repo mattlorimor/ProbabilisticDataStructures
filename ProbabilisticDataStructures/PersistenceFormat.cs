@@ -407,10 +407,11 @@ namespace ProbabilisticDataStructures
         internal const int EnvelopeLength = HeaderLength + ChecksumLength;
 
         /// <summary>
-        /// The longest payload an envelope can hold. A payload is written as one array
-        /// together with the envelope around it, so it is the largest array less the
-        /// envelope; the length field is a <c>u32</c>, which would allow more, and no
-        /// array does.
+        /// The longest payload the ordinary envelope holds, and the longest one array holds
+        /// with its envelope. Such a payload is built in one array and written together with
+        /// the envelope around it, so it is the largest array less the envelope; the length
+        /// field is a <c>u32</c>, which would allow more, and no array does. A longer payload
+        /// is written in the large form, streamed rather than held, and only to a stream.
         /// </summary>
         internal static int MaxPayloadLength => Array.MaxLength - EnvelopeLength;
 
@@ -472,8 +473,10 @@ namespace ProbabilisticDataStructures
         internal static bool IsLargeForm(long length) => length > LargeFormThreshold;
 
         /// <summary>
-        /// Refuses a payload longer than an envelope holds, naming the size it would be and
-        /// the size one can be, before anything is allocated for it.
+        /// Refuses a payload longer than one array holds with its envelope, naming the size
+        /// it would be and the size one can be, before anything is allocated for it: for
+        /// <c>ToByteArray</c>, whose result is one array, and for a buffer that holds a
+        /// payload whole.
         /// </summary>
         /// <param name="length">The payload's length, in bytes, worked out in 64 bits.</param>
         /// <exception cref="InvalidOperationException">
@@ -484,12 +487,13 @@ namespace ProbabilisticDataStructures
             if (length > MaxPayloadLength)
             {
                 throw new InvalidOperationException(
-                    $"The payload would reach {length:N0} bytes, and the most one can be is " +
-                    $"{MaxPayloadLength:N0}: the largest array a .NET runtime holds, " +
+                    $"The payload would reach {length:N0} bytes, and the most one array holds " +
+                    $"is {MaxPayloadLength:N0}: the largest array a .NET runtime holds, " +
                     $"{Array.MaxLength:N0} bytes, less the {EnvelopeLength} bytes the " +
                     "envelope adds around it in the same array. The structure is intact and " +
-                    "can still be used, but it is too large to write; the format has no way " +
-                    "to store it. Keep less in it, or split what it holds across several.");
+                    "can still be used. A payload this long is written to a stream, in the " +
+                    "large form of the envelope: write it with WriteTo(Stream) rather than " +
+                    "as a byte array.");
             }
         }
 
@@ -503,14 +507,16 @@ namespace ProbabilisticDataStructures
         internal static Action<IPayloadBody, long>? Counted;
 
         /// <summary>
-        /// Writes a structure whose payload is a body: counts the body, refuses a payload
-        /// longer than an envelope holds before anything is allocated for it, then writes
-        /// the body into a buffer of exactly that length and wraps it in its envelope.
+        /// Writes a structure whose payload is a body: counts the body, then writes the
+        /// payload in the envelope its length calls for. A payload that fits the ordinary
+        /// envelope is built in memory, at its counted length, and written with its envelope
+        /// in one call; a longer one is streamed, in the large form.
         /// </summary>
         /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
         /// <exception cref="InvalidOperationException">
-        /// The payload would be longer than <see cref="MaxPayloadLength"/>, or the body
-        /// wrote a different payload from the one it counted. Nothing is written either way.
+        /// The payload holds a run longer than <see cref="PayloadWriter.LongestRun"/>, or would
+        /// be longer than a stream holds, which the count refuses with nothing written; or the
+        /// body wrote a different payload from the one it counted.
         /// </exception>
         /// <remarks>
         /// The count is the exact length of the payload, from the layout the body writes,
@@ -521,21 +527,75 @@ namespace ProbabilisticDataStructures
         /// <para>
         /// The count also chooses the envelope: the large form for a payload past
         /// <see cref="LargeFormThreshold"/>, and the ordinary one, as it always was, for
-        /// any other. Past <see cref="MaxPayloadLength"/> the payload is still refused, as
-        /// it cannot be built in one buffer; writing one that long needs the payload
-        /// streamed rather than buffered (#225), so here the large form is reached only
-        /// with the threshold lowered.
+        /// any other. An ordinary payload is built whole before anything is written, so a
+        /// write refused for any reason, the two passes disagreeing included, writes
+        /// nothing. A payload in the large form can be longer than any array, so it is
+        /// written as the body produces it (#225): the header first, declaring the counted
+        /// length, then the payload a buffer at a time, with the checksum the header began
+        /// carried on over each piece, then that checksum. Where the two passes disagree is
+        /// found as the body runs, then: a write that would take the payload past the
+        /// declared length is refused there and not made, and a payload that ends short of
+        /// it, or at another version, is refused once the body returns. Either way the
+        /// header and the pieces already written are left in the stream, with no checksum
+        /// after them, so a reader refuses what is there, by its length or by its checksum;
+        /// as it does what a stream that fails part-way leaves.
         /// </para>
         /// </remarks>
         internal static void Write(Stream stream, IPayloadBody structure)
         {
             ArgumentNullException.ThrowIfNull(stream);
 
+            var (header, length) = Count(structure);
+            Write(stream, structure, header, length);
+        }
+
+        /// <summary>
+        /// Writes a structure whose payload is a body into one array: its envelope and
+        /// payload, as <see cref="Write(Stream, IPayloadBody)"/> writes them to a stream.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">
+        /// The payload would be longer than one array holds with its envelope, which
+        /// <see cref="CheckPayloadLength"/> refuses from the count, before anything is built;
+        /// or <see cref="Write(Stream, IPayloadBody)"/> refuses it.
+        /// </exception>
+        /// <remarks>
+        /// Past <see cref="MaxPayloadLength"/> a payload is in the large form, and the
+        /// envelope around it is longer than any array, so it is refused here, naming its
+        /// size and the stream it can be written to (#229). The count is made once, and
+        /// the write is given it.
+        /// </remarks>
+        internal static byte[] ToByteArray(IPayloadBody structure)
+        {
+            var (header, length) = Count(structure);
+            CheckPayloadLength(length);
+
+            using var stream = new MemoryStream();
+            Write(stream, structure, header, length);
+            return stream.ToArray();
+        }
+
+        /// <summary>
+        /// Counts a body, and tells <see cref="Counted"/> what it counted.
+        /// </summary>
+        private static (EnvelopeHeader Header, long Length) Count(IPayloadBody structure)
+        {
             var counter = PayloadWriter.Counter();
             var header = structure.WritePayload(counter);
-            var length = counter.Length;
-            Counted?.Invoke(structure, length);
-            CheckPayloadLength(length);
+            Counted?.Invoke(structure, counter.Length);
+            return (header, counter.Length);
+        }
+
+        /// <summary>
+        /// Writes a body counted at <paramref name="length"/> bytes in the envelope that
+        /// length calls for.
+        /// </summary>
+        private static void Write(Stream stream, IPayloadBody structure, EnvelopeHeader header, long length)
+        {
+            if (IsLargeForm(length))
+            {
+                WriteLarge(stream, structure, header, length);
+                return;
+            }
 
             var payload = new PayloadWriter((int)length);
             var written = structure.WritePayload(payload);
@@ -547,32 +607,46 @@ namespace ProbabilisticDataStructures
                     $"{written.Version}. Nothing was written: the two have to be one layout.");
             }
 
-            if (IsLargeForm(length))
-            {
-                WriteLarge(stream, header, payload.WrittenSpan);
-            }
-            else
-            {
-                Write(stream, header.Structure, header.Hash, payload.WrittenSpan, header.Version);
-            }
+            Write(stream, header.Structure, header.Hash, payload.WrittenSpan, header.Version);
         }
 
         /// <summary>
-        /// Writes a payload in the large form: its header, with its own checksum, then the
-        /// payload, then the checksum the header's began, carried on over the payload.
+        /// Writes a payload in the large form as its body produces it: the header, with its
+        /// own checksum, then the payload a buffer at a time, then the checksum the header's
+        /// began, carried on over the payload. Nothing the size of the payload is held.
         /// </summary>
-        /// <remarks>
-        /// The payload is held here, as it is for the ordinary envelope; the header and the
-        /// final checksum are written by the two calls a writer that streams the payload
-        /// puts either side of it (#225).
-        /// </remarks>
-        internal static void WriteLarge(Stream stream, EnvelopeHeader header, ReadOnlySpan<byte> payload)
+        private static void WriteLarge(Stream stream, IPayloadBody structure, EnvelopeHeader header, long length)
         {
-            var crc = WriteLargeHeader(stream, header, (ulong)payload.Length);
-            crc.Append(payload);
-            stream.Write(payload);
+            var crc = WriteLargeHeader(stream, header, (ulong)length);
+            var payload = PayloadWriter.Streaming(stream, crc, header, length);
+            var written = structure.WritePayload(payload);
+            if (payload.Length != length || written != header)
+            {
+                throw new InvalidOperationException(
+                    $"The {header.Structure} counted a payload of {length:N0} bytes, version " +
+                    $"{header.Version}, and then wrote {payload.Length:N0} bytes, version " +
+                    $"{written.Version}. " + LeftInTheStream(length, payload.Streamed));
+            }
+
+            payload.Flush();
             WriteLargeChecksum(stream, crc);
         }
+
+        /// <summary>
+        /// The refusal of a write that would take a streamed payload past the length counted
+        /// for it, which its header has declared; the write is not made.
+        /// </summary>
+        internal static InvalidOperationException WrotePastItsCount(
+            EnvelopeHeader header, long length, long reached, long streamed) => new(
+            $"The {header.Structure} counted a payload of {length:N0} bytes, version " +
+            $"{header.Version}, and then went on writing: its next write would have taken it " +
+            $"to {reached:N0} bytes, and was not made. " + LeftInTheStream(length, streamed));
+
+        /// <summary>What a write in the large form refused part-way leaves in the stream.</summary>
+        private static string LeftInTheStream(long length, long streamed) =>
+            $"The large form's header, declaring {length:N0} bytes, and the first {streamed:N0} " +
+            "bytes of the payload were written to the stream before this was found, with no " +
+            "checksum after them, so a reader refuses what is there. The two have to be one layout.";
 
         /// <summary>
         /// Writes the large form's header for a payload of <paramref name="length"/> bytes,
@@ -1317,7 +1391,9 @@ namespace ProbabilisticDataStructures
         /// <para>
         /// The envelope counted is the one the inner structure's own write will choose, by
         /// <see cref="IsLargeForm"/> on the inner payload's length, which is the length
-        /// its body has just added to the count.
+        /// its body has just added to the count. The run is the envelope and the payload
+        /// together, and is held to <see cref="PayloadWriter.LongestRun"/> as any run is,
+        /// here in the count, since the count does not begin it as one.
         /// </para>
         /// </remarks>
         internal static void WriteNested<T>(PayloadWriter payload, T structure)
@@ -1328,7 +1404,9 @@ namespace ProbabilisticDataStructures
                 var before = payload.Length;
                 ((IPayloadBody)structure).WritePayload(payload);
                 var inner = payload.Length - before;
-                payload.BeginBlock(sizeof(uint) + (IsLargeForm(inner) ? LargeEnvelopeLength : EnvelopeLength));
+                var envelope = IsLargeForm(inner) ? LargeEnvelopeLength : EnvelopeLength;
+                PayloadWriter.CheckRun(envelope + inner);
+                payload.BeginBlock(sizeof(uint) + envelope);
                 return;
             }
 

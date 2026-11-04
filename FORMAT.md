@@ -81,8 +81,14 @@ reached, because what was refused may be damage the checksum would have named.
 
 This library reads the large form by holding the payload, as it holds an ordinary one, so
 it refuses one in the large form longer than one array holds, 2,147,483,591 bytes. It
-writes the large form for no payload yet: one past the ordinary envelope's ceiling is
-still refused, as [Sizes](#sizes) describes.
+writes the large form for a payload past the ordinary envelope's ceiling, and for no
+other, as the payload is produced: the header first, with the length counted beforehand
+from the layout, then the payload a piece at a time, the final checksum carried on over
+each piece as it goes, then that checksum. Nothing the length of the payload is held, and
+the large form is written only to a stream, never returned as one array. A write that
+fails part-way can leave the beginning of an envelope in its stream, which a reader
+refuses for its length or its checksum. No single run, a `bytes` field, is written longer
+than `int.MaxValue` bytes in either form yet, as [Sizes](#sizes) describes.
 
 ### Format versions
 
@@ -410,10 +416,12 @@ disagrees with the count is refused as corrupt. Sizes that did not wrap are unch
 read as they always did.
 
 A quotient filter's table can be larger than a payload holds: 2^31 slots at five bits of
-remainder, or 2^30 at thirteen, is 268,435,458 words, and a payload carries at most
-268,435,444. Such a filter can be built and used and not written, and `WriteTo` says so
-with the `InvalidOperationException` of the envelope's ceiling; releases up to 6.2.0 failed
-with an `OverflowException` from computing the table's length in 32 bits.
+remainder, or 2^30 at thirteen, is 268,435,458 words, and the ordinary envelope carries at
+most 268,435,444. The table is one run, and no run is written longer than `int.MaxValue`
+bytes, which is fewer words than those, so such a filter can be built and used and not
+written, in either form: `WriteTo` says so with the `InvalidOperationException` that
+refuses the run, before anything is written. Releases up to 6.2.0 failed with an
+`OverflowException` from computing the table's length in 32 bits.
 
 A size below its limit can still be refused for not being in the payload. Where a reader
 allocates for a count, it first checks that the bytes left could hold that many, so what
@@ -426,12 +434,16 @@ regions whole because its arithmetic assumes their size, and a quotient filter's
 names its table outright. A payload can ask those for as large a structure as the
 constructor would build. What stops a small one asking is the read budget, below.
 
-The envelope bounds everything else. A payload is written as one array together with the
-envelope's eighteen bytes, so it is at most 2,147,483,573 bytes: the largest array,
-2,147,483,591, less those. A structure whose payload would be larger can be built but not
-written, and `WriteTo` throws an `InvalidOperationException` saying how large the payload
-would have been; the structure is untouched. A reader refuses a length field above
-2,147,483,591, what one array holds, before allocating for it.
+The envelope bounds everything else. A payload in the ordinary envelope is written as one
+array together with the envelope's eighteen bytes, so it is at most 2,147,483,573 bytes:
+the largest array, 2,147,483,591, less those. A larger one is written in
+[the large form](#the-large-form), to a stream: `ToByteArray` of a structure whose payload
+would be larger throws an `InvalidOperationException` saying how large the payload would
+have been, and the structure is untouched. In either form a run is written no longer than
+`int.MaxValue` bytes, the most a reader takes into one array, so a structure that would
+need a longer one can be built but not written yet, and `WriteTo` refuses it the same way,
+naming the run. A reader refuses a length field above 2,147,483,591, what one array
+holds, before allocating for it.
 
 ### Read budget
 

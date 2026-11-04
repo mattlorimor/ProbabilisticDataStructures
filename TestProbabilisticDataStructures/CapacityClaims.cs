@@ -435,8 +435,9 @@ namespace TestProbabilisticDataStructures
             new Claim("commit 426348d", () => true),
             new Claim("so the payload is at most 2,147,483,573 bytes: `Array.MaxLength` less the 18 bytes of envelope", () =>
                 MaxPayload == 2_147_483_573 && EnvelopeBytes() == 18 && Array.MaxLength - EnvelopeBytes() == MaxPayload),
-            new Claim("A structure is written into one `byte[]`", () =>
-                typeof(PayloadWriter).GetField("buffer", BindingFlags.NonPublic | BindingFlags.Instance)!.FieldType == typeof(byte[])),
+            new Claim("Such a payload is built in one `byte[]`", () =>
+                typeof(PayloadWriter).GetField("buffer", BindingFlags.NonPublic | BindingFlags.Instance)!.FieldType == typeof(byte[])
+                && PersistenceFormat.LargeFormThreshold == MaxPayload),
             new Claim("A read is charged at least twice the payload", () =>
             {
                 // Every payload line the rows fitted, against the charge line it was fitted with.
@@ -603,9 +604,14 @@ namespace TestProbabilisticDataStructures
                 && Slope("CountMinSketch") * WideFrom > ReadOptions.DefaultMemoryBudget),
             // Each worked out from two narrow sketches' payloads and carried to 2^27 columns,
             // with one row beside it, which does fit.
-            new Claim("Two rows of it cannot be saved at all: they are a payload of 2,147,483,681 bytes, past the most a payload can be", () =>
+            new Claim("Two rows of it are past what one array holds: they are a payload of 2,147,483,681 bytes, past the most the ordinary envelope carries", () =>
                 CountMinAtWideFrom(2) == 2_147_483_681 && CountMinAtWideFrom(2) > MaxPayload
                 && CountMinAtWideFrom(1) <= MaxPayload),
+            // The sketch is nested whole, so the run is its envelope, in the large form at
+            // that length, and its payload.
+            new Claim("a `TopK` over two rows that wide cannot be written at all yet, since its sketch is a run longer than any payload holds", () =>
+                CountMinAtWideFrom(2) + PersistenceFormat.LargeEnvelopeLength > PayloadWriter.LongestRun
+                && PayloadWriter.LongestRun == int.MaxValue),
             new Claim("Two rows of a `PrivateCountMinSketch` that wide are 2,147,483,673 bytes", () =>
                 PrivateAtWideFrom(2) == 2_147_483_673 && PrivateAtWideFrom(2) > MaxPayload
                 && PrivateAtWideFrom(1) <= MaxPayload),
@@ -627,8 +633,8 @@ namespace TestProbabilisticDataStructures
                     && window.ToByteArray().Length - EnvelopeBytes() >= (long)window.SketchesHeld * body;
             }),
             // A sketch places with 64-bit values only from 2^27 columns, where two rows of any
-            // of them pass the most a payload holds and one does not.
-            new Claim("So a sketch placed with 64-bit values saves with one row or not at all, and a `DpswSketch` only while it holds one sketch", () =>
+            // of them pass the most one array holds and one does not.
+            new Claim("So a sketch placed with 64-bit values saves as one array with one row only, and a `DpswSketch` only while it holds one sketch", () =>
                 TestSketchPlacement.Kinds().Where(k => k.Name != nameof(InverseBloomFilter))
                     .All(k => k.PlacementFor((uint)WideFrom - 1) == Placement.Narrow)
                 && new[] { CountMinAtWideFrom(2), PrivateAtWideFrom(2), KeeperAtWideFrom(2), 2 * PrivateAtWideFrom(1) }
@@ -726,29 +732,49 @@ namespace TestProbabilisticDataStructures
                 return Enumerable.Range(0, 200).All(i => widest.Test((ulong)i * 7919))
                     && Assert.Throws<ArgumentOutOfRangeException>(() => new MementoFilter(1UL << 32, 29)).ParamName == "fingerprintBits";
             }),
-            // A structure whose WriteTo counts its payload first (#216), made to claim a shape
-            // past the ceiling, is refused naming the whole payload and the ceiling before
-            // anything is built for it, and writes what it wrote before once the shape is put
-            // back; TestPayloadCount holds every structure with a body to being counted by its
-            // WriteTo. The buffer's growth is what refuses a payload of a writer that does not
-            // count yet.
-            new Claim("`WriteTo` of one throws an `InvalidOperationException` naming the size it would be and the size one can be, with the structure unchanged", () =>
+            // Past one array, WriteTo goes on to the large form at the threshold that ships: a
+            // count sketch claiming a table seven bytes past it has its header written,
+            // declaring that length, before its body runs (#225).
+            new Claim("past 2 GiB the `Stream` overloads are the way to save it: `WriteTo` writes its payload in the large form of the envelope", () =>
+            {
+                new TestLargeEnvelopeWriting().TestAWriteToPastOneArrayIsStreamedInTheLargeFormAtTheRealThreshold();
+                return PersistenceFormat.LargeFormThreshold == MaxPayload;
+            }),
+            // A structure whose write counts its payload first (#216), made to claim a shape
+            // past the ceiling with no run past the longest, is refused by ToByteArray naming
+            // the whole payload and the ceiling before anything is built for it, and writes
+            // what it wrote before once the shape is put back (#229); TestPayloadCount holds
+            // every structure with a body to being counted by its WriteTo. The buffer that
+            // holds a payload whole refuses past it the same way.
+            new Claim("`ToByteArray` of a structure built larger than that throws an `InvalidOperationException` naming the size it would be and the size one can be, with the structure unchanged, and says to write it with `WriteTo` instead", () =>
             {
                 var countSketch = new CountSketch(0.5, 0.5);
-                TestPayloadCount.AssertRefusedWhileClaiming(countSketch, 4_000_000_012,
-                    (countSketch, "width", 100_000_000u), (countSketch, "depth", 5u));
+                TestPayloadCount.AssertRefusedWhileClaiming(countSketch, 2_147_483_604,
+                    (countSketch, "width", 268_435_449u), (countSketch, "depth", 1u));
                 var table = new InvertibleBloomLookupTable(4, 4);
-                TestPayloadCount.AssertRefusedWhileClaiming(table, 6_000_000_020, (table, "cells", 300_000_000u));
+                TestPayloadCount.AssertRefusedWhileClaiming(table, 5_368_709_000, (table, "cells", 268_435_449u));
                 var setSketch = new SetSketch(8);
                 TestPayloadCount.AssertRefusedWhileClaiming(setSketch, 4_294_967_206, (setSketch, "m", Array.MaxLength));
 
-                // 2^31 slots of five bits, what a filter for 1.6 billion items at 4% is.
-                var quotient = new QuotientFilter(100, 0.01);
-                TestPayloadCount.AssertRefusedWhileClaiming(quotient, 2_147_483_680,
-                    (quotient, "quotientBits", 31u), (quotient, "remainderBits", 5u));
-
                 return Assert.Throws<InvalidOperationException>(
                     () => PayloadWriter.GrownCapacity(1000, int.MaxValue - 1, 10)) is not null;
+            }),
+            // The same shapes with a run past the longest are refused for the run by both,
+            // with nothing written: a count sketch's cells and an invertible table's counts,
+            // each one run, and 2^31 slots of five bits, what a quotient filter for 1.6
+            // billion items at 4% is.
+            new Claim("What neither writes yet is a single run longer than `int.MaxValue` bytes, the most a reader takes into one array", () =>
+            {
+                var countSketch = new CountSketch(0.5, 0.5);
+                TestPayloadCount.AssertRunRefusedWhileClaiming(countSketch, 4_000_000_000,
+                    (countSketch, "width", 100_000_000u), (countSketch, "depth", 5u));
+                var table = new InvertibleBloomLookupTable(4, 4);
+                TestPayloadCount.AssertRunRefusedWhileClaiming(table, 2_400_000_000, (table, "cells", 300_000_000u));
+                var quotient = new QuotientFilter(100, 0.01);
+                TestPayloadCount.AssertRunRefusedWhileClaiming(quotient, 2_147_483_664,
+                    (quotient, "quotientBits", 31u), (quotient, "remainderBits", 5u));
+
+                return PayloadWriter.LongestRun == int.MaxValue;
             }),
 
             // ---- BloomFilter -------------------------------------------------------------
@@ -797,6 +823,10 @@ namespace TestProbabilisticDataStructures
                 });
                 return MaxPayload == 2_147_483_573 && About(most, most, 2) == "≈ 1.79 billion";
             }),
+            // An array holds 2^30 one-bit buckets, an eighth of that in bytes, written as a run.
+            new Claim("A larger one is written to a stream, in the large form, each of its arrays a run of its own", () =>
+                (long)Buckets64.maxArraySize / 8 <= PayloadWriter.LongestRun
+                && PersistenceFormat.LargeFormThreshold == MaxPayload),
 
             // ---- PartitionedBloomFilter ---------------------------------------------------
             new Claim("each `m / k` bits", () =>
