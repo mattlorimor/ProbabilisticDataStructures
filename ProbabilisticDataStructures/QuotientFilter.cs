@@ -632,8 +632,12 @@ namespace ProbabilisticDataStructures
         /// shifted -- then forward, pairing each occupied quotient with the run that
         /// belongs to it. Runs appear in the same order as the quotients that own them,
         /// which is what makes the pairing possible at all.
+        /// <para>
+        /// Internal so that the tests can run it on a table they have broken on purpose,
+        /// and ask it for a quotient no run belongs to.
+        /// </para>
         /// </remarks>
-        private uint FindRunStart(uint quotient)
+        internal uint FindRunStart(uint quotient)
         {
             var bucket = quotient;
             while (this.IsShifted(bucket))
@@ -1004,7 +1008,11 @@ namespace ProbabilisticDataStructures
             return value & this.slotMask;
         }
 
-        private void WriteSlot(uint index, ulong value)
+        /// <summary>
+        /// Writes one slot, metadata in the low three bits. Internal so that a test can
+        /// break a table on purpose, which nothing else does.
+        /// </summary>
+        internal void WriteSlot(uint index, ulong value)
         {
             value &= this.slotMask;
 

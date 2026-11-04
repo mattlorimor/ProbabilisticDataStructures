@@ -666,7 +666,11 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Where the run belonging to a quotient begins.
         /// </summary>
-        private uint FindRunStart(uint quotient)
+        /// <remarks>
+        /// Internal so that the tests can run it on a table they have broken on purpose,
+        /// and ask it for a quotient no run belongs to.
+        /// </remarks>
+        internal uint FindRunStart(uint quotient)
         {
             var slot = quotient;
             while (IsShifted(slot))
@@ -712,7 +716,11 @@ namespace ProbabilisticDataStructures
             return value & this.slotMask;
         }
 
-        private void WriteSlot(uint index, ulong value)
+        /// <summary>
+        /// Writes one slot, metadata in the low three bits. Internal so that a test can
+        /// break a table on purpose, which nothing else does.
+        /// </summary>
+        internal void WriteSlot(uint index, ulong value)
         {
             value &= this.slotMask;
 
