@@ -561,7 +561,15 @@ namespace ProbabilisticDataStructures
         /// recomputed -- the whole cluster is taken apart and put back through the
         /// ordinary insert path, which is exercised on every addition rather than only
         /// here.
+        /// <para>
+        /// Everything it needs is read before anything is written, and a rewrite the table
+        /// has no room for is refused then, so a refusal leaves the table and its count as
+        /// they were. See below for why that is the only way it can fail part way.
+        /// </para>
         /// </remarks>
+        /// <exception cref="InvalidOperationException">
+        /// The rewritten run would leave the table holding more entries than it has slots.
+        /// </exception>
         internal void RewriteRun(uint quotient, IReadOnlyList<ulong> fields)
         {
             var start = quotient;
@@ -609,6 +617,31 @@ namespace ProbabilisticDataStructures
                 }
 
                 owner = Next(owner);
+            }
+
+            // The rewrite takes the run's slots out and puts the new ones in. An insert into a
+            // table with a slot free finds it, and the table is consistent before and after
+            // each one, so the inserts below fail only if the table runs out of slots, which
+            // is when the entries it will hold are more than its slots. That is known now,
+            // before the cluster is taken apart, from the count, which a reader holds to the
+            // table's entries and every operation keeps there; and refusing here leaves the
+            // table as it was.
+            var run = 0u;
+            foreach (var (owningQuotient, _) in entries)
+            {
+                if (owningQuotient == quotient)
+                {
+                    run++;
+                }
+            }
+
+            var holding = (long)this.Count - run + fields.Count;
+            if (holding > this.Slots)
+            {
+                throw new InvalidOperationException(
+                    $"A table of {this.Slots} slots cannot take the run of quotient {quotient} " +
+                    $"rewritten to {fields.Count} slots: it would hold {holding} entries. Its " +
+                    "owner is meant to expand it before it reaches that state.");
             }
 
             var wipe = start;
