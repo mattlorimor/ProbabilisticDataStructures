@@ -262,18 +262,39 @@ namespace TestProbabilisticDataStructures
         /// What a read allocates on this thread: the least of several measurements.
         /// </summary>
         /// <remarks>
-        /// The counter is exact for what a read allocates, but a collection that lands
-        /// mid-read -- and the rest of the suite runs in parallel, so one can -- retires
-        /// this thread's allocation context, and the counter can then report a few
-        /// kilobytes the read did not ask for. Measured identically twice, a read came to
-        /// 240,200 and 248,248 bytes. That noise only ever adds, so the least of a few
-        /// repeats is the read's own allocation.
+        /// The counter is exact for what a read allocates, but a background collection
+        /// running beside the read -- and the rest of the suite runs in parallel, so one
+        /// can -- makes it report a few kilobytes the read did not ask for. Measured
+        /// identically twice, a read came to 240,200 and 248,248 bytes. With a background
+        /// collection started just before it, a loop allocating what
+        /// <see cref="DpswSketch"/>'s large-form read keeps came to 1,632 bytes more every
+        /// time; with background collection turned off, that read measured exact with
+        /// blocking collections landing in the middle of it (#287). That noise only ever
+        /// adds, so the least of a few repeats is the read's own allocation.
         /// </remarks>
-        internal static long Allocated(Func<object> read, int repeats = 5)
+        internal static long Allocated(Func<object> read, int repeats = 5) =>
+            LeastAllocated(read, repeats, () => { });
+
+        /// <summary>
+        /// What a read allocates on this thread straight after a full collection, with the
+        /// finalizers it queued run and collected after them: the least of several
+        /// measurements, each after a collection of its own, so that whatever a collection
+        /// reclaims has been reclaimed before every one of them.
+        /// </summary>
+        internal static long AllocatedAfterACollection(Func<object> read, int repeats = 5) =>
+            LeastAllocated(read, repeats, () =>
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+            });
+
+        private static long LeastAllocated(Func<object> read, int repeats, Action first)
         {
             var least = long.MaxValue;
             for (var i = 0; i < repeats; i++)
             {
+                first();
                 var before = GC.GetAllocatedBytesForCurrentThread();
                 var result = read();
                 var after = GC.GetAllocatedBytesForCurrentThread();
@@ -417,6 +438,71 @@ namespace TestProbabilisticDataStructures
         public void TestEveryStructureHasABudgetSample()
         {
             StructureRoster.AssertCoversEveryStructure("read budget", Samples.Value.Keys);
+        }
+
+        // ---- What a read allocates does not depend on the collector ------------------
+
+        /// <summary>
+        /// Every structure's read, in either form of the envelope, allocates as much
+        /// straight after a full collection as back to back with another read: what a read
+        /// allocates does not depend on when the last collection ran (#287).
+        /// </summary>
+        /// <remarks>
+        /// The runtime holds some of what it caches only weakly, so a collection can
+        /// reclaim it, and a read that asks for it afterwards builds it again and is
+        /// measured with the building. A read's budget named its structure as it was made,
+        /// with <c>ToString</c>, and an enum's names are kept in its type's cache, which the
+        /// runtime holds through a weak handle: every read after a collection built them
+        /// again, a few kilobytes, so a structure's least of five depended on whether a
+        /// collection had landed before each of its reads, and on what other tests had
+        /// asked of the enum in between. <see cref="DpswSketch"/>'s large form, whose read
+        /// is long and allocates megabytes, failed by that much on a loaded runner. A full
+        /// collection before each read is where a rebuild happens by construction, and
+        /// each side is the least of five, as <see cref="Allocated"/> measures. The guard
+        /// measures a name looked up the same way, which has to cost more after a
+        /// collection, so that a runtime that stopped reclaiming its cache, or a collection
+        /// that stopped being made, fails here rather than passing by measuring nothing.
+        /// Not run in parallel: other tests ask for the same caches, and their allocations
+        /// set when collections land.
+        /// </remarks>
+        [TestMethod]
+        [DoNotParallelize]
+        public void TestWhatAReadAllocatesDoesNotDependOnWhenACollectionRan()
+        {
+            var looked = Allocated(() => StructureId.DpswSketch.ToString());
+            var rebuilt = AllocatedAfterACollection(() => StructureId.DpswSketch.ToString());
+            Console.WriteLine($"[AFTER-A-COLLECTION] a structure's name: back to back {looked:N0}, after a full collection {rebuilt:N0}");
+            Assert.IsGreaterThan(looked, rebuilt,
+                $"a structure's name cost {rebuilt:N0} bytes after a full collection and {looked:N0} back to " +
+                "back, so a collection reclaims nothing a read could build again, and the sweep measures nothing");
+
+            var differing = new List<string>();
+            var swept = new List<StructureId>();
+            foreach (var (id, sample) in Samples.Value)
+            {
+                var large = InTheLargeForm(sample).Bytes;
+                foreach (var (form, bytes) in new[] { ("ordinary envelope", sample.Bytes), ("large form", large) })
+                {
+                    sample.Read(bytes, ReadOptions.Unlimited);
+                    var warm = Allocated(() => sample.Read(bytes, ReadOptions.Unlimited));
+                    var cold = AllocatedAfterACollection(() => sample.Read(bytes, ReadOptions.Unlimited));
+                    Console.WriteLine(
+                        $"[AFTER-A-COLLECTION] {id} in the {form}: back to back {warm:N0}, after a full collection {cold:N0}");
+
+                    Assert.IsGreaterThan(0L, warm, $"{id}'s read in the {form} allocated nothing, so it was not measured");
+                    if (cold != warm)
+                    {
+                        differing.Add($"{id} in the {form}, {cold:N0} after a full collection and {warm:N0} back to back");
+                    }
+                }
+
+                swept.Add(id);
+            }
+
+            Assert.IsEmpty(differing,
+                "a read allocated a different amount straight after a full collection than back to back, so " +
+                "what it allocates depends on when the last collection ran: " + string.Join("; ", differing));
+            StructureRoster.AssertCoversEveryStructure("read after a collection", swept);
         }
 
         // ---- A refusal names one total, and that total loads -------------------------

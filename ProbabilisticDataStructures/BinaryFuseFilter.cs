@@ -800,7 +800,12 @@ namespace ProbabilisticDataStructures
             var fingerprints = reader.ReadBytes();
             reader.ExpectEnd();
 
-            if (!Enum.IsDefined(width))
+            // The widths named, not Enum.IsDefined: an enum's values are kept in a cache the
+            // runtime holds weakly, and looking them up after a collection had reclaimed it
+            // built it again, so what a read allocated depended on when the last collection
+            // ran (#287). These are the widths the stride below and the filter's mask are
+            // worked out for.
+            if (width is not (BinaryFuseWidth.Eight or BinaryFuseWidth.Sixteen))
             {
                 throw new InvalidDataException(
                     $"Filter has {(byte)width}-bit fingerprints, and this library builds " +

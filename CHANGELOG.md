@@ -483,6 +483,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **What a read allocates no longer depends on when the last collection ran.** Every read
+  named its structure with `ToString` as its budget was made, and the runtime keeps an
+  enum's names in a cache it holds only weakly, so a read after a collection had reclaimed
+  them built them again: 2,352 bytes more on .NET 10, which failed the suite's large-form
+  allocation check for a `DpswSketch` on a loaded runner. The structure is now named only
+  when a read is refused, and a `BinaryFuseFilter` read checks its fingerprint width
+  without `Enum.IsDefined`, which cost it 240 bytes more the same way. (#287)
+
 - **A payload naming a bucket width no bucket has is refused as the payload's.** A
   stored width of 0, or more than 8 bits, in the bucket table of a `BloomFilter`,
   `BloomFilter64`, `CountingBloomFilter`, `DeletableBloomFilter`,
