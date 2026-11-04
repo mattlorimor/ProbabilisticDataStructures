@@ -651,6 +651,13 @@ namespace ProbabilisticDataStructures
         /// into different counters. Counts cost more room and every ulong is a valid
         /// one. The sketch packs them again on the way in, at a tuning chosen to suit
         /// them.
+        /// <para>
+        /// Since version 10 that tuning is written before each state's counts: the one the
+        /// counts call for, which is not always the one the sketch holds them at, since it
+        /// retunes only when its rows crowd. So a read can be priced from it without the
+        /// counts, and the payload stays a function of the counts alone. The reader packs at
+        /// it and refuses a payload whose counts call for another (#280).
+        /// </para>
         /// </remarks>
         /// <param name="stream">The stream to write to.</param>
         public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
@@ -672,12 +679,32 @@ namespace ProbabilisticDataStructures
             foreach (var record in this.records)
             {
                 payload.WriteUInt32((uint)record[0].Count);
+                WriteTuning(payload, record);
                 WriteCounters(payload, record, record[0].Count);
             }
 
+            WriteTuning(payload, this.rows);
             WriteCounters(payload, this.rows, this.width);
 
-            return new(StructureId.SublimeCountMinSketch, PersistenceFormat.Identify(this.Hash));
+            return new(StructureId.SublimeCountMinSketch, PersistenceFormat.Identify(this.Hash),
+                PersistenceFormat.SublimeTuningVersion);
+        }
+
+        /// <summary>
+        /// Writes the tuning a read packs one state's counts at, a byte each for the counters
+        /// to a chunk and the stub width: the tuning those counts call for, worked out as a
+        /// read works it out, so that a price can be worked out from it without reading them.
+        /// </summary>
+        /// <remarks>
+        /// A counter counts the two bytes without working the tuning out, which would read
+        /// every counter of the state: what the bytes hold does not change how many there
+        /// are.
+        /// </remarks>
+        private static void WriteTuning(PayloadWriter payload, ValeCounterArray[] rows)
+        {
+            var (chunkCounters, stub) = payload.IsCounting ? (0, 0) : Tune(CounterLengths(rows));
+            payload.WriteByte((byte)chunkCounters);
+            payload.WriteByte((byte)stub);
         }
 
         /// <summary>
@@ -810,18 +837,19 @@ namespace ProbabilisticDataStructures
                 CheckRecord(i, recordWidth, expected);
 
                 sketch.width = (int)recordWidth;
-                sketch.records.Add(ReadCounters(ref reader, (int)depth, (int)recordWidth));
+                sketch.records.Add(ReadCounters(ref reader, version, (int)depth, (int)recordWidth, i));
                 expected *= 2;
             }
 
             sketch.width = (int)width;
-            sketch.rows = ReadCounters(ref reader, (int)depth, (int)width);
+            sketch.rows = ReadCounters(ref reader, version, (int)depth, (int)width, -1);
             reader.ExpectEnd();
 
-            // The constructor left the defaults, and the rows were built at a tuning chosen
-            // from the counts. The properties describe the rows, not the records of earlier
-            // states, which were tuned separately at their own widths. A sketch has at
-            // least one row, and every row is built at the same tuning.
+            // The constructor left the defaults, and the rows were built at the tuning chosen
+            // from the counts, which since version 10 the payload also stores. The properties
+            // describe the rows, not the records of earlier states, which were tuned separately
+            // at their own widths. A sketch has at least one row, and every row is built at the
+            // same tuning.
             sketch.countersPerChunk = sketch.rows[0].CountersPerChunk;
             sketch.stubBits = sketch.rows[0].StubBits;
 
@@ -833,6 +861,15 @@ namespace ProbabilisticDataStructures
         /// for each record of an earlier state, the plain counts read and the packed
         /// counters they are tuned for and moved into. See <see cref="PayloadPrice"/>.
         /// </summary>
+        /// <remarks>
+        /// What the packed counters are charged depends on the counters to a chunk and on
+        /// nothing else the counts hold, since each chunk is charged a tails array whether
+        /// it spills or not. From version 10 the payload stores the tuning before each
+        /// state's counts, and the price reads it and seeks past them, so a price reads the
+        /// fields of a payload and not its bulk; the reader refuses a stored tuning the counts
+        /// do not call for, so the price and the charges are the same sums. Before version 10
+        /// the counts are the only record of their tuning, and are read for it.
+        /// </remarks>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
             var delta = reader.ReadDouble();
@@ -854,28 +891,68 @@ namespace ProbabilisticDataStructures
             {
                 var recordWidth = reader.ReadUInt32();
                 CheckRecord(i, recordWidth, expected);
-                PriceCounters(ref reader, (int)depth, (int)recordWidth);
+                PriceCounters(ref reader, version, (int)depth, (int)recordWidth);
                 expected *= 2;
             }
 
-            PriceCounters(ref reader, (int)depth, (int)width);
+            PriceCounters(ref reader, version, (int)depth, (int)width);
         }
 
         /// <summary>
-        /// Prices what <see cref="ReadCounters"/> allocates, reading the counts it reads
-        /// for what tuning them chooses, and moves past them.
+        /// Prices what <see cref="ReadCounters"/> allocates for one state, and moves past
+        /// its counts: from the tuning the payload stores, seeking past the counts, or before
+        /// version 10, reading the counts for what tuning them chooses.
         /// </summary>
-        private static void PriceCounters(ref PayloadReader reader, int depth, int forWidth)
+        private static void PriceCounters(ref PayloadReader reader, ushort version, int depth, int forWidth)
         {
+            var counts = (long)depth * forWidth;
+            if (StoresTuning(version))
+            {
+                var (chunkCounters, _) = ReadTuning(ref reader);
+                reader.Budget.Price(CountsCost(depth, forWidth));
+                reader.Budget.Price(PackedCost(depth, forWidth, chunkCounters));
+                reader.Skip(counts * sizeof(ulong));
+                return;
+            }
+
             reader.Budget.Price(CountsCost(depth, forWidth));
 
             Span<long> lengths = stackalloc long[CounterLengthCount];
-            for (var i = 0L; i < (long)depth * forWidth; i++)
+            for (var i = 0L; i < counts; i++)
             {
                 Tally(lengths, reader.ReadUInt64());
             }
 
             reader.Budget.Price(PackedCost(depth, forWidth, Tune(lengths).CountersPerChunk));
+        }
+
+        /// <summary>Whether a payload of this version stores each state's tuning before its counts.</summary>
+        private static bool StoresTuning(ushort version) => version >= PersistenceFormat.SublimeTuningVersion;
+
+        /// <summary>
+        /// Reads the tuning a payload stores before a state's counts, and checks it is one a
+        /// chunk holds, as both the read and its price do before they use it: the price works
+        /// the packed rows' cost out from it, and a chunk of no counters divides by nought.
+        /// Whether it is the tuning the counts call for only the counts can say, and the read
+        /// asks them.
+        /// </summary>
+        private static (int CountersPerChunk, int StubBits) ReadTuning(ref PayloadReader reader)
+        {
+            int chunkCounters = reader.ReadByte();
+            int stub = reader.ReadByte();
+            if (chunkCounters < ValeCounterArray.MinCountersPerChunk
+                || chunkCounters > ValeCounterArray.MaxCountersPerChunk
+                || stub < ValeCounterArray.MinStubBits
+                || stub > ValeCounterArray.MaxStubBits)
+            {
+                throw new InvalidDataException(
+                    $"Sketch stores a tuning of {chunkCounters} counters to a chunk with {stub}-bit " +
+                    $"stubs. A chunk holds between {ValeCounterArray.MinCountersPerChunk} and " +
+                    $"{ValeCounterArray.MaxCountersPerChunk} counters, with stubs of " +
+                    $"{ValeCounterArray.MinStubBits} to {ValeCounterArray.MaxStubBits} bits.");
+            }
+
+            return (chunkCounters, stub);
         }
 
         /// <summary>The rows of plain counts one state is read into.</summary>
@@ -1028,16 +1105,33 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Reads one state's counts and packs them.
+        /// Reads one state's counts and packs them: at the tuning the payload stores for
+        /// them, which has to be the one they call for, or before version 10 at that one.
         /// </summary>
+        /// <param name="reader">The payload, at the state's tuning or, before version 10, its counts.</param>
+        /// <param name="version">The payload's version.</param>
+        /// <param name="depth">The rows in the state.</param>
+        /// <param name="forWidth">The counters in each of its rows.</param>
+        /// <param name="record">Which record of an earlier state this is, or -1 for the rows.</param>
         /// <remarks>
         /// The reader is passed by reference because it is a ref struct holding its own
         /// position. Taken by value it would read the right bytes and leave the caller
         /// where it started, which looks like a payload with everything left over.
+        /// <para>
+        /// A stored tuning other than the one the counts call for is refused rather than
+        /// packed at, though the counts would pack at it: the price came from it, and the
+        /// sketch read would write another payload than the one it was read from, since a
+        /// payload stores the tuning its counts call for. The tuning is worked out with plain
+        /// arithmetic, which unlike <see cref="Math.Pow"/> rounds alike on every platform, so
+        /// a payload written on one reads on another.
+        /// </para>
         /// </remarks>
         private static ValeCounterArray[] ReadCounters(
-            ref PayloadReader reader, int depth, int forWidth)
+            ref PayloadReader reader, ushort version, int depth, int forWidth, int record)
         {
+            (int CountersPerChunk, int StubBits)? stored =
+                StoresTuning(version) ? ReadTuning(ref reader) : null;
+
             // Each row of plain counts is allocated before it is read.
             reader.Budget.Charge(CountsCost(depth, forWidth));
             var values = new ulong[depth][];
@@ -1050,9 +1144,19 @@ namespace ProbabilisticDataStructures
                 }
             }
 
-            var (chunkCounters, stub) = Tune(values);
+            var calledFor = Tune(values);
+            if (stored is { } tuning && tuning != calledFor)
+            {
+                throw new InvalidDataException(
+                    $"Sketch stores {(record < 0 ? "its rows" : $"record {record}")} at a tuning of " +
+                    $"{tuning.CountersPerChunk} counters to a chunk with {tuning.StubBits}-bit stubs, " +
+                    $"and its counters call for {calledFor.CountersPerChunk} with " +
+                    $"{calledFor.StubBits}-bit stubs. A payload stores the tuning its counters call " +
+                    "for, so this one was not written as it stands.");
+            }
+            var (chunkCounters, stub) = stored ?? calledFor;
 
-            // And then packed, at the tuning just chosen.
+            // And then packed, at the tuning stored, or just chosen.
             reader.Budget.Charge(PackedCost(depth, forWidth, chunkCounters));
             var rows = new ValeCounterArray[depth];
             for (var i = 0; i < depth; i++)
@@ -1486,8 +1590,12 @@ namespace ProbabilisticDataStructures
         /// whose total runs past the pool. Tunings that put that fraction above three
         /// in a hundred are passed over.
         /// </para>
+        /// <para>
+        /// Internal so that a test writing counts into a payload by hand can store the
+        /// tuning they call for, as it repairs the checksum, and have the reader read them.
+        /// </para>
         /// </remarks>
-        private static (int CountersPerChunk, int StubBits) Tune(ulong[][] values) =>
+        internal static (int CountersPerChunk, int StubBits) Tune(ulong[][] values) =>
             Tune(CounterLengths(values));
 
         /// <summary>
@@ -1608,7 +1716,26 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// How many lengths <see cref="CounterLengths"/> tallies counters by: every one
+        /// <see cref="CounterLengths(ulong[][])"/> for counters already packed, as the writer
+        /// has them, so that it tunes the counts it writes as a read of them will.
+        /// </summary>
+        private static long[] CounterLengths(ValeCounterArray[] rows)
+        {
+            var lengths = new long[CounterLengthCount];
+
+            foreach (var row in rows)
+            {
+                for (var j = 0; j < row.Count; j++)
+                {
+                    Tally(lengths, row.Get(j));
+                }
+            }
+
+            return lengths;
+        }
+
+        /// <summary>
+        /// How many lengths <see cref="CounterLengths(ulong[][])"/> tallies counters by: every one
         /// from nought to <see cref="CounterBits"/>.
         /// </summary>
         private const int CounterLengthCount = CounterBits + 1;
