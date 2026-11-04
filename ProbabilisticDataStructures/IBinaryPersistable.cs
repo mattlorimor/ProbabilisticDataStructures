@@ -54,6 +54,12 @@ namespace ProbabilisticDataStructures
         /// was written while a hash function set through SetHash was in use. The last
         /// case needs the overload that supplies one.
         /// </exception>
+        /// <exception cref="NotSupportedException">
+        /// The payload is in the large form of the envelope, which a payload past 2 GiB is
+        /// written in, and the stream cannot seek: the large form is priced in one pass over
+        /// the stream and read in a second. Copy it to a file, or to another stream that can
+        /// seek, and read it from there.
+        /// </exception>
         static abstract TSelf ReadFrom(Stream stream);
 
         /// <summary>
@@ -66,6 +72,12 @@ namespace ProbabilisticDataStructures
         /// different one produces a structure that answers no to everything it holds.
         /// </param>
         /// <returns>The structure that was written.</returns>
+        /// <exception cref="NotSupportedException">
+        /// The payload is in the large form of the envelope, which a payload past 2 GiB is
+        /// written in, and the stream cannot seek: the large form is priced in one pass over
+        /// the stream and read in a second. Copy it to a file, or to another stream that can
+        /// seek, and read it from there.
+        /// </exception>
         static abstract TSelf ReadFrom(Stream stream, Func<ReadOnlySpan<byte>, ulong> hash);
 
         /// <summary>
@@ -81,7 +93,11 @@ namespace ProbabilisticDataStructures
         /// <see cref="ReadBudgetExceededException"/>.
         /// </exception>
         /// <exception cref="NotSupportedException">
-        /// The type implements this interface without implementing a budgeted read.
+        /// The type implements this interface without implementing a budgeted read; or the
+        /// payload is in the large form of the envelope, which a payload past 2 GiB is
+        /// written in, and the stream cannot seek: the large form is priced in one pass over
+        /// the stream and read in a second. Copy it to a file, or to another stream that can
+        /// seek, and read it from there.
         /// </exception>
         /// <remarks>
         /// Virtual, with a default, rather than abstract, so that a type outside this
@@ -110,7 +126,11 @@ namespace ProbabilisticDataStructures
         /// <see cref="ReadBudgetExceededException"/>.
         /// </exception>
         /// <exception cref="NotSupportedException">
-        /// The type implements this interface without implementing a budgeted read.
+        /// The type implements this interface without implementing a budgeted read; or the
+        /// payload is in the large form of the envelope, which a payload past 2 GiB is
+        /// written in, and the stream cannot seek: the large form is priced in one pass over
+        /// the stream and read in a second. Copy it to a file, or to another stream that can
+        /// seek, and read it from there.
         /// </exception>
         static virtual TSelf ReadFrom(
             Stream stream, Func<ReadOnlySpan<byte>, ulong> hash, ReadOptions options) =>
