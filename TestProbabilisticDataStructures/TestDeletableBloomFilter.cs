@@ -7,6 +7,28 @@ namespace TestProbabilisticDataStructures
     [TestClass]
     public class TestDeletableBloomFilter
     {
+        /// <summary>
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to: two bucket
+        /// tables, the filter's and its regions', so the bits and the regions each varied,
+        /// and a filter with collisions recorded.
+        /// </summary>
+        internal static System.Collections.Generic.IEnumerable<PayloadState> PayloadStates()
+        {
+            yield return PayloadState.Of(
+                "10 at 50%, 2 regions, empty", new DeletableBloomFilter(10, 2, 0.5),
+                PersistenceFormat.PlacementVersion);
+
+            var filled = new DeletableBloomFilter(200, 10, 0.01);
+            for (var i = 0; i < 150; i++) filled.Add(Encoding.ASCII.GetBytes($"w{i}"));
+            yield return PayloadState.Of(
+                "200 at 1%, 10 regions, collided", filled, PersistenceFormat.PlacementVersion);
+
+            var regions = new DeletableBloomFilter(200, 77, 0.01);
+            regions.Add(Encoding.ASCII.GetBytes("a"));
+            yield return PayloadState.Of(
+                "200 at 1%, 77 regions", regions, PersistenceFormat.PlacementVersion);
+        }
+
         private static byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
         private static byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
         private static byte[] C_BYTES = Encoding.ASCII.GetBytes("c");

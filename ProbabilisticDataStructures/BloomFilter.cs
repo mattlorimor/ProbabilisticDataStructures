@@ -19,7 +19,7 @@ namespace ProbabilisticDataStructures
     /// written before is still that filter, rate included; add its items to a new filter
     /// to have the rate it was sized for. The two schemes do not merge.
     /// </remarks>
-    public class BloomFilter : IFilter, IBinaryPersistable<BloomFilter>
+    public class BloomFilter : IFilter, IBinaryPersistable<BloomFilter>, IPayloadBody
     {
         /// <summary>
         /// Filter data
@@ -248,11 +248,10 @@ namespace ProbabilisticDataStructures
         /// Writes this filter to a stream, in the format documented in FORMAT.md.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteUInt32(this.m);
             payload.WriteUInt32(this.k);
             BitPlacement.Write(payload, this.Placement);
@@ -261,11 +260,8 @@ namespace ProbabilisticDataStructures
             payload.WriteByte(this.Buckets.BucketSize);
             payload.WriteBytes(this.Buckets.RawData);
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.BloomFilter,
-                PersistenceFormat.Identify(this.Hash),
-                payload.WrittenSpan,
+            return new(
+                StructureId.BloomFilter, PersistenceFormat.Identify(this.Hash),
                 PersistenceFormat.PlacementVersion);
         }
 

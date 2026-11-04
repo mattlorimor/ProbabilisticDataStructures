@@ -65,7 +65,7 @@ namespace ProbabilisticDataStructures
     /// sizes one filter in 64 bits and has no ceiling of this kind.
     /// </para>
     /// </summary>
-    public class ScalableBloomFilter : IFilter, IBinaryPersistable<ScalableBloomFilter>
+    public class ScalableBloomFilter : IFilter, IBinaryPersistable<ScalableBloomFilter>, IPayloadBody
     {
         /// <summary>
         /// Filters with geometrically decreasing error rates
@@ -446,11 +446,10 @@ namespace ProbabilisticDataStructures
         /// Writes this filter to a stream, in the format documented in FORMAT.md.
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
-        public void WriteTo(Stream stream)
-        {
-            ArgumentNullException.ThrowIfNull(stream);
+        public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
-            var payload = new PayloadWriter();
+        EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
+        {
             payload.WriteDouble(this.R);
             payload.WriteDouble(this.FP);
             payload.WriteDouble(this.P);
@@ -477,11 +476,8 @@ namespace ProbabilisticDataStructures
                 PersistenceFormat.WriteNested(payload, filter);
             }
 
-            PersistenceFormat.Write(
-                stream,
-                StructureId.ScalableBloomFilter,
-                PersistenceFormat.Identify(this.Filters[0].Hash),
-                payload.WrittenSpan,
+            return new(
+                StructureId.ScalableBloomFilter, PersistenceFormat.Identify(this.Filters[0].Hash),
                 version);
         }
 
