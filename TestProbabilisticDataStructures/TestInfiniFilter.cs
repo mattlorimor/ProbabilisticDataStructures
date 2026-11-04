@@ -621,5 +621,31 @@ namespace TestProbabilisticDataStructures
                 "record from the second table instead of k's own entry in the first, " +
                 "which remembers five bits of hash to the second table's four.");
         }
+
+        /// <summary>
+        /// A filter whose payload would pass the longest an envelope holds is refused by its
+        /// <c>WriteTo</c> before anything is built for it, naming the size it would be
+        /// (#216). Its payload is the count, the expansions and the segment count, sixteen
+        /// bytes, then for each segment its two widths, its count and its word count, and
+        /// eight bytes a word. One segment of 2^31 slots, the most a table is addressed by and
+        /// a size expansion reaches, is past the ceiling at any fingerprint. At thirty-two
+        /// bits its words times eight are past 2^33, a few bytes in 32 bits. Too large to
+        /// build here, so the segment of a small filter claims the shape.
+        /// </summary>
+        [TestMethod]
+        [DataRow(8, 402_653_186L)]
+        [DataRow(32, 1_207_959_554L)]
+        public void TestAFilterTooLargeToWriteIsRefusedNamingItsWholeSize(int fingerprintBits, long words)
+        {
+            Assert.AreEqual(words, (((1L << InfiniFilter.MaxQuotientBits) * (fingerprintBits + 4)) >> 6) + 2,
+                "the row's table is miscounted");
+
+            var filter = new InfiniFilter(initialCapacity: 64, fingerprintBits: fingerprintBits);
+            for (var i = 0; i < 40; i++) filter.Add(Key(i));
+            Assert.HasCount(1, filter.Segments, "Premise: the filter has not expanded.");
+
+            TestPayloadCount.AssertRefusedWhileClaiming(filter, 16 + 16 + 8 * words,
+                (filter.Segments[0], "QuotientBits", InfiniFilter.MaxQuotientBits));
+        }
     }
 }

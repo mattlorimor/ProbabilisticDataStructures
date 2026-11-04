@@ -759,5 +759,34 @@ namespace TestProbabilisticDataStructures
                     $"Premise: some range {range} removal matched in several tables.");
             }
         }
+
+        /// <summary>
+        /// A filter whose payload would pass the longest an envelope holds is refused by its
+        /// <c>WriteTo</c> before anything is built for it, naming the size it would be
+        /// (#216). Its payload is the count, the expansions, the memento's width and the
+        /// segment count, twenty bytes, then for each segment its two widths, its count and
+        /// its word count, and eight bytes a word. A segment at the filter's own limit on its
+        /// address is past the ceiling: 2^31 slots of twenty bits for a range of 256, and
+        /// 2^30 of sixty-four for the widest slot, whose words times eight are 2^33 and
+        /// sixteen, sixteen in 32 bits. Too large to build here, so the segment of a small
+        /// filter claims the shape.
+        /// </summary>
+        [TestMethod]
+        [DataRow(256UL, 8, 671_088_642L)]
+        [DataRow(1UL << 32, 28, 1_073_741_826L)]
+        public void TestAFilterTooLargeToWriteIsRefusedNamingItsWholeSize(
+            ulong maxRangeSize, int fingerprintBits, long words)
+        {
+            var filter = new MementoFilter(maxRangeSize, fingerprintBits, initialCapacity: 64);
+            var slotBits = MementoSegment.SlotBits(fingerprintBits, filter.MementoBits);
+            Assert.AreEqual(words, (((1L << filter.QuotientBitsLimit) * slotBits) >> 6) + 2,
+                "the row's table is miscounted");
+
+            for (ulong i = 0; i < 40; i++) filter.Add(i * 7919);
+            Assert.HasCount(1, filter.Segments, "Premise: the filter has not expanded.");
+
+            TestPayloadCount.AssertRefusedWhileClaiming(filter, 20 + 16 + 8 * words,
+                (filter.Segments[0], "QuotientBits", filter.QuotientBitsLimit));
+        }
     }
 }
