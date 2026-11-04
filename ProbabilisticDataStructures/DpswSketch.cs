@@ -396,6 +396,11 @@ namespace ProbabilisticDataStructures
         /// Adds an item to the stream.
         /// </summary>
         /// <param name="data">The item.</param>
+        /// <exception cref="InvalidOperationException">
+        /// The window has already seen <c>long.MaxValue</c> items, the most its position
+        /// holds, which no stream of adds reaches but a window read from a payload can. The
+        /// window is unchanged.
+        /// </exception>
         public DpswSketch Add(byte[] data)
         {
             ArgumentNullException.ThrowIfNull(data);
@@ -405,6 +410,16 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Add(byte[])"/>
         public DpswSketch Add(ReadOnlySpan<byte> data)
         {
+            // Before anything is touched. The position numbers every item and places every
+            // substream; one that wrapped went negative, and the window's own payload was then
+            // refused by its reader as having seen fewer than no items.
+            if (this.position == long.MaxValue)
+            {
+                throw new InvalidOperationException(
+                    $"The window has already seen {long.MaxValue} items, the most its position " +
+                    "holds, and one more would wrap the position negative.");
+            }
+
             this.position++;
 
             if (this.substreams.Count == 0
@@ -777,10 +792,20 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.DpswSketch);
-            var payload = PersistenceFormat.Read(
-                stream, StructureId.DpswSketch, out var hashId, out var version, budget, Price,
-                hash, PersistenceFormat.CheckResolvable);
-            var reader = new PayloadReader(payload, budget);
+            return PersistenceFormat.Read(
+                stream, StructureId.DpswSketch, budget, Price, hash, PersistenceFormat.CheckResolvable,
+                ReadPayload);
+        }
+
+        /// <summary>
+        /// Reads the payload of the envelope <c>Read</c> opened, once the envelope has
+        /// been checked. See <see cref="PayloadParse{T}"/>.
+        /// </summary>
+        private static DpswSketch ReadPayload(
+            ref PayloadReader reader, ushort version, HashId hashId,
+            Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            var budget = reader.Budget;
 
             var window = (long)reader.ReadUInt64();
             var rho = reader.ReadDouble();

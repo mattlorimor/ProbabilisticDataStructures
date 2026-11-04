@@ -13,8 +13,8 @@ namespace Benchmarks
     public enum KernelVariant
     {
         /// <summary>
-        /// <c>Utils.HashKernel</c> and 32-bit position arithmetic: what a filter below 2^27
-        /// positions does.
+        /// The hash split into its 32-bit halves, and 32-bit position arithmetic: what a
+        /// filter below 2^27 positions does.
         /// </summary>
         Narrow,
 
@@ -142,9 +142,9 @@ namespace Benchmarks
             switch (Variant)
             {
                 case KernelVariant.Narrow:
-                    var narrow = Utils.HashKernel(item, _hash);
-                    first = narrow.LowerBaseHash;
-                    step = narrow.UpperBaseHash;
+                    var sum = _hash(item);
+                    first = (uint)sum;
+                    step = (uint)(sum >> 32);
                     break;
                 case KernelVariant.Wide:
                     var wide = Utils.HashKernel128(item, _hash);

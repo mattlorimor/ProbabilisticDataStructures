@@ -22,11 +22,25 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="stream">The stream to write to.</param>
         /// <exception cref="InvalidOperationException">
-        /// The structure is too large to write: its payload would be longer than the
-        /// largest one the format holds, 2,147,483,573 bytes. The structure is
-        /// unchanged. This is the one thing a structure can be built but not written
-        /// for.
+        /// The structure is too large to write: one run in its payload, such as a table
+        /// written whole or a structure held inside it, would be longer than
+        /// <c>int.MaxValue</c> bytes, the most a reader takes into one array; or the
+        /// payload would be longer than a stream holds. Either is found before anything is
+        /// written, and the structure is unchanged.
         /// </exception>
+        /// <remarks>
+        /// A payload of up to 2,147,483,573 bytes, which fits the ordinary envelope, is
+        /// built in memory and written in one call once it is whole, so a write that fails
+        /// before then writes nothing, and every release that reads its format version reads
+        /// it. A longer payload, past 2 GiB, is written in the large form of the envelope,
+        /// which only releases after 6.2.0 read, and is written as it is produced rather than
+        /// held, so the <c>Stream</c> overloads are the way to save a structure that large:
+        /// <see cref="Persistence.ToByteArray{T}"/> refuses it. A write in the large form that
+        /// fails part-way, because the stream fails or for any other reason, can leave the
+        /// beginning of an envelope in the stream. A reader refuses what is left, by its length
+        /// or by its checksum, but a caller that catches the exception and writes on to the
+        /// same stream leaves it in front of whatever follows.
+        /// </remarks>
         void WriteTo(Stream stream);
 
         /// <summary>
@@ -118,9 +132,20 @@ namespace ProbabilisticDataStructures
         /// <typeparam name="T">The structure's type.</typeparam>
         /// <param name="structure">The structure to write.</param>
         /// <returns>The bytes that <see cref="IBinaryPersistable{TSelf}.WriteTo"/> writes.</returns>
+        /// <exception cref="InvalidOperationException">
+        /// The structure's payload would be longer than one array holds with its envelope,
+        /// 2,147,483,573 bytes, which is refused before anything is written, naming its size;
+        /// <see cref="IBinaryPersistable{TSelf}.WriteTo"/> writes a payload that long to a
+        /// stream. Or <c>WriteTo</c> refuses the structure, for the reasons it gives.
+        /// </exception>
         public static byte[] ToByteArray<T>(this T structure) where T : IBinaryPersistable<T>
         {
             ArgumentNullException.ThrowIfNull(structure);
+
+            if (structure is IPayloadBody body)
+            {
+                return PersistenceFormat.ToByteArray(body);
+            }
 
             using var stream = new MemoryStream();
             structure.WriteTo(stream);

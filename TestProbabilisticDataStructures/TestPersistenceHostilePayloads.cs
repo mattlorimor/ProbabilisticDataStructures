@@ -1727,6 +1727,92 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A count-min sketch's counters are checked against the bytes behind them at the
+        /// edges of the check, as a private sketch's are. The unedited sketch, 28 by 1,
+        /// holds exactly its 28 counters and reads; one column more claims 29, one more
+        /// than it holds, and one row more claims 56. Each is refused for that, where it
+        /// used to be refused at the first missing counter, "Payload ended", after
+        /// allocating the row it was in.
+        /// <para>
+        /// And where 32 bits run out: a sketch four rows deep with its width edited to
+        /// 2^30 + 1 claims 2^32 + 4 counters, which as a 32-bit product is 4, and four
+        /// counters fit. Counted in 64 bits it is refused for the counters it lacks. Counted
+        /// in 32 it is priced at 34 GB and refused for its budget instead, or under no
+        /// budget would allocate a row of eight gigabytes, which is why it is read only
+        /// under the default.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestACountMinSketchClaimingMoreCountersThanItHoldsIsRefusedAtTheEdges()
+        {
+            // f64 epsilon, f64 delta, u32 width at 16, u32 depth at 20. Delta 0.5 is one row.
+            var narrow = new CountMinSketch(0.1, 0.5).ToByteArray();
+            var read = Persistence.FromByteArray<CountMinSketch>(narrow);
+            Assert.AreEqual((28u, 1u), (read.Width, read.Depth),
+                "the unedited sketch does not read as 28 by 1, so the edits below are not the only lie.");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<CountMinSketch>(PokeUInt32(narrow, 16, 29)),
+                "counters, beyond what it can hold");
+            AssertRefused(
+                () => Persistence.FromByteArray<CountMinSketch>(PokeUInt32(narrow, 20, 2)),
+                "counters, beyond what it can hold");
+
+            // Four rows of 2^30 + 1: 2^32 + 4 counters, and 4 as a product of two u32.
+            const uint Wraps = (1u << 30) + 1;
+            var deep = new CountMinSketch(0.1, 0.02).ToByteArray();
+            Assert.AreEqual(4u, Persistence.FromByteArray<CountMinSketch>(deep).Depth,
+                "delta 0.02 is not four rows, so the width below does not wrap to four counters.");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<CountMinSketch>(PokeUInt32(deep, 16, Wraps)),
+                "counters, beyond what it can hold");
+        }
+
+        /// <summary>
+        /// A Sublime sketch's counters likewise. Its width is a power of two, so the
+        /// smallest edit to it doubles the row; and the check is made with the shape,
+        /// before the totals and any records are read, so the bytes it holds the counters
+        /// to are the current rows' and the 28 of the totals ahead of them. The unedited
+        /// sketch, 64 by 1, reads; twice the width, or one row more, claims 128 counters
+        /// where 64 and those 28 bytes are, and is refused for that, where it used to be
+        /// refused at the first missing counter.
+        /// <para>
+        /// And where 32 bits run out: a sketch four rows deep with its width edited to 2^30,
+        /// the widest it takes, claims 2^32 counters, which as a 32-bit product is none.
+        /// Counted in 32 bits it is priced at 34 GB and refused for its budget instead, so
+        /// it is read only under the default.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestASublimeSketchClaimingMoreCountersThanItHoldsIsRefusedAtTheEdges()
+        {
+            // Three f64, u32 depth at 24, u32 width at 28. Delta 0.5 is one row, and an
+            // empty sketch has no records to constrain the width.
+            var narrow = new SublimeCountMinSketch(0.5).ToByteArray();
+            var read = Persistence.FromByteArray<SublimeCountMinSketch>(narrow);
+            Assert.AreEqual((64, 1), (read.Width, read.Depth),
+                "the unedited sketch does not read as 64 by 1, so the edits below are not the only lie.");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<SublimeCountMinSketch>(PokeUInt32(narrow, 28, 128)),
+                "counters, beyond what it can hold");
+            AssertRefused(
+                () => Persistence.FromByteArray<SublimeCountMinSketch>(PokeUInt32(narrow, 24, 2)),
+                "counters, beyond what it can hold");
+
+            // Four rows of 2^30: 2^32 counters, and none as a product of two u32.
+            var deep = new SublimeCountMinSketch(0.02).ToByteArray();
+            Assert.AreEqual(4, Persistence.FromByteArray<SublimeCountMinSketch>(deep).Depth,
+                "delta 0.02 is not four rows, so the width below does not wrap to no counters.");
+
+            AssertRefused(
+                () => Persistence.FromByteArray<SublimeCountMinSketch>(
+                    PokeUInt32(deep, 28, (uint)SublimeCountMinSketch.MaxWidth)),
+                "counters, beyond what it can hold");
+        }
+
+        /// <summary>
         /// The same guard reached through a DPSW payload, which holds its private
         /// sketches inline. Every counter in every nested sketch is floored, which is
         /// what a window built with the mechanism disabled would have written.
@@ -1910,6 +1996,52 @@ namespace TestProbabilisticDataStructures
                 StringAssert.Contains(ex.Message, "the window says it has seen",
                     $"a substream starting at {start} was refused for something else");
             }
+        }
+
+        /// <summary>
+        /// A window at the largest position a long holds reads, since the format can hold
+        /// it, and refuses the next add with an <see cref="InvalidOperationException"/>,
+        /// unchanged, as a full DDSketch does. The add used to wrap the position to
+        /// <c>long.MinValue</c>, and the window's own payload was then refused as having
+        /// seen a negative number of items. Adds alone would take 2^63 - 1 items to get
+        /// there, so the position is edited into a payload.
+        /// <para>
+        /// One short, the add is taken and brings the window to the largest position, so
+        /// the refusal is not turning away a window with room; and that window, brought
+        /// there by an add, refuses the next, unchanged, and still reads.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestADpswWindowAtTheLargestPositionRefusesAnAddAndChangesNothing()
+        {
+            var (bytes, _) = SmallDpswPayload();
+
+            // window(8) rho(8) alpha(8) substreamSize(4) width(4) depth(4), then position(8).
+            var full = Persistence.FromByteArray<DpswSketch>(PokeUInt64(bytes, 36, long.MaxValue));
+            Assert.AreEqual(long.MaxValue, full.Position,
+                "the window was not read at the position edited in, so the add below is not made there.");
+            var before = full.ToByteArray();
+
+            var ex = Assert.ThrowsExactly<InvalidOperationException>(
+                () => full.Add(Key("one more")),
+                "a window at the largest position took another item");
+            StringAssert.Contains(ex.Message, "the most its position holds");
+            CollectionAssert.AreEqual(before, full.ToByteArray(),
+                "a refused add changed the window");
+
+            var room = Persistence.FromByteArray<DpswSketch>(PokeUInt64(bytes, 36, long.MaxValue - 1));
+            room.Add(Key("one more"));
+            Assert.AreEqual(long.MaxValue, room.Position,
+                "an add one short of the largest position did not reach it");
+
+            var filled = room.ToByteArray();
+            Assert.ThrowsExactly<InvalidOperationException>(
+                () => room.Add(Key("and another")),
+                "a window brought to the largest position by an add took another item");
+            CollectionAssert.AreEqual(filled, room.ToByteArray(),
+                "a refused add changed a window brought to the largest position by an add");
+            Assert.AreEqual(long.MaxValue, Persistence.FromByteArray<DpswSketch>(filled).Position,
+                "a window brought to the largest position by an add does not read back there");
         }
 
         /// <summary>

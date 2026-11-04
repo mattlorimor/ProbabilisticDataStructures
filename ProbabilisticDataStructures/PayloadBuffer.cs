@@ -1,11 +1,12 @@
 using System;
 using System.Buffers.Binary;
 using System.IO;
+using System.IO.Hashing;
 
 namespace ProbabilisticDataStructures
 {
     /// <summary>
-    /// Builds a payload as a growable little-endian byte buffer, or counts one.
+    /// Builds a payload as a growable little-endian byte buffer, counts one, or streams one.
     /// </summary>
     /// <remarks>
     /// Little-endian throughout, and explicitly so, because the layout is a file format
@@ -21,9 +22,57 @@ namespace ProbabilisticDataStructures
     /// <see cref="BeginRun"/>: counted whole there, it costs the count nothing however long
     /// it is.
     /// </para>
+    /// <para>
+    /// A writer from <see cref="Streaming"/> holds a buffer of
+    /// <see cref="StreamBufferLength"/> bytes and no more. It empties the buffer into a
+    /// stream whenever the next write would not fit, and appends each piece to a running
+    /// checksum as it goes, so that a payload in the large form of the envelope, which can
+    /// be longer than any array, is written without being held (#225). A run longer than
+    /// the buffer goes to the stream as it is, after what the buffer holds. The writer is
+    /// given the length the count declared in the header already written, and refuses a
+    /// write that would take the payload past it, at that write, which is not made.
+    /// </para>
     /// </remarks>
     internal sealed class PayloadWriter
     {
+        /// <summary>
+        /// How much of a payload a streaming writer holds before it empties the buffer into
+        /// the stream: small against any payload the large form is written for, and under
+        /// the 85,000 bytes from which an array goes on the large object heap.
+        /// </summary>
+        internal const int StreamBufferLength = 64 * 1024;
+
+        /// <summary>
+        /// A smaller buffer for the streaming writers made on the calling thread, so that
+        /// the suite can cut a payload into many pieces; null otherwise, as it is in every
+        /// thread but a test's. At least eight bytes, the widest field.
+        /// </summary>
+        [ThreadStatic]
+        internal static int? LoweredStreamBufferLength;
+
+        /// <summary>
+        /// A lower bound for <see cref="LongestRun"/> on the calling thread, so that the
+        /// suite can show a run refused at lengths it can build; null otherwise.
+        /// </summary>
+        [ThreadStatic]
+        internal static long? LoweredLongestRun;
+
+        /// <summary>
+        /// The longest run a payload can hold: <c>int.MaxValue</c> bytes, the most a reader
+        /// of a run takes (<see cref="PayloadReader.ReadBytes"/>), unless the suite has
+        /// lowered it on this thread.
+        /// </summary>
+        /// <remarks>
+        /// A run's length prefix is a <c>u32</c>, so a run past this, which the ceiling on
+        /// the ordinary envelope kept out of every payload until the large form, would be
+        /// written with a length its reader refuses, and one of 2^32 bytes or more with a
+        /// length that had wrapped. No check downstream would see the second: the count and
+        /// the write agree on the bytes, and the checksum covers the wrong length as
+        /// faithfully as the right one. So a run past it is refused where it is counted,
+        /// before anything is written. Widening runs is #228.
+        /// </remarks>
+        internal static long LongestRun => LoweredLongestRun ?? int.MaxValue;
+
         private byte[] buffer;
         private int length;
 
@@ -31,6 +80,16 @@ namespace ProbabilisticDataStructures
         // scratch a field is written into to be counted, and nothing reads it.
         private readonly bool counting;
         private long counted;
+
+        // A streaming writer's: the stream its buffer is emptied into, the running checksum
+        // each piece is appended to on the way, the header and length the count gave, the
+        // second already declared in the stream, and how many bytes of the payload have gone
+        // to the stream. Its buffer holds the bytes written since it was last emptied.
+        private readonly Stream? sink;
+        private readonly Crc32? crc;
+        private readonly EnvelopeHeader header;
+        private readonly long declared;
+        private long flushed;
 
         internal PayloadWriter()
             : this(256)
@@ -52,10 +111,30 @@ namespace ProbabilisticDataStructures
             this.counting = counting;
         }
 
+        private PayloadWriter(Stream sink, Crc32 crc, EnvelopeHeader header, long declared)
+        {
+            this.buffer = new byte[LoweredStreamBufferLength ?? StreamBufferLength];
+            this.sink = sink;
+            this.crc = crc;
+            this.header = header;
+            this.declared = declared;
+        }
+
         /// <summary>
         /// A writer that stores nothing and counts what it is given.
         /// </summary>
         internal static PayloadWriter Counter() => new(counting: true);
+
+        /// <summary>
+        /// A writer that writes what it is given to <paramref name="sink"/>, a buffer at a
+        /// time, appending every byte to <paramref name="crc"/> as it goes.
+        /// </summary>
+        /// <param name="sink">The stream the payload is written to, after its header.</param>
+        /// <param name="crc">The running checksum the header began.</param>
+        /// <param name="header">What the count said the body writes, for a refusal to name.</param>
+        /// <param name="declared">The payload's counted length, declared in the header.</param>
+        internal static PayloadWriter Streaming(Stream sink, Crc32 crc, EnvelopeHeader header, long declared) =>
+            new(sink, crc, header, declared);
 
         /// <summary>
         /// Whether this writer counts rather than stores.
@@ -66,7 +145,12 @@ namespace ProbabilisticDataStructures
         /// How long the payload is: the bytes written, or, for a counter, the bytes the
         /// same writes would have written.
         /// </summary>
-        internal long Length => this.counting ? this.counted : this.length;
+        internal long Length => this.counting ? this.counted : this.flushed + this.length;
+
+        /// <summary>
+        /// How many bytes of the payload a streaming writer has written to its stream.
+        /// </summary>
+        internal long Streamed => this.flushed;
 
         internal ReadOnlySpan<byte> WrittenSpan => this.buffer.AsSpan(0, this.length);
 
@@ -107,7 +191,7 @@ namespace ProbabilisticDataStructures
         {
             if (BeginRun(value.Length))
             {
-                value.CopyTo(Reserve(value.Length));
+                Append(value);
             }
         }
 
@@ -119,7 +203,7 @@ namespace ProbabilisticDataStructures
         {
             if (BeginBlock(value.Length))
             {
-                value.CopyTo(Reserve(value.Length));
+                Append(value);
             }
         }
 
@@ -134,6 +218,10 @@ namespace ProbabilisticDataStructures
         /// the run is. True otherwise, and the caller then writes exactly
         /// <paramref name="length"/> bytes.
         /// </returns>
+        /// <exception cref="InvalidOperationException">
+        /// The run is longer than <see cref="LongestRun"/>. A counter refuses it, so a write
+        /// counted first refuses it before anything is written.
+        /// </exception>
         /// <remarks>
         /// The length is taken in 64 bits so that a counter can count a run longer than
         /// a payload holds, which is how such a payload comes to be refused naming its
@@ -141,6 +229,7 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         internal bool BeginRun(long length)
         {
+            CheckRun(length);
             WriteUInt32((uint)length);
             return BeginBlock(length);
         }
@@ -153,11 +242,45 @@ namespace ProbabilisticDataStructures
         {
             if (this.counting)
             {
-                this.counted += length;
+                Count(length);
                 return false;
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Refuses a run longer than a payload can hold, naming its length, before its
+        /// length prefix is written.
+        /// </summary>
+        /// <param name="length">The run's length, in bytes, without its prefix.</param>
+        /// <exception cref="InvalidOperationException">
+        /// The run is longer than <see cref="LongestRun"/>.
+        /// </exception>
+        internal static void CheckRun(long length)
+        {
+            if (length > LongestRun)
+            {
+                throw new InvalidOperationException(
+                    $"The payload would hold a run of {length:N0} bytes, and no single run in a " +
+                    $"payload can be longer than {LongestRun:N0} bytes yet, the most a reader " +
+                    "takes into one array. The structure is intact and can still be used, but it " +
+                    "is too large to write, to a stream or as a byte array. Keep less in it, or " +
+                    "split what it holds across several.");
+            }
+        }
+
+        /// <summary>
+        /// Writes out what a streaming writer still holds. It is the payload's last piece
+        /// once the body has written the whole of it.
+        /// </summary>
+        internal void Flush()
+        {
+            if (this.length > 0)
+            {
+                Emit(this.buffer.AsSpan(0, this.length));
+                this.length = 0;
+            }
         }
 
         /// <summary>
@@ -170,7 +293,7 @@ namespace ProbabilisticDataStructures
         /// <param name="length">How many bytes have been written.</param>
         /// <param name="count">How many more are about to be.</param>
         /// <exception cref="InvalidOperationException">
-        /// The payload would be longer than the largest one that can be written.
+        /// The payload would be longer than one array holds with its envelope.
         /// </exception>
         /// <remarks>
         /// All of it in 64 bits. In 32, doubling wrapped negative from a gibibyte up and
@@ -178,7 +301,8 @@ namespace ProbabilisticDataStructures
         /// payload; and the sum of the length and the write wrapped too, so a payload
         /// past the largest array failed in whatever way a negative length fails. Doubling
         /// is clamped to the largest payload, so that the buffer reaches it in one copy and
-        /// every write up to it after that costs nothing.
+        /// every write up to it after that costs nothing. This buffer holds a payload whole,
+        /// so it keeps the ceiling one array sets; a payload past it is streamed instead.
         /// </remarks>
         internal static int GrownCapacity(int capacity, int length, int count)
         {
@@ -195,28 +319,109 @@ namespace ProbabilisticDataStructures
             return (int)Math.Max(needed, Math.Min(2L * capacity, largest));
         }
 
+        /// <summary>
+        /// Adds <paramref name="count"/> bytes to a counter's length, refusing a payload
+        /// longer than a stream holds, whose length no envelope could declare.
+        /// </summary>
+        private void Count(long count)
+        {
+            if (count > long.MaxValue - this.counted)
+            {
+                throw new InvalidOperationException(
+                    $"The payload would be longer than {long.MaxValue:N0} bytes, more than a " +
+                    "stream can hold, so no envelope could declare its length. The structure is " +
+                    "intact and can still be used, but it is too large to write.");
+            }
+
+            this.counted += count;
+        }
+
         private Span<byte> Reserve(int count)
         {
             if (this.counting)
             {
                 // Only a field reaches here from a counter, so the scratch holds it.
-                this.counted += count;
+                Count(count);
                 return this.buffer.AsSpan(0, count);
             }
 
-            var capacity = GrownCapacity(this.buffer.Length, this.length, count);
-            if (capacity != this.buffer.Length)
+            if (this.sink is not null)
             {
-                var grown = new byte[capacity];
-                this.buffer.AsSpan(0, this.length).CopyTo(grown);
-                this.buffer = grown;
+                // Only a field reaches here from a streaming writer, so an emptied buffer
+                // holds it.
+                Admit(count);
+                if (count > this.buffer.Length - this.length)
+                {
+                    Flush();
+                }
+            }
+            else
+            {
+                var capacity = GrownCapacity(this.buffer.Length, this.length, count);
+                if (capacity != this.buffer.Length)
+                {
+                    var grown = new byte[capacity];
+                    this.buffer.AsSpan(0, this.length).CopyTo(grown);
+                    this.buffer = grown;
+                }
             }
 
             var span = this.buffer.AsSpan(this.length, count);
             this.length += count;
             return span;
         }
+
+        /// <summary>
+        /// Writes bytes whose run or block has been begun: into the buffer, or, from a
+        /// streaming writer, into the buffer if they fit it once it is emptied, and
+        /// otherwise to the stream as they are, after what the buffer held.
+        /// </summary>
+        private void Append(ReadOnlySpan<byte> value)
+        {
+            if (this.sink is null)
+            {
+                value.CopyTo(Reserve(value.Length));
+                return;
+            }
+
+            Admit(value.Length);
+            if (value.Length > this.buffer.Length - this.length)
+            {
+                Flush();
+                if (value.Length > this.buffer.Length)
+                {
+                    Emit(value);
+                    return;
+                }
+            }
+
+            value.CopyTo(this.buffer.AsSpan(this.length));
+            this.length += value.Length;
+        }
+
+        /// <summary>
+        /// Refuses a write that would take a streamed payload past the length its header has
+        /// declared, before the write is made.
+        /// </summary>
+        private void Admit(long count)
+        {
+            if (this.Length + count > this.declared)
+            {
+                throw PersistenceFormat.WrotePastItsCount(this.header, this.declared, this.Length + count, this.flushed);
+            }
+        }
+
+        /// <summary>
+        /// Writes one piece of a streamed payload, appending it to the running checksum.
+        /// </summary>
+        private void Emit(ReadOnlySpan<byte> piece)
+        {
+            this.crc!.Append(piece);
+            this.sink!.Write(piece);
+            this.flushed += piece.Length;
+        }
     }
+
 
     /// <summary>
     /// Reads a payload written by <see cref="PayloadWriter"/>, refusing to run off the
@@ -392,14 +597,18 @@ namespace ProbabilisticDataStructures
         /// Over a held payload this reader moves past the slice at once. Over one that is
         /// not held both read from the same stream, so this one follows wherever the slice
         /// leaves it, and the slice has to be skipped to its end before this one goes on.
+        /// <para>
+        /// The length is taken in 64 bits, as a nested large-form envelope claims its own,
+        /// and held to what remains before it is narrowed.
+        /// </para>
         /// </remarks>
-        internal PayloadReader Slice(int length)
+        internal PayloadReader Slice(long length)
         {
             RequireAhead(length);
             if (this.source is null)
             {
-                var slice = new PayloadReader(this.payload.Slice(this.offset, length), this.Budget);
-                this.offset += length;
+                var slice = new PayloadReader(this.payload.Slice(this.offset, (int)length), this.Budget);
+                this.offset += (int)length;
                 return slice;
             }
 

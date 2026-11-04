@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 
@@ -507,6 +508,216 @@ namespace TestProbabilisticDataStructures
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => array.Set(100, 1));
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => array.Increment(100));
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => array.Decrement(100));
+        }
+
+        /// <summary>
+        /// A copy holds the same counters packed the same way, and the two change apart: a
+        /// write to either, to a chunk on tails, to one moving onto tails or to one in its
+        /// pool, leaves the other as it was.
+        /// </summary>
+        /// <remarks>
+        /// Three chunks: the first on tails, the second one add from spilling its pool, and the
+        /// third in its pool. A copy sharing the words, a tails array, or the dictionary of
+        /// them would show the other's write. Two tunings, so that a copy made at the default
+        /// one is caught as well.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(C, S)]
+        [DataRow(ValeCounterArray.MaxCountersPerChunk, ValeCounterArray.MinStubBits)]
+        public void TestACopyHoldsTheSameCountersAndChangesApartFromTheArray(
+            int countersPerChunk, int stubBits)
+        {
+            const ulong Large = 1UL << 40;
+            var array = new ValeCounterArray(3 * countersPerChunk, countersPerChunk, stubBits);
+            for (var i = 0; array.ChunksWithTails == 0; i++)
+            {
+                array.Set(i, Large);
+            }
+            OneAddFromSpilling(array, countersPerChunk);
+            array.Set(2 * countersPerChunk, 7);
+            array.Set(2 * countersPerChunk + 1, Large);
+            Assert.AreEqual(1, array.ChunksWithTails, "the first chunk alone should be on tails");
+
+            var copy = array.Copy();
+            AssertAlike(array, copy, "a copy just made");
+
+            var held = CountsOf(array);
+            copy.Set(1, 3 * Large);
+            copy.Increment(countersPerChunk);
+            copy.Set(2 * countersPerChunk + 1, 5);
+            Assert.AreEqual(2, copy.ChunksWithTails, "the copy's second chunk did not spill");
+            CollectionAssert.AreEqual(held, CountsOf(array), "a write to the copy changed the array");
+            Assert.AreEqual(1, array.ChunksWithTails, "the copy's spill put the array's chunk on tails");
+
+            held = CountsOf(copy);
+            array.Set(0, 5 * Large);
+            array.Increment(countersPerChunk);
+            array.Set(2 * countersPerChunk, 9);
+            CollectionAssert.AreEqual(held, CountsOf(copy), "a write to the array changed the copy");
+            AssertAlike(array, array.Copy(), "a copy of the array as it now is");
+        }
+
+        /// <summary>
+        /// Asked before each increment of a long run whether the increment will move its chunk
+        /// to a tails array, the array answers what the increment then does, at every kind of
+        /// counter the run reaches: a stub with room, a full stub whose longer extension fits
+        /// and one whose extension spills, a full stub in a chunk already on tails, and a
+        /// counter at the largest count.
+        /// </summary>
+        /// <remarks>
+        /// The sketch lays its rows out again, building them first, at the add whose increments
+        /// would put too many chunks on tails, so it has to know that before it takes them; the
+        /// answer is checked against the move itself, not against a second reading of the rule.
+        /// Each kind is counted, and each must have been seen, so a run that never spilled a
+        /// chunk, or never filled a stub, fails rather than agreeing about nothing. The
+        /// tunings are the default, the narrowest stubs with the most counters, which spill
+        /// soonest, and a pool wide enough that only longer extensions spill it.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(C, S)]
+        [DataRow(ValeCounterArray.MaxCountersPerChunk, ValeCounterArray.MinStubBits)]
+        [DataRow(40, 6)]
+        public void TestAnIncrementSaysBeforehandWhetherItMovesItsChunkToTails(
+            int countersPerChunk, int stubBits)
+        {
+            const int Chunks = 64;
+            const int Steps = 400_000;
+            var array = new ValeCounterArray(Chunks * countersPerChunk, countersPerChunk, stubBits);
+            var mask = (1UL << stubBits) - 1;
+            var onTails = new System.Collections.Generic.HashSet<int>();
+
+            // One counter in every eighth chunk starts at the largest count, where an increment
+            // changes nothing; at narrow stubs its extension alone spills the chunk.
+            for (var chunk = 0; chunk < Chunks; chunk += 8)
+            {
+                var before = array.ChunksWithTails;
+                array.Set(chunk * countersPerChunk + 1, ulong.MaxValue);
+                if (array.ChunksWithTails > before)
+                {
+                    onTails.Add(chunk);
+                }
+            }
+
+            const int Roomy = 0, Fits = 1, Spills = 2, OnTails = 3, Largest = 4;
+            var seen = new int[5];
+            var wrong = new System.Collections.Generic.List<string>();
+            var random = new Random(242);
+            for (var step = 0; step < Steps; step++)
+            {
+                var j = random.Next(array.Count);
+                var chunk = j / countersPerChunk;
+                var value = array.Get(j);
+
+                var predicted = array.IncrementMovesToTails(j);
+                var before = array.ChunksWithTails;
+                array.Increment(j);
+                var moved = array.ChunksWithTails - before;
+
+                if (moved != (predicted ? 1 : 0) && wrong.Count < 10)
+                {
+                    wrong.Add($"step {step}, counter {j} at {value}: predicted {predicted}, moved {moved}");
+                }
+
+                var kind = value == ulong.MaxValue ? Largest
+                    : (value & mask) != mask ? Roomy
+                    : onTails.Contains(chunk) ? OnTails
+                    : moved == 1 ? Spills
+                    : Fits;
+                seen[kind]++;
+                if (moved == 1)
+                {
+                    onTails.Add(chunk);
+                }
+            }
+
+            Assert.AreEqual(0, wrong.Count, string.Join(Environment.NewLine, wrong));
+            var tally = $"roomy {seen[Roomy]}, fits {seen[Fits]}, spills {seen[Spills]}, " +
+                $"on tails {seen[OnTails]}, largest {seen[Largest]}";
+            Assert.IsTrue(seen.All(n => n > 0), $"a kind of counter went unseen: {tally}");
+        }
+
+        /// <summary>
+        /// At the edge of a pool, whether an increment moves its chunk to a tails array is
+        /// answered as it then happens, and as the pool's size says it must: a carry whose
+        /// extension keeps its length fits a pool with no room for a longer one, one that grows
+        /// into the pool's last free fragment fits, and one that grows into a pool already full
+        /// spills, as does a counter's first extension into one fragment of room.
+        /// </summary>
+        /// <remarks>
+        /// The long run above reaches these only by chance, and passed with the answer taken at
+        /// the count as it is rather than one higher, with the counter's own extension left out,
+        /// and with a pool filled exactly taken for one too small. Each case is built exactly at the
+        /// default tuning: a pool of 51 fragments, two for an extension of an overflow of one or
+        /// two (a count of 32 to 95) and three for three to eight. The answer and the move are
+        /// both held to what the pool's size says, so a rule that moved early would not pass by
+        /// agreeing with itself.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(24, 0, 63UL, false, DisplayName = "keeps its length, 50 of 51 fragments")]
+        [DataRow(24, 0, 95UL, false, DisplayName = "grows into the last free fragment")]
+        [DataRow(23, 1, 95UL, true, DisplayName = "grows into a pool already full")]
+        [DataRow(25, 0, 31UL, true, DisplayName = "a first extension into one fragment of room")]
+        public void TestAnIncrementAtTheEdgeOfAPoolIsAnsweredAsThePoolSays(
+            int shortest, int longer, ulong value, bool spills)
+        {
+            Assert.AreEqual(51, new ValeCounterArray(C, C, S).PoolFragments);
+            Assert.AreEqual(2, ValeCounter.ExtensionLength(1));
+            Assert.AreEqual(2, ValeCounter.ExtensionLength(2));
+            Assert.AreEqual(3, ValeCounter.ExtensionLength(3));
+
+            var array = new ValeCounterArray(C, C, S);
+            var j = 0;
+            for (var n = 0; n < shortest; n++)
+            {
+                array.Set(j++, 1UL << S);
+            }
+            for (var n = 0; n < longer; n++)
+            {
+                array.Set(j++, 3UL << S);
+            }
+            array.Set(j, value);
+            Assert.AreEqual(0, array.ChunksWithTails, "the pool spilled while it was filled");
+
+            Assert.AreEqual(spills, array.IncrementMovesToTails(j), "the answer before the increment");
+            array.Increment(j);
+            Assert.AreEqual(spills ? 1 : 0, array.ChunksWithTails, "what the increment did");
+            Assert.AreEqual(value + 1, array.Get(j), "the count the increment left");
+        }
+
+        /// <summary>
+        /// Fills the pool of the chunk starting at <paramref name="first"/> with as many of the
+        /// shortest extensions as it holds, and leaves its first counter one count short of
+        /// needing one more.
+        /// </summary>
+        private static void OneAddFromSpilling(ValeCounterArray array, int first)
+        {
+            var shortest = 1UL << array.StubBits;
+            var fit = array.PoolFragments / ValeCounter.ExtensionLength(1);
+            Assert.IsTrue(fit < array.CountersPerChunk, "the chunk is too short to fill its pool");
+            for (var i = 1; i <= fit; i++)
+            {
+                array.Set(first + i, shortest);
+            }
+            array.Set(first, shortest - 1);
+        }
+
+        private static ulong[] CountsOf(ValeCounterArray array)
+        {
+            var counts = new ulong[array.Count];
+            for (var i = 0; i < counts.Length; i++)
+            {
+                counts[i] = array.Get(i);
+            }
+            return counts;
+        }
+
+        private static void AssertAlike(ValeCounterArray expected, ValeCounterArray actual, string what)
+        {
+            CollectionAssert.AreEqual(CountsOf(expected), CountsOf(actual), $"{what}: the counts");
+            Assert.AreEqual(expected.CountersPerChunk, actual.CountersPerChunk, $"{what}: counters a chunk");
+            Assert.AreEqual(expected.StubBits, actual.StubBits, $"{what}: stub bits");
+            Assert.AreEqual(expected.ChunksWithTails, actual.ChunksWithTails, $"{what}: chunks on tails");
+            Assert.AreEqual(expected.SizeInBytes, actual.SizeInBytes, $"{what}: bytes");
         }
     }
 }

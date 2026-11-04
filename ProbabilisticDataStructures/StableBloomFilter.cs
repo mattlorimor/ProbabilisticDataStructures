@@ -131,7 +131,7 @@ namespace ProbabilisticDataStructures
         /// makes its behavior assertable rather than only describable.
         /// </param>
         public StableBloomFilter(uint m, byte d, double fpRate,
-            Func<ReadOnlySpan<byte>, ulong>? hash = null, int? seed = null)
+            Func<ReadOnlySpan<byte>, ulong>? hash = null, ulong? seed = null)
             : this(m, d, fpRate, hash, seed, null)
         {
         }
@@ -146,7 +146,7 @@ namespace ProbabilisticDataStructures
         /// place items the way a large one does.
         /// </remarks>
         internal StableBloomFilter(uint m, byte d, double fpRate,
-            Func<ReadOnlySpan<byte>, ulong>? hash, int? seed, Placement? placement)
+            Func<ReadOnlySpan<byte>, ulong>? hash, ulong? seed, Placement? placement)
         {
             Guard.ValidItemCount(m, nameof(m));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
@@ -169,7 +169,7 @@ namespace ProbabilisticDataStructures
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.random = seed is null
                 ? SeededRandom.Unpredictable()
-                : new SeededRandom((ulong)seed.Value);
+                : new SeededRandom(seed.Value);
             this.originalRandomState = this.random.State;
             this.M = m;
             this.k = k;
@@ -502,10 +502,20 @@ namespace ProbabilisticDataStructures
             ArgumentNullException.ThrowIfNull(stream);
 
             var budget = ReadBudget.For(options, StructureId.StableBloomFilter);
-            var payload = PersistenceFormat.Read(
-                stream, StructureId.StableBloomFilter, out var hashId, out var version, budget, Price,
-                hash, PersistenceFormat.CheckResolvable);
-            var reader = new PayloadReader(payload, budget);
+            return PersistenceFormat.Read(
+                stream, StructureId.StableBloomFilter, budget, Price, hash, PersistenceFormat.CheckResolvable,
+                ReadPayload);
+        }
+
+        /// <summary>
+        /// Reads the payload of the envelope <c>Read</c> opened, once the envelope has
+        /// been checked. See <see cref="PayloadParse{T}"/>.
+        /// </summary>
+        private static StableBloomFilter ReadPayload(
+            ref PayloadReader reader, ushort version, HashId hashId,
+            Func<ReadOnlySpan<byte>, ulong>? hash)
+        {
+            var budget = reader.Budget;
 
             var m = reader.ReadUInt32();
             var k = reader.ReadUInt32();

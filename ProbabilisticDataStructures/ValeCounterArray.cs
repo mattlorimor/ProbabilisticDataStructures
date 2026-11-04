@@ -115,6 +115,14 @@ namespace ProbabilisticDataStructures
         private readonly ulong[] _pool;
 
         /// <summary>
+        /// Called before the array allocates a tails array for a chunk that has outgrown its
+        /// pool, the one allocation a write to a counter can make. It is null;
+        /// <see cref="SublimeCountMinSketch.BeforeAllocating"/> hands a test's hook to the
+        /// rows of a sketch, to fail that allocation.
+        /// </summary>
+        internal Action? BeforeAllocatingTails { get; set; }
+
+        /// <summary>
         /// Builds an array of counters, all nought.
         /// </summary>
         /// <param name="counterCount">How many counters the array holds.</param>
@@ -168,6 +176,27 @@ namespace ProbabilisticDataStructures
             ChunkCount = (counterCount + countersPerChunk - 1) / countersPerChunk;
             _words = new ulong[ChunkCount * WordsPerChunk];
             _pool = new ulong[_poolWords];
+        }
+
+        /// <summary>
+        /// A copy of the array, which changes apart from it: the same counters packed the same
+        /// way, at the same tuning and with the same chunks on tails, in arrays of its own.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="BeforeAllocatingTails"/> is not copied; whoever wants the copy hooked
+        /// hooks it.
+        /// </remarks>
+        internal ValeCounterArray Copy()
+        {
+            var copy = new ValeCounterArray(_counterCount, _countersPerChunk, _stubBits);
+            Array.Copy(_words, copy._words, _words.Length);
+            copy._tails.EnsureCapacity(_tails.Count);
+            foreach (var (chunk, tails) in _tails)
+            {
+                copy._tails.Add(chunk, (ulong[])tails.Clone());
+            }
+
+            return copy;
         }
 
         /// <summary>How many counters the array holds.</summary>
@@ -280,13 +309,8 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         internal void Increment(int index)
         {
-            var chunk = ChunkOf(index, out var i);
-            var stubAt = ChunkStart(chunk) + _stubBase + i * _stubBits;
-
-            var stub = ReadBits(_words, stubAt, _stubBits);
-            if (stub != _stubMask)
+            if (IncrementInStub(index))
             {
-                WriteBits(_words, stubAt, _stubBits, stub + 1);
                 return;
             }
 
@@ -295,6 +319,41 @@ namespace ProbabilisticDataStructures
             {
                 Set(index, value + 1);
             }
+        }
+
+        /// <summary>
+        /// Adds one to a counter where its stub lies, if the stub has room for it, and says
+        /// whether it did; a counter whose stub is full is left as it is.
+        /// </summary>
+        /// <remarks>
+        /// This is <see cref="Increment"/>'s short cut, which most increments stop at. It
+        /// touches the stub and nothing else, so it cannot allocate, and
+        /// <see cref="TakeBackFromStub"/> undoes it exactly.
+        /// </remarks>
+        internal bool IncrementInStub(int index)
+        {
+            var chunk = ChunkOf(index, out var i);
+            var stubAt = ChunkStart(chunk) + _stubBase + i * _stubBits;
+
+            var stub = ReadBits(_words, stubAt, _stubBits);
+            if (stub == _stubMask)
+            {
+                return false;
+            }
+
+            WriteBits(_words, stubAt, _stubBits, stub + 1);
+            return true;
+        }
+
+        /// <summary>
+        /// Takes back an add that <see cref="IncrementInStub"/> took, leaving the stub as it
+        /// was before.
+        /// </summary>
+        internal void TakeBackFromStub(int index)
+        {
+            var chunk = ChunkOf(index, out var i);
+            var stubAt = ChunkStart(chunk) + _stubBase + i * _stubBits;
+            WriteBits(_words, stubAt, _stubBits, ReadBits(_words, stubAt, _stubBits) - 1);
         }
 
         /// <summary>
@@ -374,21 +433,8 @@ namespace ProbabilisticDataStructures
                 return;
             }
 
-            ReadPool(chunk);
-            var start = ExtensionStart(Rank(chunk, i));
-            var used = TotalPoolBits();
-
-            var was = 0;
-            if (had)
-            {
-                ValeCounter.DecodeExtension(_pool, start, _poolBits, out was);
-            }
-
-            var wanted = wants
-                ? ValeCounter.ExtensionLength(overflow) * ValeCounter.FragmentBits
-                : 0;
-
-            if (used - was + wanted > _poolBits)
+            if (Outgrows(chunk, i, overflow, had, wants,
+                out var start, out var used, out var was, out var wanted))
             {
                 // The pool cannot hold this. Everything in it is decanted into a tails
                 // array, which has to happen before the pool is disturbed.
@@ -413,6 +459,64 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Whether the pool of a chunk that is not on tails is too small for counter
+        /// <paramref name="i"/>'s high bits to become <paramref name="overflow"/>, with the
+        /// pool read into the scratch buffer, where the counter's extension starts, how much of
+        /// the pool is in use, and how many bits the extension takes now and would take.
+        /// </summary>
+        private bool Outgrows(int chunk, int i, ulong overflow, bool had, bool wants,
+            out int start, out int used, out int was, out int wanted)
+        {
+            ReadPool(chunk);
+            start = ExtensionStart(Rank(chunk, i));
+            used = TotalPoolBits();
+
+            was = 0;
+            if (had)
+            {
+                ValeCounter.DecodeExtension(_pool, start, _poolBits, out was);
+            }
+
+            wanted = wants
+                ? ValeCounter.ExtensionLength(overflow) * ValeCounter.FragmentBits
+                : 0;
+
+            return used - was + wanted > _poolBits;
+        }
+
+        /// <summary>
+        /// Whether <see cref="Increment"/> at this counter would move its chunk onto a tails
+        /// array, which is the one thing an increment can allocate. It changes no counter.
+        /// </summary>
+        /// <remarks>
+        /// It takes the increment's own steps and the pool's own test. A stub with room takes
+        /// the add where it lies; a chunk already on tails has nowhere further to go; a counter
+        /// at the largest count stays there. What is left is a full stub, which carries into
+        /// the counter's extension, so the counter wants one, and the question is whether the
+        /// pool holds it at the count one higher.
+        /// </remarks>
+        internal bool IncrementMovesToTails(int index)
+        {
+            var chunk = ChunkOf(index, out var i);
+            var at = ChunkStart(chunk);
+            if (ReadBits(_words, at + _stubBase + i * _stubBits, _stubBits) != _stubMask
+                || _tails.ContainsKey(chunk))
+            {
+                return false;
+            }
+
+            var value = Get(index);
+            if (value == ulong.MaxValue)
+            {
+                return false;
+            }
+
+            var had = ReadBits(_words, at + i, 1) != 0;
+            return Outgrows(chunk, i, ValeCounter.OverflowOf(value + 1, _stubBits), had, true,
+                out _, out _, out _, out _);
+        }
+
+        /// <summary>
         /// Empties a chunk's pool into a tails array and flags the chunk as using one.
         /// </summary>
         /// <remarks>
@@ -422,6 +526,7 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         private ulong[] MoveToTails(int chunk, int used)
         {
+            BeforeAllocatingTails?.Invoke();
             var tails = new ulong[_countersPerChunk];
 
             var at = 0;
