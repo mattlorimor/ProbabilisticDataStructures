@@ -124,6 +124,7 @@ structure whose layout changes bumps only its own.
 | 7 | the release after 6.2.0 | `ScalableBloomFilter` | the growth factor, written only by a filter that grows |
 | 8 | the release after 6.2.0 | `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter`, `StableBloomFilter` | a placement byte, and the item count as a `u64`; written by every save |
 | 9 | the release after 6.2.0 | `InverseBloomFilter`, `CountMinSketch`, `HeavyKeeper`, `PrivateCountMinSketch`, `DpswSketch` | a placement byte, in each private sketch body for `DpswSketch`; written by every save |
+| 10 | the release after 6.2.0 | `SublimeCountMinSketch` | the packing tuning of each state, before its counters; written by every save |
 
 The version field's high bit, `0x8000`, is not part of a version: it marks
 [the large form](#the-large-form) of the envelope, and the version is the other fifteen
@@ -236,6 +237,13 @@ A payload before version 9 has no placement byte and was placed with 32-bit valu
 whatever its width, and reads back that way, and saves again as version 9. Two
 `CountMinSketch`es of the same width placed differently count the same item in different
 columns, so they refuse to merge, and so do two `TopK`s holding them.
+
+Version 10 is `SublimeCountMinSketch`'s. It writes the layout of version 1 with the tuning
+each state's counters are packed at stored before them, so that a read can be priced from
+the fields without reading the counters; [its section](#sublimecountminsketch-id-29) says
+what the tuning is and how a reader holds it to the counters. Every save is version 10, so
+a library older than version 10 reads none of them; a payload written before it still
+reads, and saves again as version 10.
 
 A reader refuses a payload whose magic does not match, whose version is not one its
 structure has defined, whose structure id is not the type being read, or whose
@@ -490,9 +498,11 @@ skipped, to name the total, before its checksum could be checked. One in the lar
 never held either. It is priced in a first pass over its stream, which reads the fields
 the structure's price depends on and seeks over the rest, and then read in a second, so it
 is priced before its checksum is reached, which follows it, and a refusal of it says so. A
-structure whose price depends on every field it holds is read whole by that first pass. A
-payload that ends early, or whose fields are not ones its reader accepts, is priced as far
-as it goes.
+structure whose price depends on every field it holds is read whole by that first pass, as
+a `SublimeCountMinSketch` payload from before version 10 would be: its counters are the only
+record of the tuning its price needs. From version 10 it stores the tuning, and the first
+pass seeks past its counters. A payload that ends early, or whose fields are not ones its
+reader accepts, is priced as far as it goes.
 
 The hash id is checked before anything is priced: after the checksum when the payload is
 held, as the header states it when it is not, and in the large form after the header's own
@@ -1312,7 +1322,11 @@ u64     the count at which the arrays next double
 u64     the count at which they next fold back
 u32     the number of records of earlier states, oldest first
 u32       the number of counters in one row of that record
+u8        the counters to a chunk its counters are packed at   (version 10 only)
+u8        the bits of a stub they are packed at                (version 10 only)
 u64         each of its counters, row by row
+u8      the counters to a chunk the current arrays are packed at   (version 10 only)
+u8      the bits of a stub they are packed at                      (version 10 only)
 u64     each counter of the current arrays, row by row
 ```
 
@@ -1321,7 +1335,40 @@ them in. Packing depends on two parameters the sketch retunes as it runs, so pac
 would only be safely readable by the version that wrote them — and a corrupted payload
 would not look corrupt, it would decode into different counters. Every `u64` is a valid
 count, so nothing in this layout can be misread as something else. The sketch packs them
-again on the way in, at a tuning chosen to suit what it just read.
+again on the way in, at a tuning chosen to suit what it just read: how many counters
+share a chunk of 512 bits, and how many bits each has before it spills into the chunk's
+pool, its stub.
+
+From version 10 the payload also stores that tuning, before each state's counters, so
+that a read can be priced from the fields alone and seek past the counters, as a payload
+that is not held is priced (see [Read budget](#read-budget)). What the packed counters are
+charged depends on how many share a chunk and on nothing else they hold, since every
+chunk is charged a tails array, spilled or not; the stub width is stored with it so that
+the reader packs at what is stored. The tuning stored is the one the counters call for,
+by the rule below, and not the one the sketch held them at, which it changes only when its
+arrays crowd. So the payload is still a function of the counts alone, and a reader holds
+the stored tuning to the counters: it packs them at it, and refuses a payload whose
+counters call for another, naming both. A tuning no chunk holds, fewer than 16 or more
+than 92 counters to a chunk or a stub narrower than 4 bits or wider than 32, is refused
+before anything after it is priced. A payload before version 10 stores no tuning, and its
+counters are read for the one they call for, by its price as well.
+
+The tuning a state's counters call for is found from how many of them, *N* in all, have
+each bit length, from 0 for a counter holding nothing to 64. For each count *c* of
+counters to a chunk from 92 down to 16, try each stub width *s* from 4 up to 32. A chunk's
+pool is *p* = 511 − *c*(*s* + 1) bits. If *p* is more than 128, try the next *s*; if it is
+less than 48, go on to the next *c*. Otherwise, with *k* = max(1, *N* / *c*), take each bit
+length *b* above *s* held by *n*<sub>*b*</sub> counters, and the bits *x*<sub>*b*</sub>
+its extension takes: two for each base-3 digit of 2<sup>*b* − *s*</sup> − 1, which has at
+least one, and two more. Sum the expected bits *E* = Σ (*x*<sub>*b*</sub> / *k*) ·
+*n*<sub>*b*</sub> and their variance *V* = Σ ((*x*<sub>*b*</sub> · *x*<sub>*b*</sub>) /
+*k* − (*x*<sub>*b*</sub> / *k*)²) · *n*<sub>*b*</sub>, over *b* in increasing order. The
+tuning is the first (*c*, *s*) for which *p* − *E* is not negative and is either nought or
+has *V* / (*p* − *E*)² no more than 0.03. If none is, it is 16 counters to a chunk with
+27-bit stubs, the widest whose pool at 16 counters is between 48 and 128 bits. The
+arithmetic is IEEE 754 binary64, each term as written, and uses nothing whose last bit
+differs between platforms, so a payload written on one reads on another. The rule belongs
+to version 10: a release that tunes otherwise writes a version of its own.
 
 The records of earlier states are what let the sketch fold back rather than only grow.
 Each stands for one doubling and is half the width of the one after it, so a reader can

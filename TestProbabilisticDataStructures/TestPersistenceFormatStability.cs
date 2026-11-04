@@ -541,7 +541,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestTheVersionAfterTheNewestIsRefused()
         {
-            // Ten is one past the newest, version 9. It is written out rather than
+            // Eleven is one past the newest, version 10. It is written out rather than
             // computed from the library's ceiling, which is the thing being checked.
             var newest = new (string Fixture, Func<Stream, object> Read)[]
             {
@@ -554,13 +554,14 @@ namespace TestProbabilisticDataStructures
                 ("heavykeeper-v9-narrow.bin", s => HeavyKeeper.ReadFrom(s)),
                 ("inversebloomfilter-v9-narrow.bin", s => InverseBloomFilter.ReadFrom(s)),
                 ("dpswsketch-v9-narrow.bin", s => DpswSketch.ReadFrom(s)),
+                ("sublimecountminsketch-v10.bin", s => SublimeCountMinSketch.ReadFrom(s)),
             };
 
             foreach (var (fixture, read) in newest)
             {
-                var bytes = Relabeled(ReadFixture(fixture), 10);
+                var bytes = Relabeled(ReadFixture(fixture), 11);
                 var ex = Assert.ThrowsExactly<InvalidDataException>(() => read(new MemoryStream(bytes)), fixture);
-                StringAssert.Contains(ex.Message, "format version 10", fixture);
+                StringAssert.Contains(ex.Message, "format version 11", fixture);
                 StringAssert.Contains(ex.Message, "written by a later version", fixture);
             }
         }
@@ -1369,6 +1370,52 @@ namespace TestProbabilisticDataStructures
                 "the stored sketch no longer carries the record it needs to fold back");
         }
 
+        /// <summary>
+        /// Version 10 stores, before each state's counters, the tuning a read packs them at
+        /// (#280). Its fixture was assembled outside the library, from FORMAT.md alone: the
+        /// version 1 fixture's payload with a byte for the counters to a chunk and a byte for
+        /// the stub width before the record's counters and before the rows', each worked out
+        /// from that state's counters by the rule the Sublime section states. So it reads as
+        /// the sketch the version 1 fixture holds, packed at the tuning it stores, and the
+        /// version 1 fixture saves again as it, byte for byte; and without its tuning it is
+        /// the version 1 fixture.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredSublimeCountMinSketchAtVersionTenReadsAsTheOneBeforeIt()
+        {
+            var stored = ReadFixture("sublimecountminsketch-v10.bin");
+            var earlier = ReadFixture("sublimecountminsketch-v1.bin");
+            var sketch = SublimeCountMinSketch.ReadFrom(new MemoryStream(stored));
+            var before = SublimeCountMinSketch.ReadFrom(new MemoryStream(earlier));
+
+            Assert.AreEqual(before.Width, sketch.Width);
+            Assert.AreEqual(before.Depth, sketch.Depth);
+            Assert.AreEqual(before.TotalCount(), sketch.TotalCount());
+            for (var i = 0; i < 40; i++)
+            {
+                Assert.AreEqual(before.Count(Key($"flow-{i}")), sketch.Count(Key($"flow-{i}")),
+                    $"flow-{i} is counted differently at version 10");
+            }
+
+            // The rows' tuning is the two bytes before their counters, the last thing in
+            // the payload.
+            var rowsTuning = stored.Length - 4 - 8 * sketch.Depth * sketch.Width - 2;
+            Assert.AreEqual((stored[rowsTuning], stored[rowsTuning + 1]),
+                ((byte)sketch.CountersPerChunk, (byte)sketch.StubBits),
+                "the rows were not packed at the tuning the payload stores");
+
+            // One record of 64 counters a row, four rows: its tuning follows its width.
+            const int RecordTuning = 14 + 3 * 8 + 2 * 4 + 3 * 8 + 4 + 4;
+            var withoutTuning = stored[14..RecordTuning]
+                .Concat(stored[(RecordTuning + 2)..rowsTuning])
+                .Concat(stored[(rowsTuning + 2)..^4])
+                .ToArray();
+            CollectionAssert.AreEqual(earlier[14..^4], withoutTuning,
+                "the version 10 fixture without its tuning is not the version 1 fixture's payload");
+
+            AssertBytes("sublimecountminsketch-v10.bin", before.ToByteArray());
+        }
+
         [TestMethod]
         public void TestStoredGrafiteStillReads()
         {
@@ -1959,7 +2006,9 @@ namespace TestProbabilisticDataStructures
                 sublime.Remove(Key($"flow-{i % 40}"));
             }
 
-            AssertBytes("sublimecountminsketch-v1.bin", sublime.ToByteArray());
+            // v10, not v1: the payload also stores each state's tuning (#280). The v1
+            // fixture is what 6.2.0 wrote, and is read by TestStoredSublimeCountMinSketchStillReads.
+            AssertBytes("sublimecountminsketch-v10.bin", sublime.ToByteArray());
 
             AssertBytes("grafite-v1.bin", Grafite.Build(
                 Enumerable.Range(0, 500).Select(i => (ulong)(i * 1009)),

@@ -292,17 +292,6 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// What a structure's price is let off reading: the structures whose price reads all
-        /// of their payload, with the reason, held to it so that the reason going stale fails.
-        /// </summary>
-        private static readonly Dictionary<StructureId, string> PricedFromEveryByte = new()
-        {
-            [StructureId.SublimeCountMinSketch] =
-                "its packed counters are tuned to the counts, so its price reads every count to " +
-                "price them; a format version recording the tuning is to let it seek over them",
-        };
-
-        /// <summary>
         /// Every structure in the large form is read in two passes over its stream, with one
         /// move back to the payload's first byte between them. The first, the price, reads
         /// only fields, none longer than the widest, and no byte of a run, and less than the
@@ -323,7 +312,12 @@ namespace TestProbabilisticDataStructures
         /// are sized so the bulk of each payload is its runs or its counted fields.
         /// <para>
         /// A price reads the fields its structure's price depends on, so a structure whose
-        /// bulk is fields its price needs reads them all: <see cref="PricedFromEveryByte"/>.
+        /// bulk were fields its price needs would read them all. <c>SublimeCountMinSketch</c>
+        /// was one, let off here with that reason, until version 10 stored the tuning its
+        /// packed counters are priced at: its price had read every count to work it out, and
+        /// now seeks past them (#280), so no structure is let off. A Sublime payload from
+        /// before version 10 still is priced from every byte, and is not one the samples hold,
+        /// since they are written at the version each structure writes.
         /// </para>
         /// </remarks>
         [TestMethod]
@@ -332,11 +326,6 @@ namespace TestProbabilisticDataStructures
             var samples = TestReadBudget.Samples.Value;
             var start = (long)PersistenceFormat.LargeHeaderLength;
             long runBytes = 0, movedOver = 0, payloadBytes = 0;
-
-            foreach (var reason in PricedFromEveryByte.Values)
-            {
-                Assert.IsFalse(string.IsNullOrWhiteSpace(reason), "a structure is let off without a reason");
-            }
 
             foreach (var (id, sample) in samples)
             {
@@ -420,15 +409,7 @@ namespace TestProbabilisticDataStructures
                 Console.WriteLine(
                     $"[TWO-PASS] {id}: payload {payload:N0}, priced from {priced:N0}, runs {bulk.Count:N0} of {bulk.Sum(r => r.Count):N0} bytes");
 
-                if (PricedFromEveryByte.ContainsKey(id))
-                {
-                    Assert.AreEqual(payload, priced,
-                        $"{id} is let off pricing from less than its whole payload, and priced from {priced:N0} of {payload:N0}");
-                }
-                else
-                {
-                    Assert.IsLessThan(payload, priced, $"{id}'s price read all {payload:N0} bytes of its payload");
-                }
+                Assert.IsLessThan(payload, priced, $"{id}'s price read all {payload:N0} bytes of its payload");
             }
 
             // Vacuity: the sweep held something to the claims about runs.

@@ -100,7 +100,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   First the structure's price walks it, reading the fields the price depends on and seeking
   over the rest, so that the read is priced whole before anything is allocated and a budget
   of the total a refusal names loads it. A structure whose price depends on every field it
-  holds reads all of them in that pass. Then the reader reads it from its first byte again,
+  holds reads all of them in that pass. A `SublimeCountMinSketch` written before format
+  version 10 would be one, since its price reads every counter for their tuning; this
+  release writes version 10 (below), whose price reads the tuning and seeks past the
+  counters. Then the reader reads it from its first byte again,
   each run straight into the storage that keeps it, the checksum carried on over every byte
   and compared at the end. In the suite, each structure read from the large form allocated
   its payload's size less, within 96 bytes, than the same structure read from the ordinary
@@ -310,6 +313,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   placement, and save again as version 9. A placement byte naming neither scheme is refused
   with what it holds. A `TopK` keeps version 1: its sketch is in an envelope of its own, and
   that is version 9. (#192)
+
+- **`SublimeCountMinSketch` saves at format version 10, which stores how each state is
+  packed.** Every save is now
+  [format version 10](FORMAT.md#sublimecountminsketch-id-29): the layout of version 1 with
+  two bytes before the counters of each record and of the current rows, the counters to a
+  chunk and the stub width a read packs those counters at. A read is then priced from the
+  fields and seeks past the counters, where the price read every counter to work their
+  tuning out. For a sketch that has doubled three times, the price read every byte of its
+  envelope but the checksum; it now reads 94 of the 38,498, the header and the fields, and
+  seeks past 38,400 bytes of counters. The tuning stored is the one the counters call for,
+  not the one the sketch held them at, so the same counts still write the same bytes; a
+  reader refuses a payload whose counters call for another, or whose tuning no chunk
+  holds. The counters are still plain `u64`, and are charged what they were.
+  **Releases up to 6.2.0 refuse every such payload** as written by a later version.
+  Payloads 6.2.0 wrote still read, priced as before by reading their counters, and save
+  again as version 10. (#280)
 
 - **`SetSketch` now documents a small low bias in a very large sketch's cardinality, which
   it keeps.** An element's first value goes to a register drawn with a 32-bit

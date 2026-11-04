@@ -289,6 +289,15 @@ namespace ProbabilisticDataStructures
         internal const ushort ColumnPlacementVersion = 9;
 
         /// <summary>
+        /// The version at which <see cref="SublimeCountMinSketch"/> stores, before each
+        /// state's counters, the tuning its reader packs them at: how many counters share a
+        /// chunk, and how wide their stubs are. A read can then be priced from the fields and
+        /// seek past the counters; before it, the price read every counter to work out the
+        /// tuning they call for. The tuning stored is that one, and a reader refuses any other.
+        /// </summary>
+        internal const ushort SublimeTuningVersion = 10;
+
+        /// <summary>
         /// The format versions each structure has defined, which are exactly the ones its
         /// reader reads. This is the one place that says so.
         /// </summary>
@@ -342,7 +351,7 @@ namespace ProbabilisticDataStructures
             [StructureId.Grafite] = [DefaultVersion],
             [StructureId.InfiniFilter] = [DefaultVersion],
             [StructureId.MementoFilter] = [DefaultVersion],
-            [StructureId.SublimeCountMinSketch] = [DefaultVersion],
+            [StructureId.SublimeCountMinSketch] = [DefaultVersion, SublimeTuningVersion],
             [StructureId.SetSketch] = [DefaultVersion, SetSketchVariantVersion],
             [StructureId.TupleSketch] = [DefaultVersion],
             [StructureId.PrivateCountMinSketch] = [DefaultVersion, ColumnPlacementVersion],
