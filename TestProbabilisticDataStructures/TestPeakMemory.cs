@@ -455,6 +455,53 @@ namespace TestProbabilisticDataStructures
                 "was collected before the count was compared with the limit");
         }
 
+        // ---- BloomierFilter: the pairs -------------------------------------------------------
+
+        /// <summary>
+        /// The keys a Bloomier build is measured at: a power of two, so that arrays which grow
+        /// by doubling end exactly the size of what they hold and the measurement is of what
+        /// the build keeps, not of where the count fell between two doublings.
+        /// </summary>
+        private const int BuildKeys = 1 << 16;
+
+        /// <summary>
+        /// A Bloomier build holds the distinct pairs once. It used to collect them into a
+        /// dictionary and then copy them into a list, 28 bytes a key at the least for the one
+        /// and 16 for the other, before the peel copied them again into the arrays it reads:
+        /// about 42 GB for the two at the most keys a map of 8-bit values holds.
+        /// </summary>
+        /// <remarks>
+        /// What is measured is everything a build of 2^16 distinct keys allocates, the least
+        /// of five: the cells it keeps, the peel's arrays and the pairs. The pairs allocate
+        /// nothing themselves (<see cref="CountedPairs"/>).
+        /// </remarks>
+        [TestMethod]
+        public void TestABloomierBuildHoldsItsPairsOnce()
+        {
+            var pairs = new CountedPairs(BuildKeys);
+            BloomierFilter map = null;
+            var allocated = Allocated(() => map = BloomierFilter.Build(pairs, 8));
+            var perKey = (double)allocated / BuildKeys;
+
+            Assert.AreEqual((uint)BuildKeys, map.Count(), "premise: every key was built");
+            for (var i = 0; i < BuildKeys; i += 997)
+            {
+                Assert.IsTrue(map.TryGetValue(Key(i), out var value), $"key {i} is missing");
+                Assert.AreEqual((ulong)(i & 0xFF), value, $"key {i} came back with the wrong value");
+            }
+
+            // Not vacuous: the build allocated at least the cells it keeps.
+            var cells = BloomierFilter.CellBytes(BuildKeys, 8);
+            Assert.IsGreaterThan(cells, allocated, "premise: the measurement is of a build");
+            // Measured with the pairs in a dictionary and then a list, 138.5 bytes a key. Held
+            // once, in the two arrays the peel reads with an index of them beside, 92.3: the
+            // arrays and the index as they double, the peel's arrays and the cells. The bound
+            // is a quarter more than that.
+            Assert.IsLessThan(115.0, perKey,
+                $"a build of {BuildKeys:N0} keys allocated {allocated:N0} bytes, {perKey:F1} a " +
+                "key: the pairs were held in more than one collection of every pair");
+        }
+
         /// <summary>
         /// Distinct pairs, as many as asked for, counting how many have been read. Each key is
         /// written into one buffer, which a build may do because it hashes a key when it
