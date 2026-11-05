@@ -881,6 +881,7 @@ namespace ProbabilisticDataStructures
             CheckTotals(sketch.count, sketch.expansionLimit, width, sizeFactor, growthExponent);
 
             var recordCount = reader.ReadUInt32();
+            CheckFolding(sketch.contractionLimit, recordCount);
             var expected = FirstRecordWidth(recordCount, width);
 
             for (var i = 0; i < recordCount; i++)
@@ -1044,6 +1045,37 @@ namespace ProbabilisticDataStructures
             }
 
             return expected;
+        }
+
+        /// <summary>
+        /// Checks that a payload claims a count at which the rows fold back only with a record
+        /// to fold them back by.
+        /// </summary>
+        /// <remarks>
+        /// A sketch folds its rows by the record of the doubling that widened them, and holds a
+        /// folding count only while it holds a record: nought until its first doubling, and
+        /// nought again once a folding takes its last record off. A sketch read with one and no
+        /// record never folded at it, since a folding needs a record, and wrote the claim back
+        /// as it was read. 6.2.0 took a folding's record off before it allocated the folded
+        /// rows, so a folding that ran out of memory left a sketch of one record so, which it
+        /// wrote; that sketch can no longer fold back. Only the read makes the check: it stops
+        /// no allocation, and a price that refuses does not stop the read.
+        /// <para>
+        /// Otherwise the count is not checked. One that does not fit the records can only bring
+        /// the next folding earlier or later, and every folding and doubling sets it afresh.
+        /// </para>
+        /// </remarks>
+        private static void CheckFolding(ulong contractionLimit, uint recordCount)
+        {
+            if (contractionLimit != 0 && recordCount == 0)
+            {
+                throw new InvalidDataException(
+                    $"Sketch claims a count of {contractionLimit:N0} for its rows to fold " +
+                    "back below, and carries no record of an earlier state to fold them " +
+                    "back to. A sketch holds a folding count only while it holds the record " +
+                    "of the doubling a folding undoes. 6.2.0 left a sketch in this state, " +
+                    "and wrote it, when removing a key ran out of memory folding its rows back.");
+            }
         }
 
         private static void CheckRecord(int i, uint recordWidth, uint expected)

@@ -1394,8 +1394,12 @@ is not the same in its last bit on every platform, and a payload written on one 
 on another; twice the width doubles at about twice the count or more, which no such
 difference reaches. A doubling count of 2^64 or more is written as the largest `u64` and
 stands for one no total reaches, so any total fits beneath it, the largest included.
-Every payload 6.2.0 wrote meets both. The count at which the arrays fold back is not
-checked: one that does not fit can only bring the next fold earlier or later, and every
+Every payload 6.2.0 wrote meets both. The count at which the arrays fold back is held to
+the records: the arrays fold back by the last record, and a sketch has a count to fold at
+only while it holds one, so a payload with no records and a folding count other than nought
+is refused. 6.2.0 wrote such a payload when a removal ran out of memory folding the arrays
+back, having already taken the sketch's only record off. With records, the folding count is
+not checked: one that does not fit can only bring the next fold earlier or later, and every
 fold and doubling sets it afresh.
 
 ### `SetSketch` (id 30)

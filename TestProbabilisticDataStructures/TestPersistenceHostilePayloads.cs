@@ -1651,6 +1651,64 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Where the count at which a Sublime sketch's rows fold back sits, and the number of
+        /// records of earlier states after it.
+        /// </summary>
+        private const int SublimeFoldingAt = 48;
+        private const int SublimeRecordsAt = 56;
+
+        /// <summary>
+        /// A sketch folds its rows back by the record of the doubling that widened them, so it
+        /// holds a count at which they fold back only while it holds a record: nought before its
+        /// first doubling and after its last folding, and set afresh by each. A payload claiming
+        /// one with no record behind it was read, and written back with the claim in it, though
+        /// no folding could happen at it. It is refused. Straddled: the same payload with the
+        /// count at nought reads, and a sketch holding a record reads at its own count.
+        /// </summary>
+        /// <remarks>
+        /// 6.2.0 wrote such a payload, measured by hand: its removal took the record off before
+        /// it allocated the folded rows, so a folding that ran out of memory left a sketch of
+        /// one record with none and its folding count where it was, which it wrote, and which
+        /// both it and the reader before this read. Rows of 2^22, the record of rows of 2^21,
+        /// under a heap limit of 1 GiB; the payload, 160 MiB, is too large to keep as a fixture.
+        /// </remarks>
+        [TestMethod]
+        public void TestSublimeCountMinSketchFoldingBackWithNoRecordIsRefused()
+        {
+            var sketch = new SublimeCountMinSketch(0.02);
+            for (var i = 0; i < 1_000; i++)
+            {
+                sketch.Add(Key($"flow-{i % 40}"));
+            }
+            var unrecorded = sketch.ToByteArray();
+            Assert.AreEqual(0u, BinaryPrimitives.ReadUInt32LittleEndian(
+                unrecorded.AsSpan(PayloadStart + SublimeRecordsAt)), "the sketch doubled");
+            Assert.AreEqual(0UL, BinaryPrimitives.ReadUInt64LittleEndian(
+                unrecorded.AsSpan(PayloadStart + SublimeFoldingAt)));
+
+            foreach (var folding in new[] { 1UL, 1_000UL, ulong.MaxValue })
+            {
+                AssertRefused(
+                    () => Persistence.FromByteArray<SublimeCountMinSketch>(
+                        PokeUInt64(unrecorded, SublimeFoldingAt, folding)),
+                    "no record");
+            }
+
+            var atNought = Persistence.FromByteArray<SublimeCountMinSketch>(
+                PokeUInt64(unrecorded, SublimeFoldingAt, 0));
+            Assert.AreEqual(1_000UL, atNought.TotalCount());
+
+            var recorded = SublimePayload();
+            Assert.AreEqual(1u, BinaryPrimitives.ReadUInt32LittleEndian(
+                recorded.AsSpan(PayloadStart + SublimeRecordsAt)), "the sketch did not double once");
+            Assert.AreEqual(2_560UL, BinaryPrimitives.ReadUInt64LittleEndian(
+                recorded.AsSpan(PayloadStart + SublimeFoldingAt)));
+            var read = Persistence.FromByteArray<SublimeCountMinSketch>(recorded);
+            Assert.AreEqual(128, read.Width);
+            CollectionAssert.AreEqual(recorded, read.ToByteArray(), "a sketch holding a record reads back as it was");
+        }
+
+        /// <summary>
         /// The guard the private sketch exists for. A counter is a draw from a
         /// continuous distribution plus a whole number of hits, so it is non-integral
         /// with probability one and stays so for the sketch's whole life. A payload
