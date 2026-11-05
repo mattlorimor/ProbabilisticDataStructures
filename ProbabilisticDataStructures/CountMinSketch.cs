@@ -527,7 +527,7 @@ namespace ProbabilisticDataStructures
             }
 
             var left = (long)width * depth * sizeof(ulong);
-            Span<byte> piece = stackalloc byte[PayloadReader.PieceFor(left)];
+            Span<byte> piece = stackalloc byte[PayloadReader.BlockPieceFor(left)];
             uint row = 0;
             uint column = 0;
             while (left > 0)

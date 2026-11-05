@@ -816,11 +816,16 @@ namespace ProbabilisticDataStructures
             return count;
         }
 
+        /// <summary>The buffer a run of <paramref name="count"/> bytes is read through in pieces.</summary>
+        private static int PieceFor(long count) => (int)Math.Min(count, PayloadSource.PieceBytes);
+
         /// <summary>
-        /// The buffer a run, or a block (<see cref="ReadBlock"/>), of <paramref name="count"/>
-        /// bytes is read through in pieces.
+        /// The buffer, on its caller's stack, a block (<see cref="ReadBlock"/>) of
+        /// <paramref name="count"/> bytes is read through in pieces: no longer than the block,
+        /// as a run's is no longer than the run, and no longer than
+        /// <see cref="PayloadSource.BlockPieceBytes"/>.
         /// </summary>
-        internal static int PieceFor(long count) => (int)Math.Min(count, PayloadSource.PieceBytes);
+        internal static int BlockPieceFor(long count) => (int)Math.Min(count, PayloadSource.BlockPieceBytes);
 
         /// <summary>
         /// Reads the next <c>piece.Length</c> bytes into <paramref name="piece"/>: a piece of a
@@ -830,7 +835,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <remarks>
         /// As <see cref="ReadWords"/> is for a run, with nothing allocated: the piece is the
-        /// caller's, on its stack, no longer than <see cref="PieceFor"/> says. So a block read
+        /// caller's, on its stack, no longer than <see cref="BlockPieceFor"/> says. So a block read
         /// this way allocates, and is charged, what it did read a word at a time, and each piece
         /// is held to what the payload has left as each word was.
         /// </remarks>
@@ -1086,7 +1091,7 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// A shorter piece for the sources made on the calling thread, so that the suite can
-        /// show a run read in pieces at lengths it can build; null otherwise, as it is in
+        /// show a run, or a block, read in pieces at lengths it can build; null otherwise, as it is in
         /// every thread but a test's. A whole number of eight-byte words.
         /// </summary>
         [ThreadStatic]
@@ -1098,6 +1103,23 @@ namespace ProbabilisticDataStructures
         /// pieces.
         /// </summary>
         internal static int PieceBytes => LoweredPieceLength ?? PieceLength;
+
+        /// <summary>
+        /// The most of a block of words with no length before it that a reader takes at a time
+        /// (#289). The block is read into a buffer on the reader's stack, so this is kept far
+        /// shorter than <see cref="PieceLength"/>, which is on the heap: it is the shortest
+        /// length, in powers of two from 1 KiB to 64 KiB, at which a large count-min sketch
+        /// read from a file stayed within a tenth of the time it took in 64 KiB pieces. A
+        /// whole number of eight-byte words.
+        /// </summary>
+        internal const int BlockPieceLength = 16 * 1024;
+
+        /// <summary>
+        /// The longest piece a block is read in on this thread: <see cref="BlockPieceLength"/>,
+        /// or the lowered piece where that is shorter, so that the suite shows a block read in
+        /// pieces as it shows a run.
+        /// </summary>
+        internal static int BlockPieceBytes => Math.Min(PieceBytes, BlockPieceLength);
 
         private readonly Stream stream;
         private readonly byte[] field = new byte[WidestField];
@@ -1206,7 +1228,7 @@ namespace ProbabilisticDataStructures
         /// <remarks>
         /// A stream that implements only the array overload is handed a copy rented from the
         /// shared pool, as it is for a field: one as long as the piece, at most
-        /// <see cref="PieceBytes"/>, where a run read that way would rent one as long as the run
+        /// <see cref="BlockPieceBytes"/>, where a run read that way would rent one as long as the run
         /// (<see cref="ReadRun"/>).
         /// </remarks>
         internal void ReadPiece(scoped Span<byte> piece)
