@@ -1083,8 +1083,12 @@ namespace ProbabilisticDataStructures
             // may still say a little more: the old constructor wrote remainders that wide
             // for the finest rates at the smallest sizes, and what it wrote is read as
             // written rather than refused. A fingerprint wider than the hash is refused,
-            // as it always was.
-            if (remainderBits == 0 || quotientBits + remainderBits > HashBits)
+            // as it always was. The widths are added in 64 bits: in 32, a remainder within the
+            // quotient's width of 2^32 wrapped the sum to a few bits and passed, and the
+            // slot's width wrapped with it, so a table of eight slots or fewer, two words at
+            // its own width and at the wrapped one, read as slots narrower than their
+            // metadata, which then lost a key added to them.
+            if (remainderBits == 0 || (ulong)quotientBits + remainderBits > HashBits)
             {
                 throw new InvalidDataException(
                     $"Filter splits a fingerprint into {quotientBits} quotient and " +
