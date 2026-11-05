@@ -145,8 +145,9 @@ namespace TestProbabilisticDataStructures
         /// this sketch's write allocated 240,432 bytes: its cells staged in an array of their
         /// own, and a writer's buffer started small and grown to hold them. A writer grown by
         /// doubling, as one is that is not given the counted length, allocates more again.
-        /// Measured as the least of five, since a collection landing mid-write can add a
-        /// retired allocation context's worth (TESTING.md, on the read budget).
+        /// Measured as the least of five, each in a no-GC region, since a background
+        /// collection running beside a write adds kilobytes to its count (TESTING.md, on the
+        /// read budget; <see cref="NoGCRegion"/>).
         /// </summary>
         [TestMethod]
         public void TestAPayloadThatFitsIsBuiltOnceAtItsCountedLength()
@@ -157,12 +158,7 @@ namespace TestProbabilisticDataStructures
             var payload = sketch.ToByteArray().Length - (long)PersistenceFormat.EnvelopeLength;
             Assert.AreEqual(12 + 8L * 10_000, payload, "the sketch is not the shape the bound assumes");
 
-            var allocated = Enumerable.Range(0, 5).Min(_ =>
-            {
-                var before = GC.GetAllocatedBytesForCurrentThread();
-                sketch.WriteTo(Stream.Null);
-                return GC.GetAllocatedBytesForCurrentThread() - before;
-            });
+            var allocated = Enumerable.Range(0, 5).Min(_ => NoGCRegion.Allocated(() => sketch.WriteTo(Stream.Null)));
 
             // The payload's buffer and the frame, which is the payload and the envelope.
             var twice = 2 * payload + PersistenceFormat.EnvelopeLength;
@@ -558,11 +554,10 @@ namespace TestProbabilisticDataStructures
         {
             WhileClaiming(structure, shape, () =>
             {
-                var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-                var ex = Assert.ThrowsExactly<InvalidOperationException>(
+                InvalidOperationException ex = null;
+                var allocated = NoGCRegion.Allocated(() => ex = Assert.ThrowsExactly<InvalidOperationException>(
                     () => structure.ToByteArray(),
-                    $"a {typeof(T).Name} whose payload would be {payload:N0} bytes was made a byte array");
-                var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+                    $"a {typeof(T).Name} whose payload would be {payload:N0} bytes was made a byte array"));
 
                 StringAssert.Contains(ex.Message, payload.ToString("N0"),
                     "the refusal should name the size the whole payload would be");
@@ -610,11 +605,14 @@ namespace TestProbabilisticDataStructures
 
             WhileClaiming(structure, shape, () =>
             {
-                using var stream = new MemoryStream();
-                var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-                var ex = Assert.ThrowsExactly<InvalidOperationException>(() => structure.WriteTo(stream),
-                    $"a {typeof(T).Name} claiming a payload of {payload:N0} bytes was written whole");
-                var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+                // A stream of its own for each attempt at the measurement, so that the header
+                // one attempt wrote is not what the next is held to.
+                MemoryStream stream = null;
+                InvalidOperationException ex = null;
+                var allocated = NoGCRegion.Allocated(
+                    () => ex = Assert.ThrowsExactly<InvalidOperationException>(() => structure.WriteTo(stream),
+                        $"a {typeof(T).Name} claiming a payload of {payload:N0} bytes was written whole"),
+                    first: () => stream = new MemoryStream());
 
                 StringAssert.Contains(ex.Message, $"counted a payload of {declared:N0} bytes",
                     $"WriteTo did not set about writing the large form at the count with u64 runs: {ex.Message}");

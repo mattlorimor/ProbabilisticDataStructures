@@ -68,8 +68,8 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// What <paramref name="build"/> allocates on this thread for each unit of its
         /// argument, from the difference between a small and a large one, each the least of
-        /// three: a collection landing mid-build only ever adds, as <c>TestReadBudget</c>
-        /// measures a read.
+        /// three, each in a no-GC region, as <c>TestReadBudget</c> measures a read
+        /// (<see cref="NoGCRegion"/>).
         /// </summary>
         private static double AllocatedPer(Func<int, object> build, int small, int large)
         {
@@ -78,11 +78,7 @@ namespace TestProbabilisticDataStructures
                 var least = long.MaxValue;
                 for (var i = 0; i < 3; i++)
                 {
-                    var before = GC.GetAllocatedBytesForCurrentThread();
-                    var built = build(size);
-                    var after = GC.GetAllocatedBytesForCurrentThread();
-                    GC.KeepAlive(built);
-                    least = Math.Min(least, after - before);
+                    least = Math.Min(least, NoGCRegion.Allocated(() => build(size)));
                 }
 
                 return least;

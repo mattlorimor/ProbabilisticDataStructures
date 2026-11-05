@@ -38,7 +38,9 @@ namespace TestProbabilisticDataStructures
         /// <para>
         /// The warmup matters: without it the measurement captures JIT tiering work
         /// rather than steady-state behavior. GC.GetAllocatedBytesForCurrentThread is
-        /// per-thread, so this stays correct under MSTest's parallel execution.
+        /// per-thread, so this stays correct under MSTest's parallel execution, and the
+        /// operations are counted in a no-GC region, so that a background collection running
+        /// beside them cannot add the kilobytes it does to the count (<see cref="NoGCRegion"/>).
         /// </para>
         /// </summary>
         private static long BytesPerOperation(Action operation)
@@ -48,14 +50,15 @@ namespace TestProbabilisticDataStructures
                 operation();
             }
 
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (int i = 0; i < Measured; i++)
+            var allocated = NoGCRegion.Allocated(() =>
             {
-                operation();
-            }
-            var after = GC.GetAllocatedBytesForCurrentThread();
+                for (int i = 0; i < Measured; i++)
+                {
+                    operation();
+                }
+            });
 
-            return (after - before) / Measured;
+            return allocated / Measured;
         }
 
         private static byte[] Key(string s) => Encoding.ASCII.GetBytes(s);
