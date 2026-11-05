@@ -115,7 +115,7 @@ structure whose layout changes bumps only its own.
 
 | Version | First written by | Structures | Added |
 | --- | --- | --- | --- |
-| 1 | 3.1.0 | every structure | the layouts below, without the fields marked as later |
+| 1 | 3.2.0 | every structure | the layouts below, without the fields marked as later |
 | 2 | 6.0.0 | `StableBloomFilter`, `CuckooBloomFilter` | the random generator's state |
 | 3 | 6.1.0 | `CuckooBloomFilter` | fingerprints packed at their exact bit width |
 | 4 | 6.2.0 | `SetSketch` | the construction, written only for the second one |
@@ -466,7 +466,8 @@ array together with the envelope's eighteen bytes, so it is at most 2,147,483,57
 the largest array, 2,147,483,591, less those. A larger one is written in
 [the large form](#the-large-form), to a stream: `ToByteArray` of a structure whose payload
 would be larger throws an `InvalidOperationException` saying how large the payload would
-have been, and the structure is untouched. In the ordinary envelope no run is longer than
+have been in the ordinary envelope, as a byte array would hold it, and the structure is
+untouched. In the ordinary envelope no run is longer than
 2,147,483,591 bytes, the most a reader takes into one array, since the payload around it is
 shorter. In the large form a run's length is a `u64`, so a longer one is written: a table
 written as one run, or a structure held inside another whose own envelope is in the large

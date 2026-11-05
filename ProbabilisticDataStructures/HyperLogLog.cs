@@ -419,7 +419,9 @@ namespace ProbabilisticDataStructures
         /// <returns>The HyperLogLog</returns>
         public HyperLogLog Reset()
         {
-            this.Registers = new byte[this.M];
+            // Cleared where they are. A new array allocated while this one was still held
+            // needed both at once, twice the estimator.
+            Array.Clear(this.Registers);
             return this;
         }
 
