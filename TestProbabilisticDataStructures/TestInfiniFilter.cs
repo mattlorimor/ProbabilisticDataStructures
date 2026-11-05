@@ -465,6 +465,72 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A read holds each table once and is charged for it once (#313). In the ordinary
+        /// envelope, what it allocates and is charged beyond the payload it holds is the tables
+        /// it builds, read into them and not first into arrays of their own and copied; in the
+        /// large form, where the payload is not held, it is the tables alone.
+        /// </summary>
+        /// <remarks>
+        /// Two-bit fingerprints are the narrowest, and an entry's goes void after the fewest
+        /// expansions, so the chain behind the first table is longest: tables of 2^16, 2^13,
+        /// 2^10 and 2^7 slots, 56,320 bytes of words. Probed on master at baf83ea, a read held
+        /// every table twice and allocated 728 bytes besides its payload and both copies in the
+        /// ordinary envelope, and 808 besides both copies in the large form, and was charged 416
+        /// and 496 besides them. The slack, 4 KiB, is several times that and short of the first
+        /// table and of the second, so a second copy of either fails it, as one of every table
+        /// does. The reads are counted in a no-GC region (#293).
+        /// </remarks>
+        [TestMethod]
+        public void TestAReadHoldsEachTableOnce()
+        {
+            const long Slack = 4 * 1024;
+
+            var filter = new InfiniFilter(initialCapacity: 16, fingerprintBits: 2);
+            for (var i = 0; i < 48_000; i++)
+            {
+                filter.Add(Key(i));
+            }
+
+            long TableBytes(InfiniSegment segment) => ReadBudget.ArrayOf((ulong)segment.Data.Length, sizeof(ulong));
+            var tables = filter.Segments.Sum(TableBytes);
+            Assert.IsGreaterThan(2, filter.Segments.Count, "premise: the chain does not hold tables behind the first");
+            Assert.IsGreaterThan(Slack, TableBytes(filter.Segments[1]), "premise: a copy of the second table could hide in the slack");
+
+            var bytes = filter.ToByteArray();
+            long payload = bytes.Length - PersistenceFormat.EnvelopeLength;
+            InfiniFilter.ReadFrom(new MemoryStream(bytes, writable: false));
+            var ordinary = NoGCRegion.Allocated(() => InfiniFilter.ReadFrom(new MemoryStream(bytes, writable: false)));
+            Assert.IsGreaterThanOrEqualTo(payload + tables, ordinary,
+                $"the read allocated {ordinary:N0} bytes, less than the {payload:N0}-byte payload it holds and the {tables:N0} bytes of its tables");
+            Assert.IsLessThanOrEqualTo(payload + tables + Slack, ordinary,
+                $"the read allocated {ordinary:N0} bytes, {ordinary - payload - tables:N0} more than its payload and its tables");
+
+            var charged = CapacityModel.ChargeOf<InfiniFilter>(StructureId.InfiniFilter, bytes);
+            Assert.IsGreaterThanOrEqualTo(payload + tables, charged,
+                $"the read was charged {charged:N0} bytes, less than its payload and its tables");
+            Assert.IsLessThanOrEqualTo(payload + tables + Slack, charged,
+                $"the read was charged {charged:N0} bytes, {charged - payload - tables:N0} more than its payload and its tables");
+
+            var large = LargeForm.WriteLarge(filter);
+            Assert.IsTrue(LargeForm.IsLarge(large), "the filter was not written in the large form");
+            InfiniFilter.ReadFrom(new MemoryStream(large, writable: false));
+            var streamed = NoGCRegion.Allocated(() => InfiniFilter.ReadFrom(new MemoryStream(large, writable: false)));
+            Assert.IsGreaterThanOrEqualTo(tables, streamed,
+                $"the read of the large form allocated {streamed:N0} bytes, less than the {tables:N0} bytes of its tables");
+            Assert.IsLessThanOrEqualTo(tables + Slack, streamed,
+                $"the read of the large form allocated {streamed:N0} bytes, {streamed - tables:N0} more than its tables");
+
+            var budget = new ReadBudget(long.MaxValue, StructureId.InfiniFilter);
+            CollectionAssert.AreEqual(bytes,
+                InfiniFilter.ReadFrom(new MemoryStream(large, writable: false), new ReadOptions(budget)).ToByteArray(),
+                "the large form does not read back as the filter");
+            Assert.IsGreaterThanOrEqualTo(tables, budget.Charged,
+                $"the read of the large form was charged {budget.Charged:N0} bytes, less than its tables");
+            Assert.IsLessThanOrEqualTo(tables + Slack, budget.Charged,
+                $"the read of the large form was charged {budget.Charged:N0} bytes, {budget.Charged - tables:N0} more than its tables");
+        }
+
+        /// <summary>
         /// Reset returns the filter to the size it was built at, not merely to empty.
         /// </summary>
         [TestMethod]
