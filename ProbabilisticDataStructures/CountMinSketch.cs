@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers.Binary;
 using System.IO;
 using System.Security.Cryptography;
 
@@ -512,15 +513,36 @@ namespace ProbabilisticDataStructures
             // only because Epsilon() and Delta() report them.
             CheckMatrix(ref reader, width, depth);
 
-            // Each row is allocated before it is read.
+            // The rows are allocated before any is read, and the counters, which have no length
+            // before them, are read into them in pieces (#289), through a buffer on the stack: a
+            // piece at a time from the stream when the payload is not held, as the large form's
+            // is not, and from the payload when it is. Read from the stream a counter at a time,
+            // each counter was a call to it and an append to every checksum carried. Nothing is
+            // allocated for the pieces, so the read is charged what it always was.
             budget.Charge(RowsCost(width, depth));
             var matrix = new UInt64[depth][];
             for (uint i = 0; i < depth; i++)
             {
                 matrix[i] = new UInt64[width];
-                for (uint j = 0; j < width; j++)
+            }
+
+            var left = (long)width * depth * sizeof(ulong);
+            Span<byte> piece = stackalloc byte[PayloadReader.BlockPieceFor(left)];
+            uint row = 0;
+            uint column = 0;
+            while (left > 0)
+            {
+                var cells = piece[..(int)Math.Min(left, piece.Length)];
+                reader.ReadBlock(cells);
+                left -= cells.Length;
+                for (var at = 0; at < cells.Length; at += sizeof(ulong))
                 {
-                    matrix[i][j] = reader.ReadUInt64();
+                    matrix[row][column] = BinaryPrimitives.ReadUInt64LittleEndian(cells[at..]);
+                    if (++column == width)
+                    {
+                        column = 0;
+                        row++;
+                    }
                 }
             }
 

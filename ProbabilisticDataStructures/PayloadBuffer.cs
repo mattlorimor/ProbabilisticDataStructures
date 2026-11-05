@@ -275,8 +275,14 @@ namespace ProbabilisticDataStructures
         /// in the large form, unless the bound has been lowered. So a <c>u32</c> prefix is
         /// only ever written for a run that fits one.
         /// </remarks>
+        /// <exception cref="InvalidOperationException">
+        /// The length is below nought (<see cref="CheckLength"/>). Nothing of the run is
+        /// written, its prefix included.
+        /// </exception>
         internal bool BeginRun(long length)
         {
+            CheckLength(length, "run");
+
             if (this.counting)
             {
                 this.longest = Math.Max(this.longest, length);
@@ -291,14 +297,27 @@ namespace ProbabilisticDataStructures
                 WriteUInt32((uint)length);
             }
 
-            return BeginBlock(length);
+            return Begin(length);
         }
 
         /// <summary>
         /// As <see cref="BeginRun"/>, for bytes with no length prefix before them: fields
         /// whose total length is known before they are written.
         /// </summary>
+        /// <exception cref="InvalidOperationException">
+        /// The length is below nought (<see cref="CheckLength"/>). Nothing is written.
+        /// </exception>
         internal bool BeginBlock(long length)
+        {
+            CheckLength(length, "block");
+            return Begin(length);
+        }
+
+        /// <summary>
+        /// What beginning a run's bytes or a block does once its length is known to be one: a
+        /// counter counts them whole and says not to write them, and any other writer says to.
+        /// </summary>
+        private bool Begin(long length)
         {
             if (this.counting)
             {
@@ -307,6 +326,34 @@ namespace ProbabilisticDataStructures
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Refuses a run or block whose length is below nought, from any writer, before
+        /// anything of it is written (#278).
+        /// </summary>
+        /// <remarks>
+        /// Taken, a counter would add the length to its count, so that the payload was
+        /// counted that much short, and a writer that holds or streams the payload would go on
+        /// to write whatever the body wrote after it, under a length that does not describe
+        /// it. No body in the library begins one: the lengths are a span's, never below
+        /// nought, or a structure's shape multiplied out in 64 bits, which its constructor
+        /// and its reader bound. A product left unbounded comes here below nought when it
+        /// wraps, which takes at least 2^63 bytes, more than a stream holds. One that wraps
+        /// past 2^64 can come back as a length that is not below nought, which this cannot see.
+        /// </remarks>
+        /// <exception cref="InvalidOperationException">The length is below nought.</exception>
+        private static void CheckLength(long length, string what)
+        {
+            if (length < 0)
+            {
+                throw new InvalidOperationException(
+                    $"The payload would hold a {what} of {length:N0} bytes, and no {what} is " +
+                    "shorter than nought. A length worked out from a structure's shape comes to " +
+                    $"one when it is past {long.MaxValue:N0} bytes, more than a stream can hold, " +
+                    $"and wraps in 64 bits. Nothing of the {what} was written. The structure is " +
+                    "intact and can still be used, but it cannot be written.");
+            }
         }
 
         /// <summary>
@@ -820,6 +867,38 @@ namespace ProbabilisticDataStructures
         private static int PieceFor(long count) => (int)Math.Min(count, PayloadSource.PieceBytes);
 
         /// <summary>
+        /// The buffer, on its caller's stack, a block (<see cref="ReadBlock"/>) of
+        /// <paramref name="count"/> bytes is read through in pieces: no longer than the block,
+        /// as a run's is no longer than the run, and no longer than
+        /// <see cref="PayloadSource.BlockPieceBytes"/>.
+        /// </summary>
+        internal static int BlockPieceFor(long count) => (int)Math.Min(count, PayloadSource.BlockPieceBytes);
+
+        /// <summary>
+        /// Reads the next <c>piece.Length</c> bytes into <paramref name="piece"/>: a piece of a
+        /// block of eight-byte words with no length before it, which its structure unpacks into
+        /// storage of its own (#289), copied from a held payload, and read from the stream into
+        /// it from one that is not.
+        /// </summary>
+        /// <remarks>
+        /// As <see cref="ReadWords"/> is for a run, with nothing allocated: the piece is the
+        /// caller's, on its stack, no longer than <see cref="BlockPieceFor"/> says. So a block read
+        /// this way allocates, and is charged, what it did read a word at a time, and each piece
+        /// is held to what the payload has left as each word was.
+        /// </remarks>
+        internal void ReadBlock(scoped Span<byte> piece)
+        {
+            if (this.source is null)
+            {
+                Take(piece.Length).CopyTo(piece);
+                return;
+            }
+
+            RequireAhead(piece.Length);
+            this.source.ReadPiece(piece);
+        }
+
+        /// <summary>
         /// Reads the length prefix of a run that holds a nested envelope, which a read that
         /// holds no payload reads from this reader rather than copying it out, held to what
         /// the payload has left. Returns its length.
@@ -1059,7 +1138,7 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// A shorter piece for the sources made on the calling thread, so that the suite can
-        /// show a run read in pieces at lengths it can build; null otherwise, as it is in
+        /// show a run, or a block, read in pieces at lengths it can build; null otherwise, as it is in
         /// every thread but a test's. A whole number of eight-byte words.
         /// </summary>
         [ThreadStatic]
@@ -1071,6 +1150,23 @@ namespace ProbabilisticDataStructures
         /// pieces.
         /// </summary>
         internal static int PieceBytes => LoweredPieceLength ?? PieceLength;
+
+        /// <summary>
+        /// The most of a block of words with no length before it that a reader takes at a time
+        /// (#289). The block is read into a buffer on the reader's stack, so this is kept far
+        /// shorter than <see cref="PieceLength"/>, which is on the heap: it is the shortest
+        /// length, in powers of two from 1 KiB to 64 KiB, at which a large count-min sketch
+        /// read from a file stayed within a tenth of the time it took in 64 KiB pieces. A
+        /// whole number of eight-byte words.
+        /// </summary>
+        internal const int BlockPieceLength = 16 * 1024;
+
+        /// <summary>
+        /// The longest piece a block is read in on this thread: <see cref="BlockPieceLength"/>,
+        /// or the lowered piece where that is shorter, so that the suite shows a block read in
+        /// pieces as it shows a run.
+        /// </summary>
+        internal static int BlockPieceBytes => Math.Min(PieceBytes, BlockPieceLength);
 
         private readonly Stream stream;
         private readonly byte[] field = new byte[WidestField];
@@ -1167,6 +1263,25 @@ namespace ProbabilisticDataStructures
             }
 
             this.Taken(piece.AsSpan(0, count));
+        }
+
+        /// <summary>
+        /// Reads the next <c>piece.Length</c> bytes into <paramref name="piece"/>, a buffer on
+        /// its reader's stack, through the stream's span overload of <c>Read</c>: a piece of a
+        /// block of words with no length before it, which its structure unpacks into storage of
+        /// its own (#289).
+        /// </summary>
+        /// <exception cref="InvalidDataException">The stream ends first.</exception>
+        /// <remarks>
+        /// A stream that implements only the array overload is handed a copy rented from the
+        /// shared pool, as it is for a field: one as long as the piece, at most
+        /// <see cref="BlockPieceBytes"/>, where a run read that way would rent one as long as the run
+        /// (<see cref="ReadRun"/>).
+        /// </remarks>
+        internal void ReadPiece(scoped Span<byte> piece)
+        {
+            this.Fill(piece);
+            this.Taken(piece);
         }
 
         /// <summary>

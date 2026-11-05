@@ -115,7 +115,7 @@ structure whose layout changes bumps only its own.
 
 | Version | First written by | Structures | Added |
 | --- | --- | --- | --- |
-| 1 | 3.1.0 | every structure | the layouts below, without the fields marked as later |
+| 1 | 3.2.0 | every structure | the layouts below, without the fields marked as later |
 | 2 | 6.0.0 | `StableBloomFilter`, `CuckooBloomFilter` | the random generator's state |
 | 3 | 6.1.0 | `CuckooBloomFilter` | fingerprints packed at their exact bit width |
 | 4 | 6.2.0 | `SetSketch` | the construction, written only for the second one |
@@ -466,7 +466,8 @@ array together with the envelope's eighteen bytes, so it is at most 2,147,483,57
 the largest array, 2,147,483,591, less those. A larger one is written in
 [the large form](#the-large-form), to a stream: `ToByteArray` of a structure whose payload
 would be larger throws an `InvalidOperationException` saying how large the payload would
-have been, and the structure is untouched. In the ordinary envelope no run is longer than
+have been in the ordinary envelope, as a byte array would hold it, and the structure is
+untouched. In the ordinary envelope no run is longer than
 2,147,483,591 bytes, the most a reader takes into one array, since the payload around it is
 shorter. In the large form a run's length is a `u64`, so a longer one is written: a table
 written as one run, or a structure held inside another whose own envelope is in the large
@@ -1393,8 +1394,12 @@ is not the same in its last bit on every platform, and a payload written on one 
 on another; twice the width doubles at about twice the count or more, which no such
 difference reaches. A doubling count of 2^64 or more is written as the largest `u64` and
 stands for one no total reaches, so any total fits beneath it, the largest included.
-Every payload 6.2.0 wrote meets both. The count at which the arrays fold back is not
-checked: one that does not fit can only bring the next fold earlier or later, and every
+Every payload 6.2.0 wrote meets both. The count at which the arrays fold back is held to
+the records: the arrays fold back by the last record, and a sketch has a count to fold at
+only while it holds one, so a payload with no records and a folding count other than nought
+is refused. 6.2.0 wrote such a payload when a removal ran out of memory folding the arrays
+back, having already taken the sketch's only record off. With records, the folding count is
+not checked: one that does not fit can only bring the next fold earlier or later, and every
 fold and doubling sets it afresh.
 
 ### `SetSketch` (id 30)

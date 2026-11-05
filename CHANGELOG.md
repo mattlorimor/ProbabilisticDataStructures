@@ -138,7 +138,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   64 KiB straight into that storage. A run read into one array is refused past one array as before, and a DDSketch
   store claiming more counts than one array holds is refused as that. (#228)
 
+- **A test on the edge of `SublimeCountMinSketch`'s crowding fraction.** A sketch lays its
+  counters out again at the add that puts more than three in a hundred of its chunks on tails
+  arrays. No test used a number of chunks of which three in a hundred is a whole number, so
+  the rule passed as well asking for at least the fraction as for more than it. A sketch of a
+  hundred rows of one chunk each is now held to it: three chunks on tails leave the rows as
+  they are, and four lay them out. The library is unchanged. (#275)
+
 ### Changed
+
+- **`ToByteArray`'s refusal of a payload past one array says which form its size is
+  for.** It names the payload's size as a byte array would hold it, in the ordinary form
+  of the envelope, with each run's length a `u32`. The large form counts each run's length
+  as a `u64`, so for a payload with runs its refusals, such as a read's from a stream that
+  cannot seek, name a larger number for the same structure. The number is unchanged, and each message now says which form it counts. (#290)
 
 - **The package's minimum `System.IO.Hashing` rises from 10.0.11 to 10.0.14.** A project
   that pins an earlier version of that package has to raise it to restore this one. (#142)
@@ -412,6 +425,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a shared machine. It refuses what it refused, in the same order, and builds every map to
   the same bytes.
 
+- **A `HyperLogLog`'s reset holds one register array.** No answer and no stored byte
+  changes. (#277)
+  <br><br>
+  `HyperLogLog.Reset` clears the registers where they are. It allocated a new array while
+  the old one was still held, so a reset needed twice the estimator at once: 2 GiB at the
+  2^30 registers of the largest.
+
 - **`VarOpt` now says what is exact about its total weight, and keeps the arithmetic.**
   The documentation said the sampled weights sum to *exactly* the stream's total weight.
   What holds is that no weight is lost when an item is dropped, because the survivors
@@ -481,7 +501,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is and where it began as 64-bit values, and resume from those however they were seeded.
   (#235)
 
+- **The README's and CAPACITY.md's "Saves up to" column is now "As a byte array".** Its
+  figures are unchanged: each is the largest a structure can be built and still be saved
+  with `ToByteArray`, whose array holds a payload of at most 2,147,483,573 bytes. Since
+  `WriteTo` writes a payload past that in the large form, the old name read as a limit on
+  saving at all, and a sentence above the table now says what is: through
+  `WriteTo(Stream)` every structure saves as built, limited only by memory. A test over
+  every structure holds the sentence. Each whose payload a field sizes is made to claim its
+  largest build, and `WriteTo` of it refuses nothing before its payload would be written:
+  its count is the length its layout gives, and past one array the large form's header
+  goes to the stream declaring it, up to 12,197,706,796,913 bytes for a count-min sketch of
+  2,147,483,591 counters by 710 rows. Each sized by the arrays or items it holds is written
+  for real, with the threshold and the longest run lowered beneath its own. No structure
+  needed a change. (#279)
+
+- **A `CountMinSketch`, and the one a `TopK` holds, read their counters in pieces, and load
+  from the large form seven to nine times as fast.** The counters have no length before
+  them, and were read a counter at a time: from the large form, which is read from its stream,
+  each was a call to the stream and an append to every checksum carried. They are now read
+  16 KiB at a time, from the stream or from the held payload, through a buffer on the stack,
+  and so at close to a `CountSketch`'s speed, whose cells have been read in pieces since
+  #228. The buffer is kept that small because it is on the caller's stack: 16 KiB is the
+  shortest piece, in powers of two from 1 KiB to 64 KiB, that read a large sketch from a
+  file within a tenth of the time 64 KiB pieces took. The bytes written are unchanged, and so
+  is what a read is charged, since nothing is allocated for the pieces. Measured for a sketch
+  of 5 rows of 10,000,000 counters, 400 MB, the median of three runs, each the best of three
+  reads: from the large form in memory 0.678 s became 0.090 s, and from a file 0.771 s became
+  0.102 s; a `TopK` holding such a sketch, 0.860 s became 0.107 s, and 1.040 s became
+  0.117 s. The ordinary envelope, already read from memory, went from 0.166 s to 0.125 s.
+  (#289)
+
 ### Fixed
+
+- **FORMAT.md gives 3.2.0 as the release that first wrote format version 1.** Its version
+  table said 3.1.0, but persistence first shipped in 3.2.0: the 3.1.0 package on nuget.org
+  has no `WriteTo`, `ToByteArray` or `PersistenceFormat`, and the 3.2.0 package has them.
+  (#272)
+
+- **A `PrivateCountMinSketch` payload with bytes left over after its counters is refused.**
+  Its reader stopped at the last counter without checking that the payload ended there, so
+  in the ordinary envelope a payload with a byte appended, its length and checksum repaired,
+  was read as if the byte were not there, as it had been since the sketch was added in
+  6.2.0. It is now refused naming the bytes left over, as every other structure's is, and as
+  the same payload in the large form already was. A `DpswSketch`, which holds its sketches'
+  bodies one after another, checks the end of its own payload and is unchanged.
 
 - **The suite's allocation checks no longer fail when a background collection runs beside
   them.** Every allocation the suite holds the library to is now counted inside a no-GC
@@ -527,6 +590,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged, and a payload that fits is now built into a buffer allocated once, at its
   counted size. Past that size `WriteTo` now writes the large form instead, and the refusal
   by size is `ToByteArray`'s (#225, #229). (#216)
+
+- **A payload's run or block whose length is below nought is refused as it is begun.**
+  Nothing in the library begins one, so no write changes. One would have been counted that
+  many bytes short and then failed at the write without being named: an
+  `OverflowException`, or a refusal for writing other than was counted. It is now the
+  `InvalidOperationException` that `WriteTo` documents for a structure too large to write,
+  naming the length: from the count, before anything is written, and alike from the writer
+  that holds a payload and the one that streams the large form. A length worked out from a
+  structure's shape comes below nought only at 2^63 bytes or more, when its 64-bit product
+  wraps. (#278)
 
 - **A `CountMinSketch` counter, and its total, wrapped to nought at 2^64 instead of
   stopping at `ulong.MaxValue`, so `Merge` could take an estimate to 0.** A wrapped counter
@@ -1630,6 +1703,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with its checksum repaired; every payload this library wrote holds its counters and
   reads as before, and the format is unchanged.
 
+- **A `SublimeCountMinSketch` payload with a count to fold back at and no record to fold
+  back by was read.** A sketch folds its rows back by the record of the doubling that
+  widened them, and holds a folding count only while it holds a record. A payload of a
+  sketch that never doubled, with that count edited and its checksum repaired, was read and
+  written back with the claim in it, though no removal could fold at it. It is now refused,
+  naming the missing record. 6.2.0 wrote such a payload itself: its removal took the record
+  off before it allocated the folded rows (#213), so one that ran out of memory folding a
+  sketch of one record left it with none and its folding count kept. Measured by hand, on
+  rows of 2^22 under a heap limit of 1 GiB, 6.2.0 wrote that sketch, and both its reader and
+  the one before this read it back; it is now refused too, and the refusal says how it came
+  about. Every payload this library now writes reads as before, and the format is unchanged.
+
 - **`DpswSketch.Add` on a window at the largest position wrapped the position to
   `long.MinValue`.** The reader accepts any position that is not negative, `long.MaxValue`
   included, since the format can hold it, and `Add` incremented it unchecked. A window
@@ -1691,7 +1776,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   array of bytes, which holds 2,147,483,591: from one byte too many the build failed with
   an `OverflowException` (from 2^31) or an `OutOfMemoryException`, after hashing the whole
   set. That is 1,908,641,337 distinct keys at 8-bit fingerprints and 954,204,160 at 16;
-  954,204,160, 636,136,107 and 318,068,053 for values of up to 8, 16 and 40 bits. A set with
+  954,204,160 for values of 1 to 8 bits, 636,136,107 for 9 to 16, 476,985,572 for 17 to
+  24, 381,681,664 for 25 to 32 and 318,068,053 for 33 to 40. A set with
   more is now an `ArgumentOutOfRangeException` naming `items` or `pairs`, which says how
   many keys it would have held, before any array of the build is allocated. The README's
   and CAPACITY.md's "builds up to" are those numbers, where they said memory. No size that
@@ -1980,6 +2066,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now throws the `OutOfMemoryException` with the sketch exactly as it was, and trying again
   adds or removes the key once. No key raises different counters, and nothing a sketch
   writes changes. (#242)
+
+- **A `SublimeCountMinSketch` `Add` that ran out of memory moving a chunk to a tails array
+  lost counts.** An increment that outgrows its chunk's pool moves the chunk to a tails
+  array, which allocates, and it wrote the counter's stub before it allocated. An `Add` that
+  did not crowd the rows took each row's increment in turn, so one that ran out of memory
+  there left that counter with its stub carried and its high bits not: at nought where it
+  had held 31, and the estimate at nought with it, below what was added, which Count-Min
+  promises never to be. The rows before it had counted the key. The `Add` now asks each row
+  whose stub is full whether its increment moves a chunk, as the crowded `Add` already did,
+  allocates those tails arrays first, and only then takes the increments. One that runs out
+  of memory throws the `OutOfMemoryException` with the sketch exactly as it was, and adding
+  the key again counts it once. Measured on five rows of 2^16 counters, an add costs what it
+  did, within the noise of the machine. No key raises different counters, and nothing a
+  sketch writes changes. (#274)
 
 - **A read refused for its budget named a number that did not load it.**
   `ReadBudgetExceededException.RequiredBytes` was the running total at the allocation

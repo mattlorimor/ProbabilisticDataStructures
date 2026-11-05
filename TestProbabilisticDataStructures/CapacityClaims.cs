@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Numerics;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 using static TestProbabilisticDataStructures.CapacityModel;
@@ -64,6 +67,88 @@ namespace TestProbabilisticDataStructures
             });
 
         private static byte[] Key(long i) => BitConverter.GetBytes(i);
+
+        /// <summary>
+        /// The widths of value <see cref="BloomierFilter.Build(IEnumerable{KeyValuePair{byte[], ulong}}, int, Func{ReadOnlySpan{byte}, ulong})"/>
+        /// takes, found by asking it, in bands of consecutive widths that share one limit on
+        /// distinct keys, <see cref="BloomierFilter.MaxKeys"/>, in order.
+        /// </summary>
+        private static (int From, int To, uint Keys)[] BloomierBands()
+        {
+            var one = new[] { new KeyValuePair<byte[], ulong>(new byte[] { 1 }, 1) };
+            var bands = new List<(int From, int To, uint Keys)>();
+            for (var v = 0; v <= 64; v++)
+            {
+                try
+                {
+                    BloomierFilter.Build(one, v);
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    continue;
+                }
+
+                var keys = BloomierFilter.MaxKeys(v);
+                if (bands.Count > 0 && bands[^1].Keys == keys && bands[^1].To == v - 1)
+                {
+                    bands[^1] = (bands[^1].From, v, keys);
+                }
+                else
+                {
+                    bands.Add((v, v, keys));
+                }
+            }
+
+            return bands.ToArray();
+        }
+
+        /// <summary>Each band of <see cref="BloomierBands"/> as <paramref name="band"/> words it, listed.</summary>
+        private static string BloomierLimits(Func<(int From, int To, uint Keys), string> band)
+        {
+            var parts = BloomierBands().Select(band).ToArray();
+            return parts.Length == 1 ? parts[0] : string.Join(", ", parts[..^1]) + " and " + parts[^1];
+        }
+
+        /// <summary>
+        /// Whether the bands of widths are more than one, from the narrowest value up, and
+        /// each band's limit is the most keys whose cells one array holds by the fuse sizing
+        /// restated from the paper, at FORMAT.md's width of a cell, an 8-bit fingerprint and
+        /// the value rounded up to whole bytes, at every width in it; and whether
+        /// <c>Build</c>'s documented refusal states the same limits, to the million.
+        /// </summary>
+        private static bool BloomierBandsHold()
+        {
+            var bands = BloomierBands();
+            var fit = bands.All(b => Enumerable.Range(b.From, b.To - b.From + 1).All(v =>
+            {
+                var stride = (ulong)((8 + v + 7) / 8);
+                return CapacityRows.FuseCells(b.Keys) * stride <= (ulong)Array.MaxLength
+                    && CapacityRows.FuseCells(b.Keys + 1UL) * stride > (ulong)Array.MaxLength;
+            }));
+
+            var documented = BloomierLimits(b =>
+                $"{Math.Round(b.Keys / 1e6, MidpointRounding.AwayFromZero)} million at " +
+                (b.From == 1 ? $"values of {b.From} to {b.To} bits" : $"{b.From} to {b.To}"));
+
+            return bands.Length > 1 && bands[0].From == 1 && fit
+                && BloomierBuildRefusal().Contains(documented, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// What the public <c>BloomierFilter.Build</c>'s XML documentation says of its
+        /// <see cref="ArgumentOutOfRangeException"/>, its whitespace run together, from the
+        /// documentation file the library's build writes beside it.
+        /// </summary>
+        private static string BloomierBuildRefusal()
+        {
+            var path = Path.ChangeExtension(typeof(BloomierFilter).Assembly.Location, ".xml");
+            var refusal = XDocument.Load(path).Descendants("member")
+                .Where(m => ((string)m.Attribute("name")!).StartsWith(
+                    "M:ProbabilisticDataStructures.BloomierFilter.Build(", StringComparison.Ordinal))
+                .SelectMany(m => m.Elements("exception"))
+                .Single(e => (string)e.Attribute("cref") == "T:System.ArgumentOutOfRangeException");
+            return Regex.Replace(refusal.Value, @"\s+", " ");
+        }
 
         /// <summary>
         /// What <paramref name="build"/> allocates on this thread for each unit of its
@@ -745,6 +830,20 @@ namespace TestProbabilisticDataStructures
                 return Enumerable.Range(0, 200).All(i => widest.Test((ulong)i * 7919))
                     && Assert.Throws<ArgumentOutOfRangeException>(() => new MementoFilter(1UL << 32, 29)).ParamName == "fingerprintBits";
             }),
+            // The column the README's tables end with, which this paragraph explains.
+            new Claim("**As a byte array** is the largest that `ToByteArray` returns", () =>
+                TestCapacityDocumentation.TableHeader.EndsWith("| As a byte array |", StringComparison.Ordinal)),
+            // The sentence above the README's tables, said here too: the stream path refuses
+            // nothing a structure builds, at its largest build where a field sizes it, and
+            // past the bounds that ship, lowered, where what it holds sizes it (#279).
+            new Claim("Through `WriteTo(Stream)` every structure saves as built, limited only by memory.", () =>
+            {
+                var stream = new TestTheStreamSavesAsBuilt();
+                stream.TestEveryStructureIsCountedAtItsLargestBuildWithoutARefusal();
+                stream.TestEveryStructurePastTheThresholdIsWrittenWithItsLongestRunPastTheBound();
+                return TestCapacityDocumentation.ReadmeSays(
+                    "Through `WriteTo(Stream)` every structure saves as built, limited only by memory.");
+            }),
             // Past one array, WriteTo goes on to the large form at the threshold that ships: a
             // count sketch claiming a table seven bytes past it has its header written,
             // declaring that length, before its body runs (#225).
@@ -899,6 +998,12 @@ namespace TestProbabilisticDataStructures
             new Claim("about 2.25 bytes a key for 8-bit fingerprints", () =>
                 Rounds(2.0 * CapacityRows.FuseCells(100_000_000) / 100_000_000, 2.25, 2)),
             new Claim("2 bytes at `v = 8`, and 6 at `v = 40`", () => (8 + 8 + 7) / 8 == 2 && (8 + 40 + 7) / 8 == 6),
+            // The most keys for each band of widths, the bands and the figures both read off
+            // MaxKeys at every width Build takes, so neither the bands nor the figures can
+            // drift from it; Build's documentation states them too (#276).
+            new Claim("so the most distinct keys are " + BloomierLimits(
+                    b => $"{b.Keys:N0} {(b.From == 1 ? "for `v` " : "")}from {b.From} to {b.To}"),
+                () => BloomierBandsHold()),
             new Claim("puts the hash of every item it is given into one list, duplicates and all, and holds " +
                 "that list and a sorted copy of it, at least 16 bytes an item, before it can refuse", () =>
             {

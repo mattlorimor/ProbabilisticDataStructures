@@ -302,7 +302,11 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// Every public <c>ToByteArray</c> refuses a payload past one array before writing
         /// anything, with an <c>InvalidOperationException</c> that names the payload's size,
-        /// counted, and the most one array holds, and points to the <c>Stream</c> overload.
+        /// counted, and the form that size is for, and the most one array holds, and points to
+        /// the <c>Stream</c> overload. The size is the ordinary form's, as a byte array would
+        /// hold it; the large form, with each run's length a <c>u64</c>, counts more for a
+        /// payload with runs, so a refusal of the large form names a different number for the
+        /// same structure, and each says which form its number is for (#290).
         /// The roster is the library's public surface, by reflection: a <c>ToByteArray</c>
         /// this test does not know how to call fails it by name.
         /// </summary>
@@ -355,6 +359,9 @@ namespace TestProbabilisticDataStructures
                         $"{where} refused a payload past one array with something else: {thrown.InnerException}");
 
                     StringAssert.Contains(ex.Message, claimed.ToString("N0"), $"{where} did not name the payload's size: {ex.Message}");
+                    StringAssert.Contains(ex.Message,
+                        $"{claimed:N0} bytes as a byte array would hold it, in the ordinary form of the envelope",
+                        $"{where} did not say which form the payload's size is for: {ex.Message}");
                     StringAssert.Contains(ex.Message, PersistenceFormat.MaxPayloadLength.ToString("N0"),
                         $"{where} did not name the most one array holds: {ex.Message}");
                     StringAssert.Contains(ex.Message, "WriteTo(Stream)", $"{where} did not point to the Stream overload: {ex.Message}");

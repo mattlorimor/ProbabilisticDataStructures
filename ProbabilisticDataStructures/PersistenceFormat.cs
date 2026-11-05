@@ -487,9 +487,13 @@ namespace ProbabilisticDataStructures
         /// Refuses a payload longer than one array holds with its envelope, naming the size
         /// it would be and the size one can be, before anything is allocated for it: for
         /// <c>ToByteArray</c>, whose result is one array, and for a buffer that holds a
-        /// payload whole.
+        /// payload whole. The size named is the ordinary form's, as a byte array would hold
+        /// it, and the message says so: the large form counts each run's length as a
+        /// <c>u64</c>, so its refusals name a larger number for a payload with runs (#290).
         /// </summary>
-        /// <param name="length">The payload's length, in bytes, worked out in 64 bits.</param>
+        /// <param name="length">
+        /// The payload's length in the ordinary form, in bytes, worked out in 64 bits.
+        /// </param>
         /// <exception cref="InvalidOperationException">
         /// The payload would be longer than <see cref="MaxPayloadLength"/>.
         /// </exception>
@@ -498,7 +502,8 @@ namespace ProbabilisticDataStructures
             if (length > MaxPayloadLength)
             {
                 throw new InvalidOperationException(
-                    $"The payload would reach {length:N0} bytes, and the most one array holds " +
+                    $"The payload would reach {length:N0} bytes as a byte array would hold it, " +
+                    "in the ordinary form of the envelope, and the most one array holds " +
                     $"is {MaxPayloadLength:N0}: the largest array a .NET runtime holds, " +
                     $"{Array.MaxLength:N0} bytes, less the {EnvelopeLength} bytes the " +
                     "envelope adds around it in the same array. The structure is intact and " +
