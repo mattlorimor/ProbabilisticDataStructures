@@ -1088,6 +1088,12 @@ filter, exactly as it was written. It is also written back at version 1, as it w
 because at version 12 its 32 quotient bits would say 2^32 slots. Remainders wider than the
 constructor now builds are read as written in the same way, at either version.
 
+At either version the two widths together come to at most 64. Releases up to 6.2.0 added
+them in 32 bits, so a remainder within the quotient's width of 2^32 wrapped the sum and
+was let through. The slot's width wrapped with it, and a table of eight slots or fewer can
+be two words at its own width and at the wrapped one, so such a payload read, with slots
+narrower than their metadata. It is refused for its split now.
+
 ### `ThetaSketch` (id 18)
 
 ```
@@ -1394,6 +1400,13 @@ tables. The tables are stored newest first, and each table's count of entries is
 well; it must be the slots whose metadata has any bit set, which the reader checks. Before
 it prices or allocates a table, it checks that the rest of the payload holds the table's words.
 
+The expansion count counts the first table's doublings and nothing else, and a first table
+starts with at least two bits of address, so a reader rejects a count above the first
+table's address bits less two, at both versions. Resetting a filter builds the table it
+started with, the first table less a bit for each expansion, and a larger count would name
+a table it never had. The tables behind the first double on their own, uncounted, and are
+not held to it.
+
 ### `MementoFilter` (id 28)
 
 ```
@@ -1435,7 +1448,8 @@ same tables, before any run is decoded, since decoding one walks the metadata. T
 decodes every occupied run once and rejects a box whose count claims
 more keys than the rest of its run has bits for, or whose run ends inside its count; no
 writer produces either, and refusing them at read is what keeps every query on a filter it
-read from meeting one.
+read from meeting one. Last, it rejects an expansion count above the first table's address
+bits less two, as `InfiniFilter`'s reader does and for the same reason.
 
 A slot of exactly 64 bits — the fingerprint plus the memento width come to 60 — was written
 by releases up to and including 6.2.0 with a mask of zero, which dropped every write: the

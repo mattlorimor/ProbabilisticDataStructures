@@ -592,6 +592,64 @@ namespace TestProbabilisticDataStructures
             AssertRefused(Poke(clean, 8, 999999), "slots");
         }
 
+        /// <summary>
+        /// The two widths are <c>u32</c>s, and the reader added them in 32 bits, so a remainder
+        /// within the quotient's width of 2^32 wrapped the sum to a few bits and passed the
+        /// check that the widths split the hash. The slot's width, the remainder and three
+        /// bits of metadata, wraps the same way in the table's word count, to 0, 1 or 2 bits
+        /// from the last three remainders. A table of eight slots or fewer, small enough to
+        /// be two words at its own width, is still two words at those, so its payload with
+        /// only the remainder edited read: two slots of version 12 at a remainder of
+        /// 2^32 - 1 were two slots of 2 bits, and a key added to them was then not found. The
+        /// one slot of version 1 read the same way. A larger table was refused, but for its
+        /// bytes or for its array, never for its split.
+        /// <para>
+        /// Held at the two small tables and at the stored fixtures of both versions, either
+        /// side of 64 bits and either side of the wrap, which moves with the quotient: a sum
+        /// of 2^32 - 1 is refused for the split whatever the arithmetic, and 2^32 is the
+        /// first that a 32-bit sum wraps.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestASplitPastTheHashIsRefusedWhereA32BitSumOfItsWidthsWraps()
+        {
+            const string why = "not a split of a";
+            var payloads = new (string Name, int Version, byte[] Bytes)[]
+            {
+                ("two slots", 12, new QuotientFilter(1, 0.5).ToByteArray()),
+                ("one slot", 1, QuotientFilterFixture("quotientfilter-q32-v1.bin")),
+                ("quotientfilter-v1.bin", 1, QuotientFilterFixture("quotientfilter-v1.bin")),
+                ("quotientfilter-v12.bin", 12, QuotientFilterFixture("quotientfilter-v12.bin")),
+            };
+
+            foreach (var (name, expectedVersion, bytes) in payloads)
+            {
+                var quotientBits = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(14));
+                var version = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(4));
+                Assert.AreEqual(expectedVersion, version, $"premise: {name} is at version {expectedVersion}");
+
+                // A split of exactly 64 bits is one; what refuses it, if anything does, is the
+                // bytes the edit left behind.
+                try
+                {
+                    Persistence.FromByteArray<QuotientFilter>(Poke(bytes, 4, 64 - quotientBits));
+                }
+                catch (InvalidDataException ex)
+                {
+                    Assert.DoesNotContain(why, ex.Message, $"{name}: a split of 64 bits was refused as no split");
+                }
+
+                foreach (var remainderBits in new ulong[]
+                    { 65 - quotientBits, (1UL << 32) - quotientBits - 1, (1UL << 32) - quotientBits, uint.MaxValue })
+                {
+                    var ex = Assert.ThrowsExactly<InvalidDataException>(
+                        () => Persistence.FromByteArray<QuotientFilter>(Poke(bytes, 4, (uint)remainderBits)),
+                        $"{name} with {remainderBits} remainder bits read");
+                    StringAssert.Contains(ex.Message, why, $"{name} with {remainderBits} remainder bits");
+                }
+            }
+        }
+
         [TestMethod]
         public void TestTheTableIsSizedForTheItemsAndTheRate()
         {

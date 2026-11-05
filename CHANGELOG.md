@@ -731,6 +731,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An `InfiniFilter` or `MementoFilter` payload claiming more expansions than its first
+  table can have had is refused.** A first table starts with at least two bits of address
+  and gains one with each expansion, and `Reset` builds the table the filter started with
+  as the first table's bits less the count. The readers took the count as written, so a
+  first table of 2^4 slots whose count was edited to `0xFFFFFFFF`, its checksum repaired,
+  read: the count became -1 in `Reset`, which built a table of 2^5 slots, a size the filter
+  was never built at. A smaller excess read as well, and `Reset`'s floor of four slots hid
+  it. Both readers now refuse a count above the first table's address bits less two, naming
+  both, at every version each reads. No release wrote such a count: in every one the first
+  table starts at four slots or more, only its doublings are counted, and `Reset` sets the
+  count back to zero.
+
+- **A `QuotientFilter` payload whose two widths come to more than 64 bits is refused
+  however far past they go.** The reader added the quotient and remainder widths, both
+  `u32`s, in 32 bits, as it had since the filter was added in 6.0.0, so a remainder within
+  the quotient's width of 2^32 wrapped the sum to a few bits and passed the check that the
+  widths split a 64-bit hash. Most such payloads were refused anyway, for their bytes or
+  their array, but the slot's width wrapped as well, to 0, 1 or 2 bits, and a table of
+  eight slots or fewer can be two words at its own width and at those: two slots with the
+  remainder edited to 2^32 - 1, the checksum repaired, read as slots of 2 bits, and a key
+  added to that filter was then not found. The widths are added in 64 bits now, and every
+  such payload is refused for its split, at both versions the reader reads.
+
 - **A reader no longer allocates for data its payload does not hold.** A read is priced
   before it allocates, and a price that finds the payload ending early is set aside so that
   the reader refuses it with its own explanation, at whatever had been priced by then.

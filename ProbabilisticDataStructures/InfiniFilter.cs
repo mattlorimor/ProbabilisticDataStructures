@@ -702,6 +702,7 @@ namespace ProbabilisticDataStructures
                 filter.Segments.Add(segment);
             }
 
+            CheckExpansions(expansions, filter.Segments[0].QuotientBits);
             reader.ExpectEnd();
 
             filter.Hash = PersistenceFormat.ResolveOrThrow(hashId, hash);
@@ -761,6 +762,31 @@ namespace ProbabilisticDataStructures
                     $"Filter claims a chain of {segmentCount} tables. The chain grows " +
                     "with the logarithm of the item count, so this is longer than a " +
                     "64-bit hash could ever justify.");
+            }
+        }
+
+        /// <summary>
+        /// Refuses an expansion count the first table could not have come from. The first table
+        /// starts with at least two bits of address and gains one with each expansion, which is
+        /// all the count counts, so <see cref="Reset"/>, which takes the table the filter was
+        /// built with to be the first less a bit for each expansion, then builds one the
+        /// constructor builds; a count above it once reset a filter to a table it never had.
+        /// </summary>
+        /// <remarks>
+        /// The count is held to the first table alone. The tables behind it double on their
+        /// own, uncounted, so their address bits say nothing about it, and the chain's length
+        /// rests on how long an entry's fingerprint lasts, which is the filter's choice, while
+        /// the reader takes the tables behind the first as they come, each checked on its own.
+        /// </remarks>
+        private static void CheckExpansions(uint expansions, int quotientBits)
+        {
+            if (expansions > quotientBits - 2)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {expansions:N0} expansions, and its first table has " +
+                    $"{quotientBits} bits of address. A first table starts with at least 2 and " +
+                    $"gains one with each expansion, so this one has been through at most " +
+                    $"{quotientBits - 2}.");
             }
         }
 
