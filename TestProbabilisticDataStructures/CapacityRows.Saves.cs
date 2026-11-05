@@ -74,32 +74,57 @@ namespace TestProbabilisticDataStructures
             },
             StructureId.CountingBloomFilter => () =>
             {
+                // As BloomFilter64's: the fields, the counters, and a length for each of the
+                // table's arrays, which are as many as its count implies (#232).
                 var b = byte.Parse(Regex.Match(row.Counts, @"(\d)-bit").Groups[1].Value);
-                var payload = PayloadLine("CountingBloomFilter", StructureId.CountingBloomFilter);
-                var most = LargestSound(0.01, b);
-                return payload.Upper(BitsOf(most, 0.01, b)) <= MaxPayload
-                    ? AsBuilt
-                    : Saved(payload, most, n => BitsOf(n, 0.01, b));
+                var small = new CountingBloomFilter(100_000, b, 0.01);
+                var fixedBytes = PayloadOf(small) - (long)TrueBytes(small.Capacity(), b) - 4;
+                var most = Largest(1, 1UL << 40, n =>
+                {
+                    var m = Utils.OptimalM64(n, 0.01);
+                    return fixedBytes + (long)TrueBytes(m, b) + 4 * (long)(m / Buckets64.maxArraySize + 1) <= MaxPayload;
+                });
+                return About(most, most, 2);
             },
             StructureId.DeletableBloomFilter => () =>
             {
-                TryOptimalM(LargestSound(0.01, 1, 1000), 0.01, out var m);
-                return AsBuiltByCharge("DeletableBloomFilter", TrueBytes(m - 1000, 1));
+                // As the counting filter's, with its data region for the table that grows:
+                // the collision regions are r bits, one array, and among the fields (#232).
+                var small = new DeletableBloomFilter(100_000, 1000, 0.01);
+                var fixedBytes = PayloadOf(small) - (long)TrueBytes(small.Capacity(), 1) - 4;
+                var most = Largest(1_000, 1UL << 40, n =>
+                {
+                    var m = Utils.OptimalM64(n, 0.01) - 1000;
+                    return fixedBytes + (long)TrueBytes(m, 1) + 4 * (long)(m / Buckets64.maxArraySize + 1) <= MaxPayload;
+                });
+                return About(most, most, 2);
             },
             StructureId.PartitionedBloomFilter => () =>
             {
+                // As BloomFilter64's, with a table to each partition: the fields, each
+                // partition's bits, and a length for each of its table's arrays (#232).
                 var k = Utils.OptimalK(0.01);
-                TryOptimalM(LargestSized(0.01), 0.01, out var m);
-                return AsBuiltByCharge("PartitionedBloomFilter", k * TrueBytes((ulong)Math.Ceiling((double)m / k), 1));
+                ulong Slots(ulong n) => (Utils.OptimalM64(n, 0.01) + k - 1) / k;
+                var small = new ProbabilisticDataStructures.PartitionedBloomFilter(100_000, 0.01);
+                Assert.AreEqual(Slots(100_000), small.Partitions[0].count, "a partition is not the bits over the hash count");
+                var fixedBytes = PayloadOf(small) - k * ((long)TrueBytes(small.Partitions[0].count, 1) + 4);
+                var most = Largest(1, 1UL << 40, n =>
+                {
+                    var s = Slots(n);
+                    return fixedBytes + k * ((long)TrueBytes(s, 1) + 4 * (long)(s / Buckets64.maxArraySize + 1)) <= MaxPayload;
+                });
+                return About(most, most, 2);
             },
             StructureId.StableBloomFilter => () =>
             {
+                // As the counting filter's: the fields, the cells, and a length for each of
+                // the table's arrays, which are as many as its count implies (#232).
                 var d = byte.Parse(Regex.Match(row.Counts, @"(\d)-bit").Groups[1].Value);
-                var payload = PayloadLine("StableBloomFilter", StructureId.StableBloomFilter);
-                var most = Largest(1, uint.MaxValue, m => BucketsAreSound(m, d));
-                return payload.Upper(TrueBytes(most, d)) <= MaxPayload
-                    ? AsBuilt
-                    : Saved(payload, most, m => TrueBytes(m, d));
+                var small = new StableBloomFilter(100_000, d, 0.01, seed: 1);
+                var fixedBytes = PayloadOf(small) - (long)TrueBytes(small.Cells(), d) - 4;
+                var most = Largest(1, 1UL << 40, m =>
+                    fixedBytes + (long)TrueBytes(m, d) + 4 * (long)(m / Buckets64.maxArraySize + 1) <= MaxPayload);
+                return Exact(most);
             },
             StructureId.InverseBloomFilter => () =>
             {
@@ -125,10 +150,24 @@ namespace TestProbabilisticDataStructures
                     return AsBuiltIf(Facts[$"scalable length 1000 0.01 {r}"] <= MaxPayload, "the contained filters come to more than the ceiling");
                 }
 
-                // Each contained filter is its partitions' bits, a little over, and the filter is
-                // all of them: a tenth is room enough for the lengths and headers.
-                var units = ShapeOf(1000, 0.01, r, 2).Aggregate(0UL, (sum, s) => sum + s.Units);
-                return AsBuiltIf(units * 1.1 <= MaxPayload, "the contained filters come to more than the ceiling");
+                // Since #232 the filters double until memory runs out, and the payload passes
+                // the ceiling long before: what is saved is the items of the whole filters
+                // before the one that takes it past, as a read stops before the one that
+                // passes its budget. The payloads are worked out, and held to real ones
+                // for the filters that can be built here.
+                var shape = ShapeOf(1000, 0.01, r, 2);
+                CheckShapePayloads(1000, 0.01, r, 2, 8);
+                var most = 0UL;
+                var filters = 0;
+                while (filters < shape.Count && ScalablePayload(shape, filters + 1) <= (ulong)MaxPayload)
+                {
+                    most += shape[filters].Items;
+                    filters++;
+                }
+
+                Assert.IsLessThan(shape.Count, filters, "every filter its shape has fits a payload, so the payload is not what stops it");
+                Facts[$"scalable growth 2 {r} saves filters"] = filters;
+                return About(most, most, 2);
             },
             StructureId.CuckooBloomFilter => () =>
             {

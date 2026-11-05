@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.ExceptionServices;
@@ -198,6 +200,82 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A table of one array, which reads and writes a bucket as a shift and mask of one
+        /// byte where no bucket crosses a byte, answers as a table of several arrays does,
+        /// which always takes the general path, and both answer as a plain list of values
+        /// clamped to the width (#232). At every width from 1 to 8 bits, the two tables take
+        /// the same seeded run of sets, increments up and down past both ends, and reads, and
+        /// after every step the bucket it touched and its two neighbours read alike in both
+        /// and in the list; at the end every bucket does, and the bytes of the one array are
+        /// the bytes of the several laid end to end, so no write strayed into a neighbour's
+        /// bits. Widths 3, 5, 6 and 7 cross bytes, so even in one array they take the
+        /// general path, and are held to the same. Which path each table takes is checked
+        /// first, so that the test cannot pass by holding the general path to itself.
+        /// </summary>
+        [TestMethod]
+        public void TestATableOfOneArrayAnswersAsOneOfSeveralDoes()
+        {
+            const ulong Count = 1_000;
+            for (byte width = 1; width <= 8; width++)
+            {
+                var one = new Buckets64(Count, width);
+                var several = WithArrayBits(4, () => new Buckets64(Count, width));
+                Assert.HasCount(1, one.RawData, $"premise: the {width}-bit table is one array");
+                Assert.IsGreaterThan(1, several.RawData.Count(array => array.Length > 0),
+                    $"premise: the lowered {width}-bit table holds its bytes in several arrays");
+
+                // Which path each takes, or the two could both be the general one and this
+                // would hold nothing: the one array where no bucket crosses a byte.
+                var single = typeof(Buckets64).GetField("single",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+                var divides = 8 % width == 0;
+                Assert.AreEqual(divides, single.GetValue(one) is not null,
+                    $"premise: the {width}-bit table of one array {(divides ? "does not take" : "takes")} the one-byte path");
+                Assert.IsNull(single.GetValue(several), $"premise: the {width}-bit table of several arrays takes the one-byte path");
+
+                var max = (1 << width) - 1;
+                var model = new int[Count];
+                var random = new Random(232 + width);
+                for (var step = 0; step < 20_000; step++)
+                {
+                    var bucket = (ulong)random.Next((int)Count);
+                    switch (random.Next(3))
+                    {
+                        case 0:
+                            var value = (byte)random.Next(256);
+                            one.Set(bucket, value);
+                            several.Set(bucket, value);
+                            model[bucket] = Math.Min(value, max);
+                            break;
+                        case 1:
+                            var delta = random.Next(-2 * max - 2, 2 * max + 3);
+                            one.Increment(bucket, delta);
+                            several.Increment(bucket, delta);
+                            model[bucket] = Math.Clamp(model[bucket] + delta, 0, max);
+                            break;
+                        default:
+                            break;
+                    }
+
+                    for (var b = bucket == 0 ? 0 : bucket - 1; b <= Math.Min(bucket + 1, Count - 1); b++)
+                    {
+                        Assert.AreEqual((uint)model[b], one.Get(b), $"{width}-bit, step {step}: bucket {b} of one array");
+                        Assert.AreEqual((uint)model[b], several.Get(b), $"{width}-bit, step {step}: bucket {b} of several");
+                    }
+                }
+
+                for (var b = 0UL; b < Count; b++)
+                {
+                    Assert.AreEqual((uint)model[b], one.Get(b), $"{width}-bit: bucket {b} of one array at the end");
+                    Assert.AreEqual((uint)model[b], several.Get(b), $"{width}-bit: bucket {b} of several at the end");
+                }
+
+                CollectionAssert.AreEqual(several.RawData.SelectMany(array => array).ToArray(), one.RawData[0],
+                    $"{width}-bit: the one array's bytes are not the several arrays' laid end to end");
+            }
+        }
+
+        /// <summary>
         /// Buckets split at a lowered size answer for every bucket as buckets of the real size
         /// do, on the thread that built them, on another, and once the size is put back: they
         /// keep the size they were built at, and a reset on another thread clears every array
@@ -289,6 +367,788 @@ namespace TestProbabilisticDataStructures
             var refused = OnAnotherThread(() =>
                 Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<BloomFilter64>(bytes)));
             StringAssert.Contains(refused.Message, "arrays and");
+        }
+
+        /// <summary>
+        /// A counting filter whose counters fill several lowered arrays is one filter
+        /// throughout, as a <see cref="BloomFilter64"/> is: given the same keys as a filter of
+        /// the real size, it removes, merges, counts and answers as that one does and holds
+        /// the same counters, one of them held at its maximum by the merge. Its payload reads
+        /// back as the bytes it was read from, the reset of the copy clears every array, and a
+        /// reader that has not lowered the size refuses the payload, which holds more arrays
+        /// than its count implies at the real size.
+        /// </summary>
+        [TestMethod]
+        public void TestACountingFilterOfLoweredArraysIsOneFilterThroughout()
+        {
+            static byte[] Key(int i) => BitConverter.GetBytes(i);
+            static (CountingBloomFilter Filter, bool[] Removed, bool[] Answers) Exercised()
+            {
+                var first = new CountingBloomFilter(10_000, 4, 0.01);
+                var second = new CountingBloomFilter(10_000, 4, 0.01);
+                for (var i = 0; i < 1_000; i++) first.Add(Key(i));
+                for (var i = 500; i < 1_500; i++) second.Add(Key(i));
+                for (var i = 0; i < 10; i++)
+                {
+                    first.Add(Key(-1));
+                    second.Add(Key(-1));
+                }
+
+                var removed = Enumerable.Range(0, 400).Select(i => first.TestAndRemove(Key(3 * i))).ToArray();
+                first.Merge(second);
+                return (first, removed, Enumerable.Range(-1, 3_000).Select(i => first.Test(Key(i))).ToArray());
+            }
+
+            var (real, realRemoved, realAnswers) = Exercised();
+            Assert.Contains(real.Buckets.MaxBucketValue(),
+                Enumerable.Range(0, checked((int)real.Buckets.count)).Select(i => real.Buckets.Get((ulong)i)).ToArray(),
+                "premise: the merge holds a counter at its maximum");
+
+            var (filter, bytes, removed, answers) = WithArrayBits(10, () =>
+            {
+                var (exercised, removedHere, answersHere) = Exercised();
+                Assert.IsGreaterThan(1, exercised.Buckets.RawData.Count(array => array.Length > 0),
+                    "premise: the counters fill several arrays");
+
+                var written = exercised.ToByteArray();
+                var read = Persistence.FromByteArray<CountingBloomFilter>(written);
+                CollectionAssert.AreEqual(written, read.ToByteArray(), "the read filter writes other bytes");
+
+                read.Reset();
+                Assert.IsTrue(read.Buckets.RawData.All(array => array.AsSpan().IndexOfAnyExcept((byte)0) < 0),
+                    "the reset left a counter set");
+                return (exercised, written, removedHere, answersHere);
+            });
+
+            CollectionAssert.AreEqual(realRemoved, removed, "the filters removed other keys");
+            CollectionAssert.AreEqual(realAnswers, answers, "the filters answer otherwise");
+            Assert.AreEqual(real.Count(), filter.Count());
+            Assert.AreEqual(real.Buckets.count, filter.Buckets.count);
+            for (ulong i = 0; i < real.Buckets.count; i++)
+            {
+                Assert.AreEqual(real.Buckets.Get(i), filter.Buckets.Get(i), $"counter {i}");
+            }
+
+            var refused = OnAnotherThread(() =>
+                Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<CountingBloomFilter>(bytes)));
+            StringAssert.Contains(refused.Message, "arrays and");
+        }
+
+        /// <summary>
+        /// A counting filter saved before version 14 holds its counters as one run, which
+        /// is kept as the first array of a 64-bit table when it fits one and split into arrays
+        /// of the table's size when it does not. Unsplit, the run is the first array and the
+        /// rest are empty. Split, the counters are the same: with arrays of 16 bytes, the
+        /// filter read holds the counters of the one read at the real size, and saves as it
+        /// does once both are narrowed back to version 8. Either way it is charged what it
+        /// was priced at, and the split, which copies the run once, is charged what it
+        /// allocates beyond the unsplit read, to the byte.
+        /// </summary>
+        [TestMethod]
+        [DataRow("countingbloomfilter-v1.bin")]
+        [DataRow("countingbloomfilter-v8-narrow.bin")]
+        [DataRow("countingbloomfilter-v8-wide.bin")]
+        public void TestAnEarlierCountingPayloadIsLaidOutAsOneTableOfArrays(string fixture)
+        {
+            const int Bits = 4, Size = 16;
+            var bytes = TestPersistenceFormatStability.ReadFixture(fixture);
+            (CountingBloomFilter Filter, long Charged, long Allocated) Read()
+            {
+                var budget = new ReadBudget(long.MaxValue, StructureId.CountingBloomFilter);
+                var read = Persistence.FromByteArray<CountingBloomFilter>(bytes, new ReadOptions(budget));
+
+                // A charge past the price raises it, so the price alone is what a budget of
+                // nothing is refused for.
+                var priced = ((ReadBudgetExceededException)Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<CountingBloomFilter>(bytes, new ReadOptions(0))).InnerException!).RequiredBytes;
+                Assert.AreEqual(priced, budget.Spent, $"{fixture} was priced at one sum and charged another");
+                var allocated = TestReadBudget.Allocated(() => Persistence.FromByteArray<CountingBloomFilter>(bytes));
+                return (read, budget.Spent, allocated);
+            }
+
+            var real = Read();
+            var run = checked((int)((real.Filter.Buckets.count * real.Filter.Buckets.BucketSize + 7) / 8));
+            var arrays = real.Filter.Buckets.RawData;
+            Assert.AreEqual(run, arrays[0].Length, "the run is not the first array");
+            Assert.IsTrue(arrays.Skip(1).All(array => array.Length == 0), "an array past the first holds something");
+
+            var split = WithArrayBits(Bits, Read);
+            var pieces = split.Filter.Buckets.RawData.Where(array => array.Length > 0).ToArray();
+            Assert.AreEqual((run + Size - 1) / Size, pieces.Length, "premise: the run was split into arrays of 16 bytes");
+            Assert.IsTrue(pieces.All(piece => piece.Length <= Size), "a piece is longer than an array");
+            Assert.AreEqual(run, pieces.Sum(piece => piece.Length));
+            for (ulong i = 0; i < real.Filter.Buckets.count; i++)
+            {
+                Assert.AreEqual(real.Filter.Buckets.Get(i), split.Filter.Buckets.Get(i), $"counter {i}");
+            }
+
+            CollectionAssert.AreEqual(TestBitPlacement.Narrowed(real.Filter.ToByteArray(), "mubqt"),
+                TestBitPlacement.Narrowed(split.Filter.ToByteArray(), "mubqt"), "the split filter saves another filter");
+
+            Console.WriteLine($"[LAID-OUT] {fixture}: run {run}, charged {real.Charged} and {split.Charged}, " +
+                $"allocated {real.Allocated} and {split.Allocated}");
+            Assert.IsGreaterThan(0L, split.Charged - real.Charged, "premise: the split costs something");
+            Assert.AreEqual(split.Allocated - real.Allocated, split.Charged - real.Charged,
+                "the split was charged other than what it allocated beyond the unsplit read");
+        }
+
+        /// <summary>
+        /// A deletable filter whose two regions fill several lowered arrays is one filter
+        /// throughout: given the same keys as a filter of the real size, it adds, removes
+        /// (some refused for their collided regions) and answers as that one does, and holds
+        /// the same bits in both regions. Its payload reads back as the bytes it was read
+        /// from, and a reader that has not lowered the size refuses it.
+        /// </summary>
+        [TestMethod]
+        public void TestADeletableFilterOfLoweredArraysIsOneFilterThroughout()
+        {
+            static byte[] Key(int i) => BitConverter.GetBytes(i);
+            static (DeletableBloomFilter Filter, bool[] Removed, bool[] Answers) Exercised()
+            {
+                var filter = new DeletableBloomFilter(10_000, 1000, 0.01);
+                for (var i = 0; i < 3_000; i++) filter.Add(Key(i));
+                var removed = Enumerable.Range(0, 1_000).Select(i => filter.TestAndRemove(Key(3 * i))).ToArray();
+                return (filter, removed, Enumerable.Range(0, 6_000).Select(i => filter.Test(Key(i))).ToArray());
+            }
+
+            static void AssertSame(Buckets64 expected, Buckets64 actual, string what)
+            {
+                Assert.AreEqual(expected.count, actual.count, what);
+                for (ulong i = 0; i < expected.count; i++)
+                {
+                    Assert.AreEqual(expected.Get(i), actual.Get(i), $"{what}, bit {i}");
+                }
+            }
+
+            var (real, realRemoved, realAnswers) = Exercised();
+            var (filter, bytes, removed, answers) = WithArrayBits(4, () =>
+            {
+                var (exercised, removedHere, answersHere) = Exercised();
+                Assert.IsGreaterThan(1, exercised.Buckets.RawData.Count(array => array.Length > 0),
+                    "premise: the data region fills several arrays");
+                Assert.IsGreaterThan(1, exercised.Collisions.RawData.Count(array => array.Length > 0),
+                    "premise: the collision regions fill several arrays");
+
+                var written = exercised.ToByteArray();
+                CollectionAssert.AreEqual(written, Persistence.FromByteArray<DeletableBloomFilter>(written).ToByteArray(),
+                    "the read filter writes other bytes");
+                return (exercised, written, removedHere, answersHere);
+            });
+
+            var stillThere = Enumerable.Range(0, 1_000).Select(i => realAnswers[3 * i]).ToArray();
+            Assert.Contains(true, stillThere, "premise: some removed keys are still members, refused for their regions");
+            Assert.Contains(false, stillThere, "premise: some removals cleared their keys");
+            CollectionAssert.AreEqual(realRemoved, removed, "the filters removed other keys");
+            CollectionAssert.AreEqual(realAnswers, answers, "the filters answer otherwise");
+            Assert.AreEqual(real.Count(), filter.Count());
+            AssertSame(real.Buckets, filter.Buckets, "the data region");
+            AssertSame(real.Collisions, filter.Collisions, "the collision regions");
+
+            var refused = OnAnotherThread(() =>
+                Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<DeletableBloomFilter>(bytes)));
+            StringAssert.Contains(refused.Message, "arrays and");
+        }
+
+        /// <summary>
+        /// A deletable filter saved before version 14 holds each region as one run, and each
+        /// is laid out as a 64-bit table's arrays, as the counting filter's counters are: at
+        /// arrays of a byte both regions are split, hold the bits of the filter read at the
+        /// real size and save as it does once narrowed back to version 8; the read is priced
+        /// at what it is charged, and the splits are charged what they allocate beyond the
+        /// unsplit read, to the byte.
+        /// </summary>
+        [TestMethod]
+        [DataRow("deletablebloomfilter-v1.bin")]
+        [DataRow("deletablebloomfilter-v8-narrow.bin")]
+        [DataRow("deletablebloomfilter-v8-wide.bin")]
+        public void TestAnEarlierDeletablePayloadIsLaidOutAsTablesOfArrays(string fixture)
+        {
+            var bytes = TestPersistenceFormatStability.ReadFixture(fixture);
+            (DeletableBloomFilter Filter, long Charged, long Allocated) Read()
+            {
+                var budget = new ReadBudget(long.MaxValue, StructureId.DeletableBloomFilter);
+                var read = Persistence.FromByteArray<DeletableBloomFilter>(bytes, new ReadOptions(budget));
+                var priced = ((ReadBudgetExceededException)Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<DeletableBloomFilter>(bytes, new ReadOptions(0))).InnerException!).RequiredBytes;
+                Assert.AreEqual(priced, budget.Spent, $"{fixture} was priced at one sum and charged another");
+                var allocated = TestReadBudget.Allocated(() => Persistence.FromByteArray<DeletableBloomFilter>(bytes));
+                return (read, budget.Spent, allocated);
+            }
+
+            var real = Read();
+            var split = WithArrayBits(0, Read);
+            foreach (var (what, of) in new (string, Func<DeletableBloomFilter, Buckets64>)[]
+            {
+                ("the data region", f => f.Buckets), ("the collision regions", f => f.Collisions),
+            })
+            {
+                var (kept, laid) = (of(real.Filter), of(split.Filter));
+                Assert.AreEqual(1, kept.RawData.Count(array => array.Length > 0), $"{what} is not one array at the real size");
+                Assert.IsGreaterThan(1, laid.RawData.Count(array => array.Length > 0), $"premise: {what} was split");
+                Assert.IsTrue(laid.RawData.All(array => array.Length <= 1), $"{what} has a piece longer than an array");
+                for (ulong i = 0; i < kept.count; i++)
+                {
+                    Assert.AreEqual(kept.Get(i), laid.Get(i), $"{what}, bit {i}");
+                }
+            }
+
+            CollectionAssert.AreEqual(TestBitPlacement.Narrowed(real.Filter.ToByteArray(), "mubqtt"),
+                TestBitPlacement.Narrowed(split.Filter.ToByteArray(), "mubqtt"), "the split filter saves another filter");
+            Assert.IsGreaterThan(0L, split.Charged - real.Charged, "premise: the split costs something");
+            Assert.AreEqual(split.Allocated - real.Allocated, split.Charged - real.Charged,
+                "the split was charged other than what it allocated beyond the unsplit read");
+        }
+
+        /// <summary>
+        /// A stable filter whose cells fill several lowered arrays is one filter throughout:
+        /// seeded alike and given the same keys as a filter of the real size, it decays the
+        /// same cells, its runs crossing from one array into the next, and answers and holds
+        /// as that one does. Its payload reads back as the bytes it was read from, the copy's
+        /// reset clears every array, and a reader that has not lowered the size refuses it.
+        /// </summary>
+        [TestMethod]
+        public void TestAStableFilterOfLoweredArraysIsOneFilterThroughout()
+        {
+            static byte[] Key(int i) => BitConverter.GetBytes(i);
+            static (StableBloomFilter Filter, bool[] Answers) Exercised()
+            {
+                var filter = new StableBloomFilter(2_000, 3, 0.01, null, 11);
+                for (var i = 0; i < 3_000; i++) filter.Add(Key(i));
+                return (filter, Enumerable.Range(0, 6_000).Select(i => filter.Test(Key(i))).ToArray());
+            }
+
+            var (real, realAnswers) = Exercised();
+            var (filter, bytes, answers, reset) = WithArrayBits(4, () =>
+            {
+                var (exercised, answersHere) = Exercised();
+                Assert.IsGreaterThan(1, exercised.cells.RawData.Count(array => array.Length > 0),
+                    "premise: the cells fill several arrays");
+
+                var written = exercised.ToByteArray();
+                var read = Persistence.FromByteArray<StableBloomFilter>(written);
+                CollectionAssert.AreEqual(written, read.ToByteArray(), "the read filter writes other bytes");
+                read.Reset();
+                return (exercised, written, answersHere, read);
+            });
+
+            Assert.Contains(false, realAnswers.Take(3_000).ToArray(), "premise: the filter forgot some keys");
+            CollectionAssert.AreEqual(realAnswers, answers, "the filters answer otherwise");
+            Assert.AreEqual(real.cells.count, filter.cells.count);
+            for (ulong i = 0; i < real.cells.count; i++)
+            {
+                Assert.AreEqual(real.cells.Get(i), filter.cells.Get(i), $"cell {i}");
+            }
+
+            Assert.IsTrue(reset.cells.RawData.All(array => array.AsSpan().IndexOfAnyExcept((byte)0) < 0),
+                "the reset left a cell set");
+            var refused = OnAnotherThread(() =>
+                Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<StableBloomFilter>(bytes)));
+            StringAssert.Contains(refused.Message, "arrays and");
+        }
+
+        /// <summary>
+        /// A stable filter saved before version 14 holds its cells as one run, laid out as a
+        /// 64-bit table's arrays as the counting filter's counters are: at arrays of a byte
+        /// the cells are split, hold what the read at the real size holds and save as it
+        /// does once narrowed back to version 8; the read is priced at what it is charged,
+        /// and the split is charged what it allocates beyond the unsplit read, to the byte.
+        /// </summary>
+        [TestMethod]
+        [DataRow("stablebloomfilter-v1.bin")]
+        [DataRow("stablebloomfilter-v5.bin")]
+        [DataRow("stablebloomfilter-v8-narrow.bin")]
+        [DataRow("stablebloomfilter-v8-wide.bin")]
+        public void TestAnEarlierStablePayloadIsLaidOutAsATableOfArrays(string fixture)
+        {
+            var bytes = TestPersistenceFormatStability.ReadFixture(fixture);
+            (StableBloomFilter Filter, long Charged, long Allocated) Read()
+            {
+                var budget = new ReadBudget(long.MaxValue, StructureId.StableBloomFilter);
+                var read = Persistence.FromByteArray<StableBloomFilter>(bytes, new ReadOptions(budget));
+                var priced = ((ReadBudgetExceededException)Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<StableBloomFilter>(bytes, new ReadOptions(0))).InnerException!).RequiredBytes;
+                Assert.AreEqual(priced, budget.Spent, $"{fixture} was priced at one sum and charged another");
+                var allocated = TestReadBudget.Allocated(() => Persistence.FromByteArray<StableBloomFilter>(bytes));
+                return (read, budget.Spent, allocated);
+            }
+
+            var real = Read();
+            var split = WithArrayBits(0, Read);
+            Assert.AreEqual(1, real.Filter.cells.RawData.Count(array => array.Length > 0), "the cells are not one array at the real size");
+            Assert.IsGreaterThan(1, split.Filter.cells.RawData.Count(array => array.Length > 0), "premise: the cells were split");
+            for (ulong i = 0; i < real.Filter.cells.count; i++)
+            {
+                Assert.AreEqual(real.Filter.cells.Get(i), split.Filter.cells.Get(i), $"cell {i}");
+            }
+
+            // A version 1 payload has no stored generator state, so each read takes an
+            // unpredictable one, and only its cells are compared.
+            if (!fixture.EndsWith("v1.bin", StringComparison.Ordinal))
+            {
+                CollectionAssert.AreEqual(TestBitPlacement.Narrowed(real.Filter.ToByteArray(), "muubtqq"),
+                    TestBitPlacement.Narrowed(split.Filter.ToByteArray(), "muubtqq"), "the split filter saves another filter");
+            }
+
+            Assert.IsGreaterThan(0L, split.Charged - real.Charged, "premise: the split costs something");
+            Assert.AreEqual(split.Allocated - real.Allocated, split.Charged - real.Charged,
+                "the split was charged other than what it allocated beyond the unsplit read");
+        }
+
+        /// <summary>
+        /// A partitioned filter whose partitions each fill several lowered arrays is one
+        /// filter throughout: given the same keys as a filter of the real size, and merged
+        /// with another, it answers as that one does and holds the same bits in every
+        /// partition. Its payload reads back as the bytes it was read from, and a reader that
+        /// has not lowered the size refuses it.
+        /// </summary>
+        [TestMethod]
+        public void TestAPartitionedFilterOfLoweredArraysIsOneFilterThroughout()
+        {
+            static byte[] Key(int i) => BitConverter.GetBytes(i);
+            static (PartitionedBloomFilter Filter, bool[] Answers) Exercised()
+            {
+                var filter = new PartitionedBloomFilter(10_000, 0.01);
+                var other = new PartitionedBloomFilter(10_000, 0.01);
+                for (var i = 0; i < 3_000; i++) filter.Add(Key(i));
+                for (var i = 3_000; i < 5_000; i++) other.Add(Key(i));
+                filter.Merge(other);
+                return (filter, Enumerable.Range(0, 10_000).Select(i => filter.Test(Key(i))).ToArray());
+            }
+
+            var (real, realAnswers) = Exercised();
+            var (filter, bytes, answers) = WithArrayBits(4, () =>
+            {
+                var (exercised, answersHere) = Exercised();
+                Assert.IsTrue(exercised.Partitions.All(p => p.RawData.Count(array => array.Length > 0) > 1),
+                    "premise: every partition fills several arrays");
+
+                var written = exercised.ToByteArray();
+                CollectionAssert.AreEqual(written, Persistence.FromByteArray<PartitionedBloomFilter>(written).ToByteArray(),
+                    "the read filter writes other bytes");
+                return (exercised, written, answersHere);
+            });
+
+            Assert.Contains(false, realAnswers, "premise: some keys are not members");
+            CollectionAssert.AreEqual(realAnswers, answers, "the filters answer otherwise");
+            Assert.AreEqual(real.Count(), filter.Count());
+            Assert.AreEqual(real.Partitions.Length, filter.Partitions.Length);
+            for (var p = 0; p < real.Partitions.Length; p++)
+            {
+                Assert.AreEqual(real.Partitions[p].count, filter.Partitions[p].count, $"partition {p}");
+                for (ulong i = 0; i < real.Partitions[p].count; i++)
+                {
+                    Assert.AreEqual(real.Partitions[p].Get(i), filter.Partitions[p].Get(i), $"partition {p}, bit {i}");
+                }
+            }
+
+            var refused = OnAnotherThread(() =>
+                Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<PartitionedBloomFilter>(bytes)));
+            StringAssert.Contains(refused.Message, "arrays and");
+        }
+
+        /// <summary>
+        /// A partitioned filter saved before version 14 holds each partition as one run, and
+        /// each is laid out as a 64-bit table's arrays, as the counting filter's counters
+        /// are: at arrays of a byte every partition is split, holds the bits of the filter
+        /// read at the real size and saves as it does once narrowed back to version 8; the
+        /// read is priced at what it is charged, and the splits are charged what they
+        /// allocate beyond the unsplit read, to the byte.
+        /// </summary>
+        [TestMethod]
+        [DataRow("partitionedbloomfilter-v1.bin")]
+        [DataRow("partitionedbloomfilter-v8-narrow.bin")]
+        [DataRow("partitionedbloomfilter-v8-wide.bin")]
+        public void TestAnEarlierPartitionedPayloadIsLaidOutAsTablesOfArrays(string fixture)
+        {
+            var bytes = TestPersistenceFormatStability.ReadFixture(fixture);
+            (PartitionedBloomFilter Filter, long Charged, long Allocated) Read()
+            {
+                var budget = new ReadBudget(long.MaxValue, StructureId.PartitionedBloomFilter);
+                var read = Persistence.FromByteArray<PartitionedBloomFilter>(bytes, new ReadOptions(budget));
+                var priced = ((ReadBudgetExceededException)Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<PartitionedBloomFilter>(bytes, new ReadOptions(0))).InnerException!).RequiredBytes;
+                Assert.AreEqual(priced, budget.Spent, $"{fixture} was priced at one sum and charged another");
+                var allocated = TestReadBudget.Allocated(() => Persistence.FromByteArray<PartitionedBloomFilter>(bytes));
+                return (read, budget.Spent, allocated);
+            }
+
+            var real = Read();
+            var split = WithArrayBits(0, Read);
+            for (var p = 0; p < real.Filter.Partitions.Length; p++)
+            {
+                var (kept, laid) = (real.Filter.Partitions[p], split.Filter.Partitions[p]);
+                Assert.AreEqual(1, kept.RawData.Count(array => array.Length > 0), $"partition {p} is not one array at the real size");
+                Assert.IsGreaterThan(1, laid.RawData.Count(array => array.Length > 0), $"premise: partition {p} was split");
+                Assert.IsTrue(laid.RawData.All(array => array.Length <= 1), $"partition {p} has a piece longer than an array");
+                for (ulong i = 0; i < kept.count; i++)
+                {
+                    Assert.AreEqual(kept.Get(i), laid.Get(i), $"partition {p}, bit {i}");
+                }
+            }
+
+            CollectionAssert.AreEqual(TestBitPlacement.Narrowed(real.Filter.ToByteArray(), "mumbqn"),
+                TestBitPlacement.Narrowed(split.Filter.ToByteArray(), "mumbqn"), "the split filter saves another filter");
+            Assert.IsGreaterThan(0L, split.Charged - real.Charged, "premise: the split costs something");
+            Assert.AreEqual(split.Allocated - real.Allocated, split.Charged - real.Charged,
+                "the split was charged other than what it allocated beyond the unsplit read");
+        }
+
+        /// <summary>
+        /// Past 2^32 cells a decay run's start and its cells are 64-bit (#232), which no
+        /// filter in the suite can be built large enough to show, so the two functions are
+        /// held to it directly: the start is the high half of the 128-bit product, which
+        /// reaches past 2^32 and stays below m, and a run wraps from the last cell to the
+        /// first. Below 2^32 cells they give what the 32-bit ones gave, which
+        /// TestStableDecayDraw holds.
+        /// </summary>
+        [TestMethod]
+        public void TestADecayRunPastTwoToTheThirtyTwoCellsIsPlacedInSixtyFourBits()
+        {
+            var m = (1UL << 40) + 5;
+            Assert.AreEqual(0UL, StableBloomFilter.DecayStart(0, m));
+            Assert.AreEqual(m - 1, StableBloomFilter.DecayStart(ulong.MaxValue, m));
+            Assert.AreEqual(m / 2, StableBloomFilter.DecayStart(1UL << 63, m));
+            Assert.IsGreaterThan((ulong)uint.MaxValue, StableBloomFilter.DecayStart(1UL << 63, m), "premise: a start past 2^32");
+
+            Assert.AreEqual(m - 1, StableBloomFilter.DecayCell(m - 2, 1, m));
+            Assert.AreEqual(0UL, StableBloomFilter.DecayCell(m - 1, 1, m));
+            Assert.AreEqual(2UL, StableBloomFilter.DecayCell(m - 1, 3, m));
+            Assert.AreEqual((1UL << 32) + 1, StableBloomFilter.DecayCell(1UL << 32, 1, m));
+        }
+
+        /// <summary>
+        /// The one boundary in laying out a run of buckets as a 64-bit table, at arrays of 16
+        /// bytes: runs of 15 and 16 eight-bit buckets fit the first array and are kept, the
+        /// 16's second array empty, and one of 17 is split into 16 bytes and 1, which copies
+        /// it. Each is read with the buckets it holds and priced at what it is charged. What
+        /// each allocates beyond its charge is, to the byte, what reading a table stored at
+        /// version 14 allocates beyond its own: the two readers build the same table, so
+        /// what differs is the arrays, and each is charged for the arrays it allocates.
+        /// </summary>
+        [TestMethod]
+        public void TestARunIsChargedWhatLayingItOutAsATableAllocates()
+        {
+            const int Size = 16;
+            static byte[] Run(int length)
+            {
+                // Version 8: u32 count, u8 width, then the run's u32 length and its bytes.
+                var payload = new List<byte>(BitConverter.GetBytes((uint)length)) { 8 };
+                payload.AddRange(BitConverter.GetBytes((uint)length));
+                payload.AddRange(Enumerable.Range(1, length).Select(i => (byte)i));
+                return payload.ToArray();
+            }
+
+            static byte[] Table(int length)
+            {
+                // Version 14: u64 count, u8 width, u32 array count, then each array's run.
+                var arrays = length / Size + 1;
+                var payload = new List<byte>(BitConverter.GetBytes((ulong)length)) { 8 };
+                payload.AddRange(BitConverter.GetBytes((uint)arrays));
+                for (var a = 0; a < arrays; a++)
+                {
+                    var piece = Math.Clamp(length - Size * a, 0, Size);
+                    payload.AddRange(BitConverter.GetBytes((uint)piece));
+                    payload.AddRange(Enumerable.Range(Size * a + 1, piece).Select(i => (byte)i));
+                }
+
+                return payload.ToArray();
+            }
+
+            static (Buckets64 Buckets, long Beyond) Read(byte[] payload, TableReader read)
+            {
+                ReadBudget budget = null;
+                var allocated = NoGCRegion.Allocated(() =>
+                {
+                    var reader = new PayloadReader(payload, budget);
+                    return read(ref reader);
+                }, () => budget = new ReadBudget(long.MaxValue, StructureId.CountingBloomFilter));
+                var again = new PayloadReader(payload, new ReadBudget(long.MaxValue, StructureId.CountingBloomFilter));
+                return (read(ref again), allocated - budget.Spent);
+            }
+
+            (int[] Lengths, long Beyond, long Stored) LaidOut(int length)
+            {
+                var payload = Run(length);
+                var priced = new ReadBudget(long.MaxValue, StructureId.CountingBloomFilter);
+                var pricer = new PayloadReader(payload, priced);
+                Assert.AreEqual((ulong)length, PersistenceFormat.PriceBucketsAs64(ref pricer), "the price read another count");
+
+                var charged = new ReadBudget(long.MaxValue, StructureId.CountingBloomFilter);
+                var once = new PayloadReader(payload, charged);
+                PersistenceFormat.ReadBucketsAs64(ref once);
+                Assert.AreEqual(priced.Charged, charged.Spent, $"a run of {length} was priced at one sum and charged another");
+
+                var (buckets, beyond) = Read(payload, PersistenceFormat.ReadBucketsAs64);
+                var (stored, storedBeyond) = Read(Table(length), PersistenceFormat.ReadBuckets64);
+                for (ulong i = 0; i < (ulong)length; i++)
+                {
+                    Assert.AreEqual((uint)i + 1, buckets.Get(i), $"bucket {i} of a run of {length}");
+                    Assert.AreEqual((uint)i + 1, stored.Get(i), $"bucket {i} of the stored table of {length}");
+                }
+
+                Console.WriteLine($"[RUN] {length}: beyond its charge {beyond}, and stored at version 14 {storedBeyond}");
+                return (buckets.RawData.Select(array => array.Length).ToArray(), beyond, storedBeyond);
+            }
+
+            var (shorter, kept, split) = WithArrayBits(4, () => (LaidOut(Size - 1), LaidOut(Size), LaidOut(Size + 1)));
+            CollectionAssert.AreEqual(new[] { Size - 1 }, shorter.Lengths, "a run shorter than an array was not kept whole");
+            CollectionAssert.AreEqual(new[] { Size, 0 }, kept.Lengths, "a run as long as an array was not kept whole");
+            CollectionAssert.AreEqual(new[] { Size, 1 }, split.Lengths, "a run a byte longer was not split at the array");
+
+            // The stored tables of 15 and 17 hold no empty array, and those are the
+            // reference: a stored table's reader charges an empty run as the array of
+            // nothing it would be, and allocates none, so the stored table of 16 is charged
+            // a little more than it allocates, where the run laid out as it holds no such array.
+            Assert.AreEqual(shorter.Stored, split.Stored, "premise: the stored tables allocate beyond their charge alike");
+            foreach (var (what, layout) in new[] { ("shorter", shorter), ("kept", kept), ("split", split) })
+            {
+                Assert.AreEqual(split.Stored, layout.Beyond,
+                    $"the {what} run allocated other than it was charged, beyond what a stored table does");
+            }
+        }
+
+        /// <summary>
+        /// A run's price checks it as its reader does, before it prices the table its count
+        /// implies. A version 8 counting payload whose bucket count is edited to the most
+        /// four-bit buckets one array holds, against its run of 480 bytes, is refused for
+        /// that by its reader. At arrays of 16 bytes that count implies an array of 2^28
+        /// arrays, 2 GiB, which a price that did not check the run first would charge, and
+        /// under a budget of a mebibyte the read would be refused for the budget instead.
+        /// </summary>
+        [TestMethod]
+        public void TestARunWhoseCountDisagreesIsRefusedForThatUnderABudget()
+        {
+            // Version 8: u32 m, u32 k, u8 placement, u64 count, then the run's u32 count.
+            const int RunCount = 17;
+            var bytes = TestPersistenceFormatStability.ReadFixture("countingbloomfilter-v8-narrow.bin");
+            Assert.AreEqual(959u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(14 + RunCount)), "premise: the run's count");
+            var edited = TestPersistenceHostilePayloads.PokeUInt32(bytes, RunCount, Buckets.MaxCount(4));
+
+            var refused = WithArrayBits(4, () => Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<CountingBloomFilter>(edited, new ReadOptions(1 << 20))));
+            Assert.IsNotInstanceOfType<ReadBudgetExceededException>(refused.InnerException, "the run was refused for the budget");
+            StringAssert.Contains(refused.Message, "bytes and 480 were stored");
+        }
+
+        private delegate Buckets64 TableReader(ref PayloadReader reader);
+
+        /// <summary>
+        /// A stored 64-bit table's price refuses each shape its reader refuses, with the
+        /// reader's message, and accepts the table the reader accepts (#232). A filter's own
+        /// checks of the count it is handed cannot stand in for these: a table with one
+        /// array more than its count needs, the extra one empty, holds the count it should,
+        /// and every array it stores is the length the count gives it, so only the count of
+        /// arrays is wrong. Before, the price walked that table and priced it, and a payload
+        /// holding it over its budget was refused for the budget rather than its shape.
+        /// The tables are built here by hand, at 100 one-bit buckets, thirteen bytes in one
+        /// array.
+        /// </summary>
+        [TestMethod]
+        public void TestATablesPriceRefusesWhatItsReaderRefuses()
+        {
+            static byte[] Table(ulong count, byte width, params int[] lengths)
+            {
+                // Version 14: u64 count, u8 width, u32 array count, then each array's run.
+                var payload = new List<byte>(BitConverter.GetBytes(count)) { width };
+                payload.AddRange(BitConverter.GetBytes((uint)lengths.Length));
+                foreach (var length in lengths)
+                {
+                    payload.AddRange(BitConverter.GetBytes((uint)length));
+                    payload.AddRange(new byte[length]);
+                }
+
+                return payload.ToArray();
+            }
+
+            static ReadBudget Unlimited() => new(long.MaxValue, StructureId.BloomFilter64);
+
+            var whole = Table(100, 1, 13);
+            var priceOfWhole = new PayloadReader(whole, Unlimited());
+            Assert.AreEqual(100UL, PersistenceFormat.PriceBuckets64(ref priceOfWhole), "the price refused a table its reader reads");
+            var readOfWhole = new PayloadReader(whole, Unlimited());
+            Assert.AreEqual(100UL, PersistenceFormat.ReadBuckets64(ref readOfWhole).count, "premise: the reader reads the table");
+
+            foreach (var (what, table, because) in new[]
+            {
+                ("one array too many, empty", Table(100, 1, 13, 0), "need 1 arrays and 2 were stored"),
+                ("its width disagreeing with its bytes", Table(100, 2, 13), "needs 25 bytes and 13 were stored"),
+                ("a width of none", Table(100, 0, 13), "claims buckets of 0 bits"),
+                ("more buckets than a table holds", Table(Buckets64.MaxCount + 1, 1, 13), "beyond anything"),
+            })
+            {
+                var read = Assert.ThrowsExactly<InvalidDataException>(() =>
+                {
+                    var reader = new PayloadReader(table, Unlimited());
+                    PersistenceFormat.ReadBuckets64(ref reader);
+                }, $"premise: the reader takes a table with {what}");
+                StringAssert.Contains(read.Message, because, $"premise: the reader refuses a table with {what} for another reason");
+
+                var priced = Assert.ThrowsExactly<InvalidDataException>(() =>
+                {
+                    var reader = new PayloadReader(table, Unlimited());
+                    PersistenceFormat.PriceBuckets64(ref reader);
+                }, $"the price takes a table with {what}, which its reader refuses");
+                Assert.AreEqual(read.Message, priced.Message, $"the price refuses a table with {what} for another reason than its reader");
+            }
+        }
+
+        // ---- Adding one table of counters to another (#232) -------------------------------
+
+        /// <summary>
+        /// A pair of tables holding every pair of values the width can: bucket i + 1 of the
+        /// first holds i / (max + 1) and of the second i mod (max + 1), so there is no choice
+        /// of pairs to be unlucky in, and the sums run from nought to twice the maximum.
+        /// </summary>
+        /// <remarks>
+        /// The first and last buckets hold nought and one, so that an add which skipped either
+        /// end of the table leaves a bucket that should have moved: every pair in order begins
+        /// with nought and nought and ends with the maximum and the maximum, and adding either
+        /// changes nothing.
+        /// </remarks>
+        private static (Buckets Mine, Buckets Theirs, Buckets64 Mine64, Buckets64 Theirs64) EveryPair(
+            byte bucketSize, Func<Func<Buckets64>, Buckets64> build)
+        {
+            var max = (1u << bucketSize) - 1;
+            var count = (max + 1) * (max + 1) + 2;
+            var mine = new Buckets(count, bucketSize);
+            var theirs = new Buckets(count, bucketSize);
+            var mine64 = build(() => new Buckets64(count, bucketSize));
+            var theirs64 = build(() => new Buckets64(count, bucketSize));
+            for (uint i = 0; i < count; i++)
+            {
+                var (a, b) = PairAt(i, count, max);
+                mine.Set(i, (byte)a);
+                theirs.Set(i, (byte)b);
+                mine64.Set(i, (byte)a);
+                theirs64.Set(i, (byte)b);
+            }
+
+            return (mine, theirs, mine64, theirs64);
+        }
+
+        /// <summary>The pair of values <see cref="EveryPair"/> puts in bucket <paramref name="i"/>.</summary>
+        private static (uint A, uint B) PairAt(uint i, uint count, uint max) =>
+            i == 0 || i == count - 1 ? (0, 1) : ((i - 1) / (max + 1), (i - 1) % (max + 1));
+
+        /// <summary>
+        /// Adding a 64-bit table of counters to another adds each counter to its counterpart
+        /// and holds the sum at the maximum a counter carries, exactly as
+        /// <see cref="Buckets.Add"/> does, which is the oracle: it is what a counting filter's
+        /// merge has always done, and what <c>CountingBloomFilter.Merge</c> does now that its
+        /// counters are 64-bit tables. The other table is left as it was.
+        /// </summary>
+        /// <remarks>
+        /// Every width, and every pair of values each holds, so that sums both under the
+        /// maximum and past it are added, which is checked both ways. Only eight-bit counters
+        /// tell the clamp in the sum from the one in <c>Set</c>: below eight bits twice the
+        /// maximum still fits a byte, and <c>Set</c> holds it at the maximum anyway, while at
+        /// eight a sum past 255 cast to a byte wraps, and is written as what it wrapped to.
+        /// The widths of three, five, six and seven bits straddle bytes.
+        /// </remarks>
+        [TestMethod]
+        [DataRow((byte)1)]
+        [DataRow((byte)2)]
+        [DataRow((byte)3)]
+        [DataRow((byte)4)]
+        [DataRow((byte)5)]
+        [DataRow((byte)6)]
+        [DataRow((byte)7)]
+        [DataRow((byte)8)]
+        public void TestAddingBuckets64AddsEachCounterAndHoldsItAtTheMaximum(byte bucketSize)
+        {
+            var (mine, theirs, mine64, theirs64) = EveryPair(bucketSize, make => make());
+            var max = mine.MaxBucketValue();
+
+            mine.Add(theirs);
+            Assert.AreSame(mine64, mine64.Add(theirs64), "Add does not return the table it added to");
+
+            var held = 0;
+            var under = 0;
+            for (uint i = 0; i < mine.count; i++)
+            {
+                var (a, b) = PairAt(i, mine.count, max);
+                Assert.AreEqual(mine.Get(i), mine64.Get(i), $"{bucketSize}-bit bucket {i}: {a} + {b}");
+                Assert.AreEqual(Math.Min(a + b, (uint)max), mine64.Get(i), $"{bucketSize}-bit bucket {i}: {a} + {b}, held at {max}");
+                Assert.AreEqual(b, theirs64.Get(i), $"{bucketSize}-bit bucket {i} of the table added was changed");
+                if (a + b > max) held++; else under++;
+            }
+
+            Assert.IsGreaterThan(0, held, "no sum passed the maximum, so the clamp was never needed");
+            Assert.IsGreaterThan(0, under, "every sum passed the maximum, so nothing was added");
+        }
+
+        /// <summary>
+        /// The add is a bucket at a time through each table's own layout, so tables split into
+        /// arrays at different sizes add as tables of one array do: lowered to arrays of 16
+        /// bytes on either side or both, three-bit counters straddle arrays as well as bytes
+        /// (bucket 42 holds bits 126 to 128, the last two of the first array and the first of
+        /// the second).
+        /// </summary>
+        [TestMethod]
+        [DataRow(true, false)]
+        [DataRow(false, true)]
+        [DataRow(true, true)]
+        public void TestAddingBuckets64OfSeveralArraysAddsAsOneArrayDoes(bool mineLowered, bool theirsLowered)
+        {
+            const byte BucketSize = 3;
+            var (mine, theirs, _, _) = EveryPair(BucketSize, make => make());
+            Buckets64 Build(bool lowered) =>
+                lowered ? WithArrayBits(4, () => new Buckets64(mine.count, BucketSize)) : new Buckets64(mine.count, BucketSize);
+            var mine64 = Build(mineLowered);
+            var theirs64 = Build(theirsLowered);
+            for (uint i = 0; i < mine.count; i++)
+            {
+                mine64.Set(i, (byte)mine.Get(i));
+                theirs64.Set(i, (byte)theirs.Get(i));
+            }
+
+            Assert.IsGreaterThan(1, (mineLowered ? mine64 : theirs64).RawData.Count(array => array.Length > 0),
+                "premise: a lowered table fills several arrays");
+
+            mine.Add(theirs);
+            mine64.Add(theirs64);
+            for (uint i = 0; i < mine.count; i++)
+            {
+                Assert.AreEqual(mine.Get(i), mine64.Get(i), $"bucket {i}");
+            }
+        }
+
+        /// <summary>
+        /// Two 64-bit tables that disagree about how many counters there are, or how wide
+        /// each is, are refused, and the receiver is left as it was, as
+        /// <see cref="TestBuckets.TestCombiningBucketsOfDifferentGeometryIsRefused"/> holds
+        /// <see cref="Buckets.Add"/> to: each field varied alone, the other table larger and
+        /// smaller. Reachable only from inside the library, since the counting filter's merge
+        /// checks its geometry first.
+        /// </summary>
+        [TestMethod]
+        [DataRow(8UL, (byte)4, 9UL, (byte)4, "count only, the other larger")]
+        [DataRow(9UL, (byte)4, 8UL, (byte)4, "count only, the other smaller")]
+        [DataRow(8UL, (byte)4, 8UL, (byte)3, "width only, the other narrower")]
+        [DataRow(8UL, (byte)3, 8UL, (byte)4, "width only, the other wider")]
+        public void TestAddingBuckets64OfDifferentGeometryIsRefused(
+            ulong thisCount, byte thisSize, ulong otherCount, byte otherSize, string what)
+        {
+            var before = new Buckets64(thisCount, thisSize);
+            for (ulong i = 0; i < thisCount; i++)
+            {
+                before.Set(i, (byte)(i % before.MaxBucketValue() + 1));
+            }
+            var snapshot = before.RawData.Select(array => array.ToArray()).ToArray();
+            var other = new Buckets64(otherCount, otherSize);
+            for (ulong i = 0; i < otherCount; i++)
+            {
+                other.Set(i, 1);
+            }
+
+            Assert.ThrowsExactly<ArgumentException>(() => before.Add(other),
+                $"Add must refuse 64-bit tables that differ in {what}.");
+            Assert.HasCount(snapshot.Length, before.RawData);
+            for (var a = 0; a < snapshot.Length; a++)
+            {
+                CollectionAssert.AreEqual(snapshot[a], before.RawData[a],
+                    $"A refused Add ({what}) must leave the receiver as it found it.");
+            }
         }
     }
 }

@@ -173,10 +173,6 @@ namespace TestProbabilisticDataStructures
                 var other => throw new InvalidOperationException($"{member} is a {other.GetType().Name}"),
             };
 
-        /// <summary>FORMAT.md's bytes of counters: <c>m</c> × <c>b</c> bits, rounded up.</summary>
-        private static BigInteger BucketBytes(object buckets) =>
-            (Big(buckets, "count") * Big(buckets, "BucketSize") + 7) / 8;
-
         /// <summary>A table of 2^q slots of <paramref name="slotBits"/> each, and two words after it.</summary>
         private static BigInteger TableBytes(BigInteger quotientBits, BigInteger slotBits) =>
             8 * (((BigInteger.One << (int)quotientBits) * slotBits >> 6) + 2);
@@ -206,35 +202,6 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         private static IEnumerable<LargestBuild> LargestBuilds()
         {
-            yield return new(StructureId.CountingBloomFilter, "4-bit counters, as many as one array holds", true,
-                () => Filled(new CountingBloomFilter(200, 4, 0.01), (f, k) => f.Add(k)),
-                s => new[] { new Claim(Get(s, "Buckets"), "count", Buckets.MaxCount(4)) },
-                s => BucketBytes(Get(s, "Buckets")));
-
-            yield return new(StructureId.StableBloomFilter, "8-bit cells, as many as one array holds", true,
-                () => Filled(new StableBloomFilter(200, 8, 0.01, seed: 1), (f, k) => f.Add(k)),
-                s => new[] { new Claim(Get(s, "cells"), "count", Buckets.MaxCount(8)) },
-                s => BucketBytes(Get(s, "cells")));
-
-            // A 32-bit count of bits, which fits one array: the ordinary envelope saves it.
-            yield return new(StructureId.DeletableBloomFilter, "2^32 - 1 bits in all", false,
-                () => Filled(new DeletableBloomFilter(200, 10, 0.01), (f, k) => f.Add(k)),
-                s => new[]
-                {
-                    new Claim(Get(s, "Buckets"), "count",
-                        uint.MaxValue - (uint)Big(Get(s, "Collisions"), "count")),
-                },
-                s => BucketBytes(Get(s, "Buckets")) + BucketBytes(Get(s, "Collisions")));
-
-            yield return new(StructureId.PartitionedBloomFilter, "2^32 - 1 bits across its partitions", false,
-                () => Filled(new PartitionedBloomFilter(200, 0.01), (f, k) => f.Add(k)),
-                s =>
-                {
-                    var partitions = (Buckets[])Get(s, "Partitions");
-                    return partitions.Select(p => new Claim(p, "count", uint.MaxValue / (uint)partitions.Length)).ToArray();
-                },
-                s => ((Buckets[])Get(s, "Partitions")).Aggregate(BigInteger.Zero, (sum, p) => sum + BucketBytes(p)));
-
             // The table is one array of 64-bit words (#231): at its widest, 2^34 slots, that
             // holds a remainder of four bits, and at 2^32 slots one of 28, the most words of
             // any table. A slot count held in 32 bits makes either a table of a few slots.
@@ -454,6 +421,10 @@ namespace TestProbabilisticDataStructures
         {
             new(StructureId.BloomFilter, typeof(Buckets), "Data"),
             new(StructureId.BloomFilter64, typeof(Buckets64), "Data"),
+            new(StructureId.CountingBloomFilter, typeof(Buckets64), "Data"),
+            new(StructureId.DeletableBloomFilter, typeof(Buckets64), "Data"),
+            new(StructureId.StableBloomFilter, typeof(Buckets64), "Data"),
+            new(StructureId.PartitionedBloomFilter, typeof(Buckets64), "Data"),
             new(StructureId.HyperLogLog, typeof(HyperLogLog), "Registers"),
             new(StructureId.UltraLogLog, typeof(UltraLogLog), "Registers"),
             new(StructureId.HyperLogLogPlus, typeof(HyperLogLogPlus), "registers", "sparse"),

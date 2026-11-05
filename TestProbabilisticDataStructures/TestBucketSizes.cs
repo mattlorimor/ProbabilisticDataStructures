@@ -227,40 +227,62 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A counting filter of eight-bit counters is refused past 2,147,483,591 counters,
-        /// and the refusal is against <c>n</c>, which is what the caller chose. The
-        /// item count used is the first to size past the limit, which sizes to within ten
-        /// of 2^31 -- so the wrapped array the old arithmetic allocated was a few bytes,
-        /// and this fails by not throwing rather than by exhausting memory.
+        /// A counting filter is refused past the counters a 64-bit table holds,
+        /// <c>Buckets64.MaxCount</c>, and the refusal is against <c>n</c>, which is what the
+        /// caller chose: the first item count that sizes past it is refused, and the one
+        /// before it sizes within it, at four-bit and eight-bit counters alike, since the
+        /// table is limited by how many arrays it holds and not by their bytes. Until #232
+        /// the counters were one array, and an eight-bit filter of 2,147,483,592 counters,
+        /// about 224 million items at 1%, was refused.
         /// </summary>
+        /// <remarks>
+        /// The item count before the edge is not built, which would take 2^61 bytes: its size
+        /// is held to the check the constructor makes, which is what refuses the one at the
+        /// edge. A constructor that left the check to the table would refuse naming the
+        /// table's parameter rather than <c>n</c>.
+        /// </remarks>
         [TestMethod]
-        public void TestACountingFilterBeyondAnArrayIsRefusedNamingN()
+        [DataRow((byte)4)]
+        [DataRow((byte)8)]
+        public void TestACountingFilterBeyondItsTableIsRefusedNamingN(byte b)
         {
             const double Rate = 0.01;
-            var n = FirstItemCountSizedAbove(2_147_483_591UL, Rate);
-            var sized = Utils.OptimalM(n, Rate);
-            Assert.IsGreaterThan(2_147_483_591u, sized);
-            Assert.IsLessThan(2_147_483_648u + 10, sized);
-            Assert.IsLessThanOrEqualTo(2_147_483_591u, Utils.OptimalM(n - 1, Rate),
+            var n = TestBitPlacement.SmallestCountReaching64(Buckets64.MaxCount + 1, Rate);
+            Assert.IsGreaterThan(Buckets64.MaxCount, Utils.OptimalM64(n, Rate));
+            Assert.IsLessThanOrEqualTo(Buckets64.MaxCount, Utils.OptimalM64(n - 1, Rate),
                 "the item count before this one should still fit");
+            Buckets64.CheckSize(Utils.OptimalM64(n - 1, Rate), b, "n");
 
             var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
-                () => new CountingBloomFilter(n, 8, Rate));
+                () => new CountingBloomFilter(n, b, Rate));
             Assert.AreEqual("n", ex.ParamName);
-            StringAssert.Contains(ex.Message, Array.MaxLength.ToString("N0"));
+            StringAssert.Contains(ex.Message, Buckets64.MaxCount.ToString("N0"));
         }
 
         /// <summary>
         /// A stable filter's cells are its own parameter, and the refusal is against it.
-        /// Two to the 31st eight-bit cells is the sizing that wrapped to no array at all.
+        /// Its cells have been a 64-bit table since #232, so the line is the table's: one
+        /// cell past <see cref="Buckets64.MaxCount"/> is refused naming <c>m</c>, by the
+        /// constructor and by the factory of an unstable filter, and the count at the line
+        /// passes the check both make. Until then two to the 31st eight-bit cells, which
+        /// one array cannot hold, was refused, and before that it wrapped to no array.
         /// </summary>
         [TestMethod]
-        public void TestAStableFilterBeyondAnArrayIsRefusedNamingM()
+        [DataRow((byte)1)]
+        [DataRow((byte)8)]
+        public void TestAStableFilterBeyondItsTableIsRefusedNamingM(byte d)
         {
+            var past = Buckets64.MaxCount + 1;
+            Buckets64.CheckSize(Buckets64.MaxCount, d, "m");
             var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
-                () => new StableBloomFilter(1u << 31, 8, 0.01, seed: 1));
+                () => new StableBloomFilter(past, d, 0.01, seed: 1));
             Assert.AreEqual("m", ex.ParamName);
-            StringAssert.Contains(ex.Message, Array.MaxLength.ToString("N0"));
+            StringAssert.Contains(ex.Message, Buckets64.MaxCount.ToString("N0"));
+
+            var unstable = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => StableBloomFilter.NewUnstableBloomFilter(past, 0.01));
+            Assert.AreEqual("m", unstable.ParamName);
+            StringAssert.Contains(unstable.Message, Buckets64.MaxCount.ToString("N0"));
         }
 
         /// <summary>

@@ -33,10 +33,15 @@ namespace ProbabilisticDataStructures
     /// the distribution of false positives is uniform across all elements.
     /// </summary>
     /// <remarks>
+    /// Sized in 64 bits: <c>n</c>, <c>m</c>, the partition size and <see cref="Capacity"/>
+    /// are <c>ulong</c>s, and each partition is a table of arrays of 2^30 bytes, so what
+    /// stops the constructor is memory. Before the release after 6.2.0 its sizes were
+    /// <c>uint</c>s and each partition one array. Every save is format version 14, which
+    /// records the placement in a byte of its own and the item count and sizes in 64 bits,
+    /// and which libraries before this one cannot read; a payload of an earlier version
+    /// still reads.
     /// A filter whose partitions are 2^27 bits or more places items with 64-bit hash
-    /// values; a smaller one places with 32-bit values, as it always did. Every save is
-    /// format version 8, which records the placement in a byte of its own and the item
-    /// count in 64 bits, and which libraries before this one cannot read.
+    /// values; a smaller one places with 32-bit values, as it always did.
     /// A position is reduced modulo its partition's size, so that is what decides,
     /// and a filter of <c>k</c> partitions reaches the threshold at <c>k</c> times 2^27
     /// bits: at a rate of 1%, seven partitions and 940 million bits. Placing a large
@@ -49,7 +54,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Partitioned filter data
         /// </summary>
-        internal Buckets[] Partitions { get; set; }
+        internal Buckets64[] Partitions { get; set; }
         /// <summary>
         /// Hash algorithm
         /// </summary>
@@ -57,7 +62,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Filter size (divided into k partitions)
         /// </summary>
-        private uint M { get; set; }
+        private ulong M { get; set; }
         /// <summary>
         /// Number of hash functions (and partitions)
         /// </summary>
@@ -65,7 +70,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Partition size (m / k)
         /// </summary>
-        private uint S { get; set; }
+        private ulong S { get; set; }
         /// <summary>
         /// Number of items added
         /// </summary>
@@ -76,7 +81,7 @@ namespace ProbabilisticDataStructures
         internal Placement Placement { get; private set; }
 
         /// <summary>How many bits the filter holds across every partition, for tests.</summary>
-        internal uint BitCount => this.M;
+        internal ulong BitCount => this.M;
 
         /// <summary>How many hash functions (and partitions) the filter uses, for tests.</summary>
         internal uint PartitionCount => this.k;
@@ -92,7 +97,7 @@ namespace ProbabilisticDataStructures
         /// only way to have one hash cover everything the structure will ever hold:
         /// once anything has been added, the hash can no longer be replaced.
         /// </param>
-        public PartitionedBloomFilter(uint n, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash = null)
+        public PartitionedBloomFilter(ulong n, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash = null)
             : this(n, fpRate, hash, null)
         {
         }
@@ -108,19 +113,25 @@ namespace ProbabilisticDataStructures
         /// place its bits the way a large one does.
         /// </remarks>
         internal PartitionedBloomFilter(
-            uint n, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash, Placement? placement)
+            ulong n, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash, Placement? placement)
         {
             Guard.ValidItemCount(n, nameof(n));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
 
-            var m = Utils.OptimalM(n, fpRate);
+            var m = Utils.OptimalM64(n, fpRate);
             var k = Utils.OptimalK(fpRate);
-            var partitions = new Buckets[k];
-            var s = (uint)Math.Ceiling((double)m / (double)k);
+            var s = PartitionSize(m, k);
 
+            // Each partition is a 64-bit table, which holds far more than memory does; what
+            // it refuses is refused here against n, which is what the caller chose.
+            Buckets64.CheckSize(s, 1, nameof(n),
+                $"Holding {n:N0} items at a false positive rate of {fpRate} needs {k:N0} " +
+                $"partitions of {s:N0} bits",
+                "Use fewer items or a looser false positive rate.");
+            var partitions = new Buckets64[k];
             for (uint i = 0; i < k; i++)
             {
-                partitions[i] = new Buckets(s, 1);
+                partitions[i] = new Buckets64(s, 1);
             }
 
             this.Partitions = partitions;
@@ -135,7 +146,7 @@ namespace ProbabilisticDataStructures
         /// Returns the Bloom filter capacity, m.
         /// </summary>
         /// <returns>The Bloom filter capacity, m</returns>
-        public uint Capacity()
+        public ulong Capacity()
         {
             return this.M;
         }
@@ -180,8 +191,8 @@ namespace ProbabilisticDataStructures
             var t = (double)0;
             for (uint i = 0; i < this.k; i++)
             {
-                uint sum = 0;
-                for (uint j = 0; j < this.Partitions[i].count; j++)
+                ulong sum = 0;
+                for (ulong j = 0; j < this.Partitions[i].count; j++)
                 {
                     sum += this.Partitions[i].Get(j);
                 }
@@ -209,7 +220,7 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Test(byte[])"/>
         public bool Test(ReadOnlySpan<byte> data)
         {
-            var positions = Positions.Of(data, this.Hash, this.Placement, this.S);
+            var positions = Positions64.Of(data, this.Hash, this.Placement, this.S);
 
             // If any of the K partiion bits are not set, then it's not a member.
             for (uint i = 0; i < this.k; i++)
@@ -239,7 +250,7 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Add(byte[])"/>
         public IFilter Add(ReadOnlySpan<byte> data)
         {
-            var positions = Positions.Of(data, this.Hash, this.Placement, this.S);
+            var positions = Positions64.Of(data, this.Hash, this.Placement, this.S);
 
             // Set the K partition bits.
             for (uint i = 0; i < this.k; i++)
@@ -269,7 +280,7 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="TestAndAdd(byte[])"/>
         public bool TestAndAdd(ReadOnlySpan<byte> data)
         {
-            var positions = Positions.Of(data, this.Hash, this.Placement, this.S);
+            var positions = Positions64.Of(data, this.Hash, this.Placement, this.S);
             var member = true;
 
             // If any K partition bits are not set, then it's not a member.
@@ -311,21 +322,21 @@ namespace ProbabilisticDataStructures
 
         EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
         {
-            payload.WriteUInt32(this.M);
+            payload.WriteUInt64(this.M);
             payload.WriteUInt32(this.k);
-            payload.WriteUInt32(this.S);
+            payload.WriteUInt64(this.S);
             BitPlacement.Write(payload, this.Placement);
             payload.WriteUInt64(this.count);
 
             payload.WriteUInt32((uint)this.Partitions.Length);
             foreach (var partition in this.Partitions)
             {
-                PersistenceFormat.WriteBuckets(payload, partition);
+                PersistenceFormat.WriteBuckets64(payload, partition);
             }
 
             return new(
                 StructureId.PartitionedBloomFilter, PersistenceFormat.Identify(this.Hash),
-                PersistenceFormat.PlacementVersion);
+                PersistenceFormat.Bloom64Version);
         }
 
         /// <summary>
@@ -413,21 +424,24 @@ namespace ProbabilisticDataStructures
         {
             var budget = reader.Budget;
 
-            var m = reader.ReadUInt32();
+            var wide = version >= PersistenceFormat.Bloom64Version;
+            var m = wide ? reader.ReadUInt64() : reader.ReadUInt32();
             var k = reader.ReadUInt32();
-            var s = reader.ReadUInt32();
+            var s = wide ? reader.ReadUInt64() : reader.ReadUInt32();
             // From the payload, never from s: a version 1 payload of any size was placed
-            // with 32-bit values, and a version 8 one says how it was placed.
-            var placement = BitPlacement.Read(ref reader, version);
+            // with 32-bit values, and a later one says how it was placed.
+            var placement = BitPlacement.ReadFor(ref reader, version, s);
             var count = BitPlacement.ReadCount(ref reader, version);
             var partitionCount = reader.ReadUInt32();
             CheckPartitions(partitionCount, k);
 
             budget.Charge(PartitionsCost(partitionCount));
-            var partitions = new Buckets[partitionCount];
+            var partitions = new Buckets64[partitionCount];
             for (uint i = 0; i < partitionCount; i++)
             {
-                partitions[i] = PersistenceFormat.ReadBuckets(ref reader);
+                partitions[i] = wide
+                    ? PersistenceFormat.ReadBuckets64(ref reader)
+                    : PersistenceFormat.ReadBucketsAs64(ref reader);
                 CheckPartition(i, partitions[i].count, s);
             }
 
@@ -457,10 +471,11 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
-            reader.ReadUInt32();
+            var wide = version >= PersistenceFormat.Bloom64Version;
+            _ = wide ? reader.ReadUInt64() : reader.ReadUInt32();
             var k = reader.ReadUInt32();
-            var s = reader.ReadUInt32();
-            BitPlacement.Read(ref reader, version);
+            var s = wide ? reader.ReadUInt64() : reader.ReadUInt32();
+            BitPlacement.ReadFor(ref reader, version, s);
             BitPlacement.ReadCount(ref reader, version);
             var partitionCount = reader.ReadUInt32();
             CheckPartitions(partitionCount, k);
@@ -468,11 +483,13 @@ namespace ProbabilisticDataStructures
             reader.Budget.Price(PartitionsCost(partitionCount));
             for (uint i = 0; i < partitionCount; i++)
             {
-                CheckPartition(i, PersistenceFormat.PriceBuckets(ref reader), s);
+                CheckPartition(i, wide
+                    ? PersistenceFormat.PriceBuckets64(ref reader)
+                    : PersistenceFormat.PriceBucketsAs64(ref reader), s);
             }
         }
 
-        private static void CheckPartition(uint i, uint buckets, uint s)
+        private static void CheckPartition(uint i, ulong buckets, ulong s)
         {
             if (buckets != s)
             {
@@ -503,6 +520,39 @@ namespace ProbabilisticDataStructures
                     $"Filter has {k} hash functions and {partitionCount} partitions. A " +
                     "partitioned filter has one partition per hash function.");
             }
+        }
+
+        /// <summary>
+        /// The bits of each of <paramref name="k"/> partitions of a filter of
+        /// <paramref name="m"/>: m / k, rounded up, in integers and without a sum that
+        /// could wrap.
+        /// </summary>
+        /// <remarks>
+        /// Below 2^32 bits it is what the double ceiling it replaced gave (#232): k is at
+        /// most 1,024, so a quotient below 2^32 keeps more than ten bits of fraction in a
+        /// double, and a fraction of at least 1 / k can neither round away nor round up to
+        /// the next integer.
+        /// </remarks>
+        internal static ulong PartitionSize(ulong m, uint k) => m / k + (m % k == 0 ? 0UL : 1UL);
+
+        /// <summary>
+        /// Whether the constructor sizes a filter for <paramref name="n"/> items at
+        /// <paramref name="fpRate"/>: whether its bits are a 64-bit number and each of its
+        /// partitions fits a 64-bit table. It allocates nothing.
+        /// </summary>
+        internal static bool Sizes(ulong n, double fpRate)
+        {
+            ulong m;
+            try
+            {
+                m = Utils.OptimalM64(n, fpRate);
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return false;
+            }
+
+            return PartitionSize(m, Utils.OptimalK(fpRate)) <= Buckets64.MaxCount;
         }
 
         /// <summary>The array holding <paramref name="partitionCount"/> partitions.</summary>

@@ -36,7 +36,7 @@ namespace TestProbabilisticDataStructures
         /// Overwrites a u32 at an offset within the payload and repairs the checksum, so
         /// that what refuses the result is a guard rather than the CRC.
         /// </summary>
-        private static byte[] PokeUInt32(byte[] original, int payloadOffset, uint value)
+        internal static byte[] PokeUInt32(byte[] original, int payloadOffset, uint value)
         {
             var bytes = (byte[])original.Clone();
             BinaryPrimitives.WriteUInt32LittleEndian(
@@ -69,7 +69,7 @@ namespace TestProbabilisticDataStructures
             return bytes;
         }
 
-        private static byte[] PokeUInt64(byte[] original, int payloadOffset, ulong value)
+        internal static byte[] PokeUInt64(byte[] original, int payloadOffset, ulong value)
         {
             var bytes = (byte[])original.Clone();
             BinaryPrimitives.WriteUInt64LittleEndian(
@@ -155,22 +155,30 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestAbsurdPartitionCountIsRefused()
         {
-            // u32 m, u32 k, u32 s, u8 placement, u64 count, then the partition count.
-            const int PartitionCountOffset = 21;
+            // u64 m, u32 k, u64 s, u8 placement, u64 count, then the partition count at
+            // version 14; at version 8 m and s are each a u32.
+            var rows = new (string Name, byte[] Bytes, int Offset)[]
+            {
+                ("version 14", new PartitionedBloomFilter(1000, 0.01).ToByteArray(), 29),
+                ("version 8", TestPersistenceFormatStability.ReadFixture("partitionedbloomfilter-v8-narrow.bin"), 21),
+            };
 
-            var bytes = new PartitionedBloomFilter(1000, 0.01).ToByteArray();
+            foreach (var (name, bytes, offset) in rows)
+            {
+                Assert.AreEqual(Persistence.FromByteArray<PartitionedBloomFilter>(bytes).K(),
+                    BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + offset)),
+                    $"{name}: the partition count is not where this test expects it");
 
-            AssertRefused(
-                () => Persistence.FromByteArray<PartitionedBloomFilter>(
-                    PokeUInt32(bytes, PartitionCountOffset, 900_000_000)),
-                "partitions");
+                var ex = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<PartitionedBloomFilter>(PokeUInt32(bytes, offset, 900_000_000)), name);
+                StringAssert.Contains(ex.Message, "partitions", name);
 
-            // Zero is refused from the other side: a filter with no partitions would set
-            // no bits and answer no to everything rather than fail.
-            AssertRefused(
-                () => Persistence.FromByteArray<PartitionedBloomFilter>(
-                    PokeUInt32(bytes, PartitionCountOffset, 0)),
-                "partitions");
+                // Zero is refused from the other side: a filter with no partitions would set
+                // no bits and answer no to everything rather than fail.
+                ex = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<PartitionedBloomFilter>(PokeUInt32(bytes, offset, 0)), name);
+                StringAssert.Contains(ex.Message, "partitions", name);
+            }
         }
 
         /// <summary>
@@ -180,50 +188,59 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestAbsurdContainedFilterCountIsRefused()
         {
-            // f64 r, f64 fp, f64 p, u32 hint, then the filter count at version 1; at
-            // version 7 the growth factor comes between the hint and the count.
-            const int FilterCountOffset = 8 + 8 + 8 + 4;
-
-            foreach (var (growth, offset) in new[] { (1u, FilterCountOffset), (2u, FilterCountOffset + 4) })
+            // Where the count is moves with the version, so the payloads come with it.
+            foreach (var (name, bytes, offset) in TestScalableBloomFilter.CountedPayloads())
             {
-                var f = new ScalableBloomFilter(100, 0.01, 0.8, growth);
-                for (int i = 0; i < 500; i++) f.Add(Key($"w{i}"));
-
-                AssertRefused(
-                    () => Persistence.FromByteArray<ScalableBloomFilter>(
-                        PokeUInt32(f.ToByteArray(), offset, 900_000_000)),
-                    "contained filters");
+                var ex = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<ScalableBloomFilter>(PokeUInt32(bytes, offset, 900_000_000)),
+                    name);
+                StringAssert.Contains(ex.Message, "contained filters", name);
             }
         }
 
         /// <summary>
-        /// A version 7 payload carries a growth factor, and only a filter that grows
-        /// writes one: a filter that adds every filter at its hint writes version 1.
-        /// Zero would size every filter after the first for no items, and one at
-        /// version 7 is a payload this library never produced.
+        /// Every version 14 payload carries a growth factor, and a version 7 one carried it
+        /// only from a filter that grows: then a filter that added every filter at its hint
+        /// wrote version 1. Zero would size every filter after the first for no items, and
+        /// is refused at both. One is what a filter at a growth factor of 1 writes at
+        /// version 14, and at version 7 is a payload this library never produced.
         /// </summary>
         [TestMethod]
         public void TestScalableFilterWithAGrowthFactorItNeverWritesIsRefused()
         {
-            const int GrowthOffset = 8 + 8 + 8 + 4;
+            const int Version7 = 8 + 8 + 8 + 4, Version14 = 8 + 8 + 8 + 8;
 
             var f = new ScalableBloomFilter(100, 0.01, 0.8, 2);
             for (int i = 0; i < 500; i++) f.Add(Key($"w{i}"));
-            var bytes = f.ToByteArray();
 
-            Assert.AreEqual(2u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + GrowthOffset)),
-                "the growth factor is not where this test expects it");
-
-            foreach (var growth in new uint[] { 0, 1 })
+            var rows = new (string Name, byte[] Bytes, int Offset, uint[] Refused, uint[] Read)[]
             {
-                AssertRefused(
-                    () => Persistence.FromByteArray<ScalableBloomFilter>(PokeUInt32(bytes, GrowthOffset, growth)),
-                    "growth factor");
-            }
+                ("version 14", f.ToByteArray(), Version14, new uint[] { 0 }, new uint[] { 1, uint.MaxValue }),
+                ("version 7", TestPersistenceFormatStability.ReadFixture("scalablebloomfilter-v7.bin"), Version7,
+                    new uint[] { 0, 1 }, new uint[] { uint.MaxValue }),
+            };
 
-            // The largest the constructor accepts reads back.
-            Assert.AreEqual(uint.MaxValue, Persistence.FromByteArray<ScalableBloomFilter>(
-                PokeUInt32(bytes, GrowthOffset, uint.MaxValue)).Growth);
+            foreach (var (name, bytes, offset, refused, read) in rows)
+            {
+                Assert.AreEqual(2u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + offset)),
+                    $"{name}: the growth factor is not where this test expects it");
+
+                foreach (var growth in refused)
+                {
+                    var ex = Assert.ThrowsExactly<InvalidDataException>(
+                        () => Persistence.FromByteArray<ScalableBloomFilter>(PokeUInt32(bytes, offset, growth)),
+                        $"{name} with a growth factor of {growth}");
+                    StringAssert.Contains(ex.Message, "growth factor");
+                }
+
+                // What a save at that version writes reads back, up to the largest the
+                // constructor accepts.
+                foreach (var growth in read)
+                {
+                    Assert.AreEqual(growth, Persistence.FromByteArray<ScalableBloomFilter>(
+                        PokeUInt32(bytes, offset, growth)).Growth, $"{name} with a growth factor of {growth}");
+                }
+            }
         }
 
         /// <summary>
@@ -2219,8 +2236,80 @@ namespace TestProbabilisticDataStructures
             var bytes = Filled(new CountingBloomFilter(200, 4, 0.01)).ToByteArray();
 
             AssertRefused(
-                () => Persistence.FromByteArray<CountingBloomFilter>(PokeUInt32(bytes, 0, 12_345)),
+                () => Persistence.FromByteArray<CountingBloomFilter>(PokeUInt64(bytes, 0, 12_345)),
                 "do not describe the same filter");
+        }
+
+        /// <summary>
+        /// From version 14 a filter's size is a <c>u64</c>, and the 32-bit scheme is reduced
+        /// modulo a 32-bit count of positions, which every payload placed with it recorded.
+        /// A payload placed with 32-bit values among 2^32 positions is refused for that, before
+        /// its buckets are read, and one among 2^32 - 1 is not: it is refused only for the
+        /// buckets it does not have. So is one placed with 64-bit values among 2^32 more
+        /// positions than its buckets, which a size compared in its low 32 bits would match.
+        /// The read's price stops where its reader refuses it, at the placement byte, so under
+        /// a budget too small for its buckets it is still refused for its placement.
+        /// </summary>
+        /// <remarks>
+        /// Without the refusal, such a filter would reduce its 32-bit sums modulo the low 32
+        /// bits of its size, which at 2^32 is a division by nought.
+        /// </remarks>
+        [TestMethod]
+        public void TestAFilterPlacedWithThirtyTwoBitValuesPastTwoToTheThirtyTwoIsRefused()
+        {
+            const string Placed = "positions with 32-bit values";
+            // The offsets of m and of the placement byte in each version 14 payload.
+            var reads = new (string Name, byte[] Narrow, byte[] Wide, int Size, int Placement, Func<byte[], ReadOptions, object> ReadUnder)[]
+            {
+                (nameof(CountingBloomFilter),
+                    Filled(new CountingBloomFilter(200, 4, 0.01)).ToByteArray(),
+                    Filled(new CountingBloomFilter(200, 4, 0.01, null, Placement.Wide)).ToByteArray(),
+                    0, 12, (b, o) => Persistence.FromByteArray<CountingBloomFilter>(b, o)),
+                (nameof(DeletableBloomFilter),
+                    Filled(new DeletableBloomFilter(200, 10, 0.01)).ToByteArray(),
+                    Filled(new DeletableBloomFilter(200, 10, 0.01, null, Placement.Wide)).ToByteArray(),
+                    0, 12, (b, o) => Persistence.FromByteArray<DeletableBloomFilter>(b, o)),
+                (nameof(StableBloomFilter),
+                    Filled(new StableBloomFilter(200, 2, 0.01, null, 1, Placement.Narrow)).ToByteArray(),
+                    Filled(new StableBloomFilter(200, 2, 0.01, null, 1, Placement.Wide)).ToByteArray(),
+                    0, 16, (b, o) => Persistence.FromByteArray<StableBloomFilter>(b, o)),
+                // A partitioned filter places among a partition's s bits, not its m: u64 m,
+                // u32 k, then u64 s.
+                (nameof(PartitionedBloomFilter),
+                    Filled(new PartitionedBloomFilter(200, 0.01)).ToByteArray(),
+                    Filled(new PartitionedBloomFilter(200, 0.01, null, Placement.Wide)).ToByteArray(),
+                    12, 20, (b, o) => Persistence.FromByteArray<PartitionedBloomFilter>(b, o)),
+            };
+
+            foreach (var (name, narrow, wide, size, placement, readUnder) in reads)
+            {
+                object read(byte[] b) => readUnder(b, ReadOptions.Unlimited);
+                var placed = PokeUInt64(narrow, size, 1UL << 32);
+                var ex = Assert.ThrowsExactly<InvalidDataException>(() => read(placed), name);
+                StringAssert.Contains(ex.Message, Placed, $"{name} placed with 32-bit values among 2^32 positions");
+
+                // The price stops where the reader does, at the placement byte, as it stops at
+                // a byte that names no scheme: under a budget of nothing the two are refused
+                // naming the same bytes, which a price that went on to the buckets would not.
+                long Priced(byte[] b) => ((ReadBudgetExceededException)Assert.ThrowsExactly<InvalidDataException>(
+                    () => readUnder(b, new ReadOptions(0)), name).InnerException!).RequiredBytes;
+                Assert.AreEqual(Priced(PokeByte(narrow, placement, 0xFF)), Priced(placed),
+                    $"{name} placed with 32-bit values among 2^32 positions was priced past its placement byte");
+                var priced = Priced(placed);
+                var under = Assert.ThrowsExactly<InvalidDataException>(() => readUnder(placed, new ReadOptions(priced)), name);
+                StringAssert.Contains(under.Message, Placed, $"{name} under the {priced:N0} bytes it was priced at");
+
+                var held = BinaryPrimitives.ReadUInt64LittleEndian(wide.AsSpan(PayloadStart + size));
+                foreach (var (bytes, positions, what) in new[]
+                {
+                    (narrow, (ulong)uint.MaxValue, "32-bit values among 2^32 - 1 positions"),
+                    (wide, (1UL << 32) + held, "64-bit values among 2^32 more positions than it holds"),
+                })
+                {
+                    var other = Assert.ThrowsExactly<InvalidDataException>(() => read(PokeUInt64(bytes, size, positions)), name);
+                    Assert.DoesNotContain(Placed, other.Message, $"{name} placed with {what} was refused for its placement");
+                }
+            }
         }
 
         /// <summary>
@@ -2243,8 +2332,8 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestStableFilterWithNoHashFunctionsIsRefused()
         {
-            // u32 m, then k.
-            const int KOffset = 4;
+            // u64 m, then k.
+            const int KOffset = 8;
 
             var bytes = Filled(new StableBloomFilter(200, 2, 0.01, seed: 5)).ToByteArray();
 

@@ -1,5 +1,7 @@
 ﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
+using System;
+using System.Buffers.Binary;
 using System.Text;
 
 namespace TestProbabilisticDataStructures
@@ -16,23 +18,51 @@ namespace TestProbabilisticDataStructures
         {
             yield return PayloadState.Of(
                 "10 at 50%, 2 regions, empty", new DeletableBloomFilter(10, 2, 0.5),
-                PersistenceFormat.PlacementVersion);
+                PersistenceFormat.Bloom64Version);
 
             var filled = new DeletableBloomFilter(200, 10, 0.01);
             for (var i = 0; i < 150; i++) filled.Add(Encoding.ASCII.GetBytes($"w{i}"));
             yield return PayloadState.Of(
-                "200 at 1%, 10 regions, collided", filled, PersistenceFormat.PlacementVersion);
+                "200 at 1%, 10 regions, collided", filled, PersistenceFormat.Bloom64Version);
 
             var regions = new DeletableBloomFilter(200, 77, 0.01);
             regions.Add(Encoding.ASCII.GetBytes("a"));
             yield return PayloadState.Of(
-                "200 at 1%, 77 regions", regions, PersistenceFormat.PlacementVersion);
+                "200 at 1%, 77 regions", regions, PersistenceFormat.Bloom64Version);
         }
 
         private static byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
         private static byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
         private static byte[] C_BYTES = Encoding.ASCII.GetBytes("c");
         private static byte[] X_BYTES = Encoding.ASCII.GetBytes("x");
+
+        /// <summary>
+        /// A read allocates a scratch buffer of a position for each hash function, eight bytes
+        /// each since positions are 64-bit (#232), and is charged for it to the byte, as the
+        /// counting filter's is.
+        /// </summary>
+        [TestMethod]
+        public void TestTheScratchBufferIsChargedWhatItAllocates()
+        {
+            // Version 14: u64 m, then the u32 hash count at 8.
+            const int HashCount = 8;
+            var seven = TestPersistenceFormatStability.ReadFixture("deletablebloomfilter-v14-narrow.bin");
+            Assert.AreEqual(7u, BinaryPrimitives.ReadUInt32LittleEndian(seven.AsSpan(14 + HashCount)), "premise: the hash count");
+            var most = TestPersistenceHostilePayloads.PokeUInt32(seven, HashCount, Utils.MaxHashCount);
+
+            static (long Charged, long Allocated) Read(byte[] bytes)
+            {
+                var budget = new ReadBudget(long.MaxValue, StructureId.DeletableBloomFilter);
+                Persistence.FromByteArray<DeletableBloomFilter>(bytes, new ReadOptions(budget));
+                return (budget.Spent, TestReadBudget.Allocated(() => Persistence.FromByteArray<DeletableBloomFilter>(bytes)));
+            }
+
+            var (fewer, more) = (Read(seven), Read(most));
+            Assert.IsGreaterThanOrEqualTo(8L * (Utils.MaxHashCount - 7), more.Allocated - fewer.Allocated,
+                "premise: the buffer is eight bytes a position");
+            Assert.AreEqual(more.Allocated - fewer.Allocated, more.Charged - fewer.Charged,
+                "the read was charged other than the scratch buffer it allocated");
+        }
 
         /// <summary>
         /// Ensures that Capacity() returns the number of bits, m, in the Bloom filter.

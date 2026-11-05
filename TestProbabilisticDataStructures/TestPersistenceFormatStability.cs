@@ -169,28 +169,28 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A payload written before version 8 reads, as it always did, and saves again as
-        /// version 8 with its placement byte saying 32-bit: the version 1 fixtures, and the
-        /// stable filter's version 5 one, save as the version 8 fixtures placed that way,
-        /// byte for byte. The earlier fixtures are also exactly the version 8 ones with the
+        /// A plain filter's payload written before version 8 reads, as it always did, and
+        /// saves again as version 8 with its placement byte saying 32-bit, byte for byte the
+        /// version 8 fixture placed that way; the other Bloom filters save as version 14
+        /// since #232. Every earlier fixture is also exactly the version 8 one with the
         /// placement byte taken out and the count narrowed, which is what the tests that
         /// build an earlier payload rely on.
         /// </summary>
         [TestMethod]
         public void TestAnEarlierPayloadSavesAgainAsVersionEight()
         {
+            // The counting, deletable, stable and partitioned filters save as version 14 now,
+            // which their TestAnEarlier...PayloadSavesAgainAsVersionFourteen tests hold, so their
+            // rows have no save: each version 8 fixture is still exactly the earlier one with
+            // the byte.
             var earlier = new (string Earlier, string Current, ushort Version, int Placement, int Count, Func<byte[], byte[]> Resave)[]
             {
                 ("bloomfilter-v1.bin", "bloomfilter-v8-narrow.bin", 1, PlainPlacement, PlainPlacement + 1,
                     b => BloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray()),
-                ("countingbloomfilter-v1.bin", "countingbloomfilter-v8-narrow.bin", 1, PlainPlacement, PlainPlacement + 1,
-                    b => CountingBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray()),
-                ("deletablebloomfilter-v1.bin", "deletablebloomfilter-v8-narrow.bin", 1, PlainPlacement, PlainPlacement + 1,
-                    b => DeletableBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray()),
-                ("partitionedbloomfilter-v1.bin", "partitionedbloomfilter-v8-narrow.bin", 1, PartitionedPlacement, PartitionedPlacement + 1,
-                    b => PartitionedBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray()),
-                ("stablebloomfilter-v5.bin", "stablebloomfilter-v8-narrow.bin", 5, StablePlacement, -1,
-                    b => StableBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray()),
+                ("countingbloomfilter-v1.bin", "countingbloomfilter-v8-narrow.bin", 1, PlainPlacement, PlainPlacement + 1, null),
+                ("deletablebloomfilter-v1.bin", "deletablebloomfilter-v8-narrow.bin", 1, PlainPlacement, PlainPlacement + 1, null),
+                ("partitionedbloomfilter-v1.bin", "partitionedbloomfilter-v8-narrow.bin", 1, PartitionedPlacement, PartitionedPlacement + 1, null),
+                ("stablebloomfilter-v5.bin", "stablebloomfilter-v8-narrow.bin", 5, StablePlacement, -1, null),
             };
 
             foreach (var (old, current, version, placement, count, resave) in earlier)
@@ -198,7 +198,10 @@ namespace TestProbabilisticDataStructures
                 CollectionAssert.AreEqual(ReadFixture(old),
                     TestBitPlacement.Downgraded(ReadFixture(current), version, placement, count),
                     $"{current} without its placement byte, and with its count narrowed, is not {old}");
-                AssertBytes(current, resave(ReadFixture(old)));
+                if (resave is not null)
+                {
+                    AssertBytes(current, resave(ReadFixture(old)));
+                }
             }
         }
 
@@ -208,6 +211,255 @@ namespace TestProbabilisticDataStructures
         private const int PlainPlacement = 8;
         private const int PartitionedPlacement = 12;
         private const int StablePlacement = 12;
+
+        // And in each version 14 payload: after u64 m and u32 k for the counting and
+        // deletable filters, then u64 s for the partitioned one and u32 p for the stable one.
+        private const int CountingPlacement14 = 12;
+        private const int DeletablePlacement14 = 12;
+        private const int StablePlacement14 = 16;
+        private const int PartitionedPlacement14 = 20;
+
+        /// <summary>
+        /// The two version 14 fixtures of a filter, with what each was placed with and how
+        /// many of the words it holds: its version 8 fixtures, re-laid by hand.
+        /// </summary>
+        private static (string Fixture, Placement Placement, int Words)[] PlacedAt14(string name, int narrowWords) => new[]
+        {
+            ($"{name}-v14-narrow.bin", Placement.Narrow, narrowWords),
+            ($"{name}-v14-wide.bin", Placement.Wide, 10),
+        };
+
+        /// <summary>
+        /// Version 14 is each filter's version 8 layout with its sizes widened to a u64 and
+        /// its buckets written as a <c>Buckets64</c> (#232), which records a u64 count and
+        /// its arrays, each a run of its own. Its fixtures are the version 8 ones re-laid by
+        /// hand from FORMAT.md, outside the library, by a script that moves the fields and
+        /// copies the packed bits, so they hold the filters the version 8 ones hold and the
+        /// reader is held to the format rather than to the writer.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredCountingBloomFilterAtVersionFourteenStillReads()
+        {
+            foreach (var (fixture, placement, words) in PlacedAt14("countingbloomfilter", 10))
+            {
+                var f = CountingBloomFilter.ReadFrom(Fixture(fixture));
+
+                Assert.AreEqual(959UL, (ulong)f.Capacity());
+                Assert.AreEqual(7u, f.K());
+                Assert.AreEqual(10UL, f.Count());
+                Assert.AreEqual(placement, f.Placement);
+                AssertAllPresent(f.Test, words);
+                AssertLostWhenPlacedTheOtherWay(fixture, CountingPlacement14, b => CountingBloomFilter.ReadFrom(new MemoryStream(b)).Test, words);
+
+                Assert.IsTrue(f.TestAndRemove(Key("alpha")));
+                Assert.IsFalse(f.Test(Key("alpha")));
+                Assert.AreEqual(9UL, f.Count());
+            }
+        }
+
+        /// <summary>
+        /// Every save of the counting filter is version 14: the version 1 fixture, and the
+        /// version 8 ones placed each way, save again as the version 14 fixture placed as
+        /// they were, byte for byte.
+        /// </summary>
+        [TestMethod]
+        public void TestAnEarlierCountingPayloadSavesAgainAsVersionFourteen()
+        {
+            static byte[] Resave(byte[] b) => CountingBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray();
+
+            AssertBytes("countingbloomfilter-v14-narrow.bin", Resave(ReadFixture("countingbloomfilter-v1.bin")));
+            AssertBytes("countingbloomfilter-v14-narrow.bin", Resave(ReadFixture("countingbloomfilter-v8-narrow.bin")));
+            AssertBytes("countingbloomfilter-v14-wide.bin", Resave(ReadFixture("countingbloomfilter-v8-wide.bin")));
+
+            // And the version 14 fixtures narrowed back by FORMAT.md's two layouts, in C#
+            // here rather than the script that made them, are the version 8 ones.
+            foreach (var placed in new[] { "narrow", "wide" })
+            {
+                CollectionAssert.AreEqual(ReadFixture($"countingbloomfilter-v8-{placed}.bin"),
+                    TestBitPlacement.Narrowed(ReadFixture($"countingbloomfilter-v14-{placed}.bin"), "mubqt"),
+                    $"the version 14 {placed} fixture narrowed is not the version 8 one");
+            }
+        }
+
+        /// <summary>
+        /// The deletable filter's version 14 fixtures, re-laid by hand from its version 8
+        /// ones as the counting filter's are, with both of its regions a <c>Buckets64</c>.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredDeletableBloomFilterAtVersionFourteenStillReads()
+        {
+            foreach (var (fixture, placement, words) in PlacedAt14("deletablebloomfilter", 10))
+            {
+                var f = DeletableBloomFilter.ReadFrom(Fixture(fixture));
+
+                Assert.AreEqual(949UL, (ulong)f.Capacity());
+                Assert.AreEqual(7u, f.K());
+                Assert.AreEqual(10UL, (ulong)f.Count());
+                Assert.AreEqual(placement, f.Placement);
+                AssertAllPresent(f.Test, words);
+                AssertLostWhenPlacedTheOtherWay(fixture, DeletablePlacement14, b => DeletableBloomFilter.ReadFrom(new MemoryStream(b)).Test, words);
+                Assert.IsTrue(f.TestAndRemove(Key("alpha")));
+                Assert.AreEqual(9UL, (ulong)f.Count());
+            }
+        }
+
+        /// <summary>
+        /// Every save of the deletable filter is version 14, as the counting filter's is.
+        /// </summary>
+        [TestMethod]
+        public void TestAnEarlierDeletablePayloadSavesAgainAsVersionFourteen()
+        {
+            static byte[] Resave(byte[] b) => DeletableBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray();
+
+            AssertBytes("deletablebloomfilter-v14-narrow.bin", Resave(ReadFixture("deletablebloomfilter-v1.bin")));
+            AssertBytes("deletablebloomfilter-v14-narrow.bin", Resave(ReadFixture("deletablebloomfilter-v8-narrow.bin")));
+            AssertBytes("deletablebloomfilter-v14-wide.bin", Resave(ReadFixture("deletablebloomfilter-v8-wide.bin")));
+
+            foreach (var placed in new[] { "narrow", "wide" })
+            {
+                CollectionAssert.AreEqual(ReadFixture($"deletablebloomfilter-v8-{placed}.bin"),
+                    TestBitPlacement.Narrowed(ReadFixture($"deletablebloomfilter-v14-{placed}.bin"), "mubqtt"),
+                    $"the version 14 {placed} fixture narrowed is not the version 8 one");
+            }
+        }
+
+        /// <summary>
+        /// The stable filter's version 14 fixtures, re-laid by hand from its version 8 ones
+        /// with m a <c>u64</c> and its cells a <c>Buckets64</c>. It reads, resumes the decay
+        /// sequence it was stored partway through, and resets to its stored original state,
+        /// as the version 8 fixture does.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredStableBloomFilterAtVersionFourteenStillReads()
+        {
+            foreach (var (fixture, placement, words) in PlacedAt14("stablebloomfilter", 10))
+            {
+                var f = StableBloomFilter.ReadFrom(Fixture(fixture));
+
+                Assert.AreEqual(1000UL, (ulong)f.Cells());
+                Assert.AreEqual(3u, f.K());
+                Assert.AreEqual(35u, f.P());
+                Assert.AreEqual(placement, f.Placement);
+                AssertAllPresent(f.Test, words);
+                AssertLostWhenPlacedTheOtherWay(fixture, StablePlacement14, b => StableBloomFilter.ReadFrom(new MemoryStream(b)).Test, words);
+
+                var twin = StoredStableTwin(placement);
+                for (var i = 0; i < 300; i++)
+                {
+                    f.Add(Key($"more{i}"));
+                    twin.Add(Key($"more{i}"));
+                }
+
+                CollectionAssert.AreEqual(twin.ToByteArray(), f.ToByteArray(),
+                    "the restored filter did not carry on the sequence it was stored partway through");
+                f.Reset();
+                CollectionAssert.AreEqual(
+                    new StableBloomFilter(1000, 2, 0.01, null, 7, placement).ToByteArray(), f.ToByteArray(),
+                    "Reset did not return the restored filter to its stored original state");
+            }
+        }
+
+        /// <summary>
+        /// Every save of the stable filter is version 14: the version 5 fixture, and the
+        /// version 8 ones placed each way, save again as the version 14 fixture placed as
+        /// they were, and the version 14 fixtures narrowed back are the version 8 ones.
+        /// </summary>
+        [TestMethod]
+        public void TestAnEarlierStablePayloadSavesAgainAsVersionFourteen()
+        {
+            static byte[] Resave(byte[] b) => StableBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray();
+
+            AssertBytes("stablebloomfilter-v14-narrow.bin", Resave(ReadFixture("stablebloomfilter-v5.bin")));
+            AssertBytes("stablebloomfilter-v14-narrow.bin", Resave(ReadFixture("stablebloomfilter-v8-narrow.bin")));
+            AssertBytes("stablebloomfilter-v14-wide.bin", Resave(ReadFixture("stablebloomfilter-v8-wide.bin")));
+
+            foreach (var placed in new[] { "narrow", "wide" })
+            {
+                CollectionAssert.AreEqual(ReadFixture($"stablebloomfilter-v8-{placed}.bin"),
+                    TestBitPlacement.Narrowed(ReadFixture($"stablebloomfilter-v14-{placed}.bin"), "muubtqq"),
+                    $"the version 14 {placed} fixture narrowed is not the version 8 one");
+            }
+        }
+
+        /// <summary>
+        /// The partitioned filter's version 14 fixtures, re-laid by hand from its version 8
+        /// ones with m and s <c>u64</c>s and each partition a <c>Buckets64</c>.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredPartitionedBloomFilterAtVersionFourteenStillReads()
+        {
+            foreach (var (fixture, placement, words) in PlacedAt14("partitionedbloomfilter", 10))
+            {
+                var f = PartitionedBloomFilter.ReadFrom(Fixture(fixture));
+
+                Assert.AreEqual(959UL, (ulong)f.Capacity());
+                Assert.AreEqual(7u, f.K());
+                Assert.AreEqual(10UL, (ulong)f.Count());
+                Assert.AreEqual(placement, f.Placement);
+                AssertAllPresent(f.Test, words);
+                AssertLostWhenPlacedTheOtherWay(fixture, PartitionedPlacement14, b => PartitionedBloomFilter.ReadFrom(new MemoryStream(b)).Test, words);
+            }
+        }
+
+        /// <summary>
+        /// Every save of the partitioned filter is version 14, and the version 14 fixtures
+        /// narrowed back are the version 8 ones.
+        /// </summary>
+        [TestMethod]
+        public void TestAnEarlierPartitionedPayloadSavesAgainAsVersionFourteen()
+        {
+            static byte[] Resave(byte[] b) => PartitionedBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray();
+
+            AssertBytes("partitionedbloomfilter-v14-narrow.bin", Resave(ReadFixture("partitionedbloomfilter-v1.bin")));
+            AssertBytes("partitionedbloomfilter-v14-narrow.bin", Resave(ReadFixture("partitionedbloomfilter-v8-narrow.bin")));
+            AssertBytes("partitionedbloomfilter-v14-wide.bin", Resave(ReadFixture("partitionedbloomfilter-v8-wide.bin")));
+
+            foreach (var placed in new[] { "narrow", "wide" })
+            {
+                CollectionAssert.AreEqual(ReadFixture($"partitionedbloomfilter-v8-{placed}.bin"),
+                    TestBitPlacement.Narrowed(ReadFixture($"partitionedbloomfilter-v14-{placed}.bin"), "mumbqn"),
+                    $"the version 14 {placed} fixture narrowed is not the version 8 one");
+            }
+        }
+
+        /// <summary>
+        /// The scalable filter's version 14 fixtures: its version 7 fixture, which grows by
+        /// 2, and its version 1 one, which adds every filter at its hint, re-laid by hand
+        /// with the hint a <c>u64</c>, the growth factor written even when it is 1, and each
+        /// contained filter a partitioned filter at version 14. Each reads, finds what it
+        /// held, and goes on growing as a filter that was never saved does. Both save again
+        /// from their earlier fixtures as these.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredScalableBloomFilterAtVersionFourteenStillReads()
+        {
+            foreach (var (fixture, earlier, growth) in new[]
+            {
+                ("scalablebloomfilter-v14.bin", "scalablebloomfilter-v7.bin", 2u),
+                ("scalablebloomfilter-v14-g1.bin", "scalablebloomfilter-v1.bin", 1u),
+            })
+            {
+                var f = ScalableBloomFilter.ReadFrom(Fixture(fixture));
+                Assert.AreEqual(growth, (uint)f.Growth, fixture);
+                Assert.AreEqual(20UL, (ulong)f.Hint, fixture);
+                for (int i = 0; i < 100; i++)
+                {
+                    Assert.IsTrue(f.Test(Key($"s{i}")), $"{fixture} no longer finds s{i}");
+                }
+
+                AssertBytes(fixture, ScalableBloomFilter.ReadFrom(Fixture(earlier)).ToByteArray());
+
+                var twin = new ScalableBloomFilter(20, 0.01, 0.8, growth);
+                for (int i = 0; i < 400; i++)
+                {
+                    if (i >= 100) f.Add(Key($"s{i}"));
+                    twin.Add(Key($"s{i}"));
+                }
+
+                CollectionAssert.AreEqual(twin.ToByteArray(), f.ToByteArray(),
+                    $"{fixture} grew differently from a filter that was never saved");
+            }
+        }
 
         /// <summary>
         /// The two version 8 fixtures of a filter, with what each was placed with and how
@@ -334,7 +586,7 @@ namespace TestProbabilisticDataStructures
             // factor because every filter then added its filters at the hint, so the
             // filters it adds after reading are sized for 20 items each -- not for the
             // default growth a new filter is given. The twin was built that way and
-            // never saved; the two must agree byte for byte, and still write version 1.
+            // never saved; the two must agree byte for byte, both at version 14.
             Assert.AreEqual(1u, f.Growth, "a version 1 payload read as a growing filter");
             Assert.IsGreaterThan(stored, f.Filters.Count,
                 "no filter was added after reading, so nothing below is checked");
@@ -352,7 +604,8 @@ namespace TestProbabilisticDataStructures
 
             CollectionAssert.AreEqual(twin.ToByteArray(), f.ToByteArray(),
                 "the restored filter grew differently from one that was never saved");
-            Assert.AreEqual(1, f.ToByteArray()[4], "the restored filter no longer writes version 1");
+            Assert.AreEqual(PersistenceFormat.Bloom64Version, f.ToByteArray()[4],
+                "the restored filter does not write the version every save writes since #232");
         }
 
         /// <summary>
@@ -369,7 +622,7 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(2u, f.Growth);
             Assert.AreEqual(20u, f.Hint);
             Assert.AreEqual(3, f.Filters.Count);
-            CollectionAssert.AreEqual(new uint[] { 192, 402, 842 }, f.Filters.Select(x => x.BitCount).ToArray());
+            CollectionAssert.AreEqual(new ulong[] { 192, 402, 842 }, f.Filters.Select(x => x.BitCount).ToArray());
             CollectionAssert.AreEqual(new ulong[] { 20, 41, 39 }, f.Filters.Select(x => x.Count()).ToArray());
 
             for (int i = 0; i < 100; i++)
@@ -541,11 +794,16 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestTheVersionAfterTheNewestIsRefused()
         {
-            // Fourteen is one past the newest, version 13. It is written out rather than
+            // Fifteen is one past the newest, version 14. It is written out rather than
             // computed from the library's ceiling, which is the thing being checked.
             var newest = new (string Fixture, Func<Stream, object> Read)[]
             {
+                ("countingbloomfilter-v14-narrow.bin", s => CountingBloomFilter.ReadFrom(s)),
+                ("deletablebloomfilter-v14-narrow.bin", s => DeletableBloomFilter.ReadFrom(s)),
                 ("stablebloomfilter-v8-narrow.bin", s => StableBloomFilter.ReadFrom(s)),
+                ("stablebloomfilter-v14-narrow.bin", s => StableBloomFilter.ReadFrom(s)),
+                ("partitionedbloomfilter-v14-narrow.bin", s => PartitionedBloomFilter.ReadFrom(s)),
+                ("scalablebloomfilter-v14.bin", s => ScalableBloomFilter.ReadFrom(s)),
                 ("cuckoobloomfilter-v11.bin", s => CuckooBloomFilter.ReadFrom(s)),
                 ("bloomfilter-v8-narrow.bin", s => BloomFilter.ReadFrom(s)),
                 ("scalablebloomfilter-v7.bin", s => ScalableBloomFilter.ReadFrom(s)),
@@ -561,9 +819,9 @@ namespace TestProbabilisticDataStructures
 
             foreach (var (fixture, read) in newest)
             {
-                var bytes = Relabeled(ReadFixture(fixture), 14);
+                var bytes = Relabeled(ReadFixture(fixture), 15);
                 var ex = Assert.ThrowsExactly<InvalidDataException>(() => read(new MemoryStream(bytes)), fixture);
-                StringAssert.Contains(ex.Message, "format version 14", fixture);
+                StringAssert.Contains(ex.Message, "format version 15", fixture);
                 StringAssert.Contains(ex.Message, "written by a later version", fixture);
             }
         }
@@ -1973,40 +2231,38 @@ namespace TestProbabilisticDataStructures
 
             AssertBytes("bloomfilter-v8-narrow.bin", bloom.ToByteArray());
             AssertBytes("bloomfilter64-v1.bin", bloom64.ToByteArray());
-            AssertBytes("countingbloomfilter-v8-narrow.bin", counting.ToByteArray());
-            AssertBytes("deletablebloomfilter-v8-narrow.bin", deletable.ToByteArray());
-            AssertBytes("partitionedbloomfilter-v8-narrow.bin", partitioned.ToByteArray());
+            AssertBytes("countingbloomfilter-v14-narrow.bin", counting.ToByteArray());
+            AssertBytes("deletablebloomfilter-v14-narrow.bin", deletable.ToByteArray());
+            AssertBytes("partitionedbloomfilter-v14-narrow.bin", partitioned.ToByteArray());
 
             // Version 9 since the sketches and the inverse filter began recording their
             // placement; the version 1 fixture is read, above.
             AssertBytes("inversebloomfilter-v9-narrow.bin", inverse.ToByteArray());
 
-            // A filter that adds every filter at its hint writes the layout it always
-            // wrote, version 1, with no growth factor in it. Its contained filters are
-            // partitioned filters in envelopes of their own, which are version 8 since
-            // those began recording their placement and a 64-bit count, so it is pinned to
-            // v1b: the v1 fixture with each contained filter rewritten at version 8 by
-            // hand, outside the library. The v1 fixture is read, above.
+            // Every save of a scalable filter is version 14 (#232), with its hint a u64 and
+            // its growth factor written even when it is 1, and its contained filters are
+            // partitioned filters at version 14 in envelopes of their own. A filter that
+            // adds every filter at its hint is pinned to v14-g1, the v1 fixture re-laid by
+            // hand outside the library; the v1 fixture is read, above.
             var scalable = new ScalableBloomFilter(20, 0.01, 0.8, 1);
             for (int i = 0; i < 100; i++)
             {
                 scalable.Add(Key($"s{i}"));
             }
 
-            AssertBytes("scalablebloomfilter-v1b.bin", scalable.ToByteArray());
+            AssertBytes("scalablebloomfilter-v14-g1.bin", scalable.ToByteArray());
 
-            // One that grows writes version 7. The fixture was assembled from FORMAT.md's
-            // layout outside the library's writer -- the outer fields by hand, each
-            // contained filter built for 20*2^i items directly -- so this holds the
-            // writer to the layout rather than to itself.
+            // One that grows is pinned to v14, the v7 fixture re-laid the same way. The v7
+            // fixture was assembled from FORMAT.md's layout outside the library's writer --
+            // the outer fields by hand, each contained filter built for 20*2^i items
+            // directly -- so this holds the writer to the layout rather than to itself.
             var growing = new ScalableBloomFilter(20, 0.01, 0.8, 2);
             for (int i = 0; i < 100; i++)
             {
                 growing.Add(Key($"s{i}"));
             }
 
-            // And v7b is the v7 fixture with its contained filters rewritten the same way.
-            AssertBytes("scalablebloomfilter-v7b.bin", growing.ToByteArray());
+            AssertBytes("scalablebloomfilter-v14.bin", growing.ToByteArray());
 
             var hll = new HyperLogLog(64);
             for (int i = 0; i < 20; i++)
@@ -2051,7 +2307,7 @@ namespace TestProbabilisticDataStructures
                 stable.Add(Key(word));
             }
 
-            AssertBytes("stablebloomfilter-v8-narrow.bin", stable.ToByteArray());
+            AssertBytes("stablebloomfilter-v14-narrow.bin", stable.ToByteArray());
 
             // The build is deterministic -- a fixed seed sequence over a fixed set --
             // which is what lets its bytes be pinned at all.
@@ -2259,10 +2515,10 @@ namespace TestProbabilisticDataStructures
             }
 
             AssertBytes("bloomfilter-v8-wide.bin", bloom.ToByteArray());
-            AssertBytes("countingbloomfilter-v8-wide.bin", counting.ToByteArray());
-            AssertBytes("deletablebloomfilter-v8-wide.bin", deletable.ToByteArray());
-            AssertBytes("partitionedbloomfilter-v8-wide.bin", partitioned.ToByteArray());
-            AssertBytes("stablebloomfilter-v8-wide.bin", StoredStableTwin(Placement.Wide).ToByteArray());
+            AssertBytes("countingbloomfilter-v14-wide.bin", counting.ToByteArray());
+            AssertBytes("deletablebloomfilter-v14-wide.bin", deletable.ToByteArray());
+            AssertBytes("partitionedbloomfilter-v14-wide.bin", partitioned.ToByteArray());
+            AssertBytes("stablebloomfilter-v14-wide.bin", StoredStableTwin(Placement.Wide).ToByteArray());
         }
 
         /// <summary>
@@ -2326,6 +2582,8 @@ namespace TestProbabilisticDataStructures
                 ("scalablebloomfilter-v1b.bin", 6, 1),
                 ("scalablebloomfilter-v7.bin", 6, 7),
                 ("scalablebloomfilter-v7b.bin", 6, 7),
+                ("scalablebloomfilter-v14.bin", 6, 14),
+                ("scalablebloomfilter-v14-g1.bin", 6, 14),
                 ("stablebloomfilter-v1.bin", 7, 1),
                 ("inversebloomfilter-v1.bin", 8, 1),
                 ("cuckoobloomfilter-v1.bin", 9, 1),
@@ -2341,10 +2599,18 @@ namespace TestProbabilisticDataStructures
                 ("countingbloomfilter-v8-wide.bin", 3, 8),
                 ("deletablebloomfilter-v8-narrow.bin", 4, 8),
                 ("deletablebloomfilter-v8-wide.bin", 4, 8),
+                ("deletablebloomfilter-v14-narrow.bin", 4, 14),
+                ("deletablebloomfilter-v14-wide.bin", 4, 14),
                 ("partitionedbloomfilter-v8-narrow.bin", 5, 8),
                 ("partitionedbloomfilter-v8-wide.bin", 5, 8),
+                ("partitionedbloomfilter-v14-narrow.bin", 5, 14),
+                ("partitionedbloomfilter-v14-wide.bin", 5, 14),
                 ("stablebloomfilter-v8-narrow.bin", 7, 8),
                 ("stablebloomfilter-v8-wide.bin", 7, 8),
+                ("stablebloomfilter-v14-narrow.bin", 7, 14),
+                ("stablebloomfilter-v14-wide.bin", 7, 14),
+                ("countingbloomfilter-v14-narrow.bin", 3, 14),
+                ("countingbloomfilter-v14-wide.bin", 3, 14),
                 ("cuckoobloomfilter-v2.bin", 9, 2),
                 ("cuckoobloomfilter-v3.bin", 9, 3),
                 ("cuckoobloomfilter-v6.bin", 9, 6),
@@ -2402,14 +2668,22 @@ namespace TestProbabilisticDataStructures
             // The version travels per payload, so a structure whose layout did not change
             // goes on writing version 1. Raising all of them together would have made every
             // payload unreadable to 5.x to record a change most of them did not have. The
-            // five 32-bit Bloom filters did change: every save of theirs is version 8,
-            // which records their placement and a 64-bit count.
+            // 32-bit Bloom filters did change: every save of theirs was version 8, which
+            // records their placement and a 64-bit count, and the plain filter's still is.
+            // The others are sized in 64 bits since #232, and every save of theirs is
+            // version 14.
             Assert.AreEqual(1, new BloomFilter64(100, 0.01).ToByteArray()[4],
                 "an unchanged structure started writing a later format version");
             Assert.AreEqual(8, new BloomFilter(100, 0.01).ToByteArray()[4],
                 "a small BloomFilter is not writing the version its layout needs");
-            Assert.AreEqual(8, new StableBloomFilter(100, 2, 0.01).ToByteArray()[4],
+            Assert.AreEqual(14, new CountingBloomFilter(100, 4, 0.01).ToByteArray()[4],
+                "the counting filter is not writing the version its layout needs");
+            Assert.AreEqual(14, new DeletableBloomFilter(100, 10, 0.01).ToByteArray()[4],
+                "the deletable filter is not writing the version its layout needs");
+            Assert.AreEqual(14, new StableBloomFilter(100, 2, 0.01).ToByteArray()[4],
                 "the stable filter is not writing the version its layout needs");
+            Assert.AreEqual(14, new PartitionedBloomFilter(100, 0.01).ToByteArray()[4],
+                "the partitioned filter is not writing the version its layout needs");
             Assert.AreEqual(11, new CuckooBloomFilter(100, 0.01).ToByteArray()[4],
                 "the cuckoo filter is not writing the version its layout needs");
             Assert.AreEqual(12, new QuotientFilter(100, 0.01).ToByteArray()[4],
@@ -2436,12 +2710,13 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(13, new InfiniFilter(16, 4).ToByteArray()[4],
                 "a small InfiniFilter is not writing the version its layout needs");
 
-            // The scalable filter writes version 7 only when it has a growth factor to
-            // record, so one that adds every filter at its hint stays readable by
-            // libraries that predate the choice.
-            Assert.AreEqual(1, new ScalableBloomFilter(100, 0.01, 0.8, 1).ToByteArray()[4],
-                "a scalable filter that does not grow started writing a later format version");
-            Assert.AreEqual(7, new ScalableBloomFilter(100, 0.01, 0.8, 2).ToByteArray()[4],
+            // The scalable filter wrote version 7 only when it had a growth factor to
+            // record, so that one adding every filter at its hint stayed readable by
+            // libraries that predate the choice. Its 64-bit hint and the partitioned
+            // filters it holds are version 14 whatever its growth, so every save is.
+            Assert.AreEqual(14, new ScalableBloomFilter(100, 0.01, 0.8, 1).ToByteArray()[4],
+                "a scalable filter that does not grow is not writing the version its layout needs");
+            Assert.AreEqual(14, new ScalableBloomFilter(100, 0.01, 0.8, 2).ToByteArray()[4],
                 "a scalable filter that grows is not writing the version its layout needs");
         }
 
@@ -2480,7 +2755,7 @@ namespace TestProbabilisticDataStructures
             return new MemoryStream(ReadFixture(name), writable: false);
         }
 
-        private static byte[] ReadFixture(string name)
+        internal static byte[] ReadFixture(string name)
         {
             using var resource = typeof(TestPersistenceFormatStability).Assembly
                 .GetManifestResourceStream($"TestProbabilisticDataStructures.fixtures.{name}")

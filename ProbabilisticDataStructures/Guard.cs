@@ -295,7 +295,7 @@ namespace ProbabilisticDataStructures
         /// The deletable filter partitions its bits into data and collision regions,
         /// so the collision count has to leave room for the data.
         /// </summary>
-        internal static void ValidCollisionRegionCount(uint r, uint m, string paramName)
+        internal static void ValidCollisionRegionCount(ulong r, ulong m, string paramName)
         {
             if (r == 0 || r >= m)
             {

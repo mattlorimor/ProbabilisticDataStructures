@@ -140,62 +140,98 @@ namespace TestProbabilisticDataStructures
 
         internal static CapacityRow CountingBloomFilter(byte b, double fp, string label) => Row(
             StructureId.CountingBloomFilter, $"n, {b}-bit counters, fp {label}",
-            () => Exact(LargestSound(fp, b)),
+            () =>
+            {
+                // Sized in 64 bits since #232, on a 64-bit table, as BloomFilter64 is: the
+                // sizing and the table both reach far past any memory.
+                Assert.IsGreaterThan(0UL, Utils.OptimalM64(1UL << 50, fp));
+                Assert.IsGreaterThan(1UL << 60, Buckets64.MaxCount);
+                return Memory;
+            },
             () =>
             {
                 var line = ChargeLine.Fit("CountingBloomFilter", 64,
-                    new[] { 100_000u, 200_000u, 400_000u, 800_000u }
-                        .Select(n => ((long)TrueBytes(Utils.OptimalM(n, fp), b),
+                    new[] { 100_000UL, 200_000UL, 400_000UL, 800_000UL }
+                        .Select(n => ((long)TrueBytes(Utils.OptimalM64(n, fp), b),
                             ChargeOf(StructureId.CountingBloomFilter, new CountingBloomFilter(n, b, fp))))
-                        .ToArray());
-                return LoadsAbout(line, LargestSound(fp, b), n => BitsOf(n, fp, b));
+                        .ToArray())
+                    // Past 2^30 counters they are in more than one array, and each array is
+                    // charged a few more bytes; none can be built here to measure them.
+                    .Widen(5 * 48);
+                return LoadsAbout(line, 1UL << 40, n => TrueBytes(Utils.OptimalM64(n, fp), b));
             });
 
         internal static CapacityRow DeletableBloomFilter(uint r, double fp, string label) => Row(
             StructureId.DeletableBloomFilter, $"n, r {r:N0}, fp {label}",
-            () => Exact(LargestSound(fp, 1, r)),
+            () =>
+            {
+                // Sized in 64 bits since #232, both regions on 64-bit tables, as the counting
+                // filter's counters are.
+                Assert.IsGreaterThan(0UL, Utils.OptimalM64(1UL << 50, fp));
+                Assert.IsGreaterThan(1UL << 60, Buckets64.MaxCount);
+                return Memory;
+            },
             () =>
             {
                 var line = ChargeLine.Fit("DeletableBloomFilter", 64,
-                    new[] { 100_000u, 200_000u, 400_000u, 800_000u }
-                        .Select(n => ((long)TrueBytes(Utils.OptimalM(n, fp) - r, 1),
+                    new[] { 100_000UL, 200_000UL, 400_000UL, 800_000UL }
+                        .Select(n => ((long)TrueBytes(Utils.OptimalM64(n, fp) - r, 1),
                             ChargeOf(StructureId.DeletableBloomFilter, new DeletableBloomFilter(n, r, fp))))
-                        .ToArray());
-                return LoadsAbout(line, LargestSound(fp, 1, r), n => BitsOf(n, fp, 1, r));
+                        .ToArray())
+                    // Past 2^33 bits the data region is in more than one array, and each array
+                    // is charged a few more bytes; none can be built here to measure them.
+                    .Widen(5 * 48);
+                return LoadsAbout(line, 1UL << 40, n => Utils.OptimalM64(n, fp) is var m && m > r ? TrueBytes(m - r, 1) : 0);
             });
 
         internal static CapacityRow PartitionedBloomFilter(double fp, string label) => Row(
             StructureId.PartitionedBloomFilter, $"n, fp {label}",
-            () => Exact(LargestSized(fp)),
+            () =>
+            {
+                // Sized in 64 bits since #232, each partition on a 64-bit table, as the
+                // counting filter's counters are.
+                Assert.IsGreaterThan(0UL, Utils.OptimalM64(1UL << 50, fp));
+                Assert.IsGreaterThan(1UL << 60, Buckets64.MaxCount);
+                return Memory;
+            },
             () =>
             {
                 var k = Utils.OptimalK(fp);
-                ulong Bytes(ulong n)
-                {
-                    TryOptimalM(n, fp, out var m);
-                    return k * TrueBytes((ulong)Math.Ceiling((double)m / k), 1);
-                }
 
-                var line = ChargeLine.Fit("PartitionedBloomFilter", 64 + 24 * k,
-                    new[] { 100_000u, 200_000u, 400_000u, 800_000u }
+                // Each partition is the bits over the hash count, rounded up.
+                ulong Bytes(ulong n) => k * TrueBytes((Utils.OptimalM64(n, fp) + k - 1) / k, 1);
+
+                var line = ChargeLine.Fit("PartitionedBloomFilter", 64 + 48 * k,
+                    new[] { 100_000UL, 200_000UL, 400_000UL, 800_000UL }
                         .Select(n => ((long)Bytes(n),
-                            ChargeOf(StructureId.PartitionedBloomFilter, new PartitionedBloomFilter(n, fp))))
-                        .ToArray());
-                return LoadsAbout(line, LargestSized(fp), Bytes);
+                            ChargeOf(StructureId.PartitionedBloomFilter, new ProbabilisticDataStructures.PartitionedBloomFilter(n, fp))))
+                        .ToArray())
+                    // Past 2^33 bits a partition is in more than one array, and each array is
+                    // charged a few more bytes; none can be built here to measure them.
+                    .Widen(5 * 48 * k);
+                return LoadsAbout(line, 1UL << 40, Bytes);
             });
 
         internal static CapacityRow StableBloomFilter(byte d, double fp, string label) => Row(
             StructureId.StableBloomFilter, $"m cells, {d}-bit cells, fp {label}",
-            () => Exact(Largest(1, uint.MaxValue, m => BucketsAreSound(m, d))),
+            () =>
+            {
+                // Sized in 64 bits since #232, its cells on a 64-bit table, as the counting
+                // filter's counters are.
+                Assert.IsGreaterThan(1UL << 60, Buckets64.MaxCount);
+                return Memory;
+            },
             () =>
             {
                 var line = ChargeLine.Fit("StableBloomFilter", 64,
-                    new[] { 100_000u, 200_000u, 400_000u, 800_000u }
+                    new[] { 100_000UL, 200_000UL, 400_000UL, 800_000UL }
                         .Select(m => ((long)TrueBytes(m, d),
                             ChargeOf(StructureId.StableBloomFilter, new StableBloomFilter(m, d, fp, seed: 1))))
-                        .ToArray());
-                var sound = Largest(1, uint.MaxValue, m => BucketsAreSound(m, d));
-                return LoadsAbout(line, sound, m => TrueBytes(m, d));
+                        .ToArray())
+                    // Past 2^30 bytes the cells are in more than one array, and each array
+                    // is charged a few more bytes; none can be built here to measure them.
+                    .Widen(5 * 48);
+                return LoadsAbout(line, 1UL << 40, m => TrueBytes(m, d));
             });
 
         /// <summary>The rows built from the Bloom filters.</summary>

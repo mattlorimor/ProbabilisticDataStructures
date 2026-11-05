@@ -323,6 +323,19 @@ namespace ProbabilisticDataStructures
         internal const ushort InfiniWideVersion = 13;
 
         /// <summary>
+        /// The version at which the Bloom filters widened to 64-bit sizes (#232) record their
+        /// sizes as <c>u64</c>s and their buckets as a <see cref="Buckets64"/>: each writes, at
+        /// this version, its version 8 layout with those two changes. Every save of them is
+        /// written at it, whatever its size.
+        /// </summary>
+        /// <remarks>
+        /// One number for all of them, as <see cref="PlacementVersion"/> was, because it names
+        /// one change. A payload before it holds its buckets as one array, which a reader lays
+        /// out as a 64-bit table's arrays (<see cref="ReadBucketsAs64"/>).
+        /// </remarks>
+        internal const ushort Bloom64Version = 14;
+
+        /// <summary>
         /// The format versions each structure has defined, which are exactly the ones its
         /// reader reads. This is the one place that says so.
         /// </summary>
@@ -346,13 +359,13 @@ namespace ProbabilisticDataStructures
         {
             [StructureId.BloomFilter] = [DefaultVersion, PlacementVersion],
             [StructureId.BloomFilter64] = [DefaultVersion],
-            [StructureId.CountingBloomFilter] = [DefaultVersion, PlacementVersion],
-            [StructureId.DeletableBloomFilter] = [DefaultVersion, PlacementVersion],
-            [StructureId.PartitionedBloomFilter] = [DefaultVersion, PlacementVersion],
-            [StructureId.ScalableBloomFilter] = [DefaultVersion, ScalableGrowthVersion],
+            [StructureId.CountingBloomFilter] = [DefaultVersion, PlacementVersion, Bloom64Version],
+            [StructureId.DeletableBloomFilter] = [DefaultVersion, PlacementVersion, Bloom64Version],
+            [StructureId.PartitionedBloomFilter] = [DefaultVersion, PlacementVersion, Bloom64Version],
+            [StructureId.ScalableBloomFilter] = [DefaultVersion, ScalableGrowthVersion, Bloom64Version],
             [StructureId.StableBloomFilter] =
                 [DefaultVersion, RandomStateVersion, StableOriginalStateVersion,
-                 PlacementVersion],
+                 PlacementVersion, Bloom64Version],
             [StructureId.InverseBloomFilter] = [DefaultVersion, ColumnPlacementVersion],
             [StructureId.CuckooBloomFilter] =
                 [DefaultVersion, RandomStateVersion, CuckooPackedVersion,
@@ -1450,19 +1463,87 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Prices what <see cref="ReadBuckets64"/> allocates, and moves past what it reads.
+        /// Prices what <see cref="ReadBuckets64"/> allocates, and moves past what it reads,
+        /// refusing the shapes <see cref="Buckets64.Restore"/> refuses, as the price of a
+        /// 32-bit table does (#232). Returns the bucket count, for a price that checks it as
+        /// its reader does.
         /// </summary>
-        internal static void PriceBuckets64(ref PayloadReader reader)
+        internal static ulong PriceBuckets64(ref PayloadReader reader)
         {
-            reader.ReadUInt64();
-            reader.ReadByte();
+            var count = reader.ReadUInt64();
+            var bucketSize = reader.ReadByte();
             var arrayCount = ReadArrayCount(ref reader);
+            Buckets64.CheckRestorable(count, bucketSize, arrayCount);
 
             reader.Budget.Price(ArraysCost(arrayCount));
             for (uint i = 0; i < arrayCount; i++)
             {
-                reader.SkipBytes();
+                Buckets64.CheckStoredArray(count, bucketSize, i, reader.SkipBytes());
             }
+
+            return count;
+        }
+
+        /// <summary>
+        /// Reads a <see cref="Buckets"/> written by <see cref="WriteBuckets"/>, the layout of
+        /// a filter's buckets before <see cref="Bloom64Version"/>, as the
+        /// <see cref="Buckets64"/> the filter now holds.
+        /// </summary>
+        /// <remarks>
+        /// The run is read and checked as <see cref="ReadBuckets"/> reads and checks it,
+        /// the 32-bit byte count's wrapped length included, and then laid out as a 64-bit
+        /// table's arrays are (<see cref="Buckets64.FromOneArray"/>): kept as the first array
+        /// where it fits one, as the buckets of every filter of one-bit buckets do, and split
+        /// into arrays where it does not, which copies it once and is charged for.
+        /// </remarks>
+        internal static Buckets64 ReadBucketsAs64(ref PayloadReader reader)
+        {
+            var count = reader.ReadUInt32();
+            var bucketSize = reader.ReadByte();
+            var data = reader.ReadBytes();
+            Buckets.CheckRestorable(count, bucketSize, data.Length);
+
+            reader.Budget.Charge(LaidOutCost(count, data.Length));
+            return Buckets64.FromOneArray(count, bucketSize, data);
+        }
+
+        /// <summary>
+        /// Prices what <see cref="ReadBucketsAs64"/> allocates, and moves past what it reads.
+        /// Returns the bucket count, for a price that checks it as its reader does.
+        /// </summary>
+        internal static ulong PriceBucketsAs64(ref PayloadReader reader)
+        {
+            var count = reader.ReadUInt32();
+            var bucketSize = reader.ReadByte();
+            var length = reader.SkipBytes();
+            Buckets.CheckRestorable(count, bucketSize, length);
+
+            reader.Budget.Price(LaidOutCost(count, length));
+            return count;
+        }
+
+        /// <summary>
+        /// What laying out one array of <paramref name="length"/> bytes as the arrays of a
+        /// 64-bit table of <paramref name="count"/> buckets allocates: the table and the
+        /// array holding its arrays, and, where the one array is longer than a table's, the
+        /// arrays it is split into.
+        /// </summary>
+        private static long LaidOutCost(ulong count, int length)
+        {
+            var arraySize = Buckets64.ArraySize;
+            var arrays = count / arraySize + 1;
+            var cost = ReadBudget.Sum(ReadBudget.ArrayOf(arrays, sizeof(long)), ReadBudget.SmallObject);
+            if ((ulong)length > arraySize)
+            {
+                for (var left = (ulong)length; left > 0;)
+                {
+                    var piece = Math.Min(left, arraySize);
+                    cost = ReadBudget.Sum(cost, ReadBudget.ArrayOf(piece, 1));
+                    left -= piece;
+                }
+            }
+
+            return cost;
         }
 
         private static uint ReadArrayCount(ref PayloadReader reader)

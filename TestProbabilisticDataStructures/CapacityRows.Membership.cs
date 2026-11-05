@@ -103,7 +103,7 @@ namespace TestProbabilisticDataStructures
         /// filter takes the items it takes to get there. Its partitions are
         /// <paramref name="slots"/> bits each.
         /// </summary>
-        private static ulong ItemsBeforeNext(uint slots)
+        private static ulong ItemsBeforeNext(ulong slots)
         {
             var items = (ulong)Math.Ceiling(slots * Math.Log(2));
             while (1 - Math.Exp(-(double)items / slots) < Defaults.FILL_RATIO)
@@ -121,21 +121,29 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// The contained filters a scalable filter grows to, in order, as each one is
-        /// sized: the items it takes before the next is started, and the bytes of bits it
-        /// holds. Ends where the filter's own sizing, which is asked and not restated,
-        /// says the next cannot be built, so no filter is allocated.
+        /// sized: the items it takes before the next is started, the bytes of bits it
+        /// holds, and its payload. Ends where the filter's own sizing, which is asked and
+        /// not restated, says the next cannot be built, so no filter is allocated.
         /// </summary>
-        internal static List<(ulong Items, ulong Units)> Shape(uint hint, double fp, double r, uint growth)
+        /// <remarks>
+        /// The payload is the version 14 layout in FORMAT.md, worked out rather than
+        /// written, since the filters at the end are far past any memory: m, k, s, the
+        /// placement byte, the count and the partition count, then each partition as a
+        /// 64-bit table, its count, width and array count, then each array's length and
+        /// bytes, as many arrays as its count implies (#232).
+        /// <see cref="CheckShapePayloads"/> holds it to filters that can be built.
+        /// </remarks>
+        internal static List<(ulong Items, ulong Units, ulong Payload)> Shape(uint hint, double fp, double r, uint growth)
         {
             // The filter is asked how large its next filter is, and answers by how many it
             // has, so it is given placeholders for the ones it would have.
             var scalable = new ScalableBloomFilter(hint, fp, r, growth);
             scalable.Filters.Clear();
-            var steps = new List<(ulong, ulong)>();
+            var steps = new List<(ulong, ulong, ulong)>();
             while (true)
             {
                 var rate = fp * Math.Pow(r, scalable.Filters.Count);
-                uint capacity;
+                ulong capacity;
                 try
                 {
                     capacity = scalable.NextCapacity(rate);
@@ -147,8 +155,41 @@ namespace TestProbabilisticDataStructures
 
                 scalable.Filters.Add(Placeholder);
                 var k = Utils.OptimalK(rate);
-                var slots = (uint)Math.Ceiling((double)Utils.OptimalM(capacity, rate) / k);
-                steps.Add((ItemsBeforeNext(slots), k * TrueBytes(slots, 1)));
+                var slots = ProbabilisticDataStructures.PartitionedBloomFilter.PartitionSize(Utils.OptimalM64(capacity, rate), k);
+                var payload = 8 + 4 + 8 + 1 + 8 + 4 + k * (8 + 1 + 4 + 4 * (slots / Buckets64.maxArraySize + 1) + TrueBytes(slots, 1));
+                steps.Add((ItemsBeforeNext(slots), k * TrueBytes(slots, 1), payload));
+            }
+        }
+
+        /// <summary>
+        /// The payload of a scalable filter of the first <paramref name="filters"/> filters
+        /// of its shape, at version 14: f64 r, fp and p, the u64 hint, the u32 growth factor
+        /// and filter count, then each filter's u32 length and its whole envelope.
+        /// </summary>
+        internal static ulong ScalablePayload(List<(ulong Items, ulong Units, ulong Payload)> shape, int filters) =>
+            shape.Take(filters).Aggregate(8UL + 8 + 8 + 8 + 4 + 4, (sum, s) => sum + 4 + 18 + s.Payload);
+
+        /// <summary>
+        /// The worked-out payloads <see cref="Shape"/> gives, held to real ones wherever the
+        /// filter can be built: each contained filter's alone, and the scalable filter's
+        /// with that many.
+        /// </summary>
+        internal static void CheckShapePayloads(uint hint, double fp, double r, uint growth, int built)
+        {
+            var shape = ShapeOf(hint, fp, r, growth);
+            var filter = new ScalableBloomFilter(hint, fp, r, growth);
+            var items = 0UL;
+            for (var f = 1; f <= built; f++)
+            {
+                while (filter.Filters.Count < f)
+                {
+                    filter.Add(Key((long)items++));
+                }
+
+                Assert.AreEqual(shape[f - 1].Payload, (ulong)PayloadOf(filter.Filters[f - 1]),
+                    $"filter {f - 1}'s payload is not what its shape works out");
+                Assert.AreEqual(ScalablePayload(shape, f), (ulong)PayloadOf(filter),
+                    $"the payload of {f} filters is not what the shape works out");
             }
         }
 
@@ -158,9 +199,9 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         internal static readonly PartitionedBloomFilter Placeholder = new(1, 0.5);
 
-        private static readonly Dictionary<(uint, double, double, uint), List<(ulong Items, ulong Units)>> ShapeCache = new();
+        private static readonly Dictionary<(uint, double, double, uint), List<(ulong Items, ulong Units, ulong Payload)>> ShapeCache = new();
 
-        internal static List<(ulong Items, ulong Units)> ShapeOf(uint hint, double fp, double r, uint growth)
+        internal static List<(ulong Items, ulong Units, ulong Payload)> ShapeOf(uint hint, double fp, double r, uint growth)
         {
             lock (ShapeCache)
             {
@@ -231,7 +272,17 @@ namespace TestProbabilisticDataStructures
             {
                 // Items added before the filter that cannot be sized is wanted; the Add
                 // that wants it throws.
-                var total = ShapeOf(hint, fp, r, growth).Aggregate(0UL, (sum, s) => sum + s.Items);
+                var shape = ShapeOf(hint, fp, r, growth);
+                var total = shape.Aggregate(0UL, (sum, s) => sum + s.Items);
+                if (growth > 1)
+                {
+                    // Sized in 64 bits since #232, the filters a growing one doubles to pass
+                    // any memory long before their sizing refuses one: the last alone holds
+                    // more than a pebibyte.
+                    Assert.IsGreaterThan(1UL << 50, shape[^1].Units);
+                    return Memory;
+                }
+
                 if (growth == 1)
                 {
                     // The same, found by building every filter.

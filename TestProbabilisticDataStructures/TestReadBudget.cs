@@ -993,9 +993,9 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestACountingFilterHashCountLargerThanTheBudgetIsRefused()
         {
-            // u32 m, then u32 k at 4: 2^24 four-byte indexes, 64 MiB.
+            // u64 m, then u32 k at 8: 2^24 eight-byte indexes, 128 MiB.
             var bytes = new CountingBloomFilter(1000, 4, 0.01).ToByteArray();
-            AssertRefusedForItsHashCountBeforeAllocating<CountingBloomFilter>(Poke(bytes, 4, 1u << 24));
+            AssertRefusedForItsHashCountBeforeAllocating<CountingBloomFilter>(Poke(bytes, 8, 1u << 24));
         }
 
         /// <summary>The deletable filter's scratch buffer, likewise.</summary>
@@ -1003,7 +1003,7 @@ namespace TestProbabilisticDataStructures
         public void TestADeletableFilterHashCountLargerThanTheBudgetIsRefused()
         {
             var bytes = new DeletableBloomFilter(1000, 100, 0.01).ToByteArray();
-            AssertRefusedForItsHashCountBeforeAllocating<DeletableBloomFilter>(Poke(bytes, 4, 1u << 24));
+            AssertRefusedForItsHashCountBeforeAllocating<DeletableBloomFilter>(Poke(bytes, 8, 1u << 24));
         }
 
         /// <summary>The stable filter's scratch buffer, likewise.</summary>
@@ -1011,7 +1011,7 @@ namespace TestProbabilisticDataStructures
         public void TestAStableFilterHashCountLargerThanTheBudgetIsRefused()
         {
             var bytes = new StableBloomFilter(1000, 3, 0.01, seed: 1).ToByteArray();
-            AssertRefusedForItsHashCountBeforeAllocating<StableBloomFilter>(Poke(bytes, 4, 1u << 24));
+            AssertRefusedForItsHashCountBeforeAllocating<StableBloomFilter>(Poke(bytes, 8, 1u << 24));
         }
 
         /// <summary>An inverse filter's slots are allocated whole, occupied or not.</summary>
@@ -1357,11 +1357,42 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestAPartitionWhoseDataDisagreesWithItsWidthIsRefusedForThat()
         {
-            var bytes = Filled(new PartitionedBloomFilter(100_000, 0.01), (s, k) => s.Add(k), 5000).ToByteArray();
+            // u64 m, u32 k, u64 s, u8 placement, u64 count, u32 partition count, then the
+            // first partition's u64 bucket count and, at 41, its u8 bucket width, at
+            // version 14; at version 8 m, s and the bucket count are each a u32, and the
+            // width is at 29.
+            var rows = new (string Name, byte[] Bytes, int Width)[]
+            {
+                ("version 14", Filled(new PartitionedBloomFilter(100_000, 0.01), (s, k) => s.Add(k), 5000).ToByteArray(), 41),
+                ("version 8", TestPersistenceFormatStability.ReadFixture("partitionedbloomfilter-v8-narrow.bin"), 29),
+            };
 
-            // u32 m, u32 k, u32 s, u8 placement, u64 count, u32 partition count, then the
-            // first partition's u32 bucket count and, at 29, its u8 bucket width.
-            AssertRefusedForItsShape<PartitionedBloomFilter>(bytes, PokeByte(bytes, 29, 2), "were stored");
+            foreach (var (name, bytes, width) in rows)
+            {
+                Assert.AreEqual(1, bytes[PayloadStart + width], $"{name}: the first partition's width is not where this test expects it");
+                AssertRefusedForItsShape<PartitionedBloomFilter>(bytes, PokeByte(bytes, width, 2), "were stored");
+            }
+        }
+
+        /// <summary>
+        /// A 64-bit table whose count needs more arrays than it stores, which its price
+        /// refuses for that, as its reader does, before the arrays it does store are walked:
+        /// a first partition 2^30 bits longer than it was needs a second array (#232).
+        /// </summary>
+        [TestMethod]
+        public void TestAPartitionWhoseArraysDisagreeWithItsCountIsRefusedForThat()
+        {
+            // The first partition's u64 bucket count, after the version 14 fields.
+            const int Count = 33;
+            var bytes = Filled(new PartitionedBloomFilter(100_000, 0.01), (s, k) => s.Add(k), 5000).ToByteArray();
+            var count = BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(PayloadStart + Count));
+            Assert.IsLessThan((ulong)Buckets64.maxArraySize, count, "premise: the partition is one array");
+            Assert.AreEqual(1u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + Count + 9)),
+                "the first partition's array count is not where this test expects it");
+
+            var edited = (byte[])bytes.Clone();
+            BinaryPrimitives.WriteUInt64LittleEndian(edited.AsSpan(PayloadStart + Count), count + Buckets64.maxArraySize);
+            AssertRefusedForItsShape<PartitionedBloomFilter>(bytes, Reseal(edited), "arrays and 1 were stored");
         }
 
         /// <summary>

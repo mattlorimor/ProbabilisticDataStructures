@@ -16,12 +16,12 @@ namespace TestProbabilisticDataStructures
         {
             yield return PayloadState.Of(
                 "10 cells of 1 bit, empty", new StableBloomFilter(10, 1, 0.5, null, 7),
-                PersistenceFormat.PlacementVersion);
+                PersistenceFormat.Bloom64Version);
 
             var filled = new StableBloomFilter(1000, 3, 0.01, null, 7);
             for (var i = 0; i < 40; i++) filled.Add(Encoding.ASCII.GetBytes($"w{i}"));
             yield return PayloadState.Of(
-                "1,000 cells of 3 bits, filled", filled, PersistenceFormat.PlacementVersion);
+                "1,000 cells of 3 bits, filled", filled, PersistenceFormat.Bloom64Version);
         }
 
         private static byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
@@ -30,30 +30,55 @@ namespace TestProbabilisticDataStructures
         private static byte[] X_BYTES = Encoding.ASCII.GetBytes("x");
 
         /// <summary>
-        /// A stable filter's payload is its twenty-two bytes, its cell table whole in a run,
-        /// and its two random states. The table is as long as one array can be, and at five
-        /// bits a cell or more, a table that long takes the payload past the most one can
-        /// be: 2,147,483,536 cells of eight bits is the first past it. The cells are claimed
-        /// by reflection on a small filter, since the run is counted from the table's count
-        /// and width, as its reader checks it.
+        /// A read allocates a scratch buffer of a position for each hash function, eight bytes
+        /// each since positions are 64-bit (#232), and is charged for it to the byte, as the
+        /// counting filter's is.
         /// </summary>
         [TestMethod]
-        [DataRow((byte)8, 2_147_483_536u, 2_147_483_574L)]
-        [DataRow((byte)8, 2_147_483_591u, 2_147_483_629L)]
-        [DataRow((byte)5, 3_435_973_745u, 2_147_483_629L)]
-        public void TestAStableFilterTooLargeToWriteIsRefusedNamingItsWholeSize(
-            byte d, uint m, long payload)
+        public void TestTheScratchBufferIsChargedWhatItAllocates()
         {
-            Assert.IsLessThanOrEqualTo(Buckets.MaxCount(d), m,
-                "no filter holds this many cells of this width");
-            Assert.AreEqual(38 + Buckets.DataLength(m, d), payload, "the row's payload is miscomputed");
-            Assert.AreEqual(PersistenceFormat.MaxPayloadLength, 38 + Buckets.DataLength(2_147_483_535u, 8),
-                "one cell fewer than the first row does not fill a payload exactly");
+            // Version 14: u64 m, then the u32 hash count at 8.
+            const int HashCount = 8;
+            var three = TestPersistenceFormatStability.ReadFixture("stablebloomfilter-v14-narrow.bin");
+            Assert.AreEqual(3u, System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(three.AsSpan(14 + HashCount)),
+                "premise: the hash count");
+            var most = TestPersistenceHostilePayloads.PokeUInt32(three, HashCount, Utils.MaxHashCount);
 
-            var f = new StableBloomFilter(10, d, 0.5, null, 7);
+            static (long Charged, long Allocated) Read(byte[] bytes)
+            {
+                var budget = new ReadBudget(long.MaxValue, StructureId.StableBloomFilter);
+                Persistence.FromByteArray<StableBloomFilter>(bytes, new ReadOptions(budget));
+                return (budget.Spent, TestReadBudget.Allocated(() => Persistence.FromByteArray<StableBloomFilter>(bytes)));
+            }
+
+            var (fewer, more) = (Read(three), Read(most));
+            Assert.IsGreaterThanOrEqualTo(8L * (Utils.MaxHashCount - 3), more.Allocated - fewer.Allocated,
+                "premise: the buffer is eight bytes a position");
+            Assert.AreEqual(more.Allocated - fewer.Allocated, more.Charged - fewer.Charged,
+                "the read was charged other than the scratch buffer it allocated");
+        }
+
+        /// <summary>
+        /// A stable filter's payload is its seventeen bytes of fields and the thirteen of its
+        /// cell table's header, then each of the table's arrays in a run of its own, then its
+        /// two random states (#232). A table that takes the payload past the most one can be
+        /// is gigabytes, so its arrays are claimed by reflection on a small filter: 2,048 of
+        /// one array of a mebibyte, which is 2,147,491,886 bytes of payload. The run's
+        /// lengths are counted from the arrays, as the writer writes them.
+        /// </summary>
+        [TestMethod]
+        public void TestAStableFilterTooLargeToWriteIsRefusedNamingItsWholeSize()
+        {
+            var piece = new byte[1 << 20];
+            var claimed = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Repeat(piece, 2048));
+            var payload = 8 + 4 + 4 + 1 + 8 + 1 + 4 + System.Linq.Enumerable.Sum(claimed, array => 4L + array.Length) + 8 + 8;
+            Assert.AreEqual(2_147_491_886L, payload, "the payload is miscomputed");
+            Assert.IsGreaterThan(PersistenceFormat.MaxPayloadLength, payload, "the claim fits a payload");
+
+            var f = new StableBloomFilter(10, 8, 0.5, null, 7);
             f.Add(A_BYTES);
 
-            TestPayloadCount.AssertRefusedWhileClaiming(f, payload, (f, "M", m), (f.cells, "count", m));
+            TestPayloadCount.AssertRefusedWhileClaiming(f, payload, ((object)f.cells, "Data", (object)claimed));
         }
 
         /// <summary>

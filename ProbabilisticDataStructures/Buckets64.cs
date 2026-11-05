@@ -91,6 +91,21 @@ namespace ProbabilisticDataStructures
         /// that place it in its array. Held rather than worked out on every read and write.
         /// </summary>
         private readonly ulong arrayMask;
+
+        /// <summary>
+        /// The table's one array, where it has one and no bucket crosses a byte, so that a
+        /// bucket is a single shift and mask of a single byte in it; null otherwise, and
+        /// every read and write takes the general path (#232).
+        /// </summary>
+        /// <remarks>
+        /// Set when the buckets are built or restored, from the arrays they have then, which
+        /// they keep, and from their width, which is fixed. One array is the common case: a
+        /// table of fewer buckets than an array holds bytes, at the real size every filter
+        /// below 2^30 buckets. A width of 1, 2, 4 or 8 bits divides a byte, so no bucket
+        /// crosses one. Both paths read and write the same bits, which
+        /// TestBuckets64.TestATableOfOneArrayAnswersAsOneOfSeveralDoes holds them to.
+        /// </remarks>
+        private readonly byte[]? single;
         private byte[][] Data { get; set; }
         private int arrayCount { get; set; }
         private byte bucketSize { get; set; }
@@ -140,6 +155,24 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         internal static Buckets64 Restore(ulong count, byte bucketSize, byte[][] data)
         {
+            var arrayBits = ArrayBits;
+            CheckRestorable(count, bucketSize, (ulong)data.Length);
+            for (int i = 0; i < data.Length; i++)
+            {
+                CheckStoredArray(count, bucketSize, (ulong)i, data[i].Length);
+            }
+
+            return new Buckets64(count, bucketSize, data, arrayBits);
+        }
+
+        /// <summary>
+        /// Refuses a stored table's count, bucket size and number of arrays where
+        /// <see cref="Restore"/> would, so that a price can refuse them as its reader does
+        /// before anything is allocated.
+        /// </summary>
+        /// <exception cref="InvalidDataException">They are not a table this type holds.</exception>
+        internal static void CheckRestorable(ulong count, byte bucketSize, ulong arrays)
+        {
             CheckStoredBucketSize(bucketSize);
 
             if (count > MaxCount)
@@ -149,30 +182,80 @@ namespace ProbabilisticDataStructures
                     "which is beyond anything this library builds.");
             }
 
-            var arrayBits = ArrayBits;
-            var arraySize = 1UL << arrayBits;
-            var arrays = count / arraySize + 1;
-            if ((ulong)data.Length != arrays)
+            var needed = count / ArraySize + 1;
+            if (arrays != needed)
             {
                 throw new InvalidDataException(
-                    $"{count} buckets of {bucketSize} bits need {arrays} " +
-                    $"arrays and {data.Length} were stored.");
+                    $"{count} buckets of {bucketSize} bits need {needed} " +
+                    $"arrays and {arrays} were stored.");
             }
+        }
 
-            var bytesLeft = (count * bucketSize + 7) / 8;
-            for (int i = 0; i < data.Length; i++)
+        /// <summary>
+        /// Refuses array <paramref name="index"/> of a stored table whose count and bucket
+        /// size <see cref="CheckRestorable"/> accepted, unless it holds the bytes that array
+        /// packs: every array but the last is whole, the last holds what is left, and an
+        /// array past the bytes the buckets need holds none.
+        /// </summary>
+        /// <exception cref="InvalidDataException">It holds some other length.</exception>
+        internal static void CheckStoredArray(ulong count, byte bucketSize, ulong index, long length)
+        {
+            var arraySize = ArraySize;
+            var bytes = (count * bucketSize + 7) / 8;
+            var before = Math.Min(bytes, index * arraySize);
+            var needed = Math.Min(bytes - before, arraySize);
+            if ((ulong)length != needed)
             {
-                var needed = Math.Min(bytesLeft, arraySize);
-                if ((ulong)data[i].Length != needed)
+                throw new InvalidDataException(
+                    $"Array {index} of the bucket data needs {needed} " +
+                    $"bytes and {length} were stored.");
+            }
+        }
+
+        /// <summary>
+        /// Lays out buckets held as one array, as a <see cref="Buckets"/> holds them and a
+        /// payload before format version 14 stores them, as the arrays of this type: the
+        /// array is kept as the first where it fits one, and split into arrays of
+        /// <see cref="ArraySize"/> where it does not.
+        /// </summary>
+        /// <param name="count">Number of buckets.</param>
+        /// <param name="bucketSize">Number of bits per bucket.</param>
+        /// <param name="data">
+        /// The packed buckets, already checked to be the length the count and bucket size
+        /// imply. A bucket is packed in it where a Buckets64 packs it, so its bytes are the
+        /// bytes of the arrays one after another.
+        /// </param>
+        /// <remarks>
+        /// Every filter of one-bit buckets stored before version 14 holds at most 2^32 - 1
+        /// bits, half an array, so is kept whole. Wider buckets can run longer than an
+        /// array, and are then copied into arrays of their own once, which a read is charged
+        /// for. The arrays past the data, which the count implies, hold nothing and are the
+        /// one empty array.
+        /// </remarks>
+        internal static Buckets64 FromOneArray(ulong count, byte bucketSize, byte[] data)
+        {
+            var arraySize = ArraySize;
+            var arrays = new byte[count / arraySize + 1][];
+            if ((ulong)data.Length <= arraySize)
+            {
+                arrays[0] = data;
+                for (var i = 1; i < arrays.Length; i++)
                 {
-                    throw new InvalidDataException(
-                        $"Array {i} of the bucket data needs {needed} " +
-                        $"bytes and {data[i].Length} were stored.");
+                    arrays[i] = Array.Empty<byte>();
                 }
-                bytesLeft -= needed;
+            }
+            else
+            {
+                var at = 0UL;
+                for (var i = 0; i < arrays.Length; i++)
+                {
+                    var piece = Math.Min((ulong)data.Length - at, arraySize);
+                    arrays[i] = piece == 0 ? Array.Empty<byte>() : data.AsSpan((int)at, (int)piece).ToArray();
+                    at += piece;
+                }
             }
 
-            return new Buckets64(count, bucketSize, data, arrayBits);
+            return Restore(count, bucketSize, arrays);
         }
 
         private Buckets64(ulong count, byte bucketSize, byte[][] data, int arrayBits)
@@ -184,7 +267,12 @@ namespace ProbabilisticDataStructures
             this.arrayCount = data.Length;
             this.Data = data;
             this.Max = (1 << bucketSize) - 1;
+            this.single = Single(data, bucketSize);
         }
+
+        /// <summary>The array <see cref="single"/> holds for these arrays and width, or null.</summary>
+        private static byte[]? Single(byte[][] data, byte bucketSize) =>
+            data.Length == 1 && 8 % bucketSize == 0 ? data[0] : null;
 
         /// <summary>
         /// Refuses a bucket width read from a payload that no bucket has, as the payload's
@@ -272,6 +360,7 @@ namespace ProbabilisticDataStructures
             this.bucketSize = bucketSize;
             AllocateArray(count, bucketSize);
             this.Max = (1 << bucketSize) - 1;
+            this.single = Single(this.Data, bucketSize);
         }
 
         [MemberNotNull(nameof(Data))]
@@ -311,14 +400,30 @@ namespace ProbabilisticDataStructures
         /// <returns>The modified bucket.</returns>
         internal Buckets64 Increment(ulong bucket, int delta)
         {
-            int val = (int)(Get(bucket) + delta);
+            var offset = bucket * this.bucketSize;
+            if (this.single is { } bytes)
+            {
+                // One byte holds the bucket: read it, move it and write it back in place.
+                var shift = (int)offset & 7;
+                ref var cell = ref bytes[offset >> 3];
+                var moved = ((cell >> shift) & this._max) + delta;
+                if (moved > this._max)
+                    moved = this._max;
+                else if (moved < 0)
+                    moved = 0;
+
+                cell = (byte)((cell & ~(this._max << shift)) | (moved << shift));
+                return this;
+            }
+
+            int val = (int)(GetBits(offset, this.bucketSize) + delta);
 
             if (val > this.Max)
                 val = this.Max;
             else if (val < 0)
                 val = 0;
 
-            Set(bucket, (byte)val);
+            SetBits(offset, this.bucketSize, (uint)val);
             return this;
         }
 
@@ -334,7 +439,16 @@ namespace ProbabilisticDataStructures
             if (value > this._max)
                 value = this._max;
 
-            SetBits(bucket * this.bucketSize, this.bucketSize, value);
+            var offset = bucket * this.bucketSize;
+            if (this.single is { } bytes)
+            {
+                var shift = (int)offset & 7;
+                ref var cell = ref bytes[offset >> 3];
+                cell = (byte)((cell & ~(this._max << shift)) | (value << shift));
+                return this;
+            }
+
+            SetBits(offset, this.bucketSize, value);
             return this;
         }
 
@@ -345,7 +459,13 @@ namespace ProbabilisticDataStructures
         /// <returns>The specified bucket.</returns>
         internal uint Get(ulong bucket)
         {
-            return GetBits(bucket * this.bucketSize, this.bucketSize);
+            var offset = bucket * this.bucketSize;
+            if (this.single is { } bytes)
+            {
+                return (uint)(bytes[offset >> 3] >> ((int)offset & 7)) & this._max;
+            }
+
+            return GetBits(offset, this.bucketSize);
         }
 
         /// <summary>
@@ -383,6 +503,34 @@ namespace ProbabilisticDataStructures
                 {
                     this.Set(i, (byte)theirs);
                 }
+            }
+
+            return this;
+        }
+
+        /// <summary>
+        /// Adds each of <paramref name="other"/>'s counters to its counterpart, holding at
+        /// the maximum a bucket can carry. See <see cref="Buckets.Add"/>, whose rule this is.
+        /// </summary>
+        /// <remarks>
+        /// A bucket at a time, through each table's own layout, so two tables split into
+        /// arrays at different sizes add as two of one array do. The sum is held at the
+        /// maximum before it is narrowed: at eight bits a sum can pass 255, and cast to a
+        /// byte first it would wrap to a small count, under what the two counters stood for.
+        /// </remarks>
+        internal Buckets64 Add(Buckets64 other)
+        {
+            if (this.count != other.count || this.bucketSize != other.bucketSize)
+            {
+                throw new ArgumentException(
+                    $"Cannot add {this.count} buckets of {this.bucketSize} bits to " +
+                    $"{other.count} of {other.bucketSize}.", nameof(other));
+            }
+
+            for (ulong i = 0; i < this.count; i++)
+            {
+                var sum = this.Get(i) + other.Get(i);
+                this.Set(i, sum > this._max ? this._max : (byte)sum);
             }
 
             return this;

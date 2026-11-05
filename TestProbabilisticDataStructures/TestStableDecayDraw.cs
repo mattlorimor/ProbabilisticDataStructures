@@ -43,6 +43,13 @@ namespace TestProbabilisticDataStructures
     {
         private static readonly UInt128 TwoTo64 = (UInt128)1 << 64;
 
+        /// <summary>
+        /// The library's draw at the sizes these tests count over, all below 2^32: the start
+        /// has been a <c>ulong</c> since the filter was sized in 64 bits (#232), and below
+        /// 2^32 cells it is below 2^32 too.
+        /// </summary>
+        private static uint DecayStart32(ulong next, uint m) => checked((uint)StableBloomFilter.DecayStart(next, m));
+
         /// <summary>A signed percentage, with a zero that rounds from either side shown as 0%.</summary>
         private const string Percent = "+0.####%;-0.####%;0%";
 
@@ -229,7 +236,7 @@ namespace TestProbabilisticDataStructures
             var failures = new List<string>();
             foreach (var m in LargeCellCounts)
             {
-                var (uneven, seen, worst) = StartsOffTheirShare(StableBloomFilter.DecayStart, m);
+                var (uneven, seen, worst) = StartsOffTheirShare(DecayStart32, m);
                 if (uneven > 0)
                 {
                     failures.Add($"m = {m:N0}: {uneven} of {seen} starts more than one input " +
@@ -248,7 +255,7 @@ namespace TestProbabilisticDataStructures
             // ...and an even one: at a power of two both draws give every start exactly
             // 2^64 / m inputs.
             const uint powerOfTwo = 1u << 31;
-            foreach (var draw in new Func<ulong, uint, uint>[] { StableBloomFilter.DecayStart, Narrow })
+            foreach (var draw in new Func<ulong, uint, uint>[] { DecayStart32, Narrow })
             {
                 var counts = new InputCounts(draw, powerOfTwo);
                 foreach (var r in SampledStarts(powerOfTwo))
@@ -357,7 +364,7 @@ namespace TestProbabilisticDataStructures
             {
                 foreach (var p in RunLengthsFor(m))
                 {
-                    var cells = CellsOffTheirShare(StableBloomFilter.DecayStart, m, p);
+                    var cells = CellsOffTheirShare(DecayStart32, m, p);
                     wrappedRuns += cells.Wrapped;
                     runsPastTwoTo32 += cells.PastTwoTo32;
                     if (cells.Uneven > 0)
@@ -423,7 +430,7 @@ namespace TestProbabilisticDataStructures
             var run = new HashSet<uint>();
             for (uint i = 0; i < f.P(); i++)
             {
-                run.Add(StableBloomFilter.DecayCell(start, i, m));
+                run.Add(checked((uint)StableBloomFilter.DecayCell(start, i, m)));
             }
 
             f.Add(new byte[] { 1, 9, 1 });
@@ -447,7 +454,7 @@ namespace TestProbabilisticDataStructures
             // the run can show none.
             Assert.IsGreaterThanOrEqualTo((int)(f.P() - f.K()), decayed.Count,
                 $"only {decayed.Count} of the run's {f.P()} cells were decremented");
-            Assert.IsTrue(decayed.Contains(start),
+            Assert.IsTrue(decayed.Contains(checked((uint)start)),
                 $"the run's first cell, {start:N0}, was not decremented");
         }
 
