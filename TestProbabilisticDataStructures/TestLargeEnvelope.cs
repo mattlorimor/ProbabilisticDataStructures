@@ -662,6 +662,51 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Every structure's payload in the ordinary envelope with one byte more than its
+        /// structure reads, its length and checksum repaired, is refused for the byte left
+        /// over, as it is in the large form.
+        /// </summary>
+        /// <remarks>
+        /// The ordinary envelope has no check of its own that the payload was read to its end,
+        /// so each structure's reader makes it. <c>PrivateCountMinSketch</c>'s did not, and read
+        /// such a payload as if the byte were not there, while the same payload in the large
+        /// form was refused by the envelope's check.
+        /// </remarks>
+        [TestMethod]
+        public void TestAPayloadLongerThanItsStructureReadsIsRefusedInTheOrdinaryEnvelope()
+        {
+            var samples = LargeForm.Samples();
+
+            foreach (var (id, read, ordinary, _) in samples)
+            {
+                var longer = new byte[ordinary.Length + 1];
+                ordinary.AsSpan(0, ordinary.Length - 4).CopyTo(longer);
+                BinaryPrimitives.WriteUInt32LittleEndian(longer.AsSpan(10),
+                    (uint)(ordinary.Length - PersistenceFormat.EnvelopeLength + 1));
+
+                var ex = Assert.ThrowsExactly<InvalidDataException>(() => read(ResealOrdinary(longer)),
+                    $"{id} in the ordinary envelope was read with a byte left over");
+                StringAssert.Contains(ex.Message, "left over", $"{id} was refused for something else: {ex.Message}");
+            }
+
+            StructureRoster.AssertCoversEveryStructure("ordinary leftover", samples.Select(s => s.Id));
+        }
+
+        /// <summary>
+        /// An ordinary envelope with its checksum worked out again as FORMAT.md lays it out,
+        /// over bytes 4 through the payload's end, so that an edit made before is the only
+        /// thing wrong with it.
+        /// </summary>
+        private static byte[] ResealOrdinary(byte[] envelope)
+        {
+            var bytes = (byte[])envelope.Clone();
+            var crc = new Crc32();
+            crc.Append(bytes.AsSpan(4, bytes.Length - 8));
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(bytes.Length - 4), crc.GetCurrentHashAsUInt32());
+            return bytes;
+        }
+
+        /// <summary>
         /// A length in the large header is refused before anything is priced from it when
         /// nothing can hold it, past what any stream holds, or when this stream does not,
         /// under any budget. One array is no longer a limit: the payload is streamed, not
