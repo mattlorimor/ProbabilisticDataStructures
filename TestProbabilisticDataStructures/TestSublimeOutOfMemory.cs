@@ -462,6 +462,7 @@ namespace TestProbabilisticDataStructures
         [DataRow("mrm", DisplayName = "mrm: room in the middle row's stub")]
         [DataRow("mmr", DisplayName = "mmr: room in the last row's stub")]
         [DataRow("msm", DisplayName = "msm: a full stub that stays in the middle row")]
+        [DataRow("rsm", DisplayName = "rsm: one row moves, after room and a full stub that stays")]
         public void TestAnAddThatRunsOutOfMemoryMovingAChunkToTailsLeavesTheSketchAsItWas(string roles)
         {
             const int Width = 4_096;
