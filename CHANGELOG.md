@@ -731,6 +731,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `SublimeCountMinSketch` payload cut short inside its counters is refused for what it
+  lacks before any of them are priced or allocated.** Its price and its reader checked the
+  current rows' counters against the bytes after the sketch's shape, before its records of
+  earlier states were read, and the records share those bytes. So a payload cut inside the
+  current rows, or inside the last record of a sketch with narrow records, such as one whose
+  first record is a counter wide, passed the check: its price priced that state's counters,
+  plain and packed, before finding them missing, and its reader allocated them. Each now
+  checks that the rest of the payload holds a state's counters where the state begins,
+  before it prices, charges or allocates for them, as the readers that no longer allocate
+  for data their payload does not hold, below, do. Such a payload is refused as malformed
+  under any budget its price fits, one of exactly that price included, which a reader that
+  charged first would have overrun. Its price is now held to what the bytes it holds allow,
+  as every structure's is: the sweep's cut of 44,465 bytes priced 226,680 bytes, and prices
+  114,952. Nothing the library wrote is refused.
+
 - **A `MementoFilter` payload claiming a table no array holds is refused for that by name,
   before anything is priced or allocated for it.** A table is one array of words, and 2^31
   slots of 64 bits are 2^31 + 2 of them, more than an array holds. The reader and its price

@@ -934,10 +934,13 @@ rest of a message survives, as it should, and one that deletes the guard does no
   every budget, where a refusal for the budget fails. A cut is a payload this library wrote,
   so the claims are the writer's own and no field needs inventing. Where what a reader can
   check is a lower bound, as with items of any length, the sample says what it may cost and
-  why, and some cut has to cost that, or the allowance is out of date. A
-  `SublimeCountMinSketch` price is allowed more than its read for that reason: it checks its
-  counters once, at its shape, against bytes its records share, and then prices each block
-  of them before skipping it.
+  why, and some cut has to cost that, or the allowance is out of date. An allowance is a
+  claim that nothing more can be checked, and is worth testing as one: a
+  `SublimeCountMinSketch` price was allowed more than its read because it checked its
+  counters once, at its shape, against bytes its records share, and then priced each block
+  of them before skipping it. That was the rule broken, not a lower bound. Each block is now
+  checked where it begins, by the price and the reader, and the price is held to the bound
+  every structure is.
 - **An exemption names the test that checks its reason.** The same sweep exempts the
   structures whose readers cap nothing their constructors can reach, and each exemption
   points at a test asserting why -- the cap is unreachable, or the reader caps nothing.
