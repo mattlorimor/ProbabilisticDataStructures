@@ -294,29 +294,40 @@ namespace TestProbabilisticDataStructures
         // ---- Adding one table of counters to another (#232) -------------------------------
 
         /// <summary>
-        /// A pair of tables holding every pair of values the width can: bucket i of the first
-        /// holds i / (max + 1) and of the second i mod (max + 1), so there is no choice of
-        /// pairs to be unlucky in, and the sums run from nought to twice the maximum.
+        /// A pair of tables holding every pair of values the width can: bucket i + 1 of the
+        /// first holds i / (max + 1) and of the second i mod (max + 1), so there is no choice
+        /// of pairs to be unlucky in, and the sums run from nought to twice the maximum.
         /// </summary>
+        /// <remarks>
+        /// The first and last buckets hold nought and one, so that an add which skipped either
+        /// end of the table leaves a bucket that should have moved: every pair in order begins
+        /// with nought and nought and ends with the maximum and the maximum, and adding either
+        /// changes nothing.
+        /// </remarks>
         private static (Buckets Mine, Buckets Theirs, Buckets64 Mine64, Buckets64 Theirs64) EveryPair(
             byte bucketSize, Func<Func<Buckets64>, Buckets64> build)
         {
             var max = (1u << bucketSize) - 1;
-            var count = (max + 1) * (max + 1);
+            var count = (max + 1) * (max + 1) + 2;
             var mine = new Buckets(count, bucketSize);
             var theirs = new Buckets(count, bucketSize);
             var mine64 = build(() => new Buckets64(count, bucketSize));
             var theirs64 = build(() => new Buckets64(count, bucketSize));
             for (uint i = 0; i < count; i++)
             {
-                mine.Set(i, (byte)(i / (max + 1)));
-                theirs.Set(i, (byte)(i % (max + 1)));
-                mine64.Set(i, (byte)(i / (max + 1)));
-                theirs64.Set(i, (byte)(i % (max + 1)));
+                var (a, b) = PairAt(i, count, max);
+                mine.Set(i, (byte)a);
+                theirs.Set(i, (byte)b);
+                mine64.Set(i, (byte)a);
+                theirs64.Set(i, (byte)b);
             }
 
             return (mine, theirs, mine64, theirs64);
         }
+
+        /// <summary>The pair of values <see cref="EveryPair"/> puts in bucket <paramref name="i"/>.</summary>
+        private static (uint A, uint B) PairAt(uint i, uint count, uint max) =>
+            i == 0 || i == count - 1 ? (0, 1) : ((i - 1) / (max + 1), (i - 1) % (max + 1));
 
         /// <summary>
         /// Adding a 64-bit table of counters to another adds each counter to its counterpart
@@ -354,8 +365,7 @@ namespace TestProbabilisticDataStructures
             var under = 0;
             for (uint i = 0; i < mine.count; i++)
             {
-                var a = i / (max + 1u);
-                var b = i % (max + 1u);
+                var (a, b) = PairAt(i, mine.count, max);
                 Assert.AreEqual(mine.Get(i), mine64.Get(i), $"{bucketSize}-bit bucket {i}: {a} + {b}");
                 Assert.AreEqual(Math.Min(a + b, (uint)max), mine64.Get(i), $"{bucketSize}-bit bucket {i}: {a} + {b}, held at {max}");
                 Assert.AreEqual(b, theirs64.Get(i), $"{bucketSize}-bit bucket {i} of the table added was changed");
