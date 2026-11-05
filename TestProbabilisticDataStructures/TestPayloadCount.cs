@@ -2,6 +2,7 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Hashing;
 using System.Linq;
 using System.Reflection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -145,8 +146,9 @@ namespace TestProbabilisticDataStructures
         /// this sketch's write allocated 240,432 bytes: its cells staged in an array of their
         /// own, and a writer's buffer started small and grown to hold them. A writer grown by
         /// doubling, as one is that is not given the counted length, allocates more again.
-        /// Measured as the least of five, since a collection landing mid-write can add a
-        /// retired allocation context's worth (TESTING.md, on the read budget).
+        /// Measured as the least of five, since a background collection running beside a
+        /// measurement can add a few kilobytes to the counter, as TESTING.md says of a read
+        /// (on the read budget).
         /// </summary>
         [TestMethod]
         public void TestAPayloadThatFitsIsBuiltOnceAtItsCountedLength()
@@ -462,6 +464,141 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(writer.WrittenSpan.Length, writer.Length);
             Assert.AreEqual(writer.Length, counter.Length, "the counter counted another payload");
             Assert.AreEqual(0, counter.WrittenSpan.Length, "a counter stored something");
+        }
+
+        /// <summary>
+        /// A run or a block begun with a length below nought is refused, naming the length,
+        /// by a counter, with a run's length the ordinary envelope's <c>u32</c> or the large
+        /// form's <c>u64</c>, by a writer that holds its payload, and by one that streams it in
+        /// the large form (#278). Nothing of what is refused is counted or written, a run's
+        /// prefix included, so the writer's length is what it was. A length of nought, the
+        /// other side of the boundary, is begun by each as any length is: counted whole by a
+        /// counter, and left to be filled by the others.
+        /// </summary>
+        /// <remarks>
+        /// Nothing in the library begins one. The lengths a body begins are a span's, which is
+        /// never below nought, or a 64-bit product of the structure's shape, which its
+        /// constructor and its reader bound. The last row is such a product left unbounded:
+        /// two 32-bit dimensions at their largest, at eight bytes a counter, is 2^67 less a
+        /// little, which wraps in 64 bits to a length below nought.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(-1L)]
+        [DataRow(long.MinValue)]
+        [DataRow(unchecked((long)uint.MaxValue * uint.MaxValue * sizeof(ulong)))]
+        public void TestANegativeLengthIsRefusedByACounterAHeldWriterAndAStreamingOne(long length)
+        {
+            Assert.IsLessThan(0L, length, "premise: the length is below nought");
+
+            var writers = new (string Name, Func<Stream, PayloadWriter> Make)[]
+            {
+                ("a counter of the ordinary envelope", _ => PayloadWriter.Counter()),
+                ("a counter of the large form", _ => PayloadWriter.Counter(wide: true)),
+                ("a writer that holds its payload", _ => new PayloadWriter()),
+                ("a streaming writer", sink => PayloadWriter.Streaming(
+                    sink, new Crc32(), new EnvelopeHeader(StructureId.CountSketch, HashId.XxHash3_64), 64)),
+            };
+
+            // Each begin is given a writer of its own, holding one field, so that what one does
+            // to a writer cannot decide what the next is seen to do.
+            var failures = new List<string>();
+            foreach (var (name, make) in writers)
+            {
+                foreach (var (what, begin) in new (string, Func<PayloadWriter, bool>)[]
+                {
+                    ("block", writer => writer.BeginBlock(length)),
+                    ("run", writer => writer.BeginRun(length)),
+                })
+                {
+                    using var stream = new MemoryStream();
+                    var writer = make(stream);
+                    writer.WriteUInt32(7);
+                    try
+                    {
+                        failures.Add($"{name} began a {what} of {length:N0} bytes, returning {begin(writer)}");
+                    }
+                    catch (InvalidOperationException ex) when (!ex.Message.Contains(length.ToString("N0")))
+                    {
+                        failures.Add($"{name} refused a {what} without naming its length: {ex.Message}");
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+
+                    if (writer.Length != sizeof(uint))
+                    {
+                        failures.Add($"{name} counted or wrote {writer.Length - sizeof(uint):N0} bytes of " +
+                            $"the {what} it was given");
+                    }
+                }
+
+                // Not vacuous, and not a refusal of every length: nought is begun, counted
+                // whole by a counter and left to be filled by the others, and a run of nought
+                // has its prefix.
+                using var sink = new MemoryStream();
+                var empty = make(sink);
+                var block = empty.BeginBlock(0);
+                var afterBlock = empty.Length;
+                var run = empty.BeginRun(0);
+                var prefix = empty.IsWide ? sizeof(ulong) : sizeof(uint);
+                if (block == empty.IsCounting || run == empty.IsCounting || afterBlock != 0 || empty.Length != prefix)
+                {
+                    failures.Add($"{name} began a block and a run of nought returning {block} and {run}, " +
+                        $"at lengths {afterBlock:N0} and {empty.Length:N0}");
+                }
+            }
+
+            Assert.IsEmpty(failures, string.Join("; ", failures));
+        }
+
+        /// <summary>
+        /// A body that begins a block below nought is refused by its count, naming the length,
+        /// before anything is written and before the body is asked to write: through
+        /// <c>WriteTo</c>'s path and through <c>ToByteArray</c>'s. The same body with a block
+        /// of nought is written, so the refusal is the length's.
+        /// </summary>
+        [TestMethod]
+        [DataRow(-1L, false)]
+        [DataRow(-1L, true)]
+        [DataRow(long.MinValue, true)]
+        public void TestABodyThatBeginsANegativeBlockIsRefusedByItsCount(long length, bool fieldFirst)
+        {
+            var body = new Blocked(length, fieldFirst);
+            using var stream = new MemoryStream();
+
+            var written = Assert.ThrowsExactly<InvalidOperationException>(
+                () => PersistenceFormat.Write(stream, body));
+            StringAssert.Contains(written.Message, length.ToString("N0"), written.Message);
+            Assert.AreEqual(0L, stream.Length, "a body its count refused was written");
+            Assert.IsFalse(body.AskedToWrite, "a body its count refused was asked to write");
+
+            var array = Assert.ThrowsExactly<InvalidOperationException>(
+                () => PersistenceFormat.ToByteArray(body));
+            StringAssert.Contains(array.Message, length.ToString("N0"), array.Message);
+            Assert.IsFalse(body.AskedToWrite, "a body its count refused was asked to write");
+
+            PersistenceFormat.Write(stream, new Blocked(0, fieldFirst));
+            Assert.AreEqual((fieldFirst ? sizeof(uint) : 0) + PersistenceFormat.EnvelopeLength, stream.Length);
+        }
+
+        /// <summary>
+        /// A <c>u32</c> or not, then a block of the length given, with nothing in it.
+        /// </summary>
+        private sealed class Blocked(long length, bool fieldFirst) : IPayloadBody
+        {
+            internal bool AskedToWrite { get; private set; }
+
+            public EnvelopeHeader WritePayload(PayloadWriter payload)
+            {
+                this.AskedToWrite |= !payload.IsCounting;
+                if (fieldFirst)
+                {
+                    payload.WriteUInt32(0);
+                }
+
+                payload.BeginBlock(length);
+                return new(StructureId.CountSketch, HashId.XxHash3_64);
+            }
         }
 
         /// <summary>
