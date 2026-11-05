@@ -278,6 +278,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds. A `ScalableBloomFilter` keeps its own version, 1 or 7, and its contained filters,
   each in its own envelope, are version 8.
 
+- **`QuotientFilter` builds past 2^31 slots, its sizes are `ulong`, and it saves at format
+  version 12.** The constructor takes a `ulong` `n`, and `Count()` and `Capacity()` return
+  a `ulong`, where each was a `uint`. This is a breaking change, as the Bloom filters'
+  `Count()` above is: a caller passing a `uint` still compiles, and one assigning the count
+  or the capacity to a `uint` needs a cast or a wider variable. The slot count was a `uint`,
+  so the table stopped at 2^31 slots and `n` at 1,610,612,736. The table is one array of
+  64-bit words now, which holds up to 2^34 slots: `n` reaches 12,884,901,888 at a rate of
+  6.25% or coarser, and 6,442,450,944, a table of 2^33 slots, at 1% and at 0.1%. Past 2^31
+  slots that array bounds the remainder too, to 28 bits at 2^32 slots, 12 at 2^33 and 4 at
+  2^34, and the constructor refuses a finer rate naming the finest it can build. No stored
+  entry moves: a table of the same widths places every entry where it did. A filter merged
+  into itself takes the cheaper of listing its entries and copying its table, where it
+  always listed them, sixteen bytes each, which past 2^31 entries one list cannot hold.
+  <br><br>
+  Every save is [format version 12](FORMAT.md#format-versions): version 1's layout with the
+  number of entries as a `u64`. **Releases up to 6.2.0 refuse every such payload** as
+  written by a later version, small filters included. Payloads that earlier releases wrote
+  still read, and save again as version 12, but one: a table that a 6.2.0 constructor
+  wrapped to one slot at 32 quotient bits, which saves as it was read, at version 1, since
+  at version 12 those bits name 2^32 slots, and which `Merge` refuses to combine with a
+  table of 2^32 slots. A table past one array's worth of bytes is written through
+  `WriteTo(Stream)` in the large form of the envelope, as one of 2^31 slots already was.
+  (#231)
+
 - **`BloomFilter64` is faster, the structures placed with 64-bit values test faster, and
   every bit is where it was.** The 64-bit placement hashes the first value's eight little-endian
   bytes for the second value, and both places that do it wrote those bytes into a

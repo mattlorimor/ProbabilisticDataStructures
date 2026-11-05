@@ -231,10 +231,13 @@ full, and each slot is a remainder of `r = ⌈log2(1/fp)⌉` bits (7 at 1%, 10 a
 bits of bookkeeping. The memory is `2^q · (r + 3)` bits and doubles each time `n` passes
 three quarters of a power of two.
 
-The slot count is a `uint`, so `q` is at most 31 and `n` at most the figure in the table,
-whatever the rate; the quotient and remainder together are cut from a 64-bit hash, so a
-table that size takes a rate no finer than 2^-33. A read is charged three times the table,
-so the default budget reads one of 2^28 slots at 1%.
+The table is one array of 64-bit words, which holds 2,147,483,591, so `q` is at most 34,
+and past 31 that array bounds the remainder as well: up to 28 bits at 2^32 slots, 12 at
+2^33 and 4 at 2^34. At 1% and at 0.1% `n` therefore stops at the figure in the table,
+three quarters of 2^33, and only a rate of 6.25% or coarser goes on to 12,884,901,888,
+three quarters of 2^34. The quotient and remainder together are cut from a 64-bit hash,
+so a table of 2^31 slots takes a rate no finer than 2^-33. A read is charged three times
+the table, so the default budget reads one of 2^28 slots at 1%.
 
 ### `BinaryFuseFilter`
 

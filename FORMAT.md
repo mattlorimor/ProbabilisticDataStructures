@@ -126,6 +126,7 @@ structure whose layout changes bumps only its own.
 | 9 | the release after 6.2.0 | `InverseBloomFilter`, `CountMinSketch`, `HeavyKeeper`, `PrivateCountMinSketch`, `DpswSketch` | a placement byte, in each private sketch body for `DpswSketch`; written by every save |
 | 10 | the release after 6.2.0 | `SublimeCountMinSketch` | the packing tuning of each state, before its counters; written by every save |
 | 11 | the release after 6.2.0 | `CuckooBloomFilter` | the whole table, word by word, in place of the list of occupied entries, and the sizes as `u64`s; written by every save |
+| 12 | the release after 6.2.0 | `QuotientFilter` | the number of entries as a `u64`, and quotient bits that name a table of 2^q slots up to 34; written by every save but that of a one-slot table read from version 1 |
 
 The version field's high bit, `0x8000`, is not part of a version: it marks
 [the large form](#the-large-form) of the envelope, and the version is the other fifteen
@@ -430,7 +431,8 @@ address.
 | `InfiniFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; a filter stops expanding there |
 | `MementoFilter` | quotient bits | 31 | as `InfiniFilter` |
 | `MementoFilter` | bits of a slot | 64 | a slot is held in a 64-bit word: three bits of metadata, and a field of the fingerprint, one bit for its age counter and the memento |
-| `QuotientFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; the reader also reads 32, which earlier constructors wrote as a wrapped one-slot table |
+| `QuotientFilter` | quotient bits | 34 | the table is one array of 64-bit words, and 2^35 slots of the narrowest slot, four bits, are more than one holds; at version 1 the reader reads 32, which earlier constructors wrote as a wrapped one-slot table |
+| `QuotientFilter` | words of the table | 2,147,483,591 | they are one array, which at 2^32 slots holds slots of up to 31 bits, at 2^33 up to 15 and at 2^34 up to 7 |
 | `QuotientFilter` | quotient + remainder bits | 64 | a fingerprint is cut from a 64-bit hash |
 | `QuotientFilter` | remainder bits | 61 | a slot is its remainder and three bits of bookkeeping in one 64-bit word; the reader also reads the wider remainders earlier constructors wrote |
 
@@ -981,14 +983,22 @@ no hash could have produced them.
 ```
 u32     quotient bits
 u32     remainder bits
-u32     the number of entries
+u64     the number of entries (version 12; a u32 at version 1)
 bytes   the slot table
 ```
 
 The slot count is `2^quotient bits`, each slot is `remainder bits + 3` wide, and the
-table is those slots packed end to end with one spare word so a slot straddling the end
-has somewhere to reach. All of that follows from the two widths, so none of it is
-written: a payload cannot then disagree with itself about the shape of its own table.
+table is those slots packed end to end from the lowest bit of the first word, in
+`⌊2^q · (r + 3) / 64⌋ + 2` little-endian 64-bit words: the spare words give a slot
+straddling the end somewhere to reach. All of that follows from the two widths, so none
+of it is written: a payload cannot then disagree with itself about the shape of its own
+table.
+
+Version 12 is version 1 with the number of entries widened to a `u64`, because a table of
+2^32 slots or more can hold more entries than a `u32` counts, and with quotient bits from
+32 to 34 meaning the tables of 2^q slots they say. Every save is version 12 but one, the
+one-slot table below. A payload of version 1 reads, and saves again as version 12, which
+releases up to 6.2.0 refuse as written by a later version.
 
 The three bits per slot are `is_occupied`, `is_continuation` and `is_shifted`. Only the
 first belongs to the slot; the other two belong to whatever entry is sitting there, which
@@ -1007,14 +1017,19 @@ refuses a table whose entries, the slots with any of the three bits set, are not
 stored count. No writer produces any of these, and every lookup walks the metadata on the
 strength of them.
 
-The quotient bits run from 1 to 32 and the two widths together come to at most 64, the
-bits a hash supplies; a payload outside either is refused. The writer never goes past 31
-quotient bits, because the slot count is a 32-bit number and 2^32 does not fit it. A
-payload at 32 was written by a constructor from 6.2.0 or earlier, which wrapped a request
+At version 12 the quotient bits run from 1 to 34, and the two widths together come to at
+most 64, the bits a hash supplies. The table is one array of 64-bit words, which holds at
+most 2,147,483,591, so its two widths must fit one: 2^35 slots do not, even at the
+narrowest slot of four bits, and at 2^32 slots a remainder may be up to 28 bits, at 2^33
+up to 12 and at 2^34 up to 4. A payload outside any of these is refused.
+
+At version 1 the quotient bits run from 1 to 32. A payload at 32 was written by a
+constructor from 6.2.0 or earlier, which counted slots in 32 bits and wrapped a request
 for more items than the largest table into a table of one slot. Such a payload holds one
 slot's bytes, so its slot count is 1, not `2^32`, and it reads back as that one-slot
-filter, exactly as it was written. Remainders wider than the writer now allows are read
-as written in the same way.
+filter, exactly as it was written. It is also written back at version 1, as it was read,
+because at version 12 its 32 quotient bits would say 2^32 slots. Remainders wider than the
+constructor now builds are read as written in the same way, at either version.
 
 ### `ThetaSketch` (id 18)
 

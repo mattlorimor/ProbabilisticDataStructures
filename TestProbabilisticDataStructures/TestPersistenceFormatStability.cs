@@ -541,7 +541,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestTheVersionAfterTheNewestIsRefused()
         {
-            // Twelve is one past the newest, version 11. It is written out rather than
+            // Thirteen is one past the newest, version 12. It is written out rather than
             // computed from the library's ceiling, which is the thing being checked.
             var newest = new (string Fixture, Func<Stream, object> Read)[]
             {
@@ -555,13 +555,14 @@ namespace TestProbabilisticDataStructures
                 ("inversebloomfilter-v9-narrow.bin", s => InverseBloomFilter.ReadFrom(s)),
                 ("dpswsketch-v9-narrow.bin", s => DpswSketch.ReadFrom(s)),
                 ("sublimecountminsketch-v10.bin", s => SublimeCountMinSketch.ReadFrom(s)),
+                ("quotientfilter-v12.bin", s => QuotientFilter.ReadFrom(s)),
             };
 
             foreach (var (fixture, read) in newest)
             {
-                var bytes = Relabeled(ReadFixture(fixture), 12);
+                var bytes = Relabeled(ReadFixture(fixture), 13);
                 var ex = Assert.ThrowsExactly<InvalidDataException>(() => read(new MemoryStream(bytes)), fixture);
-                StringAssert.Contains(ex.Message, "format version 12", fixture);
+                StringAssert.Contains(ex.Message, "format version 13", fixture);
                 StringAssert.Contains(ex.Message, "written by a later version", fixture);
             }
         }
@@ -1728,6 +1729,55 @@ namespace TestProbabilisticDataStructures
             Assert.IsTrue(filter.Test(Key("beta")));
         }
 
+        /// <summary>
+        /// Version 12 is version 1 with the count of entries in 64 bits (#231). The fixture
+        /// was assembled outside the library, by a Python script using only <c>struct</c> and
+        /// <c>zlib</c>, from FORMAT.md's layout: the version 1 fixture's fields with the count
+        /// widened to a <c>u64</c>, its table run as it was, version 12, and the CRC-32 by
+        /// zlib, whose CRC was first checked on the version 1 fixture. It reads as the filter
+        /// the version 1 fixture is, answer for answer; its bytes are those of version 1
+        /// with four zero bytes after the count; and the version 1 fixture saves again as
+        /// exactly these bytes.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredQuotientFilterAtVersionTwelveReadsAsTheOneBeforeIt()
+        {
+            var v1 = ReadFixture("quotientfilter-v1.bin");
+            var v12 = ReadFixture("quotientfilter-v12.bin");
+
+            // The layout, read off the bytes: version 12 at 4, a payload four bytes
+            // longer, and after the two widths and the count, the same table run.
+            Assert.AreEqual(12, BinaryPrimitives.ReadUInt16LittleEndian(v12.AsSpan(4)));
+            Assert.AreEqual(BinaryPrimitives.ReadUInt32LittleEndian(v1.AsSpan(10)) + 4,
+                BinaryPrimitives.ReadUInt32LittleEndian(v12.AsSpan(10)));
+            CollectionAssert.AreEqual(v1[6..10], v12[6..10], "the structure and hash ids differ");
+            CollectionAssert.AreEqual(v1[14..26], v12[14..26], "the two widths and the count's low half differ");
+            CollectionAssert.AreEqual(new byte[4], v12[26..30], "the count's high half is not zero");
+            CollectionAssert.AreEqual(v1[26..^4], v12[30..^4], "the table run differs");
+
+            var stored = QuotientFilter.ReadFrom(Fixture("quotientfilter-v1.bin"));
+            var filter = QuotientFilter.ReadFrom(Fixture("quotientfilter-v12.bin"));
+
+            Assert.AreEqual(10UL, filter.Count());
+            Assert.AreEqual(stored.Capacity(), filter.Capacity());
+            Assert.AreEqual(stored.BitsPerSlot(), filter.BitsPerSlot());
+            AssertAllPresent(filter.Test);
+            for (var i = 0; i < 1000; i++)
+            {
+                Assert.AreEqual(stored.Test(Key($"absent-{i}")), filter.Test(Key($"absent-{i}")),
+                    $"absent-{i} is answered otherwise at version 12");
+            }
+
+            CollectionAssert.AreEqual(v12, stored.ToByteArray(),
+                "the version 1 fixture does not save again as the version 12 bytes");
+            CollectionAssert.AreEqual(v12, filter.ToByteArray(),
+                "the version 12 fixture does not write back the bytes it was read from");
+
+            Assert.IsTrue(filter.TestAndRemove(Key("alpha")));
+            Assert.IsFalse(filter.Test(Key("alpha")));
+            Assert.IsTrue(filter.Test(Key("beta")));
+        }
+
         [TestMethod]
         public void TestStoredDDSketchStillReads()
         {
@@ -1973,7 +2023,10 @@ namespace TestProbabilisticDataStructures
                 quotient.Add(Key(word));
             }
 
-            AssertBytes("quotientfilter-v1.bin", quotient.ToByteArray());
+            // v12, not v1: every save of a quotient filter is version 12, which counts its
+            // entries in 64 bits (#231). The v1 fixture stays the read witness of what 6.2.0
+            // wrote.
+            AssertBytes("quotientfilter-v12.bin", quotient.ToByteArray());
 
             var theta = new ThetaSketch(16);
             for (var i = 0; i < 200; i++)
@@ -2234,6 +2287,7 @@ namespace TestProbabilisticDataStructures
                 ("hyperloglogplus-sparse-p4-v1.bin", 16, 1),
                 ("quotientfilter-v1.bin", 17, 1),
                 ("quotientfilter-q32-v1.bin", 17, 1),
+                ("quotientfilter-v12.bin", 17, 12),
                 ("thetasketch-v1.bin", 18, 1),
                 ("thetasketch-v1b.bin", 18, 1),
                 ("simhashsignature-v1.bin", 19, 1),
@@ -2288,6 +2342,8 @@ namespace TestProbabilisticDataStructures
                 "the stable filter is not writing the version its layout needs");
             Assert.AreEqual(11, new CuckooBloomFilter(100, 0.01).ToByteArray()[4],
                 "the cuckoo filter is not writing the version its layout needs");
+            Assert.AreEqual(12, new QuotientFilter(100, 0.01).ToByteArray()[4],
+                "a small QuotientFilter is not writing the version its layout needs");
 
             // The sketches that place by width record their placement from version 9, and
             // every save of theirs is version 9. The top-k keeps its sketch in an envelope of

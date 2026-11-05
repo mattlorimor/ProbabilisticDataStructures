@@ -54,8 +54,9 @@ namespace TestProbabilisticDataStructures
         /// has a <c>u64</c> length (#228), the header declaring the count with it. The rows are
         /// filters the constructor builds (<see cref="TestWhichConstructedFiltersFitOneArray"/>),
         /// too large to build here, so a small filter claims the two widths that size its
-        /// table. The payload is three counts and the run's length, sixteen bytes in the
-        /// ordinary envelope and twenty in the large form, and eight a word; the table's bytes
+        /// table. The payload is the two widths, the count of entries in 64 bits from version
+        /// 12 (#231), and the run's length, twenty bytes in the ordinary envelope and
+        /// twenty-four in the large form, and eight a word; the table's bytes
         /// are past <c>int.MaxValue</c> in each, which is where the count wrapped when it was
         /// an <c>int</c>, and so past one array. At 2^31 slots of thirteen bits they are 2^32
         /// and sixteen, which is sixteen in 32 bits: a run's length worked out in a
@@ -75,7 +76,7 @@ namespace TestProbabilisticDataStructures
             var filter = new QuotientFilter(100, 0.01);
             for (var i = 0; i < 40; i++) filter.Add(System.Text.Encoding.ASCII.GetBytes($"k{i}"));
 
-            TestPayloadCount.AssertStreamedWhileClaiming(filter, 16 + 8 * words, 20 + 8 * words,
+            TestPayloadCount.AssertStreamedWhileClaiming(filter, 20 + 8 * words, 24 + 8 * words,
                 (filter, "quotientBits", quotientBits), (filter, "remainderBits", remainderBits));
         }
 
@@ -86,17 +87,26 @@ namespace TestProbabilisticDataStructures
         /// each pair fits the ordinary envelope and the second does not, and is written in the
         /// large form, its table a run with a <c>u64</c> length (#228). The table's arithmetic
         /// is restated here as well, as a table of 2^q slots of r + 3 bits and two spare words.
+        /// Past 2^31 slots (#231) every table is past one array's bytes, at the narrowest
+        /// remainder and at the widest one array of words holds, 28 bits at 2^32 slots, 12 at
+        /// 2^33 and 4 at 2^34.
         /// </summary>
         [TestMethod]
-        [DataRow(1_610_612_736u, 0.07, 31, 4, true)]
-        [DataRow(1_610_612_736u, 0.04, 31, 5, false)]
-        [DataRow(1_610_612_736u, 0.0002, 31, 13, false)]
-        [DataRow(805_306_368u, 0.0003, 30, 12, true)]
-        [DataRow(805_306_368u, 0.0002, 30, 13, false)]
-        [DataRow(805_306_368u, 0.00005, 30, 15, false)]
-        [DataRow(100_000u, 0.01, 18, 7, true)]
+        [DataRow(1_610_612_736UL, 0.07, 31, 4, true)]
+        [DataRow(1_610_612_736UL, 0.04, 31, 5, false)]
+        [DataRow(1_610_612_736UL, 0.0002, 31, 13, false)]
+        [DataRow(805_306_368UL, 0.0003, 30, 12, true)]
+        [DataRow(805_306_368UL, 0.0002, 30, 13, false)]
+        [DataRow(805_306_368UL, 0.00005, 30, 15, false)]
+        [DataRow(100_000UL, 0.01, 18, 7, true)]
+        [DataRow(3_221_225_472UL, 0.5, 32, 1, false)]
+        [DataRow(3_221_225_472UL, 3.8e-9, 32, 28, false)]
+        [DataRow(6_442_450_944UL, 0.5, 33, 1, false)]
+        [DataRow(6_442_450_944UL, 0.0003, 33, 12, false)]
+        [DataRow(12_884_901_888UL, 0.5, 34, 1, false)]
+        [DataRow(12_884_901_888UL, 0.0625, 34, 4, false)]
         public void TestWhichConstructedFiltersFitOneArray(
-            uint n, double rate, int quotientBits, int remainderBits, bool fits)
+            ulong n, double rate, int quotientBits, int remainderBits, bool fits)
         {
             var (q, r) = QuotientFilter.Split(n, rate);
             Assert.AreEqual((uint)quotientBits, q);
@@ -104,7 +114,7 @@ namespace TestProbabilisticDataStructures
 
             var words = (((1L << quotientBits) * (remainderBits + 3)) >> 6) + 2;
             var counted = CountedWhileClaiming(q, r);
-            Assert.AreEqual(16 + 8 * words, counted, "the count is not the table's bytes and sixteen");
+            Assert.AreEqual(20 + 8 * words, counted, "the count is not the table's bytes and twenty");
             Assert.AreEqual(fits, counted <= LargestPayload,
                 $"the row says the filter fits one array, and its payload of {counted:N0} bytes does not, or the reverse");
 
@@ -131,6 +141,37 @@ namespace TestProbabilisticDataStructures
             var counter = PayloadWriter.Counter();
             ((IPayloadBody)filter).WritePayload(counter);
             return counter.Length;
+        }
+
+        /// <summary>
+        /// A table of 2^32 slots or more can hold more entries than a <c>u32</c> counts, so
+        /// the count is 64 bits wide, and from version 12 so is its field (#231). No table that
+        /// size is built here, so a small filter claims a count past 2^32 and is written. The
+        /// payload's count, read where FORMAT.md puts it, is the whole count, as
+        /// <c>Count()</c> is; and read back, it is refused for being more than the table's
+        /// slots, naming all of it, so the reader takes the 64 bits as well.
+        /// </summary>
+        [TestMethod]
+        public void TestACountPastTwoToTheThirtyTwoIsWrittenAndReadInSixtyFourBits()
+        {
+            const ulong Claimed = (1UL << 32) + 40;
+
+            var filter = new QuotientFilter(100, 0.01);
+            for (var i = 0; i < 40; i++) filter.Add(System.Text.Encoding.ASCII.GetBytes($"k{i}"));
+
+            var count = typeof(QuotientFilter).GetField("count", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            count.SetValue(filter, Convert.ChangeType(Claimed, count.FieldType, System.Globalization.CultureInfo.InvariantCulture));
+            Assert.AreEqual(Claimed, filter.Count());
+
+            var bytes = filter.ToByteArray();
+            Assert.AreEqual(12, System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(4)),
+                "the filter was not written at the version that counts in 64 bits");
+            Assert.AreEqual(Claimed, System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(14 + 8)),
+                "the payload's count is not the filter's");
+
+            var refused = Assert.ThrowsExactly<System.IO.InvalidDataException>(
+                () => Persistence.FromByteArray<QuotientFilter>(bytes));
+            StringAssert.Contains(refused.Message, $"{Claimed} entries", refused.Message);
         }
     }
 }

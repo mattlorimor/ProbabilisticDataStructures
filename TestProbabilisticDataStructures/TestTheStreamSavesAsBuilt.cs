@@ -181,6 +181,18 @@ namespace TestProbabilisticDataStructures
         private static BigInteger TableBytes(BigInteger quotientBits, BigInteger slotBits) =>
             8 * (((BigInteger.One << (int)quotientBits) * slotBits >> 6) + 2);
 
+        /// <summary>
+        /// The widest remainder a quotient table of 2^q slots can have: a split of the hash,
+        /// in a slot of one word, whose table, as FORMAT.md lays it out, is one array of
+        /// <see cref="Array.MaxLength"/> words at most.
+        /// </summary>
+        private static int WidestRemainderInOneArray(int quotientBits)
+        {
+            var r = Math.Min(QuotientFilter.MaxRemainderBits, QuotientFilter.HashBits - quotientBits);
+            while (TableBytes(quotientBits, r + 3) / 8 > Array.MaxLength) r--;
+            return r;
+        }
+
         private static IEnumerable<object> Segments(object filter) => ((IEnumerable)Get(filter, "Segments")).Cast<object>();
 
         private static IEnumerable<object> DpswSketches(object window) =>
@@ -223,12 +235,24 @@ namespace TestProbabilisticDataStructures
                 },
                 s => ((Buckets[])Get(s, "Partitions")).Aggregate(BigInteger.Zero, (sum, p) => sum + BucketBytes(p)));
 
-            yield return new(StructureId.QuotientFilter, "2^31 slots, quotient and remainder all 64 bits of the hash", true,
+            // The table is one array of 64-bit words (#231): at its widest, 2^34 slots, that
+            // holds a remainder of four bits, and at 2^32 slots one of 28, the most words of
+            // any table. A slot count held in 32 bits makes either a table of a few slots.
+            yield return new(StructureId.QuotientFilter, "2^34 slots, at the widest remainder one array of words holds there", true,
                 () => Filled(new QuotientFilter(100, 0.01), (f, k) => f.Add(k)),
                 s => new[]
                 {
                     new Claim(s, "quotientBits", (uint)QuotientFilter.MaxQuotientBits),
-                    new Claim(s, "remainderBits", (uint)(QuotientFilter.HashBits - QuotientFilter.MaxQuotientBits)),
+                    new Claim(s, "remainderBits", (uint)WidestRemainderInOneArray(QuotientFilter.MaxQuotientBits)),
+                },
+                s => TableBytes(Big(s, "quotientBits"), Big(s, "remainderBits") + 3));
+
+            yield return new(StructureId.QuotientFilter, "2^32 slots, at the widest remainder one array of words holds there", true,
+                () => Filled(new QuotientFilter(100, 0.01), (f, k) => f.Add(k)),
+                s => new[]
+                {
+                    new Claim(s, "quotientBits", 32u),
+                    new Claim(s, "remainderBits", (uint)WidestRemainderInOneArray(32)),
                 },
                 s => TableBytes(Big(s, "quotientBits"), Big(s, "remainderBits") + 3));
 
