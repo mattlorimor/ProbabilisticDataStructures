@@ -816,8 +816,35 @@ namespace ProbabilisticDataStructures
             return count;
         }
 
-        /// <summary>The buffer a run of <paramref name="count"/> bytes is read through in pieces.</summary>
-        private static int PieceFor(long count) => (int)Math.Min(count, PayloadSource.PieceBytes);
+        /// <summary>
+        /// The buffer a run, or a block (<see cref="ReadBlock"/>), of <paramref name="count"/>
+        /// bytes is read through in pieces.
+        /// </summary>
+        internal static int PieceFor(long count) => (int)Math.Min(count, PayloadSource.PieceBytes);
+
+        /// <summary>
+        /// Reads the next <c>piece.Length</c> bytes into <paramref name="piece"/>: a piece of a
+        /// block of eight-byte words with no length before it, which its structure unpacks into
+        /// storage of its own (#289), copied from a held payload, and read from the stream into
+        /// it from one that is not.
+        /// </summary>
+        /// <remarks>
+        /// As <see cref="ReadWords"/> is for a run, with nothing allocated: the piece is the
+        /// caller's, on its stack, no longer than <see cref="PieceFor"/> says. So a block read
+        /// this way allocates, and is charged, what it did read a word at a time, and each piece
+        /// is held to what the payload has left as each word was.
+        /// </remarks>
+        internal void ReadBlock(scoped Span<byte> piece)
+        {
+            if (this.source is null)
+            {
+                Take(piece.Length).CopyTo(piece);
+                return;
+            }
+
+            RequireAhead(piece.Length);
+            this.source.ReadPiece(piece);
+        }
 
         /// <summary>
         /// Reads the length prefix of a run that holds a nested envelope, which a read that
@@ -1167,6 +1194,25 @@ namespace ProbabilisticDataStructures
             }
 
             this.Taken(piece.AsSpan(0, count));
+        }
+
+        /// <summary>
+        /// Reads the next <c>piece.Length</c> bytes into <paramref name="piece"/>, a buffer on
+        /// its reader's stack, through the stream's span overload of <c>Read</c>: a piece of a
+        /// block of words with no length before it, which its structure unpacks into storage of
+        /// its own (#289).
+        /// </summary>
+        /// <exception cref="InvalidDataException">The stream ends first.</exception>
+        /// <remarks>
+        /// A stream that implements only the array overload is handed a copy rented from the
+        /// shared pool, as it is for a field: one as long as the piece, at most
+        /// <see cref="PieceBytes"/>, where a run read that way would rent one as long as the run
+        /// (<see cref="ReadRun"/>).
+        /// </remarks>
+        internal void ReadPiece(scoped Span<byte> piece)
+        {
+            this.Fill(piece);
+            this.Taken(piece);
         }
 
         /// <summary>

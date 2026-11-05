@@ -298,14 +298,17 @@ namespace TestProbabilisticDataStructures
         /// whole payload. The second, the read, takes every byte of the payload once, in
         /// order, in the pieces its reader asks for: fields, and runs, each whole or in pieces
         /// of at most <see cref="PayloadSource.PieceLength"/>, of exactly the length their
-        /// <c>u64</c> prefixes give (#228). Then the checksum, once.
+        /// <c>u64</c> prefixes give (#228), and blocks of words with no length before them, in
+        /// pieces of at most that through the span overload (#289). Then the checksum, once.
         /// </summary>
         /// <remarks>
         /// A reader that held the payload would read it in one piece the length of the
         /// payload, which no prefix gives, and never move back. A price that read a run, or
         /// copied one, would read more than the widest field at once, or the bytes of a run.
         /// The runs are those the second pass reads through the array overload, which is how
-        /// a run is read. A nested envelope is read field by field from the outer stream, and
+        /// a run is read, and the blocks its reads through the span overload longer than a
+        /// field, which is how a block is read; the price moves past both. A nested envelope is
+        /// read field by field from the outer stream, and
         /// its own runs as runs; a run holding one is left out of the first pass's check,
         /// because the price looks into it, at its header and fields, to price what it
         /// holds. The roster is <see cref="StructureId"/>, through the budget samples, which
@@ -350,6 +353,7 @@ namespace TestProbabilisticDataStructures
                 // A run is read whole, as long as its u64 prefix gives, or in pieces of it, none
                 // longer than a piece; nothing else is read between the pieces of one run.
                 var runs = new List<Asked>();
+                var blocks = new List<Asked>();
                 var at = start;
                 var runLeft = 0L;
                 foreach (var piece in read.Where(a => a.From < end))
@@ -371,10 +375,15 @@ namespace TestProbabilisticDataStructures
                         runs.Add(new Asked(false, piece.From, piece.From + prefix, true));
                         runLeft = prefix - piece.Count;
                     }
-                    else
+                    else if (piece.Count > PayloadSource.WidestField)
                     {
-                        Assert.IsLessThanOrEqualTo((long)PayloadSource.WidestField, piece.Count,
-                            $"{id} read a field of {piece.Count} bytes at {piece.From}");
+                        // Not a field: a piece of a block of words with no length before it, read
+                        // through the span overload into a buffer on the stack (#289), and never
+                        // longer than a piece.
+                        Assert.IsLessThanOrEqualTo((long)PayloadSource.PieceLength, piece.Count,
+                            $"{id} read {piece.Count:N0} bytes at once at {piece.From} through the span overload, " +
+                            "longer than a field and longer than a piece: it was held");
+                        blocks.Add(piece);
                     }
                     at = piece.To;
                 }
@@ -387,7 +396,8 @@ namespace TestProbabilisticDataStructures
 
                 // The first pass: fields only, past every run, and less than the payload.
                 var priced = 0L;
-                var bulk = runs.Where(r => !large.AsSpan((int)r.From, 4).SequenceEqual(PersistenceFormat.Magic)).ToList();
+                var bulk = runs.Where(r => !large.AsSpan((int)r.From, 4).SequenceEqual(PersistenceFormat.Magic))
+                    .Concat(blocks).ToList();
                 foreach (var asked in log.Take(backs[0]).Where(a => a.IsMove || a.From >= start))
                 {
                     if (asked.IsMove)
@@ -1173,8 +1183,10 @@ namespace TestProbabilisticDataStructures
         /// ordinary envelope and in the large form, with the piece as it ships and lowered to
         /// eight words, the reader charges exactly its price, and a count-min sketch's price is
         /// its envelope and its rows. Shown at the coarsest sketch, whose counters are shorter
-        /// than either piece; at one whose counters are not a whole number of lowered pieces; at
-        /// the budget samples, whose counters are longer than a piece as it ships; at a top-k,
+        /// than either piece; at one of 273 counters, 2,184 bytes, whose last lowered piece is a
+        /// single counter, the least a piece can hold, so that a read stopping a counter short of
+        /// the end shows; at the budget samples, whose counters are longer than a piece as it
+        /// ships; at a top-k,
         /// whose sketch is nested; and at the stored fixtures of the version the sketch writes,
         /// which must write back as stored.
         /// </summary>
@@ -1253,7 +1265,7 @@ namespace TestProbabilisticDataStructures
 
             // The counters straddled every piece boundary the claims are about.
             Assert.IsTrue(spans.Any(s => s < Piece), "no sketch's counters were shorter than a lowered piece");
-            Assert.IsTrue(spans.Any(s => s % Piece != 0 && s > Piece), "no sketch's counters ended part of the way through a lowered piece");
+            Assert.IsTrue(spans.Any(s => s % Piece == sizeof(ulong) && s > Piece), "no sketch's counters ended a single counter into a lowered piece");
             Assert.IsTrue(spans.Any(s => s > PayloadSource.PieceLength), "no sketch's counters were longer than a piece as it ships");
         }
 
@@ -1388,6 +1400,49 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// A piece of a block (#289) is held to what its reader's payload has left, as a word
+        /// was, and is the bytes where the reader is, held or streamed: a slice of eight bytes
+        /// is refused a piece of nine as ending there, though the stream under it goes on, and
+        /// then reads its eight, to its end.
+        /// </summary>
+        /// <remarks>
+        /// A count-min sketch holds its counters to what remains before it reads any, so no
+        /// payload of one reaches the refusal; this is the one place it is shown.
+        /// </remarks>
+        [TestMethod]
+        public void TestAPieceOfABlockIsHeldToWhatItsPayloadHasLeft()
+        {
+            byte[] bytes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+            foreach (var streamed in new[] { false, true })
+            {
+                var form = streamed ? "streamed" : "held";
+                var reader = streamed
+                    ? new PayloadReader(new PayloadSource(new MemoryStream(bytes)), bytes.Length, Unlimited(), wide: true, streamed: true)
+                    : new PayloadReader(bytes, Unlimited(), wide: true);
+                reader.ReadByte();
+                var slice = reader.Slice(8);
+
+                InvalidDataException refused = null;
+                try
+                {
+                    slice.ReadBlock(new byte[9]);
+                }
+                catch (InvalidDataException e)
+                {
+                    refused = e;
+                }
+
+                Assert.IsNotNull(refused, $"a {form} slice of eight bytes read a piece of nine");
+                StringAssert.Contains(refused.Message, "ended", refused.Message);
+
+                var piece = new byte[8];
+                slice.ReadBlock(piece);
+                CollectionAssert.AreEqual(bytes[1..9], piece, $"a {form} slice read a piece that is not its bytes");
+                slice.ExpectEnd();
+            }
+        }
+
         private static byte[] SliceReads(byte[] bytes, bool wide)
         {
             var reader = new PayloadReader(bytes, Unlimited(), wide);
@@ -1411,7 +1466,8 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// A structure nested in the large form is read from the outer reader, field by field
         /// from the outer stream, with nothing its size held: a top-k whose count-min sketch's
-        /// envelope is about two megabytes reads it with no read longer than the widest field, and
+        /// envelope is about two megabytes reads it with no read longer than a piece, which the
+        /// sketch's counters are read in (#289), and
         /// allocates, beyond what the sketch's own read in the large form does, less than a
         /// tenth of that envelope, with the sketch's envelope in either form.
         /// </summary>
@@ -1439,9 +1495,12 @@ namespace TestProbabilisticDataStructures
                 CollectionAssert.AreEqual(expected, TopK.ReadFrom(stream, ReadOptions.Unlimited).ToByteArray(),
                     $"the top-k with its sketch {form} does not read back");
 
+                // No read longer than a piece, which the sketch's counters are read in (#289), and
+                // the envelope is longer than one, so a read that held it would be longer.
+                Assert.IsGreaterThan((long)PayloadSource.PieceLength, nested, $"the sketch's envelope is no longer than a piece");
                 var back = stream.Log.FindIndex(a => a.IsMove && a.To == PersistenceFormat.LargeHeaderLength);
                 var widest = stream.Log.Skip(back + 1).Where(a => !a.IsMove).Max(a => a.Count);
-                Assert.IsLessThanOrEqualTo((long)PayloadSource.WidestField, widest,
+                Assert.IsLessThanOrEqualTo((long)PayloadSource.PieceLength, widest,
                     $"with its sketch {form}, the top-k read {widest:N0} bytes at once: its {nested:N0}-byte envelope was held");
 
                 var read = TestReadBudget.Allocated(() => TopK.ReadFrom(new MemoryStream(large, writable: false), ReadOptions.Unlimited));
