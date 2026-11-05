@@ -55,6 +55,13 @@ namespace TestProbabilisticDataStructures
 
         private const string Heading = "### How much each one holds";
 
+        /// <summary>
+        /// Whether the README's section on how much each one holds says
+        /// <paramref name="phrase"/>, with its lines run together as a claim's are.
+        /// </summary>
+        internal static bool ReadmeSays(string phrase) =>
+            Flat(ReadmeSection()).Contains(phrase, StringComparison.Ordinal);
+
         private static string ReadmeSection()
         {
             var readme = Document("README.md");
@@ -72,6 +79,14 @@ namespace TestProbabilisticDataStructures
             ["#### Takes unlimited items"] = CapacityKind.Unlimited,
         };
 
+        /// <summary>
+        /// The header every one of the README's tables has, naming its columns in the order
+        /// <see cref="Row"/> reads them. The last is what a byte array holds (#279): through
+        /// <c>WriteTo(Stream)</c> every structure saves as built.
+        /// </summary>
+        internal const string TableHeader =
+            "| Structure | Counts | Builds up to | Loads by default up to | As a byte array |";
+
         private static readonly Regex Row = new(
             @"^\| `(?<structure>\w+)` \| (?<counts>[^|]+?) \| (?<builds>[^|]+?) \| (?<loads>[^|]+?) \| (?<saves>[^|]+?) \|\r?$",
             RegexOptions.Multiline);
@@ -88,6 +103,8 @@ namespace TestProbabilisticDataStructures
                 var heading = parts[i].TrimEnd();
                 Assert.IsTrue(Tables.TryGetValue(heading, out var kind),
                     $"the README's section has a table headed '{heading}', which is not one of the four kinds");
+                Assert.IsTrue(Regex.IsMatch(parts[i + 1], "^" + Regex.Escape(TableHeader) + @"\r?$", RegexOptions.Multiline),
+                    $"the README's table '{heading}' does not name its columns as its rows are read: {TableHeader}");
 
                 foreach (Match m in Row.Matches(parts[i + 1]))
                 {
@@ -163,7 +180,7 @@ namespace TestProbabilisticDataStructures
 
                 if (doc.Saves != saves)
                 {
-                    wrong.Add($"{row.Id} ({row.Counts}) saves up to {saves}, and the README says {doc.Saves}");
+                    wrong.Add($"{row.Id} ({row.Counts}) is {saves} as a byte array, and the README says {doc.Saves}");
                 }
             }
 
