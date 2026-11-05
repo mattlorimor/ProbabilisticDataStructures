@@ -742,12 +742,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BloomFilter64` included, the array of its arrays. The widest table an `InfiniFilter`
   payload can name is 2,080,374,786 words, 16.6 GB, and a 58-byte payload naming it, read
   with no budget in a process whose heap was held to 4 GiB, threw `OutOfMemoryException`
-  rather than being refused; it is now refused in milliseconds. Each of those readers now
-  checks, just before the allocation and after the budget is charged for it, that the rest
-  of the payload holds what it is about to allocate for, so a read refused for its budget is
-  refused as before, and nothing the library wrote is refused. A new sweep cuts every
-  structure's payload short at every length and holds each refusal to what the bytes it was
-  given allow.
+  rather than being refused; it is now refused in milliseconds. Each of those readers, and
+  its price, now checks that the rest of the payload holds what a size claims before it
+  prices, charges or allocates for it. This changes what callers see for such a payload:
+  it is refused as malformed, an `InvalidDataException` naming what it lacks, under any
+  budget that holds the payload itself, where it used to be refused for its budget, with a
+  `ReadBudgetExceededException` as the inner exception, whenever its claim came to more than
+  the budget, and the total that refusal named did not load it. The count-min sketches
+  already refused such payloads that way. Nothing the library wrote is refused. A new sweep
+  cuts every structure's payload short at every length and holds what each cut's price comes
+  to, and what its read allocates before refusing it, to what the bytes it holds allow.
 
 - **A 64-bit table whose count, width and arrays disagree is refused for that before it is
   priced.** The price of a `Buckets64` walked its arrays without checking them against its

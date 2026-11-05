@@ -1122,11 +1122,12 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The read is refused naming the counters as more than the payload holds, and
-        /// allocated less than <see cref="SmallBudget"/> before it was: no row of the
-        /// millions of counters claimed.
+        /// The read is refused naming the counters as more than the payload holds, or for
+        /// <paramref name="because"/>, not for its budget, and allocated less than
+        /// <see cref="SmallBudget"/> before it was: none of the millions of things claimed.
         /// </summary>
-        private static void AssertRefusedForMissingCounters<T>(byte[] poked, ReadOptions options, string edited)
+        private static void AssertRefusedForMissingCounters<T>(
+            byte[] poked, ReadOptions options, string edited, string because = "counters, beyond what it can hold")
             where T : IBinaryPersistable<T>
         {
             InvalidDataException refusal = null;
@@ -1144,7 +1145,7 @@ namespace TestProbabilisticDataStructures
                 $"before it was refused: {refusal.Message}");
             Assert.IsNotInstanceOfType<ReadBudgetExceededException>(refusal.InnerException,
                 $"a {typeof(T).Name} with its {edited} edited was refused for its budget under {budget}");
-            StringAssert.Contains(refusal.Message, "counters, beyond what it can hold",
+            StringAssert.Contains(refusal.Message, because,
                 $"a {typeof(T).Name} with its {edited} edited, under {budget}, was refused for something else");
         }
 
@@ -1167,23 +1168,46 @@ namespace TestProbabilisticDataStructures
             }
         }
 
-        /// <summary>HLL++'s sparse buffer is sized by the count it claims.</summary>
+        /// <summary>
+        /// HLL++'s sparse buffer is sized by the count of hashes it claims, and a payload
+        /// claiming more than it holds is refused for that, under a budget its claim would pass
+        /// and under none, before the buffer is priced or allocated. It was refused for its
+        /// budget until the price checked the hashes were there before pricing them.
+        /// </summary>
         [TestMethod]
-        public void TestAHyperLogLogPlusSparseCountLargerThanTheBudgetIsRefused()
+        public void TestAHyperLogLogPlusSparseCountItDoesNotHoldIsRefusedForThat()
         {
             // u32 precision, u8 representation, then u32 held at 5: eight MiB of hashes.
             var bytes = Filled(new HyperLogLogPlus(14), (s, k) => s.Add(k), 10).ToByteArray();
-            AssertRefusedBeforeAllocating<HyperLogLogPlus>(Poke(bytes, 5, 1_000_000), 8L * 1_000_000);
+            foreach (var options in new[] { new ReadOptions(SmallBudget), ReadOptions.Unlimited })
+            {
+                AssertRefusedForMissingCounters<HyperLogLogPlus>(Poke(bytes, 5, 1_000_000), options, "hash count", "stored hashes, beyond what it can hold");
+            }
         }
 
-        /// <summary>A 64-bit filter's array of arrays is sized by its count.</summary>
+        /// <summary>
+        /// A 64-bit filter's array of arrays is sized by its count, and a count is refused for
+        /// what it is before that is priced or allocated: one its bucket count does not need, for
+        /// its shape, and one it does, for the lengths of arrays the payload does not hold. Both
+        /// were refused for their budget until the price and the reader checked the shape and the
+        /// lengths before pricing or charging the array.
+        /// </summary>
         [TestMethod]
-        public void TestABloomFilter64ArrayCountLargerThanTheBudgetIsRefused()
+        public void TestABloomFilter64ArrayCountItDoesNotHoldIsRefusedForThat()
         {
-            // u64 m, u32 k, u64 count, then the buckets' u64 count, u8 size and u32
+            // u64 m, u32 k, u64 count, then the buckets' u64 count at 20, u8 size and u32
             // array count at 29: a million references.
             var bytes = new BloomFilter64(1000, 0.01).ToByteArray();
-            AssertRefusedBeforeAllocating<BloomFilter64>(Poke(bytes, 29, 1_000_000), 8L * 1_000_000);
+            var unneeded = Poke(bytes, 29, 1_000_000);
+
+            // A count of buckets that needs a million arrays of 2^30.
+            var needed = Poke64(unneeded, 20, 999_999UL << 30);
+
+            foreach (var options in new[] { new ReadOptions(SmallBudget), ReadOptions.Unlimited })
+            {
+                AssertRefusedForMissingCounters<BloomFilter64>(unneeded, options, "array count", "need 1 arrays and 1000000 were stored");
+                AssertRefusedForMissingCounters<BloomFilter64>(needed, options, "array count and bucket count", "arrays of buckets, beyond what it can hold");
+            }
         }
 
         // ---- A payload wrong in its shape is refused for that, whatever the budget -----

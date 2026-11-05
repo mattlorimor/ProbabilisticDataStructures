@@ -770,16 +770,17 @@ namespace ProbabilisticDataStructures
             {
                 var held = ReadHeld(ref reader);
 
+                // The hashes are read one at a time below, so the payload has to hold them
+                // before their buffer is charged or allocated, as the price checks before it
+                // prices them, so that a payload without them is refused for that under any
+                // budget.
+                reader.RequireHolds(held, sizeof(ulong), "stored hashes");
+
                 // Room for what was written, and at least a fresh buffer's worth, which
                 // never exceeds the cap -- a buffer above it with room to spare would
                 // move the conversion point. A payload holding exactly the cap comes back
                 // full, so its first new item converts it and a repeat does not.
                 budget.Charge(SparseCost(estimator.m, held));
-
-                // The hashes are read one at a time below, so the payload has to hold them
-                // before their buffer is allocated: a price that found them missing is set
-                // aside so that this read refuses the payload.
-                reader.RequireHolds(held, sizeof(ulong), "stored hashes");
                 var buffer = new ulong[Math.Max(estimator.InitialSparseEntries, (int)held)];
                 var previous = 0UL;
 
@@ -853,7 +854,9 @@ namespace ProbabilisticDataStructures
             var representation = reader.ReadByte();
             if (representation == 0)
             {
-                reader.Budget.Price(SparseCost(1u << (int)precision, ReadHeld(ref reader)));
+                var held = ReadHeld(ref reader);
+                reader.RequireHolds(held, sizeof(ulong), "stored hashes");
+                reader.Budget.Price(SparseCost(1u << (int)precision, held));
             }
             else if (representation == 1)
             {

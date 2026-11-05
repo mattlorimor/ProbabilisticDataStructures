@@ -402,8 +402,8 @@ The buckets are packed as a `Buckets` packs them, and the arrays are its packed 
 into pieces of 2^30 bytes, the last holding what is left. There are as many arrays as the
 bucket count divided by 2^30, rounded down, plus one, so arrays past the data hold none: a
 reader refuses any other count of arrays or any other length. It also refuses a count of
-arrays whose lengths the rest of the payload has no room for, before allocating anything
-for them.
+arrays whose lengths the rest of the payload has no room for, before pricing or
+allocating anything for them.
 
 ### Nested structures
 
@@ -570,7 +570,10 @@ structure whose price depends on every field it holds is read whole by that firs
 a `SublimeCountMinSketch` payload from before version 10 would be: its counters are the only
 record of the tuning its price needs. From version 10 it stores the tuning, and the first
 pass seeks past its counters. A payload that ends early, or whose fields are not ones its
-reader accepts, is priced as far as it goes.
+reader accepts, is priced as far as it goes. A size claiming more than the rest of the
+payload holds is refused before it is priced, by the price and the reader alike, so a
+payload that claims more than it holds is refused for what it lacks under any budget that
+holds the payload itself, not for its budget.
 
 The hash id is checked before anything is priced: after the checksum when the payload is
 held, as the header states it when it is not, and in the large form after the header's own
@@ -1017,7 +1020,7 @@ which is the thing the sparse form exists to avoid: ten items take 107 bytes rat
 The sparse hashes are written strictly increasing, and a payload where they are not is
 refused. They are the estimator's count as well as its contents — a repeated or
 unordered run would report more distinct items than it holds. A count of hashes the rest
-of the payload cannot hold is refused before any is allocated.
+of the payload cannot hold is refused before any is priced or allocated.
 
 The estimator converts once it would hold more than `max(16, 2^precision / 8)` hashes,
 so no payload it writes holds more. `2^precision / 8` is Heule, Nunkesser and Hall's
@@ -1232,7 +1235,7 @@ sampling has begun, so the reader requires the two regions together to fill `k`
 exactly, `n` to exceed `k`, and the region weight to be a positive finite number.
 Neither state can be forged into the other without failing one of those. Either way, a
 reader refuses more items than the rest of the payload has room for the lengths of, before
-it allocates the regions they go into.
+it prices or allocates the regions they go into.
 
 Version 6.2.0 could write a payload that fails the first reading. Merging a sample
 that had begun sampling into one with room for everything it held recorded the
@@ -1389,7 +1392,7 @@ with the shape claimed, and a table whose words are more than one array holds. I
 checks each table's metadata as `QuotientFilter`'s reader does, and refuses the same
 tables. The tables are stored newest first, and each table's count of entries is stored as
 well; it must be the slots whose metadata has any bit set, which the reader checks. Before
-it allocates a table, it checks that the rest of the payload holds the table's words.
+it prices or allocates a table, it checks that the rest of the payload holds the table's words.
 
 ### `MementoFilter` (id 28)
 
@@ -1425,8 +1428,8 @@ read another", so a small count costs as much as one memento and a large one sti
 A reader rejects an impossible memento width, a chain of no tables or absurdly many, a
 table with more than 31 bits of address (as `InfiniFilter`'s did before version 13), a table whose slots are wider
 than 64 bits, a table with more entries than slots, and a word count disagreeing with the
-shape claimed. Before it allocates a table, it checks that the rest of the payload holds the
-table's words. It then checks each table's metadata as `QuotientFilter`'s reader does, with
+shape claimed. Before it prices or allocates a table, it checks that the rest of the payload
+holds the table's words. It then checks each table's metadata as `QuotientFilter`'s reader does, with
 the count of slots used held to the slots whose metadata has any bit set, and refuses the
 same tables, before any run is decoded, since decoding one walks the metadata. Then it
 decodes every occupied run once and rejects a box whose count claims

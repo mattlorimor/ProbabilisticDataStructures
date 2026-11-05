@@ -107,7 +107,8 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         internal sealed record Swept(
             string Name, byte[] Bytes, Func<byte[], ReadOptions, object> Read,
-            string SmallBecause = null, long Allowance = PerByte, string CostlyBecause = null, int? ArrayBits = null);
+            string SmallBecause = null, long Allowance = PerByte, string CostlyBecause = null, int? ArrayBits = null,
+            long PriceAllowance = 0, string PricedBecause = null);
 
         private static Swept Of<T>(string name, T structure) where T : IBinaryPersistable<T> =>
             new(name, structure.ToByteArray(), (bytes, options) => Persistence.FromByteArray<T>(bytes, options));
@@ -125,6 +126,12 @@ namespace TestProbabilisticDataStructures
         /// Two a byte for the references, one for the payload and two for the arrays read back is
         /// five; measured, 4.67 for counters and 4.56 for cells, and they are allowed six.
         /// </summary>
+        private const string EmptyArraysPriced =
+            "its price charges each empty array as the empty array its run is read into, 24 bytes for the 4 its length " +
+            "takes, though the read hands back the one empty array the runtime keeps, and 8 for its place in the array " +
+            "of arrays, so a stretch of the empty arrays that are seven in eight of a lowered table of bits is priced at " +
+            "eight bytes a byte, every one of them for bytes the payload holds";
+
         private const string FullArraysCost =
             "its array of arrays is 8 bytes for each array, whose length takes 4 in the payload, so its reader can " +
             "know only that the payload holds half a byte per byte of it, and every array is full, so a cut just long " +
@@ -136,7 +143,8 @@ namespace TestProbabilisticDataStructures
         /// before reading any of them is far larger than <see cref="Fixed"/>, allowed
         /// <paramref name="allowance"/> a byte because <paramref name="costlyBecause"/>.
         /// </summary>
-        private static Swept ManyArrays<T>(string name, Func<T> build, long allowance = PerByte, string costlyBecause = null)
+        private static Swept ManyArrays<T>(
+            string name, Func<T> build, long allowance = PerByte, string costlyBecause = null, long priceAllowance = 0, string pricedBecause = null)
             where T : IBinaryPersistable<T>
         {
             Buckets64.LoweredArrayBits = LoweredArrayBits;
@@ -157,7 +165,9 @@ namespace TestProbabilisticDataStructures
                 },
                 Allowance: allowance,
                 CostlyBecause: costlyBecause,
-                ArrayBits: LoweredArrayBits);
+                ArrayBits: LoweredArrayBits,
+                PriceAllowance: priceAllowance,
+                PricedBecause: pricedBecause);
             }
             finally
             {
@@ -191,7 +201,7 @@ namespace TestProbabilisticDataStructures
             [StructureId.BloomFilter64] =
             [
                 ("its table is one array, and a table of many is read into an array of arrays sized by their count",
-                    () => ManyArrays("BloomFilter64 in many arrays", () => Filled(new BloomFilter64(150_000, 0.01), (f, k) => f.Add(k), 5000))),
+                    () => ManyArrays("BloomFilter64 in many arrays", () => Filled(new BloomFilter64(150_000, 0.01), (f, k) => f.Add(k), 5000), priceAllowance: 8, pricedBecause: EmptyArraysPriced)),
             ],
             [StructureId.CountingBloomFilter] =
             [
@@ -201,12 +211,12 @@ namespace TestProbabilisticDataStructures
             [StructureId.DeletableBloomFilter] =
             [
                 ("its tables are one array each, and a table of many is read into an array of arrays sized by their count",
-                    () => ManyArrays("DeletableBloomFilter in many arrays", () => Filled(new DeletableBloomFilter(150_000, 1000, 0.01), (f, k) => f.Add(k), 5000))),
+                    () => ManyArrays("DeletableBloomFilter in many arrays", () => Filled(new DeletableBloomFilter(150_000, 1000, 0.01), (f, k) => f.Add(k), 5000), priceAllowance: 8, pricedBecause: EmptyArraysPriced)),
             ],
             [StructureId.PartitionedBloomFilter] =
             [
                 ("its partitions are one array each, and a partition of many is read into an array of arrays sized by their count",
-                    () => ManyArrays("PartitionedBloomFilter in many arrays", () => Filled(new PartitionedBloomFilter(150_000, 0.01), (f, k) => f.Add(k), 5000))),
+                    () => ManyArrays("PartitionedBloomFilter in many arrays", () => Filled(new PartitionedBloomFilter(150_000, 0.01), (f, k) => f.Add(k), 5000), priceAllowance: 8, pricedBecause: EmptyArraysPriced)),
             ],
             [StructureId.StableBloomFilter] =
             [
@@ -483,7 +493,9 @@ namespace TestProbabilisticDataStructures
             var first = true;
             foreach (var sample in SweptFor(id))
             {
-                var allowance = Math.Max(sample.Allowance, priced.Allowance);
+                Assert.AreEqual(sample.PriceAllowance == 0, sample.PricedBecause is null,
+                    $"{sample.Name}'s price is allowed {sample.PriceAllowance} bytes a byte, and a reason only for an allowance");
+                var allowance = Math.Max(Math.Max(sample.Allowance, sample.PriceAllowance), priced.Allowance);
                 var version = BinaryPrimitives.ReadUInt16LittleEndian(sample.Bytes.AsSpan(4));
                 var length = sample.Bytes.Length - PayloadStart - ChecksumLength;
                 var problems = new List<string>();
@@ -529,6 +541,13 @@ namespace TestProbabilisticDataStructures
                     Assert.IsGreaterThan(0, costliest,
                         $"{id}'s price is allowed {priced.Allowance} bytes a byte because {priced.Why}, and no cut of " +
                         $"{sample.Name} was priced past what its read is allowed, so the allowance is out of date");
+                }
+
+                if (sample.PricedBecause is not null)
+                {
+                    Assert.IsGreaterThan(0, costliest,
+                        $"{sample.Name}'s price is allowed {sample.PriceAllowance} bytes a byte because {sample.PricedBecause}, " +
+                        "and no cut of it was priced past what its read is allowed, so the allowance is out of date");
                 }
 
                 first = false;
