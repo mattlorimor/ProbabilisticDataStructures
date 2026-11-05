@@ -61,7 +61,7 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         internal static byte[] OnePayload(
             StructureId id, int quotientBits, int fingerprintBits, bool includeWords,
-            int mementoBits = 3, ushort version = 1)
+            int mementoBits = 3, ushort version = 1, ulong entries = 0)
         {
             var slots = version == 1 ? 1u << quotientBits : 1UL << quotientBits;
             var bitsPerSlot = id == StructureId.MementoFilter
@@ -82,12 +82,12 @@ namespace TestProbabilisticDataStructures
             payload.WriteUInt32((uint)fingerprintBits);
             if (version == 1)
             {
-                payload.WriteUInt32(0);             // entries
+                payload.WriteUInt32((uint)entries);
                 payload.WriteUInt32((uint)words);
             }
             else
             {
-                payload.WriteUInt64(0);             // entries
+                payload.WriteUInt64(entries);
                 payload.WriteUInt64(words);
             }
 
@@ -147,6 +147,16 @@ namespace TestProbabilisticDataStructures
                     OnePayload(StructureId.InfiniFilter, q, f, includeWords: false, version: 13)));
                 Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
                     $"a table of 2^{q} slots of {f}-bit fingerprints should be refused for its cost: {atTheLimit.Message}");
+
+                // Full, a count of 2^q entries, which past 2^32 only a u64 holds, is a count the
+                // table can have; one more is not.
+                var full = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<InfiniFilter>(
+                    OnePayload(StructureId.InfiniFilter, q, f, includeWords: false, version: 13, entries: 1UL << q)));
+                Assert.IsInstanceOfType<ReadBudgetExceededException>(full.InnerException,
+                    $"a full table of 2^{q} slots of {f}-bit fingerprints should be refused for its cost: {full.Message}");
+                var over = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<InfiniFilter>(
+                    OnePayload(StructureId.InfiniFilter, q, f, includeWords: false, version: 13, entries: (1UL << q) + 1)));
+                StringAssert.Contains(over.Message, "entries in", $"2^{q} + 1 entries in 2^{q} slots of {f}-bit fingerprints");
 
                 var wider = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<InfiniFilter>(
                     OnePayload(StructureId.InfiniFilter, q + 1, f, includeWords: false, version: 13)));
@@ -337,7 +347,8 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// An expansion that would take the table past the limit is refused before the
         /// filter changes: no entry moved, no table replaced, nothing counted. The limit
-        /// is lowered to the width of a table a test can fill; the filter's own is 31.
+        /// is lowered to the width of a table a test can fill; the filter's own is as wide as
+        /// one array holds the words of its fingerprint's table.
         /// </summary>
         [TestMethod]
         [DataRow(2)]
@@ -481,10 +492,118 @@ namespace TestProbabilisticDataStructures
                 {
                     Assert.IsTrue(filter.Test(Key(i)), $"key {i} was lost");
                 }
+
+                // The table at the limit has exactly the words the array holds, and is read
+                // back: the reader refuses only a table with more.
+                Assert.AreEqual(InfiniSegment.LongestTable, filter.Segments[0].TableWords,
+                    "premise: the table fills the lowered array to its last word");
+                var restored = Persistence.FromByteArray<InfiniFilter>(before);
+                CollectionAssert.AreEqual(before, restored.ToByteArray(), "the table at its limit did not read back as itself");
             }
             finally
             {
                 InfiniSegment.LoweredLongestTable = null;
+            }
+        }
+
+        /// <summary>
+        /// The constructor takes its capacity as the 64-bit number it is (#231): one past what a
+        /// <c>uint</c> holds starts the table as wide as the fingerprint allows, where narrowed to
+        /// 32 bits it would be one item and start the narrowest. The array is lowered on this
+        /// thread, so that the widest is a table the test can build.
+        /// </summary>
+        [TestMethod]
+        public void TestAnInfiniFilterStartsAsWideAsACapacityPastAUIntNeeds()
+        {
+            InfiniSegment.LoweredLongestTable = InfiniSegment.Words(10, 8);
+            try
+            {
+                var filter = new InfiniFilter((1UL << 32) + 1, fingerprintBits: 8);
+                Assert.AreEqual(10, filter.Segments[0].QuotientBits);
+                Assert.AreEqual(1UL << 10, filter.Capacity());
+            }
+            finally
+            {
+                InfiniSegment.LoweredLongestTable = null;
+            }
+        }
+
+        /// <summary>
+        /// Every table in the chain is held to its own limit before a doubling, not only the
+        /// first. A doubling can double any of them, a table down the chain when the entries
+        /// it sheds fill it, and that happens part way through the walk of the first, so a
+        /// table that could not double would fail the walk with entries already moved. A
+        /// payload's tables are checked one by one, so a filter read back can hold a table of
+        /// another fingerprint at its limit behind a first table far from its own. Under the
+        /// lowered array, a table of 2^10 slots of 8-bit fingerprints, at its limit, is put
+        /// behind a filter of four slots of 2-bit ones: the add that would double the first is
+        /// refused, naming the table that stops it, and the filter is unchanged.
+        /// </summary>
+        [TestMethod]
+        public void TestAnInfiniFilterDoublingIsRefusedForATableDownTheChainAtItsLimit()
+        {
+            InfiniSegment.LoweredLongestTable = InfiniSegment.Words(10, 8);
+            try
+            {
+                var filter = new InfiniFilter(initialCapacity: 3, fingerprintBits: 2);
+                filter.Segments.Add(new InfiniSegment(10, 8));
+                Assert.AreEqual(2, filter.Segments[0].QuotientBits, "premise: a first table of four slots");
+                Assert.AreEqual(10, InfiniFilter.QuotientBitsLimitFor(8), "premise: the second table is at its limit");
+
+                for (var i = 0; i < 3; i++)
+                {
+                    filter.Add(Key(i));
+                }
+
+                var before = filter.ToByteArray();
+                var ex = Assert.ThrowsExactly<InvalidOperationException>(() => filter.Add(Key(3)));
+                StringAssert.Contains(ex.Message, "1,024 slots");
+                StringAssert.Contains(ex.Message, "8-bit fingerprints");
+                CollectionAssert.AreEqual(before, filter.ToByteArray(), "a refused add changed the filter");
+                Assert.AreEqual(0u, filter.ExpansionCount());
+            }
+            finally
+            {
+                InfiniSegment.LoweredLongestTable = null;
+            }
+        }
+
+        /// <summary>
+        /// A read is priced before it allocates, by a walk of the payload its reader's checks
+        /// are shared with (TESTING.md, "A refusal's number is held to loading"), so the walk
+        /// has to take every table the reader does. A version 13 payload claiming each
+        /// fingerprint's widest table, without its words, is walked as far as the words: the
+        /// table is priced at what its reader charges, and the walk stops only for the bytes
+        /// the payload lacks. A walk that stopped at the table's shape would price nothing, and
+        /// the read would go on to allocate unpriced.
+        /// </summary>
+        [TestMethod]
+        public void TestAReadIsPricedAcrossATableAsWideAsItsFingerprintAllows()
+        {
+            for (var f = 2; f <= 32; f++)
+            {
+                var q = WidestInfiniTable(f);
+                var envelope = OnePayload(StructureId.InfiniFilter, q, f, includeWords: false, version: 13);
+                var budget = ReadBudget.For(ReadOptions.Unlimited, StructureId.InfiniFilter);
+                var walk = new PayloadReader(envelope.AsSpan(PayloadStart, envelope.Length - PayloadStart - 4), budget);
+
+                InvalidDataException ex = null;
+                try
+                {
+                    InfiniFilter.Price(ref walk, PersistenceFormat.InfiniWideVersion);
+                }
+                catch (InvalidDataException e)
+                {
+                    ex = e;
+                }
+
+                Assert.IsNotNull(ex, $"2^{q} slots of {f}-bit fingerprints: the walk read words the payload does not have");
+                StringAssert.Contains(ex.Message, "Payload ended", $"2^{q} slots of {f}-bit fingerprints: {ex.Message}");
+
+                // Read into one array and copied into the table: twice the table, and more.
+                var table = (long)((((BigInteger.One << q) * (f + 4)) >> 6) + 2) * sizeof(ulong);
+                Assert.IsGreaterThan(2 * table, budget.Charged,
+                    $"2^{q} slots of {f}-bit fingerprints: the walk did not price the table");
             }
         }
 
