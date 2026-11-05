@@ -341,9 +341,22 @@ namespace ProbabilisticDataStructures
         /// chaining.
         /// </summary>
         /// <returns>The Buckets64 object the reset operation was performed on.</returns>
+        /// <remarks>
+        /// Each array is cleared where it is, as <see cref="Buckets.Reset"/> clears its one.
+        /// Allocating them again built the whole filter anew at every reset, gigabytes for a
+        /// large one (#297). The arrays are always the number and lengths the count and
+        /// bucket size imply -- the constructor allocates them so and <see cref="Restore"/>
+        /// refuses any other -- and nothing outside holds them: <see cref="RawData"/> is read
+        /// by the writer that asks for it and dropped, and the arrays a restore keeps are
+        /// the copies its reader made.
+        /// </remarks>
         internal Buckets64 Reset()
         {
-            AllocateArray(this.count, this.bucketSize);
+            foreach (var array in this.Data)
+            {
+                Array.Clear(array);
+            }
+
             return this;
         }
 

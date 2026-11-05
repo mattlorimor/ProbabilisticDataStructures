@@ -432,6 +432,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the old one was still held, so a reset needed twice the estimator at once: 2 GiB at the
   2^30 registers of the largest.
 
+- **A `BloomFilter64`'s reset allocates nothing.** No answer and no stored byte changes.
+  (#297)
+  <br><br>
+  `BloomFilter64.Reset` clears the filter's arrays of bits where they are, as `BloomFilter`
+  and the other filters on a bucket array now do (#219). It allocated every array again, so
+  each reset allocated the whole filter anew: 16,773,912 bytes, measured, for a filter of
+  16,773,852 bytes of bits.
+
 - **`VarOpt` now says what is exact about its total weight, and keeps the arithmetic.**
   The documentation said the sampled weights sum to *exactly* the stream's total weight.
   What holds is that no weight is lost when an item is dropped, because the survivors
