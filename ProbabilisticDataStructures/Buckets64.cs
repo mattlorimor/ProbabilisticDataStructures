@@ -37,15 +37,60 @@ namespace ProbabilisticDataStructures
         private const byte MaxBucketSizeBits = 8;
 
         // The largest C# array to create; the largest power of 2 that C# can support.
-        internal const uint maxArraySize = 1U << 30;
+        internal const uint maxArraySize = 1U << MaxArrayBits;
+
+        /// <summary>The bits of <see cref="maxArraySize"/>: arrays are 2^30 bytes.</summary>
+        private const int MaxArrayBits = 30;
+
+        /// <summary>
+        /// Smaller arrays for the buckets built or restored on the calling thread, of
+        /// 2^this bytes, from 0 to 30, so that the suite can build buckets of several arrays
+        /// at sizes it can hold; null otherwise, as it is in every thread but a test's.
+        /// </summary>
+        /// <remarks>
+        /// Per thread because the suite runs its tests side by side, and every other test's
+        /// buckets, and so its payloads, must be laid out as they always are. The size is read
+        /// once, when buckets are built or restored, and they keep it: they index their arrays
+        /// as they were laid out on whatever thread uses them afterwards, and a reset clears
+        /// the arrays they have. The size is not written, so a payload of buckets of several
+        /// lowered arrays holds more arrays than its count implies at the real size, and a
+        /// reader on a thread that has not lowered the size to the same refuses it.
+        /// </remarks>
+        [ThreadStatic]
+        internal static int? LoweredArrayBits;
+
+        /// <summary>
+        /// The bits of the size of the arrays buckets are built and restored at on this
+        /// thread: <see cref="MaxArrayBits"/>, unless the suite has lowered it.
+        /// </summary>
+        private static int ArrayBits => LoweredArrayBits ?? MaxArrayBits;
+
+        /// <summary>
+        /// The bytes of every array but the last, for buckets built or restored on this
+        /// thread: <see cref="maxArraySize"/>, unless the suite has lowered it.
+        /// </summary>
+        internal static ulong ArraySize => 1UL << ArrayBits;
 
         /// <summary>
         /// The most buckets this type holds. The arrays are held in one array, so there
         /// are at most <see cref="Array.MaxLength"/> of them, and a bucket count has as
-        /// many arrays as it has multiples of <see cref="maxArraySize"/>, plus one. Past
+        /// many arrays as it has multiples of <see cref="ArraySize"/>, plus one. Past
         /// this the count of arrays does not fit, and was cast to an int that wrapped.
         /// </summary>
-        internal static ulong MaxCount => (ulong)Array.MaxLength * maxArraySize - 1;
+        internal static ulong MaxCount => (ulong)Array.MaxLength * ArraySize - 1;
+
+        /// <summary>
+        /// The bits of the size of these buckets' arrays, read from <see cref="ArrayBits"/>
+        /// when they were built or restored, so that indexing them does not depend on the
+        /// thread that uses them.
+        /// </summary>
+        private readonly int arrayBits;
+
+        /// <summary>
+        /// One less than the size of these buckets' arrays, the low bits of a byte's index
+        /// that place it in its array. Held rather than worked out on every read and write.
+        /// </summary>
+        private readonly ulong arrayMask;
         private byte[][] Data { get; set; }
         private int arrayCount { get; set; }
         private byte bucketSize { get; set; }
@@ -104,7 +149,9 @@ namespace ProbabilisticDataStructures
                     "which is beyond anything this library builds.");
             }
 
-            var arrays = count / maxArraySize + 1;
+            var arrayBits = ArrayBits;
+            var arraySize = 1UL << arrayBits;
+            var arrays = count / arraySize + 1;
             if ((ulong)data.Length != arrays)
             {
                 throw new InvalidDataException(
@@ -115,7 +162,7 @@ namespace ProbabilisticDataStructures
             var bytesLeft = (count * bucketSize + 7) / 8;
             for (int i = 0; i < data.Length; i++)
             {
-                var needed = Math.Min(bytesLeft, maxArraySize);
+                var needed = Math.Min(bytesLeft, arraySize);
                 if ((ulong)data[i].Length != needed)
                 {
                     throw new InvalidDataException(
@@ -125,11 +172,13 @@ namespace ProbabilisticDataStructures
                 bytesLeft -= needed;
             }
 
-            return new Buckets64(count, bucketSize, data);
+            return new Buckets64(count, bucketSize, data, arrayBits);
         }
 
-        private Buckets64(ulong count, byte bucketSize, byte[][] data)
+        private Buckets64(ulong count, byte bucketSize, byte[][] data, int arrayBits)
         {
+            this.arrayBits = arrayBits;
+            this.arrayMask = (1UL << arrayBits) - 1;
             this.count = count;
             this.bucketSize = bucketSize;
             this.arrayCount = data.Length;
@@ -201,8 +250,8 @@ namespace ProbabilisticDataStructures
             if (count > MaxCount)
             {
                 throw new ArgumentOutOfRangeException(paramName, count,
-                    $"{request ?? $"{count:N0} buckets"}. That is {count / maxArraySize + 1:N0} " +
-                    $"arrays of up to {maxArraySize:N0} bytes, and the arrays are held in one, " +
+                    $"{request ?? $"{count:N0} buckets"}. That is {count / ArraySize + 1:N0} " +
+                    $"arrays of up to {ArraySize:N0} bytes, and the arrays are held in one, " +
                     $"which holds at most {Array.MaxLength:N0}: {MaxCount:N0} buckets.{(remedy is null ? "" : " " + remedy)}");
             }
         }
@@ -217,6 +266,8 @@ namespace ProbabilisticDataStructures
         {
             CheckSize(count, bucketSize, nameof(count));
 
+            this.arrayBits = ArrayBits;
+            this.arrayMask = (1UL << this.arrayBits) - 1;
             this.count = count;
             this.bucketSize = bucketSize;
             AllocateArray(count, bucketSize);
@@ -226,12 +277,13 @@ namespace ProbabilisticDataStructures
         [MemberNotNull(nameof(Data))]
         private void AllocateArray(ulong count, byte bucketSize)
         {
-            this.arrayCount = (int)(count / maxArraySize + 1);
+            var largest = 1UL << this.arrayBits;
+            this.arrayCount = (int)(count / largest + 1);
             this.Data = new byte[this.arrayCount][];
             var bytesToAllocate = (count * bucketSize + 7) / 8;
             for (int i = 0; i < this.arrayCount; i++)
             {
-                var arraySize = Math.Min(bytesToAllocate, maxArraySize);
+                var arraySize = Math.Min(bytesToAllocate, largest);
                 this.Data[i] = new byte[arraySize];
                 bytesToAllocate -= arraySize;
             }
@@ -341,9 +393,22 @@ namespace ProbabilisticDataStructures
         /// chaining.
         /// </summary>
         /// <returns>The Buckets64 object the reset operation was performed on.</returns>
+        /// <remarks>
+        /// Each array is cleared where it is, as <see cref="Buckets.Reset"/> clears its one.
+        /// Allocating them again built the whole filter anew at every reset, gigabytes for a
+        /// large one (#297). The arrays are always the number and lengths the count and
+        /// bucket size imply -- the constructor allocates them so and <see cref="Restore"/>
+        /// refuses any other -- and nothing outside holds them: <see cref="RawData"/> is read
+        /// by the writer that asks for it and dropped, and the arrays a restore keeps are
+        /// the copies its reader made.
+        /// </remarks>
         internal Buckets64 Reset()
         {
-            AllocateArray(this.count, this.bucketSize);
+            foreach (var array in this.Data)
+            {
+                Array.Clear(array);
+            }
+
             return this;
         }
 
@@ -365,8 +430,8 @@ namespace ProbabilisticDataStructures
                     | (GetBits(offset + (ulong)rem, length - rem) << rem);
             }
 
-            var dataArray = this.Data[byteIndex / maxArraySize];
-            var dataArrayByteIndex = byteIndex % maxArraySize;
+            var dataArray = this.Data[byteIndex >> this.arrayBits];
+            var dataArrayByteIndex = byteIndex & this.arrayMask;
             int bitMask = (1 << length) - 1;
             return (uint)((dataArray[dataArrayByteIndex] & (bitMask << byteOffset)) >> byteOffset);
         }
@@ -390,8 +455,8 @@ namespace ProbabilisticDataStructures
                 return;
             }
 
-            var dataArray = this.Data[(uint)(byteIndex / maxArraySize)];
-            var dataArrayByteIndex = (uint)(byteIndex % maxArraySize);
+            var dataArray = this.Data[(uint)(byteIndex >> this.arrayBits)];
+            var dataArrayByteIndex = (uint)(byteIndex & this.arrayMask);
             int bitMask = (1 << length) - 1;
             dataArray[dataArrayByteIndex] =
                 (byte)((dataArray[dataArrayByteIndex]) & ~(bitMask << byteOffset));
