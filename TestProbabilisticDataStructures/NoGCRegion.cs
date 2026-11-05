@@ -128,9 +128,10 @@ namespace TestProbabilisticDataStructures
             {
                 entered = GC.TryStartNoGCRegion(room);
             }
-            catch (ArgumentOutOfRangeException tooLarge)
+            catch (ArgumentOutOfRangeException outOfRange)
             {
-                Assert.Fail($"a no-GC region of {room:N0} bytes is more than this runtime allows, so nothing was measured: {tooLarge.Message}");
+                // Nothing or less, or more than the runtime gives one region.
+                Assert.Fail($"the runtime refused a no-GC region of {room:N0} bytes as out of range, so nothing was measured: {outOfRange.Message}");
                 throw;
             }
             catch (InvalidOperationException inProgress)

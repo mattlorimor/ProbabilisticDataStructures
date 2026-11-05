@@ -126,6 +126,20 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A region the runtime refuses for its size fails a measurement, saying so, rather
+        /// than letting it be counted without one: a room of nothing, which
+        /// <see cref="GC.TryStartNoGCRegion(long)"/> refuses as out of range.
+        /// </summary>
+        [TestMethod]
+        public void TestARegionRefusedForItsSizeFailsAMeasurementSayingSo()
+        {
+            var refused = Assert.ThrowsExactly<AssertFailedException>(
+                () => NoGCRegion.Allocated(() => new object(), room: 0),
+                "work was measured in a region of no room");
+            StringAssert.Contains(refused.Message, "refused a no-GC region of 0 bytes as out of range", refused.Message);
+        }
+
+        /// <summary>
         /// A region already in progress, entered by something that does not take turns with
         /// <see cref="NoGCRegion"/>, fails a measurement, saying so, rather than letting it be
         /// counted in a region it does not hold. Not run in parallel, since while this test's
