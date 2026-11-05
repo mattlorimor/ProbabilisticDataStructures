@@ -506,6 +506,51 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// As for <see cref="TestInfiniFilterClaimingMoreExpansionsThanItsFirstTableHasHadIsRefused"/>:
+        /// the first table starts with at least two bits of address and gains one with each
+        /// expansion, and <c>Reset</c> works out the table the filter was built with as the
+        /// difference, through an <c>int</c>, so a count of <c>0xFFFFFFFF</c> reset a first
+        /// table of 2^4 slots to 2^5. Held from both sides at four slots grown three times, the
+        /// coarsest corner, and at the stored fixture, the one version the reader reads, whose
+        /// first and only table has 10 bits after 5 expansions.
+        /// </summary>
+        [TestMethod]
+        public void TestMementoFilterClaimingMoreExpansionsThanItsFirstTableHasHadIsRefused()
+        {
+            const string why = "has been through at most";
+
+            var sixteen = new MementoFilter(64, 6, initialCapacity: 8);
+            Assert.AreEqual(4, sixteen.Segments[0].QuotientBits, "premise: a first table of 2^4 slots");
+            AssertRefused(
+                () => Persistence.FromByteArray<MementoFilter>(PokeUInt32(sixteen.ToByteArray(), 8, uint.MaxValue)),
+                why);
+
+            var grown = new MementoFilter(maxRangeSize: 2, fingerprintBits: 2, initialCapacity: 1);
+            Assert.AreEqual(2, grown.Segments[0].QuotientBits, "premise: a first table of four slots");
+            for (ulong i = 0; grown.ExpansionCount() < 3; i++)
+            {
+                Assert.IsLessThan(100UL, i, "the filter never expanded three times");
+                grown.Add(i * 2);
+            }
+            Assert.AreEqual(5, grown.Segments[0].QuotientBits, "premise: three doublings of four slots");
+
+            var written = grown.ToByteArray();
+            var read = Persistence.FromByteArray<MementoFilter>(written);
+            Assert.AreEqual(3u, read.ExpansionCount());
+            Assert.AreEqual(4UL, read.Reset().Capacity(), "the filter read did not reset to the four slots it was built with");
+            AssertRefused(() => Persistence.FromByteArray<MementoFilter>(PokeUInt32(written, 8, 4)), why);
+
+            var stored = TestPersistenceFormatStability.ReadFixture("mementofilter-v1.bin");
+            var filter = Persistence.FromByteArray<MementoFilter>(stored);
+            Assert.AreEqual(5u, filter.ExpansionCount(), "premise: the fixture has expanded five times");
+            Assert.AreEqual(10, filter.Segments[0].QuotientBits, "premise: the fixture has a first table of 2^10 slots");
+
+            Assert.AreEqual(8u, Persistence.FromByteArray<MementoFilter>(PokeUInt32(stored, 8, 8)).ExpansionCount(),
+                "the fixture with as many expansions as its first table can have had");
+            AssertRefused(() => Persistence.FromByteArray<MementoFilter>(PokeUInt32(stored, 8, 9)), why);
+        }
+
+        /// <summary>
         /// A Memento filter holding keys at the given positions of one block and nothing else,
         /// in a range of 64 with 8-bit fingerprints, so its one table of 16 slots holds one
         /// box, in the only run there is, starting at the box's own quotient. The block is the
@@ -677,6 +722,61 @@ namespace TestProbabilisticDataStructures
             AssertRefused(
                 () => Persistence.FromByteArray<InfiniFilter>(bytes),
                 "bits of address");
+        }
+
+        /// <summary>
+        /// The first table starts with at least two bits of address and gains one with each
+        /// expansion, which is the only thing the count counts, so a count above the first
+        /// table's address bits less two is one no doubling reaches. <c>Reset</c> works the
+        /// table the filter was built with out as that difference, through an <c>int</c>: a
+        /// first table of 2^4 slots claiming <c>0xFFFFFFFF</c> expansions read, cast to -1,
+        /// and reset to 2^5 slots, a size it was never built at.
+        /// <para>
+        /// The boundary is held from both sides, at both versions the reader reads. Four slots
+        /// grown three times is the coarsest corner: its count is exactly its address bits
+        /// less two, and the reset it reads to is four slots again. The stored fixtures' first
+        /// table has 12 bits and the one behind it 7, so a reader that held the count to any
+        /// table but the first would refuse 10 or accept 11.
+        /// </para>
+        /// </summary>
+        [TestMethod]
+        public void TestInfiniFilterClaimingMoreExpansionsThanItsFirstTableHasHadIsRefused()
+        {
+            const string why = "has been through at most";
+
+            var sixteen = new InfiniFilter(initialCapacity: 8, fingerprintBits: 6);
+            Assert.AreEqual(4, sixteen.Segments[0].QuotientBits, "premise: a first table of 2^4 slots");
+            AssertRefused(
+                () => Persistence.FromByteArray<InfiniFilter>(PokeUInt32(sixteen.ToByteArray(), 8, uint.MaxValue)),
+                why);
+
+            var grown = new InfiniFilter(initialCapacity: 1, fingerprintBits: 2);
+            Assert.AreEqual(2, grown.Segments[0].QuotientBits, "premise: a first table of four slots");
+            for (var i = 0; grown.ExpansionCount() < 3; i++)
+            {
+                Assert.IsLessThan(100, i, "the filter never expanded three times");
+                grown.Add(Key($"item-{i}"));
+            }
+            Assert.AreEqual(5, grown.Segments[0].QuotientBits, "premise: three doublings of four slots");
+
+            var written = grown.ToByteArray();
+            var read = Persistence.FromByteArray<InfiniFilter>(written);
+            Assert.AreEqual(3u, read.ExpansionCount());
+            Assert.AreEqual(4UL, read.Reset().Capacity(), "the filter read did not reset to the four slots it was built with");
+            AssertRefused(() => Persistence.FromByteArray<InfiniFilter>(PokeUInt32(written, 8, 4)), why);
+
+            foreach (var name in new[] { "infinifilter-v1.bin", "infinifilter-v13.bin" })
+            {
+                var stored = TestPersistenceFormatStability.ReadFixture(name);
+                var filter = Persistence.FromByteArray<InfiniFilter>(stored);
+                Assert.AreEqual(7u, filter.ExpansionCount(), $"premise: {name} has expanded seven times");
+                Assert.AreEqual(12, filter.Segments[0].QuotientBits, $"premise: {name} has a first table of 2^12 slots");
+                Assert.AreEqual(7, filter.Segments[1].QuotientBits, $"premise: {name} has a table of 2^7 behind it");
+
+                Assert.AreEqual(10u, Persistence.FromByteArray<InfiniFilter>(PokeUInt32(stored, 8, 10)).ExpansionCount(),
+                    $"{name} with as many expansions as its first table can have had");
+                AssertRefused(() => Persistence.FromByteArray<InfiniFilter>(PokeUInt32(stored, 8, 11)), why);
+            }
         }
 
         /// <summary>
