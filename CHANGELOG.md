@@ -731,6 +731,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An `InfiniFilter` read holds each table once, and is charged for it once.** Its reader
+  read a table's words into an array of their own and then copied them into the table the
+  segment builds, so a read held, and was charged for, every table twice: a table of 2^32
+  slots of 8-bit fingerprints is 6.4 GB, and reading it took 6.4 GB more than the filter
+  keeps. The words are now read straight into the table, in pieces through a 16 KiB buffer
+  on the stack, as a count-min sketch's counters are, and the price and the charges are one
+  table each, so they still come to the same sum. Measured in a no-GC region, a filter of
+  2-bit fingerprints whose chain holds 56,320 bytes of tables allocated 169,704 bytes to
+  read and now allocates 113,384, and in the large form, where the payload is not held,
+  113,448 and now 57,128. So the default budget now reads a filter of 8-bit fingerprints
+  up to a table of 2^28 slots, 201,326,592 items, where it stopped at 2^27; at 16 bits it
+  still stops at 2^27. (#313)
+
 - **An `InfiniFilter` or `MementoFilter` payload claiming more expansions than its first
   table can have had is refused.** A first table starts with at least two bits of address
   and gains one with each expansion, and `Reset` builds the table the filter started with
