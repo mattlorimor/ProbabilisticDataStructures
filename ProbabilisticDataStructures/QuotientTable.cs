@@ -67,9 +67,9 @@ namespace ProbabilisticDataStructures
         /// </para>
         /// </remarks>
         /// <exception cref="InvalidDataException">The table is refused, naming the slot.</exception>
-        internal static void CheckMetadata(ulong[] data, int bitsPerSlot, uint slots, uint count, int table)
+        internal static void CheckMetadata(ulong[] data, int bitsPerSlot, ulong slots, ulong count, int table)
         {
-            var start = 0u;
+            var start = 0UL;
             while ((Metadata(data, bitsPerSlot, start) & ShiftedBit) != 0)
             {
                 if (++start == slots)
@@ -79,11 +79,11 @@ namespace ProbabilisticDataStructures
                 }
             }
 
-            var waiting = 0u;
-            var entries = 0u;
+            var waiting = 0UL;
+            var entries = 0UL;
             var inRun = false;
             var slot = start;
-            for (var seen = 0u; seen < slots; seen++)
+            for (var seen = 0UL; seen < slots; seen++)
             {
                 var bits = Metadata(data, bitsPerSlot, slot);
                 var before = waiting;
@@ -159,9 +159,9 @@ namespace ProbabilisticDataStructures
         /// word, which takes nothing from the next, is a shift by 64 and not by none; every
         /// table carries spare words, so the next word is always there.
         /// </summary>
-        private static ulong Metadata(ulong[] data, int bitsPerSlot, uint slot)
+        private static ulong Metadata(ulong[] data, int bitsPerSlot, ulong slot)
         {
-            var bit = (ulong)slot * (ulong)bitsPerSlot;
+            var bit = slot * (ulong)bitsPerSlot;
             var word = (int)(bit >> 6);
             var offset = (int)(bit & 63);
             return ((data[word] >> offset) | ((data[word + 1] << 1) << (63 - offset))) & 7;
@@ -184,7 +184,7 @@ namespace ProbabilisticDataStructures
         /// belongs to, and would otherwise circle the table for ever. A table read from a
         /// payload has passed <see cref="CheckMetadata"/>.
         /// </remarks>
-        internal static InvalidOperationException Lapped(uint quotient, uint slots) => new(
+        internal static InvalidOperationException Lapped(ulong quotient, ulong slots) => new(
             $"The run of quotient {quotient} was not found in one lap of the table's {slots} " +
             "slots. Either no run belongs to that quotient, or the table's metadata is " +
             "inconsistent, which no operation on a filter leaves it.");

@@ -298,6 +298,15 @@ namespace ProbabilisticDataStructures
         internal const ushort SublimeTuningVersion = 10;
 
         /// <summary>
+        /// The version at which <see cref="QuotientFilter"/> counts its entries in a
+        /// <c>u64</c>, and its quotient bits name a table of 2^q slots up to 34, where they
+        /// stopped at 31 when the slot count was a <c>u32</c> (#231). The layout is version
+        /// 1's with the count widened; every save is written at it but one, a table of one
+        /// slot read from version 1 at 32 quotient bits, which is written back as it was.
+        /// </summary>
+        internal const ushort QuotientWideVersion = 12;
+
+        /// <summary>
         /// The format versions each structure has defined, which are exactly the ones its
         /// reader reads. This is the one place that says so.
         /// </summary>
@@ -339,7 +348,7 @@ namespace ProbabilisticDataStructures
             [StructureId.BinaryFuseFilter] = [DefaultVersion],
             [StructureId.DDSketch] = [DefaultVersion],
             [StructureId.HyperLogLogPlus] = [DefaultVersion],
-            [StructureId.QuotientFilter] = [DefaultVersion],
+            [StructureId.QuotientFilter] = [DefaultVersion, QuotientWideVersion],
             [StructureId.ThetaSketch] = [DefaultVersion],
             [StructureId.SimHashSignature] = [DefaultVersion],
             [StructureId.CountSketch] = [DefaultVersion],

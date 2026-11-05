@@ -2367,7 +2367,8 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The table is indexed by the quotient bits, so zero of them indexes nothing.
+        /// The table is indexed by the quotient bits, so zero of them indexes nothing. A save
+        /// is version 12, whose tables run to 2^34 slots.
         /// </summary>
         [TestMethod]
         public void TestQuotientFilterWithNoQuotientBitsIsRefused()
@@ -2378,7 +2379,7 @@ namespace TestProbabilisticDataStructures
             AssertRefused(
                 () => Persistence.FromByteArray<QuotientFilter>(
                     PokeUInt32(filter.ToByteArray(), 0, 0)),
-                "between 1 and 32");
+                "between 1 and 34");
         }
 
         /// <summary>

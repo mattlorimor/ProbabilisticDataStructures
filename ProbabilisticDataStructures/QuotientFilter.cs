@@ -32,15 +32,36 @@ namespace ProbabilisticDataStructures
         private const ulong ShiftedBit = 4;
         private const int MetadataBits = 3;
 
+        /// <summary>What one entry costs listed: a quotient and a remainder, each 64 bits.</summary>
+        private const ulong EntryBytes = 16;
+
         /// <summary>The bits of hash a fingerprint is cut from.</summary>
         internal const int HashBits = 64;
 
         /// <summary>
-        /// The most bits a table can be indexed by. The slot count is a uint holding
-        /// 2^q, and 2^32 is one more than a uint holds: the shift by 32 wraps to a shift
-        /// by none, and the table comes out one slot.
+        /// The most bits a table can be indexed by. The table is one array of 64-bit words,
+        /// and at 2^35 slots even the narrowest slot, a remainder of one bit and its three
+        /// of metadata, comes to 2^31 words and two, more than an array holds. Below that
+        /// the two widths still have to fit one array between them (<see cref="FitsOneArray"/>).
         /// </summary>
-        internal const int MaxQuotientBits = 31;
+        /// <remarks>
+        /// Up to 6.2.0 the slot count was a uint, which stopped the table at 2^31 slots: at
+        /// 32 bits the shift wrapped to a shift by none, and the table came out one slot.
+        /// The slot count and the entries are counted in 64 bits now (#231).
+        /// </remarks>
+        internal const int MaxQuotientBits = 34;
+
+        /// <summary>
+        /// The quotient bits a payload of version 1 says for a table of one slot: what the
+        /// constructors of 6.2.0 and earlier wrapped a request past their largest table to.
+        /// See <see cref="wrapped"/>.
+        /// </summary>
+        private const int WrappedQuotientBits = 32;
+
+        /// <summary>
+        /// The most words a table can have: it is one array.
+        /// </summary>
+        internal static long MaxTableWords => Array.MaxLength;
 
         /// <summary>
         /// The most bits a remainder can have. A slot is the remainder and its
@@ -53,17 +74,25 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// The most items a filter is sized for: the load factor of the largest table.
         /// </summary>
-        internal const uint MaxItems = (uint)(LoadFactor * (1UL << MaxQuotientBits));
+        internal const ulong MaxItems = (ulong)(LoadFactor * (1UL << MaxQuotientBits));
 
         private uint quotientBits;
         private uint remainderBits;
-        private uint slots;
-        private uint slotMaskIndex;
+        private ulong slots;
+        private ulong slotMaskIndex;
         private int bitsPerSlot;
         private ulong slotMask;
         private ulong remainderMask;
         private ulong[] data = null!;
-        private uint count;
+        private ulong count;
+
+        /// <summary>
+        /// Whether the table is the one slot a constructor of 6.2.0 or earlier wrapped a
+        /// request for 32 quotient bits to, read from a payload of version 1. Such a table
+        /// keeps its 32 bits, so that its fingerprints are cut as they were, and is written
+        /// back at version 1, as it was read: at version 12, 32 quotient bits are 2^32 slots.
+        /// </summary>
+        private bool wrapped;
 
         internal Func<ReadOnlySpan<byte>, ulong> Hash { get; set; } = null!;
 
@@ -78,7 +107,7 @@ namespace ProbabilisticDataStructures
         internal long SlotReads { get; private set; }
 
         /// <summary>How many slots the table holds, for the work-bound tests.</summary>
-        internal uint SlotCount => this.slots;
+        internal ulong SlotCount => this.slots;
 
         /// <summary>
         /// Creates a filter sized for the given number of items and false positive rate.
@@ -96,8 +125,9 @@ namespace ProbabilisticDataStructures
         /// With q the bits that pick a slot, which the item count gives as the fewest that
         /// keep the table under three quarters full, the finest rate is 2^-(64 - q), and
         /// never finer than 2^-61, which is all a slot can hold beside its three bits of
-        /// bookkeeping. The most items is three quarters of 2^31, because the table's slot
-        /// count is a 32-bit number and 2^32 does not fit it.
+        /// bookkeeping. The table is one array of 64-bit words, so the most items is three
+        /// quarters of 2^34 slots, and past 2^31 slots the array bounds the rate as well: a
+        /// remainder of at most 28 bits at 2^32 slots, 12 at 2^33 and 4 at 2^34.
         /// </para>
         /// </remarks>
         /// <exception cref="ArgumentOutOfRangeException">
@@ -106,7 +136,7 @@ namespace ProbabilisticDataStructures
         /// filter for <paramref name="n"/> items can reach. The message names the most
         /// items, or the finest rate, that would have worked.
         /// </exception>
-        public QuotientFilter(uint n, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash = null)
+        public QuotientFilter(ulong n, double fpRate, Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
             var (quotientBits, remainderBits) = Split(n, fpRate);
 
@@ -123,7 +153,7 @@ namespace ProbabilisticDataStructures
         /// be checked without allocating the table they describe. It refuses a size no
         /// filter could work at; every split it returns is one the reader accepts.
         /// </remarks>
-        internal static (uint QuotientBits, uint RemainderBits) Split(uint n, double fpRate)
+        internal static (uint QuotientBits, uint RemainderBits) Split(ulong n, double fpRate)
         {
             Guard.ValidItemCount(n, nameof(n));
             Guard.ValidFalsePositiveRate(fpRate, nameof(fpRate));
@@ -132,10 +162,9 @@ namespace ProbabilisticDataStructures
             {
                 throw new ArgumentOutOfRangeException(nameof(n), n,
                     $"A quotient filter can be sized for at most {MaxItems} items. Its " +
-                    $"table has at most 2^{MaxQuotientBits} slots, because the slot count " +
-                    "is kept in 32 bits and the next size up does not fit them, and it " +
-                    "is sized to stay three quarters full. Asked for more, the count " +
-                    "would wrap around and the table would come out far too small.");
+                    $"table has at most 2^{MaxQuotientBits} slots, because it is one array " +
+                    "of 64-bit words and the next size up does not fit one even at the " +
+                    "narrowest slot, and it is sized to stay three quarters full.");
             }
 
             // Enough slots that the table stays under its load factor.
@@ -153,11 +182,24 @@ namespace ProbabilisticDataStructures
             // no more than a slot can carry. Past either, the fingerprint is not cut
             // from the hash any more, and the filter cannot tell one key from another.
             var hashRoom = HashBits - (int)quotientBits;
-            var room = Math.Min(MaxRemainderBits, hashRoom);
+            var slotRoom = Math.Min(MaxRemainderBits, hashRoom);
+
+            // And no more than one array of words holds at this many slots, which past
+            // 2^31 slots is less than either: the reader holds a table to the same rule.
+            var room = slotRoom;
+            while (room > 0 && !FitsOneArray(1UL << (int)quotientBits, (uint)room))
+            {
+                room--;
+            }
 
             if (wanted > room)
             {
-                var why = hashRoom <= MaxRemainderBits
+                var why = room < slotRoom
+                    ? $"A table of 2^{quotientBits} slots is one array of 64-bit words, which " +
+                      $"holds at most {MaxTableWords} of them, and that leaves room for slots " +
+                      $"of {room + MetadataBits} bits: {room} for the remainder and " +
+                      $"{MetadataBits} of bookkeeping."
+                    : hashRoom <= MaxRemainderBits
                     ? $"The {quotientBits} bits that pick a slot leave {room} of the " +
                       $"hash's {HashBits} for the remainder."
                     : $"A slot holds the remainder and {MetadataBits} bits of bookkeeping " +
@@ -185,18 +227,19 @@ namespace ProbabilisticDataStructures
         /// Trusts the split it is given. The constructor refuses what cannot work before
         /// it gets here, and the reader refuses the payloads it will not read.
         /// </remarks>
-        private void Shape(uint quotientBits, uint remainderBits)
+        private void Shape(uint quotientBits, uint remainderBits, bool wrapped = false)
         {
             this.quotientBits = quotientBits;
             this.remainderBits = remainderBits;
-            this.slots = 1u << (int)quotientBits;
+            this.wrapped = wrapped;
+            this.slots = SlotsOf(quotientBits, wrapped);
             this.slotMaskIndex = this.slots - 1;
             this.bitsPerSlot = (int)remainderBits + MetadataBits;
             this.slotMask = this.bitsPerSlot >= 64 ? ulong.MaxValue : (1UL << this.bitsPerSlot) - 1;
             this.remainderMask = remainderBits >= 64 ? ulong.MaxValue : (1UL << (int)remainderBits) - 1;
 
-            // One spare word so a slot straddling the end has somewhere to reach.
-            this.data = new ulong[TableWords(quotientBits, remainderBits)];
+            // Spare words so a slot straddling the end has somewhere to reach.
+            this.data = new ulong[TableWords(this.slots, remainderBits)];
         }
 
         /// <summary>
@@ -244,7 +287,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         public ulong SizeInBytes()
         {
-            return (ulong)this.slots * (ulong)this.bitsPerSlot / 8;
+            return this.slots * (ulong)this.bitsPerSlot / 8;
         }
 
         /// <summary>
@@ -318,12 +361,26 @@ namespace ProbabilisticDataStructures
                     nameof(other));
             }
 
+            // The same split names the same table but in one case: a one-slot table read
+            // from version 1 at 32 quotient bits, against a table of 2^32 slots. Their
+            // quotients mean different slots, and one has none of the other's.
+            if (this.slots != other.slots)
+            {
+                throw new ArgumentException(
+                    "Filters must have the same table to be merged: this one has " +
+                    $"{this.slots} slots and the other {other.slots}, though both use " +
+                    $"{this.quotientBits} quotient bits. One of them is a table of one slot, " +
+                    "which a constructor of 6.2.0 or earlier wrapped a request for more items " +
+                    "than its largest table into.",
+                    nameof(other));
+            }
+
             Guard.SameHashFunction(this.Hash, other.Hash, nameof(other));
 
-            if ((ulong)this.count + other.count > this.slots)
+            if (this.count + other.count > this.slots)
             {
                 throw new InvalidOperationException(
-                    $"The merged filter would hold {(ulong)this.count + other.count} " +
+                    $"The merged filter would hold {this.count + other.count} " +
                     $"entries and has {this.slots} slots.");
             }
 
@@ -331,14 +388,26 @@ namespace ProbabilisticDataStructures
             // entries are read as they are walked and nothing is held. A filter merged
             // into itself is the one case that reads the table it is writing, and each
             // insert shifts the entries after it, so it would meet entries it had
-            // already moved: those are read out first. The check above leaves them at
-            // most half the slots, which is also why the count fits an int here.
+            // already moved: what it reads is taken first, by the cheaper of two ways.
+            // Listed, the entries are sixteen bytes each; a copy of the table is its
+            // words, at most eight bytes a slot. Past 2^31 slots a filter can hold more
+            // entries than one list does, and then the copy is the cheaper by far, so the
+            // list is only ever taken for a count that fits one.
             var entries = other.Entries();
             if (ReferenceEquals(this, other))
             {
-                var held = new List<(uint Quotient, ulong Remainder)>((int)this.count);
-                held.AddRange(entries);
-                entries = held;
+                if (this.count * EntryBytes < (ulong)this.data.LongLength * sizeof(ulong))
+                {
+                    var held = new List<(ulong Quotient, ulong Remainder)>((int)this.count);
+                    held.AddRange(entries);
+                    entries = held;
+                }
+                else
+                {
+                    var copy = (QuotientFilter)this.MemberwiseClone();
+                    copy.data = (ulong[])this.data.Clone();
+                    entries = copy.Entries();
+                }
             }
 
             // At most as many as the other filter held when the merge began, whatever the
@@ -346,9 +415,7 @@ namespace ProbabilisticDataStructures
             // searches forward for an empty slot with nothing to stop it if there is
             // none, so this is what keeps a walk that goes wrong -- one that meets the
             // entries it has just written, say -- from filling the table and hanging in
-            // the insert instead of ending with a wrong answer a test can see. The count
-            // is a uint, so it is held as one: on a full table of 2^31 slots it does not
-            // fit an int.
+            // the insert instead of ending with a wrong answer a test can see.
             using var walk = entries.GetEnumerator();
             for (var left = other.count; left > 0 && walk.MoveNext(); left--)
             {
@@ -367,9 +434,9 @@ namespace ProbabilisticDataStructures
         /// <remarks>
         /// The table must not be written to while this is being read.
         /// </remarks>
-        private IEnumerable<(uint Quotient, ulong Remainder)> Entries()
+        private IEnumerable<(ulong Quotient, ulong Remainder)> Entries()
         {
-            for (var quotient = 0u; quotient < this.slots; quotient++)
+            for (var quotient = 0UL; quotient < this.slots; quotient++)
             {
                 if (!this.IsOccupied(quotient))
                 {
@@ -440,8 +507,14 @@ namespace ProbabilisticDataStructures
         /// whose positions depend on each other. It is the insert path that then has to
         /// be right, and the insert path is exercised by everything else here.
         /// </para>
+        /// <para>
+        /// The cluster's entries are listed, so a cluster of more entries than one list
+        /// holds cannot be rebuilt this way. Only a table past 2^31 slots and nearly full
+        /// has one, where every operation walks billions of slots; the list is made, and
+        /// fails, before anything in the table is changed.
+        /// </para>
         /// </remarks>
-        private bool Remove(uint quotient, ulong remainder)
+        private bool Remove(ulong quotient, ulong remainder)
         {
             if (!this.IsOccupied(quotient) || !this.Holds(quotient, remainder))
             {
@@ -454,7 +527,7 @@ namespace ProbabilisticDataStructures
                 start = Prev(start, this.slotMaskIndex);
             }
 
-            var length = 1u;
+            var length = 1UL;
             var slot = start;
             while (true)
             {
@@ -468,11 +541,11 @@ namespace ProbabilisticDataStructures
                 length++;
             }
 
-            var entries = new List<(uint Quotient, ulong Remainder)>((int)length);
+            var entries = new List<(ulong Quotient, ulong Remainder)>((int)length);
             var owner = start;
             var cursor = start;
 
-            for (var seen = 0u; seen < length;)
+            for (var seen = 0UL; seen < length;)
             {
                 while (!this.IsOccupied(owner))
                 {
@@ -494,7 +567,7 @@ namespace ProbabilisticDataStructures
             }
 
             var wipe = start;
-            for (var i = 0u; i < length; i++)
+            for (var i = 0UL; i < length; i++)
             {
                 this.WriteSlot(wipe, 0);
                 wipe = Next(wipe, this.slotMaskIndex);
@@ -518,7 +591,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Whether a quotient's run holds a remainder.
         /// </summary>
-        private bool Holds(uint quotient, ulong remainder)
+        private bool Holds(ulong quotient, ulong remainder)
         {
             var at = this.FindRunStart(quotient);
 
@@ -554,7 +627,7 @@ namespace ProbabilisticDataStructures
         /// stored there, so shifting moves the remainder, the continuation bit and the
         /// shifted bit, and leaves every occupied bit where it is.
         /// </remarks>
-        private void Insert(uint quotient, ulong remainder)
+        private void Insert(ulong quotient, ulong remainder)
         {
             if (this.IsSlotEmpty(quotient))
             {
@@ -643,7 +716,7 @@ namespace ProbabilisticDataStructures
         /// and ask it for a quotient no run belongs to.
         /// </para>
         /// </remarks>
-        internal uint FindRunStart(uint quotient)
+        internal ulong FindRunStart(ulong quotient)
         {
             var bucket = quotient;
             while (this.IsShifted(bucket))
@@ -684,25 +757,25 @@ namespace ProbabilisticDataStructures
             return run;
         }
 
-        private static uint Next(uint slot, uint mask) => (slot + 1) & mask;
+        private static ulong Next(ulong slot, ulong mask) => (slot + 1) & mask;
 
-        private static uint Prev(uint slot, uint mask) => (slot - 1) & mask;
+        private static ulong Prev(ulong slot, ulong mask) => (slot - 1) & mask;
 
-        private bool IsOccupied(uint slot) => (this.ReadSlot(slot) & OccupiedBit) != 0;
+        private bool IsOccupied(ulong slot) => (this.ReadSlot(slot) & OccupiedBit) != 0;
 
-        private bool IsContinuation(uint slot) => (this.ReadSlot(slot) & ContinuationBit) != 0;
+        private bool IsContinuation(ulong slot) => (this.ReadSlot(slot) & ContinuationBit) != 0;
 
-        private bool IsShifted(uint slot) => (this.ReadSlot(slot) & ShiftedBit) != 0;
+        private bool IsShifted(ulong slot) => (this.ReadSlot(slot) & ShiftedBit) != 0;
 
-        private ulong RemainderAt(uint slot) => this.ReadSlot(slot) >> MetadataBits;
+        private ulong RemainderAt(ulong slot) => this.ReadSlot(slot) >> MetadataBits;
 
         /// <summary>
         /// Whether a slot holds no entry, which is all three metadata bits clear.
         /// </summary>
-        private bool IsSlotEmpty(uint slot) =>
+        private bool IsSlotEmpty(ulong slot) =>
             (this.ReadSlot(slot) & (OccupiedBit | ContinuationBit | ShiftedBit)) == 0;
 
-        private void SetOccupied(uint slot) =>
+        private void SetOccupied(ulong slot) =>
             this.WriteSlot(slot, this.ReadSlot(slot) | OccupiedBit);
 
         /// <summary>
@@ -756,7 +829,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// The number of items in the filter.
         /// </summary>
-        public uint Count()
+        public ulong Count()
         {
             return this.count;
         }
@@ -770,7 +843,7 @@ namespace ProbabilisticDataStructures
         /// lookups walk those runs. Filling it to capacity works but is slow, which is
         /// the trade a Bloom filter does not make.
         /// </remarks>
-        public uint Capacity()
+        public ulong Capacity()
         {
             return this.slots;
         }
@@ -783,6 +856,13 @@ namespace ProbabilisticDataStructures
         /// The slot count, the bits per slot and the masks all follow from the two bit
         /// widths, so only those are written. A payload cannot then disagree with itself
         /// about the shape of its own table.
+        /// <para>
+        /// Every save is format version 12, which counts the entries in 64 bits and which
+        /// releases up to 6.2.0 do not read, but one: a table of one slot read from version
+        /// 1 at 32 quotient bits is written back at version 1, as it was read, since at
+        /// version 12 its 32 quotient bits would say 2^32 slots. A table past one array's
+        /// worth of bytes is written in the large form of the envelope.
+        /// </para>
         /// </remarks>
         public void WriteTo(Stream stream) => PersistenceFormat.Write(stream, this);
 
@@ -790,10 +870,20 @@ namespace ProbabilisticDataStructures
         {
             payload.WriteUInt32(this.quotientBits);
             payload.WriteUInt32(this.remainderBits);
-            payload.WriteUInt32(this.count);
+
+            // The wrapped table holds one slot, so its count fits the u32 it was read from.
+            if (this.wrapped)
+            {
+                payload.WriteUInt32((uint)this.count);
+            }
+            else
+            {
+                payload.WriteUInt64(this.count);
+            }
 
             // One run of the table's words, sized by the two widths.
-            if (payload.BeginRun(TableWords(this.quotientBits, this.remainderBits) * sizeof(ulong)))
+            var slots = SlotsOf(this.quotientBits, this.wrapped);
+            if (payload.BeginRun(TableWords(slots, this.remainderBits) * sizeof(ulong)))
             {
                 foreach (var word in this.data)
                 {
@@ -801,7 +891,8 @@ namespace ProbabilisticDataStructures
                 }
             }
 
-            return new(StructureId.QuotientFilter, PersistenceFormat.Identify(this.Hash));
+            return new(StructureId.QuotientFilter, PersistenceFormat.Identify(this.Hash),
+                this.wrapped ? PersistenceFormat.DefaultVersion : PersistenceFormat.QuotientWideVersion);
         }
 
         /// <summary>
@@ -892,32 +983,35 @@ namespace ProbabilisticDataStructures
 
             var quotientBits = reader.ReadUInt32();
             var remainderBits = reader.ReadUInt32();
-            var count = reader.ReadUInt32();
+            var count = ReadCount(ref reader, version);
 
             // The table's words are one run, which in the large form can be longer than one
             // array (#228): read in pieces, straight into the table, when the payload is not
             // held, and copied out whole when it is.
             var stored = reader.BeginWords();
-            CheckWidths(quotientBits, remainderBits);
+            var wrapped = CheckWidths(version, quotientBits, remainderBits);
+            var slots = SlotsOf(quotientBits, wrapped);
+            var words = TableWords(slots, remainderBits);
 
-            // The table is allocated whole, from the two widths alone, before the bytes
-            // carried are compared with it.
-            budget.Charge(TableCost(quotientBits, remainderBits));
-            var filter = Build(quotientBits, remainderBits, PersistenceFormat.ResolveOrThrow(hashId, hash));
+            // The table is allocated whole, from the two widths alone, and charged for that
+            // first; it is allocated once the count and the bytes carried agree with it, so
+            // that a payload claiming a table it does not hold costs nothing to refuse.
+            budget.Charge(TableCost(slots, remainderBits));
 
-            if (count > filter.slots)
+            if (count > slots)
             {
                 throw new InvalidDataException(
-                    $"Filter claims {count} entries and has {filter.slots} slots.");
+                    $"Filter claims {count} entries and has {slots} slots.");
             }
 
-            if (stored != BytesOf(filter.data.Length))
+            if (stored != BytesOf(words))
             {
                 throw new InvalidDataException(
-                    $"Filter has {filter.slots} slots of {filter.bitsPerSlot} bits, " +
-                    $"needing {BytesOf(filter.data.Length)} bytes, and carries " +
-                    $"{stored}.");
+                    $"Filter has {slots} slots of {remainderBits + MetadataBits} bits, " +
+                    $"needing {BytesOf(words)} bytes, and carries {stored}.");
             }
+
+            var filter = Build(quotientBits, remainderBits, wrapped, PersistenceFormat.ResolveOrThrow(hashId, hash));
 
             for (var word = 0; word < filter.data.Length;)
             {
@@ -947,33 +1041,42 @@ namespace ProbabilisticDataStructures
         {
             var quotientBits = reader.ReadUInt32();
             var remainderBits = reader.ReadUInt32();
-            reader.ReadUInt32();
+            ReadCount(ref reader, version);
             reader.SkipWords();
             reader.ExpectEnd();
-            CheckWidths(quotientBits, remainderBits);
-            reader.Budget.Price(TableCost(quotientBits, remainderBits));
+            var wrapped = CheckWidths(version, quotientBits, remainderBits);
+            reader.Budget.Price(TableCost(SlotsOf(quotientBits, wrapped), remainderBits));
         }
 
+        /// <summary>The count of entries: a u64 from version 12, a u32 before it.</summary>
+        private static ulong ReadCount(ref PayloadReader reader, ushort version) =>
+            version == PersistenceFormat.DefaultVersion ? reader.ReadUInt32() : reader.ReadUInt64();
+
         /// <summary>The table a filter of these widths is built with, and the filter.</summary>
-        private static long TableCost(uint quotientBits, uint remainderBits) => ReadBudget.Sum(
-            ReadBudget.ArrayOf((ulong)TableWords(quotientBits, remainderBits), sizeof(ulong)),
+        private static long TableCost(ulong slots, uint remainderBits) => ReadBudget.Sum(
+            ReadBudget.ArrayOf((ulong)TableWords(slots, remainderBits), sizeof(ulong)),
             ReadBudget.SmallObject);
 
-        private static void CheckWidths(uint quotientBits, uint remainderBits)
+        /// <summary>
+        /// Refuses widths that are not a table this library builds, or once built, and says
+        /// whether they are the wrapped one-slot table of version 1.
+        /// </summary>
+        private static bool CheckWidths(ushort version, uint quotientBits, uint remainderBits)
         {
-            // 32, although the constructor stops at 31 now. Before it refused, a request
-            // for more items than the largest table is sized for came out as a quotient
-            // of 32 bits, whose 1u << 32 wraps to one slot, and the filter was written
-            // that way: 32 here, and the bytes of a one-slot table. Shape wraps it to
-            // the same one slot, and the length check below holds the payload to that
-            // size, so it reads back as the filter it was and nothing is guessed. Wider
-            // quotients, which a still larger request produced, were refused when they
-            // were written and are refused now.
-            if (quotientBits == 0 || quotientBits > MaxQuotientBits + 1)
+            // At version 1, 32 as well, which the constructors of 6.2.0 and earlier never
+            // meant but wrote: a request for more items than their largest table came out
+            // as a quotient of 32 bits, whose 1u << 32 wrapped to one slot, and the filter
+            // was written that way, 32 here and the bytes of a one-slot table. It is read
+            // as that one slot, the length check holding the payload to that size, so it
+            // reads back as the filter it was and nothing is guessed. Wider quotients,
+            // which a still larger request produced, were refused when they were written
+            // and are refused now. At version 12 every width means its 2^q slots.
+            var widest = version == PersistenceFormat.DefaultVersion ? WrappedQuotientBits : MaxQuotientBits;
+            if (quotientBits == 0 || quotientBits > widest)
             {
                 throw new InvalidDataException(
-                    $"Filter has {quotientBits} quotient bits, and a table is indexed by " +
-                    $"between 1 and {MaxQuotientBits + 1} of them.");
+                    $"Filter has {quotientBits} quotient bits, and a table of version {version} " +
+                    $"is indexed by between 1 and {widest} of them.");
             }
 
             // The constructor stops at the widest remainder a slot can hold, and a payload
@@ -988,6 +1091,20 @@ namespace ProbabilisticDataStructures
                     $"{remainderBits} remainder bits, which is not a split of a {HashBits}-bit " +
                     "hash.");
             }
+
+            // The constructor's own rule: the table is one array. No table read at version
+            // 1 is past it, and one of version 12 past it could not be built to read into.
+            var wrapped = version == PersistenceFormat.DefaultVersion && quotientBits == WrappedQuotientBits;
+            var slots = SlotsOf(quotientBits, wrapped);
+            if (!FitsOneArray(slots, remainderBits))
+            {
+                throw new InvalidDataException(
+                    $"Filter has {slots} slots of {remainderBits + MetadataBits} bits, " +
+                    $"{TableWords(slots, remainderBits)} words, and its table is one array, " +
+                    $"which holds at most {MaxTableWords} of them.");
+            }
+
+            return wrapped;
         }
 
         /// <summary>
@@ -996,14 +1113,30 @@ namespace ProbabilisticDataStructures
         /// an OverflowException from the allocation, or compared a payload's bytes with a
         /// wrapped number.
         /// </summary>
-        internal static long BytesOf(int words) => (long)words * sizeof(ulong);
+        internal static long BytesOf(long words) => words * sizeof(ulong);
 
         /// <summary>
-        /// The 64-bit words a table of this split occupies: one slot of remainder and
-        /// metadata per quotient, and two spare words for reads that straddle the end.
+        /// The slots a table of these quotient bits has: 2^q, or one for the table a
+        /// constructor of 6.2.0 or earlier wrapped to one slot at 32 bits.
         /// </summary>
-        private static long TableWords(uint quotientBits, uint remainderBits) =>
-            (((long)(1u << (int)quotientBits) * ((int)remainderBits + MetadataBits)) >> 6) + 2;
+        private static ulong SlotsOf(uint quotientBits, bool wrapped) =>
+            wrapped ? 1 : 1UL << (int)quotientBits;
+
+        /// <summary>
+        /// The 64-bit words a table of this many slots occupies: one slot of remainder and
+        /// metadata for each, and two spare words for reads that straddle the end. In 64
+        /// bits, since 2^34 slots of up to 67 bits do not fit 32.
+        /// </summary>
+        internal static long TableWords(ulong slots, uint remainderBits) =>
+            (long)((slots * (remainderBits + (uint)MetadataBits)) >> 6) + 2;
+
+        /// <summary>
+        /// Whether a table of this many slots and this remainder is one array of words,
+        /// which every table is. The constructor sizes no remainder past it, and the
+        /// reader refuses a payload past it.
+        /// </summary>
+        internal static bool FitsOneArray(ulong slots, uint remainderBits) =>
+            TableWords(slots, remainderBits) <= MaxTableWords;
 
         /// <summary>
         /// Builds a filter from the two bit widths directly, which is what a payload
@@ -1011,30 +1144,30 @@ namespace ProbabilisticDataStructures
         /// arriving at them.
         /// </summary>
         private static QuotientFilter Build(
-            uint quotientBits, uint remainderBits, Func<ReadOnlySpan<byte>, ulong> hash)
+            uint quotientBits, uint remainderBits, bool wrapped, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             var filter = new QuotientFilter(1, 0.5, hash);
-            filter.Shape(quotientBits, remainderBits);
+            filter.Shape(quotientBits, remainderBits, wrapped);
             return filter;
         }
 
         /// <summary>
         /// The quotient that picks a slot and the remainder stored in it.
         /// </summary>
-        private (uint Quotient, ulong Remainder) Fingerprint(ReadOnlySpan<byte> data)
+        private (ulong Quotient, ulong Remainder) Fingerprint(ReadOnlySpan<byte> data)
         {
             var hash = this.Hash(data);
             var fingerprint = hash >> (64 - (int)(this.quotientBits + this.remainderBits));
 
-            return ((uint)(fingerprint >> (int)this.remainderBits) & this.slotMaskIndex,
+            return ((fingerprint >> (int)this.remainderBits) & this.slotMaskIndex,
                     fingerprint & this.remainderMask);
         }
 
-        private ulong ReadSlot(uint index)
+        private ulong ReadSlot(ulong index)
         {
             this.SlotReads++;
 
-            var bit = (ulong)index * (ulong)this.bitsPerSlot;
+            var bit = index * (ulong)this.bitsPerSlot;
             var word = (int)(bit >> 6);
             var offset = (int)(bit & 63);
 
@@ -1053,11 +1186,11 @@ namespace ProbabilisticDataStructures
         /// Writes one slot, metadata in the low three bits. Internal so that a test can
         /// break a table on purpose, which nothing else does.
         /// </summary>
-        internal void WriteSlot(uint index, ulong value)
+        internal void WriteSlot(ulong index, ulong value)
         {
             value &= this.slotMask;
 
-            var bit = (ulong)index * (ulong)this.bitsPerSlot;
+            var bit = index * (ulong)this.bitsPerSlot;
             var word = (int)(bit >> 6);
             var offset = (int)(bit & 63);
 

@@ -154,9 +154,9 @@ namespace TestProbabilisticDataStructures
                 var fp = Fp(row.Counts);
                 var payload = PayloadLine($"QuotientFilter {AfterFp(row.Counts)}", StructureId.QuotientFilter);
                 var (_, r) = QuotientFilter.Split(1000, fp);
-                long Words(int q) => (((long)(1u << q)) * (r + 3) >> 6) + 2;
-                var q = Enumerable.Range(1, 31).Last(q => payload.Upper(Words(q)) <= MaxPayload);
-                return Exact(Largest(1, QuotientFilter.MaxItems, n => QuotientFilter.Split((uint)n, fp).QuotientBits <= q));
+                long Words(int q) => (((1L << q) * (r + 3)) >> 6) + 2;
+                var q = Enumerable.Range(1, QuotientFilter.MaxQuotientBits).Last(q => payload.Upper(Words(q)) <= MaxPayload);
+                return Exact(Largest(1, QuotientLargest(fp), n => QuotientFilter.Split(n, fp).QuotientBits <= q));
             },
             StructureId.BinaryFuseFilter => () =>
             {

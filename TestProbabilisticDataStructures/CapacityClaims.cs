@@ -985,10 +985,26 @@ namespace TestProbabilisticDataStructures
             // ---- QuotientFilter -----------------------------------------------------------
             new Claim("(7 at 1%, 10 at 0.1%)", () =>
                 QuotientFilter.Split(1000, 0.01).RemainderBits == 7 && QuotientFilter.Split(1000, 0.001).RemainderBits == 10),
-            new Claim("a rate no finer than 2^-33", () =>
-                QuotientFilter.Split(QuotientFilter.MaxItems, Math.ScaleB(1.0, -33)).RemainderBits == 33
+            new Claim("The table is one array of 64-bit words, which holds 2,147,483,591, so `q` is at most 34", () =>
+                QuotientFilter.MaxTableWords == 2_147_483_591 && QuotientFilter.MaxQuotientBits == 34
+                && QuotientFilter.FitsOneArray(1UL << 34, 1) && !QuotientFilter.FitsOneArray(1UL << 35, 1)
+                && QuotientFilter.Split(QuotientFilter.MaxItems, 0.5).QuotientBits == 34),
+            new Claim("up to 28 bits at 2^32 slots, 12 at 2^33 and 4 at 2^34", () =>
+                new[] { (32, 28), (33, 12), (34, 4) }.All(t =>
+                    QuotientFilter.Split(3UL << (t.Item1 - 2), Math.ScaleB(1.0, -t.Item2))
+                        == ((uint)t.Item1, (uint)t.Item2)
+                    && Assert.Throws<ArgumentOutOfRangeException>(
+                        () => QuotientFilter.Split(3UL << (t.Item1 - 2), Math.ScaleB(1.0, -t.Item2 - 1))) is not null)),
+            new Claim("three quarters of 2^33, and only a rate of 6.25% or coarser goes on to 12,884,901,888, three quarters of 2^34", () =>
+                CapacityRows.QuotientLargest(0.01) == 3UL << 31 && CapacityRows.QuotientLargest(0.001) == 3UL << 31
+                && QuotientFilter.MaxItems == 12_884_901_888 && QuotientFilter.MaxItems == 3UL << 32
+                && CapacityRows.QuotientLargest(0.0625) == QuotientFilter.MaxItems
+                && CapacityRows.QuotientLargest(0.0624) == 3UL << 31
+                && Rounds(100 * Math.ScaleB(1.0, -4), 6.25, 2)),
+            new Claim("a table of 2^31 slots takes a rate no finer than 2^-33", () =>
+                QuotientFilter.Split(3UL << 29, Math.ScaleB(1.0, -33)) == (31u, 33u)
                 && Assert.Throws<ArgumentOutOfRangeException>(
-                    () => QuotientFilter.Split(QuotientFilter.MaxItems, Math.ScaleB(1.0, -34))) is not null),
+                    () => QuotientFilter.Split(3UL << 29, Math.ScaleB(1.0, -34))) is not null),
             new Claim("A read is charged three times the table", () => Near(Slope("QuotientFilter 1%"), 24, 0.01)),
 
             // ---- BinaryFuseFilter and BloomierFilter ----------------------------------------

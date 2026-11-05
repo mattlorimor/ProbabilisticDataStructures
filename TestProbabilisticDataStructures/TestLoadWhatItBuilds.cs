@@ -1729,6 +1729,7 @@ namespace TestProbabilisticDataStructures
                 [("MementoFilter", "quotient bits")] = (ulong)MementoFilter.MaxQuotientBits,
                 [("MementoFilter", "bits of a slot")] = (ulong)MementoSegment.MaxSlotBits,
                 [("QuotientFilter", "quotient bits")] = QuotientFilter.MaxQuotientBits,
+                [("QuotientFilter", "words of the table")] = (ulong)QuotientFilter.MaxTableWords,
                 [("QuotientFilter", "quotient + remainder bits")] = QuotientFilter.HashBits,
                 [("QuotientFilter", "remainder bits")] = QuotientFilter.MaxRemainderBits,
             };

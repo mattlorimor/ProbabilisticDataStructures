@@ -445,26 +445,48 @@ namespace TestProbabilisticDataStructures
             StructureId.QuotientFilter, $"n, fp {label}",
             () =>
             {
+                // The most items at the coarsest rate is three quarters of the widest table.
                 var most = ProbabilisticDataStructures.QuotientFilter.MaxItems;
                 Assert.AreEqual((uint)ProbabilisticDataStructures.QuotientFilter.MaxQuotientBits,
                     ProbabilisticDataStructures.QuotientFilter.Split(most, 0.5).QuotientBits);
                 Assert.Throws<ArgumentOutOfRangeException>(
                     () => ProbabilisticDataStructures.QuotientFilter.Split(most + 1, 0.5));
-                return Exact(most);
+                return Exact(QuotientLargest(fp));
             },
             () =>
             {
                 // The table is 2^q slots of r + 3 bits in 64-bit words, and a power of two,
                 // so it is the table that steps the number.
                 var (_, r) = ProbabilisticDataStructures.QuotientFilter.Split(1000, fp);
-                long Words(int q) => (((long)(1u << q)) * (r + 3) >> 6) + 2;
+                long Words(int q) => (((1L << q) * (r + 3)) >> 6) + 2;
                 var line = ChargeLine.Fit($"QuotientFilter {label}", 64,
                     Enumerable.Range(12, 5).Select(q => (Words(q),
                         ChargeOf(StructureId.QuotientFilter,
-                            new ProbabilisticDataStructures.QuotientFilter((uint)(0.75 * (1u << q)), fp)))).ToArray());
-                var q = Enumerable.Range(1, 31).Last(q => line.Surely((ulong)Words(q)));
-                return Exact(Largest(1, ProbabilisticDataStructures.QuotientFilter.MaxItems,
-                    n => ProbabilisticDataStructures.QuotientFilter.Split((uint)n, fp).QuotientBits <= q));
+                            new ProbabilisticDataStructures.QuotientFilter((ulong)(0.75 * (1L << q)), fp)))).ToArray());
+                var q = Enumerable.Range(1, ProbabilisticDataStructures.QuotientFilter.MaxQuotientBits)
+                    .Last(q => line.Surely((ulong)Words(q)));
+                return Exact(Largest(1, QuotientLargest(fp),
+                    n => ProbabilisticDataStructures.QuotientFilter.Split(n, fp).QuotientBits <= q));
+            });
+
+        /// <summary>
+        /// The most items a quotient filter is built for at a rate: past 2^31 slots the
+        /// table, one array of words, bounds the remainder, so a finer rate stops at a
+        /// smaller table than the widest. The constructor's own sizing, asked at each count;
+        /// it refuses a count from the first one it cannot build onwards.
+        /// </summary>
+        internal static ulong QuotientLargest(double fp) =>
+            Largest(1, ProbabilisticDataStructures.QuotientFilter.MaxItems, n =>
+            {
+                try
+                {
+                    ProbabilisticDataStructures.QuotientFilter.Split(n, fp);
+                    return true;
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    return false;
+                }
             });
 
         // ---- BinaryFuseFilter and BloomierFilter ----------------------------------------------

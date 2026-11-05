@@ -192,19 +192,27 @@ namespace TestProbabilisticDataStructures
         internal static ulong[] CheckQuotientFilter(QuotientFilter filter, out byte[] payload)
         {
             payload = filter.ToByteArray();
+
+            // FORMAT.md: the count is a u64 at version 12 and a u32 at version 1, where a
+            // 32-bit quotient is the table of one slot an earlier constructor wrapped to.
+            var version = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(4));
+            Assert.IsTrue(version is 1 or 12, $"quotient filter: written at version {version}.");
             var p = payload.AsSpan(EnvelopeHeader);
             var quotientBits = (int)BinaryPrimitives.ReadUInt32LittleEndian(p);
             var remainderBits = (int)BinaryPrimitives.ReadUInt32LittleEndian(p[4..]);
-            var count = BinaryPrimitives.ReadUInt32LittleEndian(p[8..]);
-            var length = (int)BinaryPrimitives.ReadUInt32LittleEndian(p[12..]);
+            var count = version == 12
+                ? BinaryPrimitives.ReadUInt64LittleEndian(p[8..])
+                : BinaryPrimitives.ReadUInt32LittleEndian(p[8..]);
+            var run = version == 12 ? 16 : 12;
+            var length = (int)BinaryPrimitives.ReadUInt32LittleEndian(p[run..]);
 
             var words = new ulong[length / 8];
             for (var w = 0; w < words.Length; w++)
             {
-                words[w] = BinaryPrimitives.ReadUInt64LittleEndian(p[(16 + 8 * w)..]);
+                words[w] = BinaryPrimitives.ReadUInt64LittleEndian(p[(run + 4 + 8 * w)..]);
             }
 
-            var slots = 1u << quotientBits;
+            var slots = version == 1 && quotientBits == 32 ? 1u : checked((uint)(1L << quotientBits));
             var bits = remainderBits + 3;
             Assert.AreEqual((((long)slots * bits) >> 6) + 2, words.LongLength,
                 "quotient filter: the table is not the length its shape implies.");
@@ -212,7 +220,7 @@ namespace TestProbabilisticDataStructures
 
             var entries = DecodeTable("quotient filter", slots,
                 i => Slot(words, bits, i), sortedRuns: true, nonZeroFields: false);
-            Assert.AreEqual(count, (uint)entries.Count,
+            Assert.AreEqual(count, (ulong)entries.Count,
                 "quotient filter: the count disagrees with the entries the table holds.");
 
             return entries

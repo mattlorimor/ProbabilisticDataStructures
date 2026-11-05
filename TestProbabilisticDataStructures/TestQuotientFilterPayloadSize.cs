@@ -87,19 +87,26 @@ namespace TestProbabilisticDataStructures
         /// each pair fits the ordinary envelope and the second does not, and is written in the
         /// large form, its table a run with a <c>u64</c> length (#228). The table's arithmetic
         /// is restated here as well, as a table of 2^q slots of r + 3 bits and two spare words.
+        /// Past 2^31 slots (#231) every table is past one array's bytes, at the narrowest
+        /// remainder and at the widest one array of words holds, 28 bits at 2^32 slots, 12 at
+        /// 2^33 and 4 at 2^34.
         /// </summary>
         [TestMethod]
-        [DataRow(1_610_612_736u, 0.07, 31, 4, true)]
-        [DataRow(1_610_612_736u, 0.04, 31, 5, false)]
-        [DataRow(1_610_612_736u, 0.0002, 31, 13, false)]
-        [DataRow(805_306_368u, 0.0003, 30, 12, true)]
-        [DataRow(805_306_368u, 0.0002, 30, 13, false)]
-        [DataRow(805_306_368u, 0.00005, 30, 15, false)]
-        [DataRow(100_000u, 0.01, 18, 7, true)]
-        [DataRow(3_221_225_472u, 0.5, 32, 1, false)]
-        [DataRow(3_221_225_472u, 3.8e-9, 32, 28, false)]
+        [DataRow(1_610_612_736UL, 0.07, 31, 4, true)]
+        [DataRow(1_610_612_736UL, 0.04, 31, 5, false)]
+        [DataRow(1_610_612_736UL, 0.0002, 31, 13, false)]
+        [DataRow(805_306_368UL, 0.0003, 30, 12, true)]
+        [DataRow(805_306_368UL, 0.0002, 30, 13, false)]
+        [DataRow(805_306_368UL, 0.00005, 30, 15, false)]
+        [DataRow(100_000UL, 0.01, 18, 7, true)]
+        [DataRow(3_221_225_472UL, 0.5, 32, 1, false)]
+        [DataRow(3_221_225_472UL, 3.8e-9, 32, 28, false)]
+        [DataRow(6_442_450_944UL, 0.5, 33, 1, false)]
+        [DataRow(6_442_450_944UL, 0.0003, 33, 12, false)]
+        [DataRow(12_884_901_888UL, 0.5, 34, 1, false)]
+        [DataRow(12_884_901_888UL, 0.0625, 34, 4, false)]
         public void TestWhichConstructedFiltersFitOneArray(
-            uint n, double rate, int quotientBits, int remainderBits, bool fits)
+            ulong n, double rate, int quotientBits, int remainderBits, bool fits)
         {
             var (q, r) = QuotientFilter.Split(n, rate);
             Assert.AreEqual((uint)quotientBits, q);

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Reflection;
 using System.IO;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -16,18 +17,25 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// States whose payload <see cref="TestPayloadCount"/> holds the count to: the two
-        /// widths size the table, so two splits, each empty and filled.
+        /// widths size the table, so two splits, each empty and filled, all written at
+        /// version 12; and the one-slot table read from version 1, which is written back at
+        /// version 1 with its count in 32 bits.
         /// </summary>
         internal static IEnumerable<PayloadState> PayloadStates()
         {
             foreach (var (n, rate) in new[] { (100u, 0.01), (5_000u, 0.0001) })
             {
-                yield return PayloadState.Of($"{n} at {rate}, empty", new QuotientFilter(n, rate));
+                yield return PayloadState.Of($"{n} at {rate}, empty", new QuotientFilter(n, rate),
+                    PersistenceFormat.QuotientWideVersion);
 
                 var filled = new QuotientFilter(n, rate);
                 for (var i = 0; i < n / 2; i++) filled.Add(Key($"k{i}"));
-                yield return PayloadState.Of($"{n} at {rate}, half full", filled);
+                yield return PayloadState.Of($"{n} at {rate}, half full", filled, PersistenceFormat.QuotientWideVersion);
             }
+
+            yield return PayloadState.Of("one slot, read from version 1",
+                QuotientFilter.ReadFrom(new MemoryStream(QuotientFilterFixture("quotientfilter-q32-v1.bin"))),
+                PersistenceFormat.DefaultVersion);
         }
 
         [TestMethod]
@@ -202,7 +210,7 @@ namespace TestProbabilisticDataStructures
 
             var ex = Assert.ThrowsExactly<InvalidOperationException>(() =>
             {
-                for (var i = 0; i < filter.Capacity() * 4; i++)
+                for (var i = 0UL; i < filter.Capacity() * 4; i++)
                 {
                     filter.Add(Key($"x{i}"));
                     accepted.Add($"x{i}");
@@ -212,7 +220,7 @@ namespace TestProbabilisticDataStructures
             StringAssert.Contains(ex.Message, "full");
 
             // It filled up rather than giving up early.
-            Assert.IsGreaterThan(filter.Capacity() * 3 / 4, (uint)accepted.Count,
+            Assert.IsGreaterThan(filter.Capacity() * 3 / 4, (ulong)accepted.Count,
                 $"the filter refused after only {accepted.Count} of {filter.Capacity()} slots");
 
             // And everything it did accept is still there.
@@ -343,7 +351,7 @@ namespace TestProbabilisticDataStructures
             var filter = new QuotientFilter(2000, 0.01);
             var slots = filter.SlotCount;
 
-            for (var i = 0; i < slots / 2; i++)
+            for (var i = 0UL; i < slots / 2; i++)
             {
                 filter.Add(Key($"item{i}"));
             }
@@ -354,7 +362,7 @@ namespace TestProbabilisticDataStructures
             Assert.ThrowsExactly<InvalidOperationException>(() => filter.Add(Key("one more")));
 
             var small = new QuotientFilter(2000, 0.01);
-            for (var i = 0; i <= slots / 2; i++)
+            for (var i = 0UL; i <= slots / 2; i++)
             {
                 small.Add(Key($"item{i}"));
             }
@@ -569,10 +577,11 @@ namespace TestProbabilisticDataStructures
             AssertRefused(Poke(clean, 0, 0), "quotient bits");
             AssertRefused(Poke(clean, 0, 40), "quotient bits");
 
-            // One past what a payload may say. 33 is the width the old constructor wrote
-            // for the largest item counts, and the reader refused it then as now; 32 is
-            // read, and has its own test beside the stored payloads.
-            AssertRefused(Poke(clean, 0, 33), "quotient bits");
+            // One past what a payload of version 12, which every save is, may say: the
+            // widest table is 2^34 slots. Version 1 stops at 32, which is read as the
+            // one-slot table earlier constructors wrapped to, and has its own test beside
+            // the stored payloads; TestQuotientFilterLimitIsShared refuses 33 there.
+            AssertRefused(Poke(clean, 0, LargestQuotientBits + 1), "quotient bits");
             AssertRefused(Poke(clean, 4, 0), "not a split");
             AssertRefused(Poke(clean, 4, 60), "not a split");
             AssertRefused(Poke(clean, 8, 999999), "slots");
@@ -598,17 +607,23 @@ namespace TestProbabilisticDataStructures
         // What the constructor will build, restated as plain arithmetic rather than read
         // back from the filter. A fingerprint is the top q + r bits of a 64-bit hash, so
         // q + r cannot exceed 64. A slot is r + 3 bits read and written through one ulong,
-        // so r cannot exceed 61 whatever q is. And a table has 2^q slots counted in a uint,
-        // so q cannot exceed 31: 2^32 is one more than a uint holds.
+        // so r cannot exceed 61 whatever q is. And a table of 2^q slots is one array of
+        // 64-bit words, floor(2^q (r + 3) / 64) + 2 of them, and an array holds
+        // 2,147,483,591: at 2^35 slots of the narrowest slot, four bits, that is 2^31 + 2,
+        // so q cannot exceed 34, and past 31 the array also bounds r.
 
         private const int HashBits = 64;
         private const int MetadataBits = 3;
         private const int LargestSlotBits = 64;
-        private const int LargestQuotientBits = 31;
+        private const long LargestArray = 2_147_483_591;
+        private const int LargestQuotientBits = 34;
 
-        // Three quarters of the 2^31 slots the largest table has, the load factor the
+        // Three quarters of the 2^34 slots the largest table has, the load factor the
         // filter is sized for: the most items it will be asked to hold.
-        private const uint LargestItemCount = 3u << 29;
+        private const ulong LargestItemCount = 3UL << 32;
+
+        /// <summary>FORMAT.md's words of a table of 2^q slots of r + 3 bits.</summary>
+        private static long Words(int q, int r) => (((1L << q) * (r + MetadataBits)) >> 6) + 2;
 
         /// <summary>
         /// The quotient width for n items: the fewest bits whose table, kept to three
@@ -775,17 +790,18 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// More items than a table the slot count can index is refused, and the refusal
-        /// names the most it will take. The table's size is a power of two held in a
-        /// uint, so it stops at 2^31 slots, and an item count past three quarters of
-        /// that needs 2^32, which shifted into a table of one slot and then two.
+        /// More items than the largest table is sized for is refused, and the refusal
+        /// names the most it will take. The table is one array of 64-bit words, so it stops
+        /// at 2^34 slots, and an item count past three quarters of that needs 2^35. Until
+        /// #231 the slot count was a uint, which stopped it at 2^31, and a count past that
+        /// shifted into a table of one slot and then two.
         /// </summary>
         [TestMethod]
         public void TestAnItemCountPastTheLargestTableIsRefused()
         {
             var named = LargestItemCount.ToString(CultureInfo.InvariantCulture);
 
-            foreach (var n in new[] { LargestItemCount + 1, 2_000_000_000u, uint.MaxValue })
+            foreach (var n in new[] { LargestItemCount + 1, 13_000_000_000UL, ulong.MaxValue })
             {
                 var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
                     () => new QuotientFilter(n, 0.5),
@@ -800,30 +816,92 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// The other side of both limits, without building what they describe: a table
-        /// of 2^31 slots is gigabytes, so the sizing is asked directly. It is the same
-        /// sizing the constructor runs, so what it accepts here is what the constructor
-        /// would build.
+        /// of 2^31 slots or more is gigabytes, so the sizing is asked directly. It is the
+        /// same sizing the constructor runs, so what it accepts here is what the
+        /// constructor would build.
         /// </summary>
         [TestMethod]
         public void TestTheLargestTableAndTheFinestRateAreStillSized()
         {
-            Assert.IsLessThanOrEqualTo((ulong)uint.MaxValue, 1UL << LargestQuotientBits,
-                "a table of this many slots has to be countable in a uint");
-            Assert.IsGreaterThan((ulong)uint.MaxValue, 1UL << (LargestQuotientBits + 1),
-                "the next width up is the one a uint cannot count, which is why it is the limit");
+            Assert.IsLessThanOrEqualTo(LargestArray, Words(LargestQuotientBits, 1),
+                "the narrowest slots of the widest table have to fit one array");
+            Assert.IsGreaterThan(LargestArray, Words(LargestQuotientBits + 1, 1),
+                "the next width up is one whose narrowest slots no array holds, which is why it is the limit");
 
-            Assert.AreEqual((31u, 1u), QuotientFilter.Split(LargestItemCount, 0.5));
+            Assert.AreEqual((34u, 1u), QuotientFilter.Split(LargestItemCount, 0.5));
             // And the step below it, so the widest width is what the count needs and not
-            // simply the most that is allowed: 3 * 2^28 items fill 2^30 slots exactly.
-            Assert.AreEqual((30u, 1u), QuotientFilter.Split(3u << 28, 0.5));
-            Assert.AreEqual((31u, 1u), QuotientFilter.Split((3u << 28) + 1, 0.5));
+            // simply the most that is allowed: 3 * 2^31 items fill 2^33 slots exactly.
+            Assert.AreEqual((33u, 1u), QuotientFilter.Split(3UL << 31, 0.5));
+            Assert.AreEqual((34u, 1u), QuotientFilter.Split((3UL << 31) + 1, 0.5));
+            // And the step from 2^31 slots to 2^32, which a slot count in a uint wrapped.
+            Assert.AreEqual((31u, 1u), QuotientFilter.Split(3UL << 29, 0.5));
+            Assert.AreEqual((32u, 1u), QuotientFilter.Split((3UL << 29) + 1, 0.5));
 
-            // Where the two limits meet: the widest table still leaves 33 bits of hash,
-            // and a rate that needs them is sized.
-            var finest = Math.ScaleB(1.0, -(HashBits - LargestQuotientBits));
-            Assert.AreEqual((31u, 33u), QuotientFilter.Split(LargestItemCount, finest));
-            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
-                () => QuotientFilter.Split(LargestItemCount, finest / 2));
+            // Where the limits meet, at the widest tables: at 2^31 slots the 33 bits the
+            // hash leaves, which one array holds, and past it the widest remainder one
+            // array holds. Each pair is held to the arithmetic here, in both directions, and
+            // the item count that fills its table is sized at that rate and refused, naming
+            // it, one bit finer.
+            foreach (var (q, r) in new[] { (31, 33), (32, 28), (33, 12), (34, 4) })
+            {
+                Assert.IsLessThanOrEqualTo(LargestArray, Words(q, r), $"2^{q} slots of {r + MetadataBits} bits");
+                Assert.IsTrue(r == HashBits - q || Words(q, r + 1) > LargestArray,
+                    $"2^{q} slots: a remainder of {r + 1} bits is a split of the hash and fits one array");
+
+                var n = 3UL << (q - 2);
+                var finest = Math.ScaleB(1.0, -r);
+                Assert.AreEqual(((uint)q, (uint)r), QuotientFilter.Split(n, finest), $"2^{q} slots");
+                var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => QuotientFilter.Split(n, finest / 2), $"2^{q} slots: a rate one bit finer was sized");
+                StringAssert.Contains(ex.Message, finest.ToString("R", CultureInfo.InvariantCulture),
+                    $"2^{q} slots: the refusal does not name the finest rate that works");
+            }
+        }
+
+        /// <summary>
+        /// A filter merges only with one of the same table. Every split names its table but
+        /// one: a payload of version 1 at 32 quotient bits is the one slot that a constructor
+        /// of 6.2.0 or earlier wrapped a request past its largest table to, and a table of 2^32
+        /// slots says 32 bits now. Their quotients mean different slots, so the merge is
+        /// refused, whichever way round, before anything is written. A table of 2^32 slots is
+        /// too large to build here, so a small filter of the same remainder claims one; the
+        /// refusal comes before either table is read.
+        /// </summary>
+        [TestMethod]
+        public void TestAOneSlotTableFromVersionOneDoesNotMergeWithATableOfTwoToTheThirtyTwoSlots()
+        {
+            const BindingFlags Fields = BindingFlags.NonPublic | BindingFlags.Instance;
+            var stored = QuotientFilterFixture("quotientfilter-q32-v1.bin");
+            var wrapped = QuotientFilter.ReadFrom(new MemoryStream(stored));
+            Assert.AreEqual(1UL, wrapped.Capacity(), "premise: the stored table is one slot");
+
+            var wide = new QuotientFilter(100, Math.ScaleB(1.0, -20));
+            Assert.AreEqual(wrapped.BitsPerSlot(), wide.BitsPerSlot(), "premise: the same remainder");
+            typeof(QuotientFilter).GetField("quotientBits", Fields)!.SetValue(wide, 32u);
+            typeof(QuotientFilter).GetField("slots", Fields)!.SetValue(wide, 1UL << 32);
+            typeof(QuotientFilter).GetField("slotMaskIndex", Fields)!.SetValue(wide, (1UL << 32) - 1);
+            var wideBefore = (ulong[])((ulong[])typeof(QuotientFilter).GetField("data", Fields)!.GetValue(wide)).Clone();
+
+            foreach (var (into, from) in new[] { (wrapped, wide), (wide, wrapped) })
+            {
+                var ex = Assert.ThrowsExactly<ArgumentException>(() => into.Merge(from));
+                Assert.AreEqual("other", ex.ParamName);
+                StringAssert.Contains(ex.Message, "same table", ex.Message);
+            }
+
+            CollectionAssert.AreEqual(stored, wrapped.ToByteArray(), "the refused merge changed the one-slot table");
+            CollectionAssert.AreEqual(wideBefore,
+                (ulong[])typeof(QuotientFilter).GetField("data", Fields)!.GetValue(wide),
+                "the refused merge changed the other table");
+        }
+
+        private static byte[] QuotientFilterFixture(string name)
+        {
+            using var stream = typeof(TestQuotientFilter).Assembly
+                .GetManifestResourceStream($"TestProbabilisticDataStructures.fixtures.{name}")!;
+            using var copy = new MemoryStream();
+            stream.CopyTo(copy);
+            return copy.ToArray();
         }
 
         private static void AssertRefused(byte[] payload, string expected)
