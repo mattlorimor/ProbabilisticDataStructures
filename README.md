@@ -177,14 +177,14 @@ that turns your settings into a size. Almost all of these are gigabytes of memor
 default up to** is the largest that reads back under the default budget of 1,073,741,824
 bytes (see [loading files you didn't write](#loading-files-you-didnt-write)); a larger one
 reads back with `ReadFrom(stream, new ReadOptions(bytes))` or `ReadOptions.Unlimited`, and
-`any` means every size that can be built reads back by default. **Saves up to** is the
+`any` means every size that can be built reads back by default. **As a byte array** is the
 largest that can be saved as one array, with `ToByteArray`, and in the envelope every
 release that reads its format version reads. That array holds the payload and a frame
 around it, so a payload is at most 2,147,483,573 bytes, whatever the structure was built
-at. Past 2 GiB the `Stream` overloads are the way: `WriteTo` writes a structure built
-larger in the large form of the envelope, where a run in its payload, such as a table
-written whole, can pass `Array.MaxLength` bytes. `as built` means the largest build is
-under that. Reading a payload in the ordinary envelope takes at
+at, and `as built` means the largest build is under that. Through `WriteTo(Stream)` every
+structure saves as built, limited only by memory. Past 2 GiB it writes the large form of
+the envelope, where a run in its payload, such as a table written whole, can pass
+`Array.MaxLength` bytes. Reading a payload in the ordinary envelope takes at
 least twice its size in budget, so the default reads payloads of up to about half a
 gigabyte. One in the large form is read from its stream, which has to be one that can
 seek, without being held.
@@ -197,7 +197,7 @@ building at the scale it describes, which is the measurement as of commit 426348
 
 #### Sized for n items
 
-| Structure | Counts | Builds up to | Loads by default up to | Saves up to |
+| Structure | Counts | Builds up to | Loads by default up to | As a byte array |
 | --- | --- | --- | --- | --- |
 | `BloomFilter` | n, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
 | `BloomFilter` | n, fp 0.1% | 298,726,561 | ≈ 298.73 million | as built |
@@ -225,7 +225,7 @@ building at the scale it describes, which is the measurement as of commit 426348
 
 #### Grows as items are added
 
-| Structure | Counts | Builds up to | Loads by default up to | Saves up to |
+| Structure | Counts | Builds up to | Loads by default up to | As a byte array |
 | --- | --- | --- | --- | --- |
 | `ScalableBloomFilter` | items added, hint 1,000, growth 2, fp 1%, r 0.8 | ≈ 248.99 million | ≈ 62.41 million | as built |
 | `ScalableBloomFilter` | items added, hint 1,000, growth 2, fp 1%, r 0.9 | ≈ 490.25 million | ≈ 123.41 million | as built |
@@ -238,7 +238,7 @@ building at the scale it describes, which is the measurement as of commit 426348
 
 #### Retains k
 
-| Structure | Counts | Builds up to | Loads by default up to | Saves up to |
+| Structure | Counts | Builds up to | Loads by default up to | As a byte array |
 | --- | --- | --- | --- | --- |
 | `InverseBloomFilter` | capacity (slots), empty | 2,147,483,591 | ≈ 134.22 million | as built |
 | `InverseBloomFilter` | capacity (slots), every slot holding an 8-byte item | 2,147,483,591 | ≈ 19.17 million | 134,217,722 |
@@ -251,7 +251,7 @@ building at the scale it describes, which is the measurement as of commit 426348
 
 #### Takes unlimited items
 
-| Structure | Counts | Builds up to | Loads by default up to | Saves up to |
+| Structure | Counts | Builds up to | Loads by default up to | As a byte array |
 | --- | --- | --- | --- | --- |
 | `StableBloomFilter` | m cells, 1-bit cells, fp 1% | 4,294,967,295 | ≈ 4.29 billion | as built |
 | `StableBloomFilter` | m cells, 3-bit cells, fp 1% | 4,294,967,295 | ≈ 1.43 billion | as built |

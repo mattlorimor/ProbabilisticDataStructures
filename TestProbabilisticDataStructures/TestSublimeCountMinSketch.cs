@@ -469,6 +469,89 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A sketch with exactly three in a hundred of its chunks on tails is not past the
+        /// fraction: the add that puts the third of a hundred chunks on tails leaves the rows as
+        /// they are, and the add that puts the fourth there lays them out again.
+        /// </summary>
+        /// <remarks>
+        /// The test above has 183 chunks, where three in a hundred is 5.49, so no count of chunks
+        /// on tails sits on the fraction, and the rule passed there whether it asked for more
+        /// than the fraction or for at least it (#275). The fraction is a whole number of chunks
+        /// only where the chunks number a multiple of a hundred, and this is the fewest at the
+        /// coarsest chunking: a hundred rows at the starting width of 64, one chunk to a row, so
+        /// the fraction is three chunks, which is three exactly in floating point too.
+        /// <para>
+        /// Two rows' chunks are put on tails by hand, and the first two rows' chunks are packed
+        /// one count short of spilling, each where a different key lands, so the first key's add
+        /// takes the sketch to three chunks on tails and the second's to four. Every other
+        /// increment either key takes stops at a stub with room, or lands in a chunk already on
+        /// tails, or carries without lengthening its extension.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestASketchAtExactlyTheFractionIsNotLaidOutAgain()
+        {
+            Func<SublimeCountMinSketch> make = () => new SublimeCountMinSketch(Math.Exp(-99.5));
+            var sketch = make();
+            var rows = RowsOf(sketch);
+            Assert.AreEqual(64, sketch.Width);
+            Assert.AreEqual(100, rows.Length);
+            var chunks = rows.Sum(r => r.ChunkCount);
+            Assert.AreEqual(100, chunks, "a hundred rows of 64 counters, one chunk each");
+            Assert.AreEqual(3.0, chunks * 0.03, "three in a hundred of the chunks is not three chunks");
+
+            // Two keys that raise different counters in the second row, where the second is
+            // packed: the first key's add must not move that row's chunk.
+            var first = Key(0);
+            var firstColumns = ColumnsOf(first, make);
+            byte[] second = null;
+            int[] secondColumns = null;
+            for (var k = 1; second == null; k++)
+            {
+                var columns = ColumnsOf(Key(k), make);
+                if (columns[1] != firstColumns[1])
+                {
+                    second = Key(k);
+                    secondColumns = columns;
+                }
+            }
+
+            for (var i = 2; i < 4; i++)
+            {
+                for (var j = 0; j < rows[i].Count; j++)
+                {
+                    rows[i].Set(j, 1UL << 40);
+                }
+            }
+            OneCountFromSpilling(rows[0], firstColumns[0]);
+            OneCountFromSpilling(rows[1], secondColumns[1]);
+            int OnTails() => RowsOf(sketch).Sum(r => r.ChunksWithTails);
+            Assert.AreEqual(2, OnTails(), "two chunks should be on tails, in the third and fourth rows");
+
+            sketch.Add(first);
+
+            Assert.AreEqual(3, OnTails(), "the first add should have put its chunk on tails");
+            Assert.AreEqual(64, sketch.Width);
+            for (var i = 0; i < rows.Length; i++)
+            {
+                Assert.AreSame(rows[i], RowsOf(sketch)[i],
+                    $"row {i} was laid out again with three of {chunks} chunks on tails, " +
+                    "which is three in a hundred and not past it");
+            }
+
+            sketch.Add(second);
+
+            Assert.AreEqual(64, sketch.Width);
+            for (var i = 0; i < rows.Length; i++)
+            {
+                Assert.AreNotSame(rows[i], RowsOf(sketch)[i],
+                    $"row {i} was not laid out again with four of {chunks} chunks on tails, " +
+                    "which is past three in a hundred");
+            }
+            Assert.IsTrue(sketch.Count(first) >= 1 && sketch.Count(second) >= 1);
+        }
+
+        /// <summary>
         /// Growing faster gives more counters and closer estimates.
         /// </summary>
         [TestMethod]

@@ -275,8 +275,14 @@ namespace ProbabilisticDataStructures
         /// in the large form, unless the bound has been lowered. So a <c>u32</c> prefix is
         /// only ever written for a run that fits one.
         /// </remarks>
+        /// <exception cref="InvalidOperationException">
+        /// The length is below nought (<see cref="CheckLength"/>). Nothing of the run is
+        /// written, its prefix included.
+        /// </exception>
         internal bool BeginRun(long length)
         {
+            CheckLength(length, "run");
+
             if (this.counting)
             {
                 this.longest = Math.Max(this.longest, length);
@@ -291,14 +297,27 @@ namespace ProbabilisticDataStructures
                 WriteUInt32((uint)length);
             }
 
-            return BeginBlock(length);
+            return Begin(length);
         }
 
         /// <summary>
         /// As <see cref="BeginRun"/>, for bytes with no length prefix before them: fields
         /// whose total length is known before they are written.
         /// </summary>
+        /// <exception cref="InvalidOperationException">
+        /// The length is below nought (<see cref="CheckLength"/>). Nothing is written.
+        /// </exception>
         internal bool BeginBlock(long length)
+        {
+            CheckLength(length, "block");
+            return Begin(length);
+        }
+
+        /// <summary>
+        /// What beginning a run's bytes or a block does once its length is known to be one: a
+        /// counter counts them whole and says not to write them, and any other writer says to.
+        /// </summary>
+        private bool Begin(long length)
         {
             if (this.counting)
             {
@@ -307,6 +326,34 @@ namespace ProbabilisticDataStructures
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Refuses a run or block whose length is below nought, from any writer, before
+        /// anything of it is written (#278).
+        /// </summary>
+        /// <remarks>
+        /// Taken, a counter would add the length to its count, so that the payload was
+        /// counted that much short, and a writer that holds or streams the payload would go on
+        /// to write whatever the body wrote after it, under a length that does not describe
+        /// it. No body in the library begins one: the lengths are a span's, never below
+        /// nought, or a structure's shape multiplied out in 64 bits, which its constructor
+        /// and its reader bound. A product left unbounded comes here below nought when it
+        /// wraps, which takes at least 2^63 bytes, more than a stream holds. One that wraps
+        /// past 2^64 can come back as a length that is not below nought, which this cannot see.
+        /// </remarks>
+        /// <exception cref="InvalidOperationException">The length is below nought.</exception>
+        private static void CheckLength(long length, string what)
+        {
+            if (length < 0)
+            {
+                throw new InvalidOperationException(
+                    $"The payload would hold a {what} of {length:N0} bytes, and no {what} is " +
+                    "shorter than nought. A length worked out from a structure's shape comes to " +
+                    $"one when it is past {long.MaxValue:N0} bytes, more than a stream can hold, " +
+                    $"and wraps in 64 bits. Nothing of the {what} was written. The structure is " +
+                    "intact and can still be used, but it cannot be written.");
+            }
         }
 
         /// <summary>
