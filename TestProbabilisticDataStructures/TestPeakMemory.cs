@@ -253,6 +253,57 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The same of buckets of several arrays, which at the real size needs a gigabyte in
+        /// the first: built with arrays lowered to 4 KiB on this thread, three full and a last
+        /// of five bytes. Each measured reset clears the first and last bucket of every array,
+        /// set just before it, and the arrays are then asked to be every byte zero and as
+        /// many and as long as they were. A reset that cleared only some of the arrays leaves
+        /// the others' buckets set; one that built them again allocates their bytes.
+        /// </summary>
+        [TestMethod]
+        public void TestResettingBuckets64OfSeveralArraysAllocatesNothing()
+        {
+            const ulong Count = 3 * 4096 + 5;
+            var buckets = TestBuckets64.WithArrayBits(12, () => new Buckets64(Count, 8));
+            var lengths = buckets.RawData.Select(array => array.Length).ToArray();
+            CollectionAssert.AreEqual(new[] { 4096, 4096, 4096, 5 }, lengths, "premise: the arrays");
+
+            var allocated = Allocated(() =>
+            {
+                Dirty(buckets);
+                return buckets.Reset();
+            });
+
+            CollectionAssert.AreEqual(lengths, buckets.RawData.Select(array => array.Length).ToArray(),
+                "the reset arrays are not the number and lengths they were");
+            for (var i = 0; i < lengths.Length; i++)
+            {
+                Assert.IsLessThan(0, buckets.RawData[i].AsSpan().IndexOfAnyExcept((byte)0),
+                    $"the reset left a bucket set in array {i}");
+            }
+            Assert.IsLessThan(1024L, allocated,
+                $"resetting {lengths.Sum():N0} bytes of buckets in {lengths.Length} arrays allocated " +
+                $"{allocated:N0} bytes: the reset built new arrays rather than clearing the ones it had");
+
+            // Not vacuous: each reset cleared both ends of every array.
+            Dirty(buckets);
+            for (var i = 0; i < lengths.Length; i++)
+            {
+                Assert.IsTrue(buckets.RawData[i][0] == 255 && buckets.RawData[i][^1] == 255,
+                    $"premise: both ends of array {i} were set");
+            }
+
+            static void Dirty(Buckets64 buckets)
+            {
+                for (var i = 0ul; i * 4096 < Count; i++)
+                {
+                    buckets.Set(i * 4096, 255);
+                    buckets.Set(Math.Min(i * 4096 + 4095, Count - 1), 255);
+                }
+            }
+        }
+
+        /// <summary>
         /// A 64-bit Bloom filter's reset resets its buckets, so it is held to the same: a reset
         /// of a filter of about 16 MiB of bits allocates nothing, and leaves every bit clear
         /// and a count of nought. Each measured reset clears the first bit and the last, set
