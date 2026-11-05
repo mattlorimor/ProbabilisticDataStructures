@@ -489,6 +489,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FORMAT.md gives 3.2.0 as the release that first wrote format version 1.** Its version
+  table said 3.1.0, but persistence first shipped in 3.2.0: the 3.1.0 package on nuget.org
+  has no `WriteTo`, `ToByteArray` or `PersistenceFormat`, and the 3.2.0 package has them.
+  (#272)
+
 - **What a read allocates no longer depends on when the last collection ran.** Every read
   named its structure with `ToString` as its budget was made, and the runtime keeps an
   enum's names in a cache it holds only weakly, so a read after a collection had reclaimed

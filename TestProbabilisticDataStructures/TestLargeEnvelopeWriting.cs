@@ -132,11 +132,11 @@ namespace TestProbabilisticDataStructures
         /// twice, as it always has.
         /// </summary>
         /// <remarks>
-        /// Measured as the least of five, since a collection landing mid-write can add a
-        /// retired allocation context's worth (TESTING.md, on the read budget). Each payload
-        /// is more than sixteen times the bound, so a copy of it could not hide in the slack;
-        /// and the large write must be seen allocating its buffer, so a measurement that sees
-        /// nothing cannot pass.
+        /// Measured as the least of five, since a background collection running beside a
+        /// measurement can add a few kilobytes to the counter, as TESTING.md says of a read
+        /// (on the read budget). Each payload is more than sixteen times the bound, so a copy
+        /// of it could not hide in the slack; and the large write must be seen allocating its
+        /// buffer, so a measurement that sees nothing cannot pass.
         /// </remarks>
         [TestMethod]
         public void TestALargeWriteAllocatesItsBufferAndNotItsPayload()

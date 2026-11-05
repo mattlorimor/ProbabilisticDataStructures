@@ -115,7 +115,7 @@ structure whose layout changes bumps only its own.
 
 | Version | First written by | Structures | Added |
 | --- | --- | --- | --- |
-| 1 | 3.1.0 | every structure | the layouts below, without the fields marked as later |
+| 1 | 3.2.0 | every structure | the layouts below, without the fields marked as later |
 | 2 | 6.0.0 | `StableBloomFilter`, `CuckooBloomFilter` | the random generator's state |
 | 3 | 6.1.0 | `CuckooBloomFilter` | fingerprints packed at their exact bit width |
 | 4 | 6.2.0 | `SetSketch` | the construction, written only for the second one |
