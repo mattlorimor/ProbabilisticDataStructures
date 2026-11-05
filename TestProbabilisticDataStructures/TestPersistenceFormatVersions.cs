@@ -270,8 +270,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestANestedStructureAtAnUndefinedVersionIsRefused()
         {
-            // Growth 1, so the payload is version 1 and the offset below has no growth
-            // factor in front of it.
+            // A version 14 payload, as every save is since #232, whatever its growth.
             var outer = new ScalableBloomFilter(100, 0.01, 0.8, 1);
             for (var i = 0; i < 500; i++)
             {
@@ -280,9 +279,9 @@ namespace TestProbabilisticDataStructures
 
             var bytes = outer.ToByteArray();
 
-            // The first nested envelope begins after f64 r, f64 fp, f64 p, u32 hint, u32
-            // filter count, then the u32 length that precedes it.
-            const int Nested = 14 + 8 + 8 + 8 + 4 + 4 + 4;
+            // The first nested envelope begins after f64 r, f64 fp, f64 p, u64 hint, u32
+            // growth factor, u32 filter count, then the u32 length that precedes it.
+            const int Nested = 14 + 8 + 8 + 8 + 8 + 4 + 4 + 4;
             Assert.IsTrue(bytes.AsSpan(Nested, 4).SequenceEqual(PersistenceFormat.Magic),
                 "the nested envelope is not where this test expects it");
 

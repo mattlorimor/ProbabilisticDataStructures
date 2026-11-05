@@ -155,22 +155,30 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestAbsurdPartitionCountIsRefused()
         {
-            // u32 m, u32 k, u32 s, u8 placement, u64 count, then the partition count.
-            const int PartitionCountOffset = 21;
+            // u64 m, u32 k, u64 s, u8 placement, u64 count, then the partition count at
+            // version 14; at version 8 m and s are each a u32.
+            var rows = new (string Name, byte[] Bytes, int Offset)[]
+            {
+                ("version 14", new PartitionedBloomFilter(1000, 0.01).ToByteArray(), 29),
+                ("version 8", TestPersistenceFormatStability.ReadFixture("partitionedbloomfilter-v8-narrow.bin"), 21),
+            };
 
-            var bytes = new PartitionedBloomFilter(1000, 0.01).ToByteArray();
+            foreach (var (name, bytes, offset) in rows)
+            {
+                Assert.AreEqual(Persistence.FromByteArray<PartitionedBloomFilter>(bytes).K(),
+                    BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + offset)),
+                    $"{name}: the partition count is not where this test expects it");
 
-            AssertRefused(
-                () => Persistence.FromByteArray<PartitionedBloomFilter>(
-                    PokeUInt32(bytes, PartitionCountOffset, 900_000_000)),
-                "partitions");
+                var ex = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<PartitionedBloomFilter>(PokeUInt32(bytes, offset, 900_000_000)), name);
+                StringAssert.Contains(ex.Message, "partitions", name);
 
-            // Zero is refused from the other side: a filter with no partitions would set
-            // no bits and answer no to everything rather than fail.
-            AssertRefused(
-                () => Persistence.FromByteArray<PartitionedBloomFilter>(
-                    PokeUInt32(bytes, PartitionCountOffset, 0)),
-                "partitions");
+                // Zero is refused from the other side: a filter with no partitions would set
+                // no bits and answer no to everything rather than fail.
+                ex = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<PartitionedBloomFilter>(PokeUInt32(bytes, offset, 0)), name);
+                StringAssert.Contains(ex.Message, "partitions", name);
+            }
         }
 
         /// <summary>
@@ -180,50 +188,59 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestAbsurdContainedFilterCountIsRefused()
         {
-            // f64 r, f64 fp, f64 p, u32 hint, then the filter count at version 1; at
-            // version 7 the growth factor comes between the hint and the count.
-            const int FilterCountOffset = 8 + 8 + 8 + 4;
-
-            foreach (var (growth, offset) in new[] { (1u, FilterCountOffset), (2u, FilterCountOffset + 4) })
+            // Where the count is moves with the version, so the payloads come with it.
+            foreach (var (name, bytes, offset) in TestScalableBloomFilter.CountedPayloads())
             {
-                var f = new ScalableBloomFilter(100, 0.01, 0.8, growth);
-                for (int i = 0; i < 500; i++) f.Add(Key($"w{i}"));
-
-                AssertRefused(
-                    () => Persistence.FromByteArray<ScalableBloomFilter>(
-                        PokeUInt32(f.ToByteArray(), offset, 900_000_000)),
-                    "contained filters");
+                var ex = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<ScalableBloomFilter>(PokeUInt32(bytes, offset, 900_000_000)),
+                    name);
+                StringAssert.Contains(ex.Message, "contained filters", name);
             }
         }
 
         /// <summary>
-        /// A version 7 payload carries a growth factor, and only a filter that grows
-        /// writes one: a filter that adds every filter at its hint writes version 1.
-        /// Zero would size every filter after the first for no items, and one at
-        /// version 7 is a payload this library never produced.
+        /// Every version 14 payload carries a growth factor, and a version 7 one carried it
+        /// only from a filter that grows: then a filter that added every filter at its hint
+        /// wrote version 1. Zero would size every filter after the first for no items, and
+        /// is refused at both. One is what a filter at a growth factor of 1 writes at
+        /// version 14, and at version 7 is a payload this library never produced.
         /// </summary>
         [TestMethod]
         public void TestScalableFilterWithAGrowthFactorItNeverWritesIsRefused()
         {
-            const int GrowthOffset = 8 + 8 + 8 + 4;
+            const int Version7 = 8 + 8 + 8 + 4, Version14 = 8 + 8 + 8 + 8;
 
             var f = new ScalableBloomFilter(100, 0.01, 0.8, 2);
             for (int i = 0; i < 500; i++) f.Add(Key($"w{i}"));
-            var bytes = f.ToByteArray();
 
-            Assert.AreEqual(2u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + GrowthOffset)),
-                "the growth factor is not where this test expects it");
-
-            foreach (var growth in new uint[] { 0, 1 })
+            var rows = new (string Name, byte[] Bytes, int Offset, uint[] Refused, uint[] Read)[]
             {
-                AssertRefused(
-                    () => Persistence.FromByteArray<ScalableBloomFilter>(PokeUInt32(bytes, GrowthOffset, growth)),
-                    "growth factor");
-            }
+                ("version 14", f.ToByteArray(), Version14, new uint[] { 0 }, new uint[] { 1, uint.MaxValue }),
+                ("version 7", TestPersistenceFormatStability.ReadFixture("scalablebloomfilter-v7.bin"), Version7,
+                    new uint[] { 0, 1 }, new uint[] { uint.MaxValue }),
+            };
 
-            // The largest the constructor accepts reads back.
-            Assert.AreEqual(uint.MaxValue, Persistence.FromByteArray<ScalableBloomFilter>(
-                PokeUInt32(bytes, GrowthOffset, uint.MaxValue)).Growth);
+            foreach (var (name, bytes, offset, refused, read) in rows)
+            {
+                Assert.AreEqual(2u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart + offset)),
+                    $"{name}: the growth factor is not where this test expects it");
+
+                foreach (var growth in refused)
+                {
+                    var ex = Assert.ThrowsExactly<InvalidDataException>(
+                        () => Persistence.FromByteArray<ScalableBloomFilter>(PokeUInt32(bytes, offset, growth)),
+                        $"{name} with a growth factor of {growth}");
+                    StringAssert.Contains(ex.Message, "growth factor");
+                }
+
+                // What a save at that version writes reads back, up to the largest the
+                // constructor accepts.
+                foreach (var growth in read)
+                {
+                    Assert.AreEqual(growth, Persistence.FromByteArray<ScalableBloomFilter>(
+                        PokeUInt32(bytes, offset, growth)).Growth, $"{name} with a growth factor of {growth}");
+                }
+            }
         }
 
         /// <summary>

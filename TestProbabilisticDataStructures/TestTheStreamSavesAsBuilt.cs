@@ -194,15 +194,6 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         private static IEnumerable<LargestBuild> LargestBuilds()
         {
-            yield return new(StructureId.PartitionedBloomFilter, "2^32 - 1 bits across its partitions", false,
-                () => Filled(new PartitionedBloomFilter(200, 0.01), (f, k) => f.Add(k)),
-                s =>
-                {
-                    var partitions = (Buckets[])Get(s, "Partitions");
-                    return partitions.Select(p => new Claim(p, "count", uint.MaxValue / (uint)partitions.Length)).ToArray();
-                },
-                s => ((Buckets[])Get(s, "Partitions")).Aggregate(BigInteger.Zero, (sum, p) => sum + BucketBytes(p)));
-
             yield return new(StructureId.QuotientFilter, "2^31 slots, quotient and remainder all 64 bits of the hash", true,
                 () => Filled(new QuotientFilter(100, 0.01), (f, k) => f.Add(k)),
                 s => new[]
@@ -390,6 +381,7 @@ namespace TestProbabilisticDataStructures
             new(StructureId.CountingBloomFilter, typeof(Buckets64), "Data"),
             new(StructureId.DeletableBloomFilter, typeof(Buckets64), "Data"),
             new(StructureId.StableBloomFilter, typeof(Buckets64), "Data"),
+            new(StructureId.PartitionedBloomFilter, typeof(Buckets64), "Data"),
             new(StructureId.HyperLogLog, typeof(HyperLogLog), "Registers"),
             new(StructureId.UltraLogLog, typeof(UltraLogLog), "Registers"),
             new(StructureId.HyperLogLogPlus, typeof(HyperLogLogPlus), "registers", "sparse"),

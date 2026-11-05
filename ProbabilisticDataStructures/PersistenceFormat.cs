@@ -336,8 +336,8 @@ namespace ProbabilisticDataStructures
             [StructureId.BloomFilter64] = [DefaultVersion],
             [StructureId.CountingBloomFilter] = [DefaultVersion, PlacementVersion, Bloom64Version],
             [StructureId.DeletableBloomFilter] = [DefaultVersion, PlacementVersion, Bloom64Version],
-            [StructureId.PartitionedBloomFilter] = [DefaultVersion, PlacementVersion],
-            [StructureId.ScalableBloomFilter] = [DefaultVersion, ScalableGrowthVersion],
+            [StructureId.PartitionedBloomFilter] = [DefaultVersion, PlacementVersion, Bloom64Version],
+            [StructureId.ScalableBloomFilter] = [DefaultVersion, ScalableGrowthVersion, Bloom64Version],
             [StructureId.StableBloomFilter] =
                 [DefaultVersion, RandomStateVersion, StableOriginalStateVersion,
                  PlacementVersion, Bloom64Version],
@@ -1438,19 +1438,22 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Prices what <see cref="ReadBuckets64"/> allocates, and moves past what it reads.
-        /// Returns the bucket count, for a price that checks it as its reader does.
+        /// Prices what <see cref="ReadBuckets64"/> allocates, and moves past what it reads,
+        /// refusing the shapes <see cref="Buckets64.Restore"/> refuses, as the price of a
+        /// 32-bit table does (#232). Returns the bucket count, for a price that checks it as
+        /// its reader does.
         /// </summary>
         internal static ulong PriceBuckets64(ref PayloadReader reader)
         {
             var count = reader.ReadUInt64();
-            reader.ReadByte();
+            var bucketSize = reader.ReadByte();
             var arrayCount = ReadArrayCount(ref reader);
+            Buckets64.CheckRestorable(count, bucketSize, arrayCount);
 
             reader.Budget.Price(ArraysCost(arrayCount));
             for (uint i = 0; i < arrayCount; i++)
             {
-                reader.SkipBytes();
+                Buckets64.CheckStoredArray(count, bucketSize, i, reader.SkipBytes());
             }
 
             return count;

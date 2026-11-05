@@ -1,5 +1,6 @@
 ﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
+using System.Linq;
 using System.Text;
 
 namespace TestProbabilisticDataStructures
@@ -15,12 +16,54 @@ namespace TestProbabilisticDataStructures
         {
             yield return PayloadState.Of(
                 "10 at 50%, empty", new PartitionedBloomFilter(10, 0.5),
-                PersistenceFormat.PlacementVersion);
+                PersistenceFormat.Bloom64Version);
 
             var filled = new PartitionedBloomFilter(200, 0.001);
             for (var i = 0; i < 40; i++) filled.Add(Encoding.ASCII.GetBytes($"w{i}"));
             yield return PayloadState.Of(
-                "200 at 0.1%, filled", filled, PersistenceFormat.PlacementVersion);
+                "200 at 0.1%, filled", filled, PersistenceFormat.Bloom64Version);
+        }
+
+        /// <summary>
+        /// A partition is the bits over the hash count, rounded up, worked out in integers
+        /// since #232 because a <c>double</c> cannot hold every 64-bit count: past 2^53 one
+        /// more bit than a power of two rounds back to it, so the ceiling of the quotient
+        /// through a double is a bit short at a hash count of one, and at the largest count it
+        /// rounds to 2^64, which no <c>ulong</c> holds. Held at the corners, against the
+        /// ceiling worked out in arbitrary precision; and below 2^32 bits, where every filter
+        /// before #232 was built, against the ceiling through a double it replaced, on the
+        /// corners and a seeded sample of sizes at every hash count a filter can have.
+        /// </summary>
+        [TestMethod]
+        public void TestAPartitionIsTheBitsOverTheHashCountRoundedUp()
+        {
+            static System.Numerics.BigInteger Ceiling(ulong m, uint k) => (m + (System.Numerics.BigInteger)k - 1) / k;
+
+            var counts = new uint[] { 1, 2, 3, 7, 10, 1023, Utils.MaxHashCount };
+            var corners = new ulong[] { 1, 2, 6, 7, 8, 1023, 1024, 1025, uint.MaxValue - 1, uint.MaxValue,
+                (ulong)uint.MaxValue + 1, (1UL << 53) + 1, ulong.MaxValue - 1, ulong.MaxValue };
+            foreach (var k in counts)
+            {
+                foreach (var m in corners)
+                {
+                    Assert.AreEqual(Ceiling(m, k), (System.Numerics.BigInteger)PartitionedBloomFilter.PartitionSize(m, k),
+                        $"{m:N0} bits over {k} hash functions");
+                }
+            }
+
+            // The double it replaced is short past 2^53, which is why it was replaced.
+            Assert.AreEqual(1UL << 53, (ulong)System.Math.Ceiling((double)((1UL << 53) + 1) / 1),
+                "premise: a double holds 2^53 + 1, so the integers were not needed");
+
+            var random = new System.Random(232);
+            for (var k = 1u; k <= Utils.MaxHashCount; k++)
+            {
+                foreach (var m in corners.Where(m => m <= uint.MaxValue).Concat(Enumerable.Range(0, 64).Select(_ => (ulong)random.NextInt64(1, 1L << 32))))
+                {
+                    Assert.AreEqual((ulong)System.Math.Ceiling((double)m / k), PartitionedBloomFilter.PartitionSize(m, k),
+                        $"{m:N0} bits over {k} hash functions is not the partition the double gave");
+                }
+            }
         }
 
         private static byte[] A_BYTES = Encoding.ASCII.GetBytes("a");

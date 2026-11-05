@@ -307,17 +307,11 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestScalableFilterReaderTakesAFilterCountPastTheOldCeiling()
         {
-            // f64 r, f64 fp, f64 p, u32 hint, then the filter count at version 1; at
-            // version 7 the growth factor comes between the hint and the count.
-            const int FilterCountOffset = 8 + 8 + 8 + 4;
-
-            foreach (var (growth, offset) in new[] { (1u, FilterCountOffset), (2u, FilterCountOffset + 4) })
+            // Where the count is moves with the version, so the payloads come with it.
+            foreach (var (_, bytes, offset) in TestScalableBloomFilter.CountedPayloads())
             {
-                var filter = new ScalableBloomFilter(100, 0.01, 0.8, growth);
-                for (var i = 0; i < 500; i++) filter.Add(Key(i));
-
                 AssertRefusedOnlyForMissingBytes<ScalableBloomFilter>(
-                    PokeUInt32(filter.ToByteArray(), offset, OldCap + 1));
+                    PokeUInt32(bytes, offset, OldCap + 1));
             }
         }
 
@@ -921,14 +915,9 @@ namespace TestProbabilisticDataStructures
         {
             Assert.AreEqual(Array.MaxLength, ScalableBloomFilter.MaxFilters);
 
-            // At version 7 the growth factor sits between the hint and the count.
-            const int FilterCountOffset = 8 + 8 + 8 + 4;
-            foreach (var (growth, offset) in new[] { (1u, FilterCountOffset), (2u, FilterCountOffset + 4) })
+            // Where the count is moves with the version, so the payloads come with it.
+            foreach (var (_, bytes, offset) in TestScalableBloomFilter.CountedPayloads())
             {
-                var filter = new ScalableBloomFilter(100, 0.01, 0.8, growth);
-                for (var i = 0; i < 500; i++) filter.Add(Key(i));
-                var bytes = filter.ToByteArray();
-
                 AssertRefused<ScalableBloomFilter>(
                     PokeUInt32(bytes, offset, (uint)ScalableBloomFilter.MaxFilters + 1),
                     PastTheLimit);

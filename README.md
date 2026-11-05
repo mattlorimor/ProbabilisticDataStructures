@@ -206,7 +206,7 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `CountingBloomFilter` | n, 4-bit counters, fp 1% | memory | ≈ 112.02 million | ≈ 448.09 million |
 | `CountingBloomFilter` | n, 8-bit counters, fp 1% | memory | ≈ 56.01 million | ≈ 224.04 million |
 | `DeletableBloomFilter` | n, r 1,000, fp 1% | memory | ≈ 448.09 million | ≈ 1.79 billion |
-| `PartitionedBloomFilter` | n, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
+| `PartitionedBloomFilter` | n, fp 1% | memory | ≈ 448.09 million | ≈ 1.79 billion |
 | `CuckooBloomFilter` | n, fp 1%, empty | 2,040,109,465 | 510,027,366 | as built |
 | `CuckooBloomFilter` | n, fp 1%, holding n items | 2,040,109,465 | ≈ 88.92 million | ≈ 214.75 million |
 | `CuckooBloomFilter` | n, fp 0.1%, empty | 2,040,109,465 | 510,027,366 | as built |
@@ -227,10 +227,10 @@ building at the scale it describes, which is the measurement as of commit 426348
 
 | Structure | Counts | Builds up to | Loads by default up to | As a byte array |
 | --- | --- | --- | --- | --- |
-| `ScalableBloomFilter` | items added, hint 1,000, growth 2, fp 1%, r 0.8 | ≈ 248.99 million | ≈ 62.41 million | as built |
-| `ScalableBloomFilter` | items added, hint 1,000, growth 2, fp 1%, r 0.9 | ≈ 490.25 million | ≈ 123.41 million | as built |
-| `ScalableBloomFilter` | items added, hint 1,000, growth 1, fp 1%, r 0.8 | ≈ 3.16 million | ≈ 2.83 million | as built |
-| `ScalableBloomFilter` | items added, hint 1,000, growth 1, fp 1%, r 0.9 | ≈ 6.68 million | ≈ 4.10 million | as built |
+| `ScalableBloomFilter` | items added, hint 1,000, growth 2, fp 1%, r 0.8 | memory | ≈ 62.41 million | ≈ 499.81 million |
+| `ScalableBloomFilter` | items added, hint 1,000, growth 2, fp 1%, r 0.9 | memory | ≈ 123.41 million | ≈ 990.00 million |
+| `ScalableBloomFilter` | items added, hint 1,000, growth 1, fp 1%, r 0.8 | ≈ 3.16 million | ≈ 2.68 million | as built |
+| `ScalableBloomFilter` | items added, hint 1,000, growth 1, fp 1%, r 0.9 | ≈ 6.68 million | ≈ 3.89 million | as built |
 | `InfiniFilter` | items added, 8-bit fingerprints | 1,610,612,736 | 100,663,296 | 805,306,368 |
 | `InfiniFilter` | items added, 16-bit fingerprints | 1,610,612,736 | 100,663,296 | 402,653,184 |
 | `MementoFilter` | items added, one per block, range 256, 8-bit fingerprints | 1,610,612,736 | 100,663,296 | 402,653,184 |
@@ -616,8 +616,8 @@ bool wasAlreadyThere = filter.TestAndAdd(bytes);
 The same structure with 64-bit sizing throughout.
 
 **Reach for it when** the filter needs more than 4.29 billion bits — about **448 million
-items at 1%** — which is where `BloomFilter` and `PartitionedBloomFilter` refuse, naming
-this structure when they do. Below that the two deliver the same rate: a `BloomFilter` of
+items at 1%** — which is where `BloomFilter` refuses, naming this structure when it
+does. Below that the two deliver the same rate: a `BloomFilter` of
 2^27 bits or more, about 14 million items at 1%, places its bits exactly as this one does.
 One read back from a payload written before the release after 6.2.0 keeps the 32-bit
 placement it was written with, whose rate rises at large sizes: sized for 1%, it measured
@@ -634,12 +634,12 @@ two regions share its `m`.
 
 **Look elsewhere otherwise.** Below 4.29 billion bits it is the same filter with wider
 arithmetic, so `BloomFilter` is the plainer choice. And if you do not know the size
-in advance, `ScalableBloomFilter` takes it from you, but it does not reach much further:
-every filter it adds is itself a 32-bit filter, so at its default growth it stops at the
-items in [the table](#how-much-each-one-holds), a few hundred million. Past that, size a
-`BloomFilter64` for the most you expect.
+in advance, `ScalableBloomFilter` takes it from you: every filter it adds is sized in 64
+bits as this one is, so at its default growth what stops it is memory, though a byte
+array holds it only up to the items in [the table](#how-much-each-one-holds), and one
+larger is written to a stream. `PartitionedBloomFilter` is sized in 64 bits too.
 
-The ceiling of 4.29 billion bits is the 32-bit Bloom filters' own, and the other filters
+The ceiling of 4.29 billion bits is `BloomFilter`'s own, and the other filters
 have limits of their own, nearer 2^31. `CuckooBloomFilter` numbers its entries with a
 `uint`, so a table holds at most 2^31 of them, and half that at a rate fine enough for
 64-bit fingerprints, where the fingerprints pass what one .NET array holds.
@@ -849,8 +849,9 @@ the stack a query has to ask stays a few dozen filters deep at most; a growth fa
 builds every filter the same size, as the filter did before the factor existed, and
 stops after a few thousand. Either way it has a ceiling, and an `Add` that needs one more
 filter than it can build throws `InvalidOperationException` and leaves the filter as it
-was; how many items that is, and how many read back under the default budget, are in
-[the table](#how-much-each-one-holds) for growth factors of 2 and 1.
+was; how many items that is, how many read back under the default budget and how many a
+byte array holds are in [the table](#how-much-each-one-holds) for growth factors of 2
+and 1.
 
 **Reach for it when** you genuinely don't know how large the set will be and memory is not
 bounded.
@@ -859,22 +860,23 @@ bounded.
 hold a ceiling. Or if you do know the size, since a correctly sized `BloomFilter` is
 smaller than a scalable one that grew into the same capacity.
 
-It does have a ceiling, and it is not memory. Each new filter is built at a rate tighter
-than the last by the ratio `r`, and a rate can only be tightened so far: below
+It does have a ceiling, and without growth it is not memory. Each new filter is built at
+a rate tighter than the last by the ratio `r`, and a rate can only be tightened so far: below
 1 / `double.MaxValue`, about 5.6e-309, a Bloom filter cannot be sized for it. At a growth
 factor of 1, where that is what runs out, a rate of 1% and a ratio of 0.8 allow 3,161
 filters, and a ratio of 0.9 allows 6,693; each holds about as many items as the hint, so
-at a hint of a thousand the first is 3.16 million items. A filter that grows stops sooner,
-when its next filter would be built for more items or bits than a contained filter
-addresses. An `Add` past the ceiling throws an `InvalidOperationException` that says
-which, before changing anything, and the filter goes on answering. `BloomFilter64` has no
+at a hint of a thousand the first is 3.16 million items. A filter that grows runs out of
+memory first: its filters are sized in 64 bits, and it would stop only when its next
+filter would be built for more items or bits than a contained filter holds, far past any
+memory, unless its ratio is small enough that the rate runs out first. An `Add` past the
+ceiling throws an `InvalidOperationException` that says which,
+before changing anything, and the filter goes on answering. `BloomFilter64` has no
 ceiling of this kind.
 
-The first filter is built for the hint, and is a 32-bit filter like the rest, so a hint of
-more items than one can be sized for at the rate — 448,089,842 at 1% — is refused by the
-constructor with an `ArgumentOutOfRangeException` naming `hint` and giving the largest that
-builds. A smaller hint grows into the same items; for one filter of that size, use
-`BloomFilter64`.
+The first filter is built for the hint, and is sized in 64 bits like the rest, so only a
+hint of more items than one can be sized for at the rate — about 1.68 × 10^18 at 1% — is
+refused by the constructor, with an `ArgumentOutOfRangeException` naming `hint` and giving
+the largest that builds.
 
 Described by Almeida, Baquero, Preguiça and Hutchison in
 [Scalable Bloom Filters](https://haslab.uminho.pt/cbm/files/dbloom.pdf).

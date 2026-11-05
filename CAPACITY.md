@@ -76,11 +76,11 @@ the structure with an exception that names the limit, before anything changes, a
 - **A bucket array is one .NET array.** `Buckets` sizes it in 64 bits, up to the
   2,147,483,591 bytes an array holds. The filters still on it hold one-bit buckets, and
   for those that is more than a 32-bit count addresses, so the count is the limit, and
-  their sizing refuses an `n` past it. The buckets of the counting, deletable and stable
-  filters are a 64-bit table of arrays, as `BloomFilter64`'s bits are, and have no such
-  limit. Versions that sized the array in 32 bits built a filter whose bits passed 2^32
-  with an array too short for them, without an error, and it failed on `Add`; a payload
-  written then is refused when read, with that said.
+  their sizing refuses an `n` past it. The buckets of the counting, deletable, stable and
+  partitioned filters are a 64-bit table of arrays, as `BloomFilter64`'s bits are, and have
+  no such limit. Versions that sized the array in 32 bits built a filter whose bits passed
+  2^32 with an array too short for them, without an error, and it failed on `Add`; a
+  payload written then is refused when read, with that said.
 - **A table of 2^32 slots is not a table.** `InfiniFilter` and `MementoFilter` double their
   table when three quarters full, up to 2^31 slots, or 2^30 for a Memento slot of 64 bits,
   and the `Add` that would double it past that throws, with the filter as it was.
@@ -111,11 +111,11 @@ more — 16 MiB of bits, about 14 million items at 1%, and for the partitioned f
 partition — places them with 64-bit values, exactly as `BloomFilter64` does. At m = 0.75 ·
 2^32 sized for 1% it measured 1.004%, as `BloomFilter64` did. A smaller filter is placed
 as before. Below 2^27 the excess is at most about 0.07% of the rate at 1%, too small to
-measure. Every save of `BloomFilter` and `PartitionedBloomFilter`, whatever its size, is
-written at format version 8, which records the placement in a byte of its own and the
-item count in 64 bits, and which 6.2.0 and earlier refuse. Every save of
-`CountingBloomFilter`, `DeletableBloomFilter` and `StableBloomFilter` is written at format
-version 14, which records the same and its sizes in 64 bits as well. A filter read from a payload written
+measure. Every save of `BloomFilter`, whatever its size, is written at format version 8,
+which records the placement in a byte of its own and the item count in 64 bits, and which
+6.2.0 and earlier refuse. Every save of `CountingBloomFilter`, `DeletableBloomFilter`,
+`StableBloomFilter` and `PartitionedBloomFilter` is written at format version 14, which
+records the same and its sizes in 64 bits as well. A filter read from a payload written
 before the release after 6.2.0 keeps the 32-bit placement, and the rate that goes with it, whatever its size, and
 records it when saved again. It does not merge with a new filter of the same size; to have
 the rate it was sized for, add its items to a new filter.
@@ -161,8 +161,8 @@ using 7 hash functions at 1% and 10 at 0.1%.
 
 `m` is a `uint`. `Utils.OptimalM` refuses a filter of more than 4,294,967,295 bits, which
 is 448,089,842 items at 1%, and that is the figure in the table. For more items use
-`BloomFilter64`, which sizes in 64 bits.
-`ScalableBloomFilter` does not reach much further: each filter it adds is a 32-bit filter.
+`BloomFilter64`, which sizes in 64 bits, as `PartitionedBloomFilter` and the filters
+`ScalableBloomFilter` adds do.
 
 A read is charged twice the filter's bytes, so the default budget reads a filter of
 about 537 megabytes: nearly all of what the constructor builds, and a filter sized for the
@@ -205,9 +205,13 @@ so what stops the constructor is memory. Until the release after 6.2.0 its sizes
 
 ### `PartitionedBloomFilter`
 
-One array of bits for each of the `k` hash functions, each `m / k` bits, so it takes the
-same `n` as `BloomFilter` and no array is long enough to be truncated. A read charges
-every partition as an array of its own.
+A table of bits for each of the `k` hash functions, each `m / k` bits, rounded up, with
+the sizing of `BloomFilter64`. `n`, `m` and `Capacity()` are `ulong`s and each partition
+is held as arrays of 2^30 bytes, so what stops the constructor is memory. Until the
+release after 6.2.0 its sizes were `uint`s and each partition one array, and it stopped
+at 448,089,842 items at 1%, as `BloomFilter` does. A read charges every partition as a
+table of its own. A payload past the ordinary envelope is written to a stream, in the
+large form.
 
 ### `CuckooBloomFilter`
 
@@ -341,25 +345,30 @@ little under what it is sized for, so the filter holds about as many items as it
 filter is sized for, and a growth factor of 2 doubles that with every filter. Each new
 filter is also sized for a rate `r` times the last one's, so that the compound rate stays
 bounded: a filter is larger for the tighter rate, and there are more of them the closer
-`r` is to 1. The first filter is a 32-bit filter like the rest, so a `hint` of more items
-than one can be sized for at the rate, 448,089,842 at 1%, is refused by the constructor
-with an `ArgumentOutOfRangeException` naming `hint` and the largest that builds.
+`r` is to 1. The first filter is sized in 64 bits like the rest, so a `hint` of more items
+than one can be sized for at the rate, 1,683,964,771,063,398,528 at 1%, is refused by the
+constructor with an `ArgumentOutOfRangeException` naming `hint` and the largest that
+builds. Until the release after 6.2.0 every contained filter was a 32-bit filter, and the
+largest hint at 1% was 448,089,842.
 
 What ends the filter, and so what the growth factor does to the first number, depends on
-that factor. With a growth factor of 2 or more the filters double until the next filter
-would need more bits than a contained filter addresses, which is the ceiling in the
-table; and the `Add` that needs it throws `InvalidOperationException` with the filter as it
-was. With a growth factor of 1 every filter is sized for `hint` items, and what ends the
-filter is the tightened rate, not the bits: it comes after about 3,160 filters, when the
-rate of the next has no finite reciprocal to size it from, at a small fraction of the
-items. So the table gives both, at the same `hint`, rate and `r`.
+that factor. With a growth factor of 2 or more the filters double until memory runs out,
+which is the figure in the table. Their sizing would go on until the next filter would
+need more bits than a contained filter holds, far past any memory, and the `Add` that
+needs it throws `InvalidOperationException` with the filter as it was. With a growth
+factor of 1 every filter is sized for `hint` items, and what ends the filter is the
+tightened rate, not memory: it comes after about 3,160 filters, when the rate of the next
+has no finite reciprocal to size it from, at a small fraction of the items. So the table
+gives both, at the same `hint`, rate and `r`.
 
-Reading costs about four times the bytes of the filters, because each is a payload inside a
-payload. With a growth factor of 1 the filters get larger as their rate tightens, and the
-default budget is reached before the ceiling. With a factor of 2 the last filters are the
-largest by far, and the default budget is reached a number of doublings before the
-ceiling: the read stops at the filter before the one that passes it, which is why the
-number in the table is a sum of whole filters and not a round one.
+Reading costs about 4.6 times the bytes of the filters, because each is a payload inside
+a payload. With a growth factor of 1 the filters get larger as their rate tightens, and
+the default budget is reached before the ceiling. With a factor of 2 the last filters are
+the largest by far, and the default budget is reached a number of doublings before the
+payload passes what a byte array holds, which is itself far short of memory: the read
+stops at the filter before the one that passes its budget, and the byte array at the
+filter before the one that passes it, which is why those numbers in the table are sums
+of whole filters and not round ones.
 
 ### `InfiniFilter`
 

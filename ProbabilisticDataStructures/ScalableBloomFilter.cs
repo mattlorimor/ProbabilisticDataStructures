@@ -48,17 +48,18 @@ namespace ProbabilisticDataStructures
     /// For situations where memory is bounded, consider using Inverse or Stable
     /// Bloom Filters.
     /// <para>
-    /// The growth has a ceiling, and it is not memory. The i-th filter is built at
-    /// <c>fpRate * r^i</c>, and a Bloom filter sizes its hash count from the reciprocal
+    /// The growth has a ceiling, and without growth it is not memory. The i-th filter is
+    /// built at <c>fpRate * r^i</c>, and a Bloom filter sizes its hash count from the reciprocal
     /// of its rate, which is not a number once the rate is below
     /// <c>1 / double.MaxValue</c>, about 5.6e-309. At a growth factor of 1, where that is
     /// what runs out, the filter holds at most
     /// <c>floor(ln(fpRate * double.MaxValue) / ln(1 / r)) + 1</c> filters: 3,161 at a
     /// rate of 1% and a ratio of 0.8, 6,693 at a ratio of 0.9, each holding about as
     /// many items as the hint, so 3.16 million items at a hint of a thousand. A filter
-    /// that grows stops sooner, when the next one would be built for more items than a
-    /// contained filter is sized for or needs more bits than it addresses, unless its
-    /// ratio is small enough that the rate runs out first. An
+    /// that grows runs out of memory first: its contained filters are sized in 64 bits
+    /// (#232), and it would stop only when the next one would be built for more items than
+    /// a contained filter is sized for or need more bits than it holds, far past any
+    /// memory, unless its ratio is small enough that the rate runs out first. An
     /// <see cref="Add(ReadOnlySpan{byte})"/> that needs a filter beyond the ceiling
     /// throws an <see cref="InvalidOperationException"/> before it changes anything, and
     /// the filter goes on answering queries and can be written. <see cref="BloomFilter64"/>
@@ -103,7 +104,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Filter size hint
         /// </summary>
-        internal uint Hint { get; set; }
+        internal ulong Hint { get; set; }
 
         /// <summary>
         /// The growth factor a filter is built with when its constructor is not given
@@ -161,7 +162,7 @@ namespace ProbabilisticDataStructures
         /// or a <paramref name="hint"/> of more items than the first contained filter can
         /// be built for at <paramref name="fpRate"/>.
         /// </exception>
-        public ScalableBloomFilter(uint hint, double fpRate, double r,
+        public ScalableBloomFilter(ulong hint, double fpRate, double r,
             Func<ReadOnlySpan<byte>, ulong>? hash = null)
             : this(hint, fpRate, r, DefaultGrowth, hash)
         {
@@ -205,7 +206,7 @@ namespace ProbabilisticDataStructures
         /// and the exception names <paramref name="hint"/> and gives the largest at the
         /// rate asked for.
         /// </exception>
-        public ScalableBloomFilter(uint hint, double fpRate, double r, uint growth,
+        public ScalableBloomFilter(ulong hint, double fpRate, double r, uint growth,
             Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
             Guard.ValidItemCount(hint, nameof(hint));
@@ -250,11 +251,11 @@ namespace ProbabilisticDataStructures
             {
                 throw new ArgumentOutOfRangeException(nameof(hint), hint,
                     $"The first contained filter is built for the hint, and {hint:N0} items at " +
-                    $"a false positive rate of {fpRate} need more bits than the " +
-                    $"{uint.MaxValue:N0} a contained filter addresses. The largest hint at that " +
-                    $"rate is {LargestHint(fpRate):N0}. Use a smaller hint, which the filter " +
-                    "grows from by adding filters, or a BloomFilter64 sized for the most you " +
-                    "expect to hold, which sizes one filter in 64 bits.");
+                    $"a false positive rate of {fpRate} need more bits than a contained filter " +
+                    "holds: its bit count is a 64-bit number, and each of its partitions holds " +
+                    $"at most {Buckets64.MaxCount:N0} bits. The largest hint at that rate is " +
+                    $"{LargestHint(fpRate):N0}. Use a smaller hint, which the filter grows from " +
+                    "by adding filters.");
             }
         }
 
@@ -263,29 +264,21 @@ namespace ProbabilisticDataStructures
         /// <paramref name="fpRate"/>.
         /// </summary>
         /// <remarks>
-        /// A bisection over <see cref="Utils.OptimalM"/>, the sizing the contained filter's
-        /// constructor calls, asked rather than restated so that the figure a refusal gives
-        /// is the one that builds. It runs only on the way to that refusal. One item fits
-        /// at every rate the constructor accepts, since even the smallest costs under 1,500
-        /// bits an item.
+        /// A bisection over <see cref="PartitionedBloomFilter.Sizes"/>, the sizing the
+        /// contained filter's constructor checks, asked rather than restated so that the
+        /// figure a refusal gives is the one that builds. It runs only on the way to that
+        /// refusal. One item fits at every rate the constructor accepts, since even the
+        /// smallest costs under 1,500 bits an item.
         /// </remarks>
-        private static uint LargestHint(double fpRate)
+        private static ulong LargestHint(double fpRate)
         {
-            uint low = 1;
-            uint high = uint.MaxValue;
+            ulong low = 1;
+            ulong high = ulong.MaxValue;
             while (low < high)
             {
-                var mid = low + ((high - low + 1) / 2);
-                bool fits;
-                try
-                {
-                    _ = Utils.OptimalM(mid, fpRate);
-                    fits = true;
-                }
-                catch (ArgumentOutOfRangeException)
-                {
-                    fits = false;
-                }
+                // The upper middle, so that the search moves when low and high are one apart.
+                var mid = low + ((high - low) / 2) + 1;
+                var fits = PartitionedBloomFilter.Sizes(mid, fpRate);
 
                 if (fits)
                 {
@@ -315,16 +308,15 @@ namespace ProbabilisticDataStructures
         /// capacities for the contained series of Bloom filters, in bits.
         /// </summary>
         /// <remarks>
-        /// A <c>ulong</c>, where each contained filter's own capacity is a <c>uint</c>: no
-        /// one of them can pass 4,294,967,295 bits, but a filter whose contained filters
-        /// grow passes it in total well before it stops growing. In 6.2.0 and earlier
-        /// this returned a <c>uint</c>, and such a total wrapped.
+        /// A <c>ulong</c>, as each contained filter's own capacity has been since the release
+        /// after 6.2.0, when they were sized in 64 bits. In 6.2.0 and earlier this returned
+        /// a <c>uint</c>, and a total past 4,294,967,295 wrapped.
         /// </remarks>
         /// <returns>The current Scalable Bloom Filter capacity</returns>
         public ulong Capacity()
         {
-            // Summed in 64 bits: each filter's capacity is a uint, so the total of every
-            // filter a list can hold still fits.
+            // Summed in 64 bits, as each filter's capacity is: a total that wrapped would
+            // be of filters holding more bits than any memory does.
             var capacity = 0ul;
             foreach (var filter in this.Filters)
             {
@@ -453,19 +445,16 @@ namespace ProbabilisticDataStructures
             payload.WriteDouble(this.R);
             payload.WriteDouble(this.FP);
             payload.WriteDouble(this.P);
-            payload.WriteUInt32(this.Hint);
+            payload.WriteUInt64(this.Hint);
 
-            // The growth factor is written only by a filter that grows, and the version
-            // raised only then. A filter that builds every filter for its hint writes the
-            // bytes it always wrote, which libraries from before the factor still read.
-            // Each contained filter records its own size either way; the factor is what
-            // says how large the next one will be.
-            var version = PersistenceFormat.DefaultVersion;
-            if (this.Growth != 1)
-            {
-                payload.WriteUInt32(this.Growth);
-                version = PersistenceFormat.ScalableGrowthVersion;
-            }
+            // Every save is version 14 (#232): the hint a u64, and the growth factor
+            // written whatever it is, 1 included. Version 7 wrote the factor only for a
+            // filter that grows, so that one that did not wrote version 1's bytes; at
+            // version 14 its contained filters are version 14 too, which no earlier
+            // library reads, so nothing is kept by leaving the factor out. Each contained
+            // filter records its own size; the factor says how large the next one will be.
+            var version = PersistenceFormat.Bloom64Version;
+            payload.WriteUInt32(this.Growth);
 
             // Each contained filter keeps its own envelope rather than being flattened
             // into this one. It costs eighteen bytes each and means a filter added
@@ -575,7 +564,7 @@ namespace ProbabilisticDataStructures
             var r = reader.ReadDouble();
             var fp = reader.ReadDouble();
             var p = reader.ReadDouble();
-            var hint = reader.ReadUInt32();
+            var hint = ReadHint(ref reader, version);
             var growth = ReadGrowth(ref reader, version);
             var filterCount = ReadFilterCount(ref reader);
 
@@ -611,7 +600,7 @@ namespace ProbabilisticDataStructures
             reader.ReadDouble();
             reader.ReadDouble();
             reader.ReadDouble();
-            reader.ReadUInt32();
+            ReadHint(ref reader, version);
             ReadGrowth(ref reader, version);
             var filterCount = ReadFilterCount(ref reader);
 
@@ -633,6 +622,10 @@ namespace ProbabilisticDataStructures
         /// hint, so that is how this one goes on. One, and not the default a new filter
         /// is given, which would size its next filter as that filter never did.
         /// </remarks>
+        /// <summary>The hint: a <c>u64</c> from version 14, a <c>u32</c> before it.</summary>
+        private static ulong ReadHint(ref PayloadReader reader, ushort version) =>
+            version >= PersistenceFormat.Bloom64Version ? reader.ReadUInt64() : reader.ReadUInt32();
+
         private static uint ReadGrowth(ref PayloadReader reader, ushort version)
         {
             if (version < PersistenceFormat.ScalableGrowthVersion)
@@ -641,13 +634,19 @@ namespace ProbabilisticDataStructures
             }
 
             var growth = reader.ReadUInt32();
-            if (growth < 2)
+            if (growth == 0)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims a growth factor of 0, which would size every filter " +
+                    "after the first for no items.");
+            }
+
+            if (growth < 2 && version < PersistenceFormat.Bloom64Version)
             {
                 throw new InvalidDataException(
                     $"Filter claims a growth factor of {growth}. A payload at version " +
-                    $"{version} carries one only because its filter grows: zero would " +
-                    "size every filter after the first for no items, and a filter " +
-                    "growing by one writes version 1.");
+                    $"{version} carries one only because its filter grows: a filter " +
+                    "growing by one wrote version 1.");
             }
             return growth;
         }
@@ -771,7 +770,7 @@ namespace ProbabilisticDataStructures
         /// the next filter, so the test runs the rule that ships.
         /// </para>
         /// </remarks>
-        internal uint NextCapacity(double fpRate)
+        internal ulong NextCapacity(double fpRate)
         {
             var index = this.Filters.Count;
 
@@ -783,22 +782,30 @@ namespace ProbabilisticDataStructures
             }
 
             // Multiplied out rather than raised to a power, so that it is exact, and only
-            // until it passes what a contained filter is sized for: a factor of two or
-            // more gets there within 32 steps, and a factor of one never moves.
+            // while the product stays a 64-bit count: a factor of two or more passes it
+            // within 64 steps, and a factor of one never moves.
             ulong capacity = this.Hint;
-            for (var i = 0; i < index && this.Growth > 1 && capacity <= uint.MaxValue; i++)
+            var past = false;
+            for (var i = 0; i < index && this.Growth > 1; i++)
             {
+                if (capacity > ulong.MaxValue / this.Growth)
+                {
+                    past = true;
+                    break;
+                }
+
                 capacity *= this.Growth;
             }
 
             const string OneFilter = "A BloomFilter64 sized for the expected total holds them all in one filter.";
 
-            if (capacity > uint.MaxValue)
+            if (past)
             {
                 throw this.Ceiling(index,
                     $"would be built for {this.Hint:N0} * {this.Growth:N0}^{index} items, " +
-                    $"more items than the {uint.MaxValue:N0} a contained filter is sized for",
-                    OneFilter, null);
+                    $"more items than the {ulong.MaxValue:N0} a contained filter is sized for",
+                    "No contained filter is sized for more, and the filter goes on answering " +
+                    "queries and can be written.", null);
             }
 
             try
@@ -818,20 +825,17 @@ namespace ProbabilisticDataStructures
                     slower + OneFilter, e);
             }
 
-            try
-            {
-                _ = Utils.OptimalM((uint)capacity, fpRate);
-            }
-            catch (ArgumentOutOfRangeException e)
+            if (!PartitionedBloomFilter.Sizes(capacity, fpRate))
             {
                 throw this.Ceiling(index,
                     $"would be built for {capacity:N0} items at a false positive rate of " +
-                    $"{fpRate:G3}, which needs more bits than the {uint.MaxValue:N0} a " +
-                    "contained filter addresses",
-                    OneFilter, e);
+                    $"{fpRate:G3}, which needs more bits than a contained filter holds: its " +
+                    "bit count is a 64-bit number, and each of its partitions holds at most " +
+                    $"{Buckets64.MaxCount:N0} bits",
+                    "A looser target rate or a tightening ratio nearer 1 needs fewer bits.", null);
             }
 
-            return (uint)capacity;
+            return capacity;
         }
 
         /// <summary>

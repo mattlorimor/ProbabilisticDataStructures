@@ -294,6 +294,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   load, from every earlier version, and save again as version 14, resuming the decay
   sequence they were stored partway through. (#232)
 
+- **`PartitionedBloomFilter` is sized in 64 bits, and saves at format version 14, and that
+  is a breaking change.** Its `n` and `Capacity()` are `ulong`s where they were `uint`s: a
+  caller passing a `uint` compiles as it did, one keeping `Capacity()` in a `uint` needs a
+  cast or a wider variable, and code compiled against an earlier release has to be rebuilt.
+  Each partition is held as arrays of 2^30 bytes, so it is limited by memory rather than by
+  one array, which stopped it at 448,089,842 items at 1%. A partition is the total over the
+  hash count rounded up in integers rather than through a `double`, which is a bit short
+  past 2^53, and the suite holds the two to the same size below 2^32 bits. A partition of
+  2^27 bits or more places with 64-bit values, as it did.
+  <br><br>
+  Every save is [format version 14](FORMAT.md#format-versions): version 8's layout with `m`
+  and `s` `u64`s and each partition a `Buckets64`. **No earlier release reads it.** Stored
+  filters still load, from every earlier version, and save again as version 14; a version
+  14 payload placed with 32-bit values among more than 4,294,967,295 bits a partition is
+  refused, as the counting filter's is. (#232)
+
+- **`ScalableBloomFilter` is sized in 64 bits, holds 64-bit partitioned filters, and saves
+  at format version 14, and that is a breaking change.** Its `hint` is a `ulong` where it
+  was a `uint`, in both constructors: a caller passing a `uint` compiles as it did, and code
+  compiled against an earlier release has to be rebuilt. Its contained filters are the
+  widened `PartitionedBloomFilter`, so a filter that grows is stopped by memory rather than
+  by a contained filter's 2^32 bits, which stopped it at about 249 million items at a hint
+  of 1,000, 1% and r 0.8; a byte array holds it to about 499.81 million there, and one
+  larger is written to a stream. A first filter is refused only past the largest hint that
+  sizes, 1,683,964,771,063,398,528 at 1% where it was 448,089,842, and a refusal says why: a
+  bit count past a 64-bit number, or a partition past the 2,305,842,948,010,409,983 bits one
+  holds. A filter at
+  a growth factor of 1 still stops at its rate, after the same number of filters; each of
+  them costs a little more to read, so the default budget reads about 2.68 million items
+  at a hint of 1,000, 1% and r 0.8 where it read 2.83 million.
+  <br><br>
+  Every save is [format version 14](FORMAT.md#format-versions), whatever its growth factor:
+  version 7's layout with the hint a `u64`, and the growth factor written always, 1
+  included, where a filter that did not grow wrote version 1 without it. **No earlier
+  release reads it.** Stored filters still load, from version 1 and 7, and save again as
+  version 14. A reader refuses a growth factor of 0 at version 14 and below 2 at version 7,
+  where a factor of 1 was never written. (#232)
+
 - **`BloomFilter64` is faster, the structures placed with 64-bit values test faster, and
   every bit is where it was.** The 64-bit placement hashes the first value's eight little-endian
   bytes for the second value, and both places that do it wrote those bytes into a
@@ -587,6 +625,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#289)
 
 ### Fixed
+
+- **A 64-bit table whose count, width and arrays disagree is refused for that before it is
+  priced.** The price of a `Buckets64` walked its arrays without checking them against its
+  count and width, which only its reader did, so such a payload over its budget was refused
+  for the budget rather than for its shape, where a 32-bit table's price refuses the shape
+  first. It now refuses what the reader refuses, with the same message, for every filter
+  whose buckets are a `Buckets64`, `BloomFilter64` included. (#232)
 
 - **FORMAT.md gives 3.2.0 as the release that first wrote format version 1.** Its version
   table said 3.1.0, but persistence first shipped in 3.2.0: the 3.1.0 package on nuget.org

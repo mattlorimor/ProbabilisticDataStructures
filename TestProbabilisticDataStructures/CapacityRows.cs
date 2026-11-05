@@ -186,22 +186,30 @@ namespace TestProbabilisticDataStructures
 
         internal static CapacityRow PartitionedBloomFilter(double fp, string label) => Row(
             StructureId.PartitionedBloomFilter, $"n, fp {label}",
-            () => Exact(LargestSized(fp)),
+            () =>
+            {
+                // Sized in 64 bits since #232, each partition on a 64-bit table, as the
+                // counting filter's counters are.
+                Assert.IsGreaterThan(0UL, Utils.OptimalM64(1UL << 50, fp));
+                Assert.IsGreaterThan(1UL << 60, Buckets64.MaxCount);
+                return Memory;
+            },
             () =>
             {
                 var k = Utils.OptimalK(fp);
-                ulong Bytes(ulong n)
-                {
-                    TryOptimalM(n, fp, out var m);
-                    return k * TrueBytes((ulong)Math.Ceiling((double)m / k), 1);
-                }
 
-                var line = ChargeLine.Fit("PartitionedBloomFilter", 64 + 24 * k,
-                    new[] { 100_000u, 200_000u, 400_000u, 800_000u }
+                // Each partition is the bits over the hash count, rounded up.
+                ulong Bytes(ulong n) => k * TrueBytes((Utils.OptimalM64(n, fp) + k - 1) / k, 1);
+
+                var line = ChargeLine.Fit("PartitionedBloomFilter", 64 + 48 * k,
+                    new[] { 100_000UL, 200_000UL, 400_000UL, 800_000UL }
                         .Select(n => ((long)Bytes(n),
-                            ChargeOf(StructureId.PartitionedBloomFilter, new PartitionedBloomFilter(n, fp))))
-                        .ToArray());
-                return LoadsAbout(line, LargestSized(fp), Bytes);
+                            ChargeOf(StructureId.PartitionedBloomFilter, new ProbabilisticDataStructures.PartitionedBloomFilter(n, fp))))
+                        .ToArray())
+                    // Past 2^33 bits a partition is in more than one array, and each array is
+                    // charged a few more bytes; none can be built here to measure them.
+                    .Widen(5 * 48 * k);
+                return LoadsAbout(line, 1UL << 40, Bytes);
             });
 
         internal static CapacityRow StableBloomFilter(byte d, double fp, string label) => Row(

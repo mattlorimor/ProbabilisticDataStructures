@@ -79,7 +79,7 @@ namespace TestProbabilisticDataStructures
                 () => new DeletableBloomFilter(1000, 10, 0.01), new[] { 8 },
                 rate => new DeletableBloomFilter(1, 10, rate), f => f.K()),
             [typeof(PartitionedBloomFilter)] = Of(
-                () => new PartitionedBloomFilter(1000, 0.01), new[] { 4, 21 },
+                () => new PartitionedBloomFilter(1000, 0.01), new[] { 8, 29 },
                 rate => new PartitionedBloomFilter(1, rate), f => f.K()),
             // The stable filter's constructor halves the count, so it reaches the ceiling
             // only through the factory that builds an ordinary Bloom filter out of cells.
@@ -343,7 +343,7 @@ namespace TestProbabilisticDataStructures
             var nestedLength = (int)BinaryPrimitives.ReadUInt32LittleEndian(outer.AsSpan(nested - 4));
 
             var partitioned = new PartitionedBloomFilter(100, 0.01);
-            foreach (var offset in new[] { 4, 21 })
+            foreach (var offset in new[] { 8, 29 })
             {
                 Assert.AreEqual(partitioned.K(),
                     BinaryPrimitives.ReadUInt32LittleEndian(outer.AsSpan(nested + PayloadStart + offset)),
@@ -351,7 +351,7 @@ namespace TestProbabilisticDataStructures
             }
 
             var bytes = (byte[])outer.Clone();
-            foreach (var offset in new[] { 4, 21 })
+            foreach (var offset in new[] { 8, 29 })
             {
                 BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(nested + PayloadStart + offset), 0);
             }

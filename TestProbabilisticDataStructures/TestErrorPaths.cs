@@ -199,10 +199,10 @@ namespace TestProbabilisticDataStructures
             foreach (var (name, construct) in new (string, Action)[]
             {
                 ("BloomFilter", () => new BloomFilter(1_000_000_000, 0.01)),
-                ("PartitionedBloomFilter", () => new PartitionedBloomFilter(1_000_000_000, 0.01)),
-                // The scalable filter refuses a hint too large for its first filter too,
-                // but naming the hint, and pointing to a smaller hint rather than to
-                // itself: TestScalableBloomFilter's
+                // The partitioned filter is sized in 64 bits since #232, and a billion items
+                // build. The scalable filter refuses a hint too large for its first filter,
+                // naming the hint, and pointing to a smaller hint rather than to itself:
+                // TestScalableBloomFilter's
                 // TestAHintTooLargeForTheFirstFilterIsRefusedNamingTheHint holds that.
             })
             {

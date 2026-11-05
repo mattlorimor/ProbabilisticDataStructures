@@ -121,11 +121,11 @@ structure whose layout changes bumps only its own.
 | 4 | 6.2.0 | `SetSketch` | the construction, written only for the second one |
 | 5 | the release after 6.2.0 | `StableBloomFilter` | the state the random generator began in |
 | 6 | the release after 6.2.0 | `CuckooBloomFilter` | the state the random generator began in |
-| 7 | the release after 6.2.0 | `ScalableBloomFilter` | the growth factor, written only by a filter that grows |
-| 8 | the release after 6.2.0 | `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter`, `StableBloomFilter` | a placement byte, and the item count as a `u64`; written by every save of those not written at 14 |
+| 7 | the release after 6.2.0 | `ScalableBloomFilter` | the growth factor, written only by a filter that grows, until 14 |
+| 8 | the release after 6.2.0 | `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter`, `StableBloomFilter` | a placement byte, and the item count as a `u64`; written by every save of `BloomFilter` |
 | 9 | the release after 6.2.0 | `InverseBloomFilter`, `CountMinSketch`, `HeavyKeeper`, `PrivateCountMinSketch`, `DpswSketch` | a placement byte, in each private sketch body for `DpswSketch`; written by every save |
 | 10 | the release after 6.2.0 | `SublimeCountMinSketch` | the packing tuning of each state, before its counters; written by every save |
-| 14 | the release after 6.2.0 | `CountingBloomFilter`, `DeletableBloomFilter`, `StableBloomFilter` | sizes as `u64`s, and the buckets as a `Buckets64`; written by every save |
+| 14 | the release after 6.2.0 | `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter`, `ScalableBloomFilter`, `StableBloomFilter` | sizes as `u64`s, and the buckets as a `Buckets64`; for `ScalableBloomFilter`, the hint as a `u64` and the growth factor whatever it is; written by every save |
 
 The version field's high bit, `0x8000`, is not part of a version: it marks
 [the large form](#the-large-form) of the envelope, and the version is the other fifteen
@@ -176,22 +176,25 @@ in [The random generator's state](#the-random-generators-state).
 Version 7 exists because a `ScalableBloomFilter` can grow its contained filters: the
 i-th is built for hint × sⁱ items rather than for the hint every time. Each nested filter
 already records its own size, so filters of mixed sizes read back at any version; what a
-payload without the factor cannot say is how large the *next* filter should be. Only a
-filter that grows writes version 7. One with a growth factor of 1 — every filter built
-for the hint, as every scalable filter was before the factor existed — still writes
-version 1, so libraries that predate the choice still read it. A version 1 payload is a
-filter with a growth factor of 1 by definition, and goes on adding filters for its hint
-after it is read; a reader older than version 7 refuses a version 7 payload as written by
-a later version.
+payload without the factor cannot say is how large the *next* filter should be. Until
+version 14 only a filter that grows wrote version 7. One with a growth factor of 1 —
+every filter built for the hint, as every scalable filter was before the factor existed —
+wrote version 1, so libraries that predate the choice still read it. A version 1 payload
+is a filter with a growth factor of 1 by definition, and goes on adding filters for its
+hint after it is read; a reader older than version 7 refuses a version 7 payload as
+written by a later version. Every save is version 14 now, which carries the factor
+whatever it is.
 
 Version 8 records two things the five structures named on it could not say before: how
 their bits were placed, and an item count past 2^32. Each writes, at version 8, the layout
 it wrote before -- version 5's for the stable filter, version 1's for the rest -- with a
 placement byte after the fields that size the filter, and its item count, where it has
-one, widened from a `u32` to a `u64`. Every save of these five is version 8, whatever
+one, widened from a `u32` to a `u64`. Every save of these five was version 8, whatever
 its size or placement, so a library older than version 8 reads none of them; a payload
-written before version 8 still reads, and saves again as version 8. One number covers
-all five, because it names one change.
+written before version 8 still reads. One number covers all five, because it names one
+change. Version 14 widened four of them, and every save of those is version 14 now;
+`BloomFilter`'s is still version 8, and a payload of it written before version 8 saves
+again as version 8.
 
 The placement byte is `0` for 32-bit values and `1` for 64-bit ones, as
 [Bit placement](#bit-placement) describes, and a reader refuses any other value, naming
@@ -210,8 +213,8 @@ reads back that way, so a large filter written by an earlier release is the filt
 was, including the false positive rate it had. Two filters of the same size placed
 differently set different bits for the same item, so the filters that merge refuse to
 merge them. A `ScalableBloomFilter` holds partitioned filters, each in its own
-envelope, so its contained filters are written at version 8 inside a scalable filter at
-version 1 or 7.
+envelope, so before version 14 its contained filters were written at version 8 inside a
+scalable filter at version 1 or 7; now both are version 14.
 
 Version 9 is the same change for the structures that reduce a hash to one column of a
 row, or one slot: `CountMinSketch`, `PrivateCountMinSketch`, `HeavyKeeper` and
@@ -246,14 +249,22 @@ what the tuning is and how a reader holds it to the counters. Every save is vers
 a library older than version 10 reads none of them; a payload written before it still
 reads, and saves again as version 10.
 
-Version 14 is the change that widens `CountingBloomFilter`, `DeletableBloomFilter` and
-`StableBloomFilter` to 64-bit sizes. Each writes, at version 14, its version 8 layout with
-each size that was a `u32` widened to a `u64` and each of its tables of buckets written as
-a [`Buckets64`](#payload-primitives) rather than a `Buckets`; nothing else moves, and the
+Version 14 is the change that widens `CountingBloomFilter`, `DeletableBloomFilter`,
+`StableBloomFilter`, `PartitionedBloomFilter` and `ScalableBloomFilter` to 64-bit sizes.
+Each of the first four writes, at version 14, its version 8 layout with each size that was
+a `u32` widened to a `u64` and each of its tables of buckets written as a
+[`Buckets64`](#payload-primitives) rather than a `Buckets`; nothing else moves, and the
 packed bits are the same bytes. Every save is version 14, whatever its size, so a library
 older than version 14 reads none of them; a payload written before it still reads, and
 saves again as version 14. A table of buckets, one array in a payload before version 14,
 is laid out as a `Buckets64`'s arrays when read.
+
+The scalable filter writes, at version 14, its version 7 layout with the hint a `u64`,
+since the hint sizes the first contained filter and that is sized in 64 bits now, and
+with the growth factor whatever it is, 1 included: one layout carries every filter, so a
+filter that does not grow no longer needs a version of its own. Its contained filters are
+partitioned filters, at version 14 like it. A version 1 or 7 payload still reads, and
+saves again as version 14.
 
 The placement byte means what version 8's does. One thing about it is new: a size can now
 pass 2^32, and the 32-bit scheme is reduced modulo a 32-bit count of positions, which every
@@ -425,7 +436,7 @@ address.
 | `SetSketch` | `m` | 2,147,483,591 | the registers are one array |
 | `SublimeCountMinSketch` | rows | 710 | `ceil(ln(1 / delta))` at the smallest delta whose reciprocal is a finite double |
 | `SublimeCountMinSketch` | counters in a row | 1,073,741,824 | a width is a power of two held in an `int`, and 2^30 is the largest of those; the sketch stops widening there |
-| `ScalableBloomFilter` | filter count | 2,147,483,591 | the filters are a list; a filter stops growing sooner, when its next filter would have no finite rate to be sized from, or would be built for more items or bits than a contained filter addresses, which is a limit on growing and not on reading |
+| `ScalableBloomFilter` | filter count | 2,147,483,591 | the filters are a list; a filter stops growing sooner, when its next filter would have no finite rate to be sized from, or would be built for more items or bits than a contained filter holds, which is a limit on growing and not on reading |
 | `CountingBloomFilter` | counters, `m` | 2,305,842,948,010,409,983 | the counters are a `Buckets64`, arrays of 2^30 bytes held in one array, which holds at most 2,147,483,591 of them; memory runs out long before |
 | `StableBloomFilter` | cells, `m` | 2,305,842,948,010,409,983 | the cells are a `Buckets64`, as the counting filter's counters are; memory runs out long before |
 | `BloomFilter` | hash functions, `k` | 1,024 | `ceil(log2(1 / rate))` at the smallest false positive rate whose reciprocal is a finite double; the constructor refuses a smaller rate. A reader also refuses none, which sets no bit and tests none |
@@ -445,10 +456,10 @@ The other filters built on `Buckets` hold one-bit buckets, so the most they hold
 a `u32` counts, 4,294,967,295, which is 536,870,912 bytes, and their sizing refuses
 anything beyond it. Before version 14 the same arithmetic limited the counting and stable
 filters from four bits up: at 4 bits it was 4,294,967,182 buckets, and at 8 bits
-2,147,483,591. A counting filter's counters, a deletable filter's two regions and a stable
-filter's cells have been a `Buckets64` since version 14, which counts its buckets in a
-`u64` and holds them in arrays of 2^30 bytes: what limits them is the count of arrays, at
-most what one array holds, at every bucket width.
+2,147,483,591. A counting filter's counters, a deletable filter's two regions, a stable
+filter's cells and a partitioned filter's partitions have been a `Buckets64` since version
+14, which counts its buckets in a `u64` and holds them in arrays of 2^30 bytes: what
+limits them is the count of arrays, at most what one array holds, at every bucket width.
 
 A `DeletableBloomFilter` keeps its data region and its collision regions out of one `m`
 that sizing holds to what a `Buckets64` holds, 2,305,842,948,010,409,983, so the two come
@@ -666,23 +677,24 @@ is read as it was stored.
 
 ### `PartitionedBloomFilter` (id 5)
 
-At version 8:
+At version 14:
 
 ```
-u32     m, the total capacity in bits
-u32     k
-u32     s, the size of each partition in bits
-u8      placement, 0 for 32-bit values and 1 for 64-bit ones
-u64     count
-u32     partition count
-Buckets one per partition
+u64       m, the total capacity in bits
+u32       k
+u64       s, the size of each partition in bits
+u8        placement, 0 for 32-bit values and 1 for 64-bit ones
+u64       count
+u32       partition count
+Buckets64 one per partition
 ```
 
 There is one partition per hash function, and a payload whose partition count differs
 from `k` is refused. Each partition must hold `s` buckets. Which item a bit stands for
 is described in [Bit placement](#bit-placement), with `m` the partition size `s`. At
-version 1 there is no placement byte, the bits were placed with 32-bit values, and the
-count is a `u32`.
+version 8, `m` and `s` are each a `u32` and each partition a `Buckets`. At version 1
+there is also no placement byte, the bits were placed with 32-bit values, and the count
+is a `u32`.
 
 ### `ScalableBloomFilter` (id 6)
 
@@ -690,8 +702,8 @@ count is a `u32`.
 f64     r, the tightening ratio
 f64     fp, the target false positive rate
 f64     p, the fill ratio at which a new filter is added
-u32     hint, the items the first contained filter is built for
-u32     s, the growth factor, at format version 7 only
+u64     hint, the items the first contained filter is built for; a u32 before version 14
+u32     s, the growth factor, at format version 7 and 14
 u32     filter count
 nested  PartitionedBloomFilter, one per contained filter, in order
 ```
@@ -703,8 +715,9 @@ Filter i is built for hint × sⁱ items at fp × rⁱ, and s is 1 in a payload 
 A reader takes each filter's size from its nested payload and does not recompute it:
 the sizing goes through floating point that is not bit-identical across platforms, and
 the filters are what they were built as. The factor is stored for the filters still to
-come. A reader at version 7 rejects a growth factor below 2, since a filter growing by 1
-writes version 1, and every reader rejects a payload holding no filters.
+come. A reader rejects a growth factor of 0, which would build every filter after the
+first for no items, and at version 7 one of 1 as well, since a filter growing by 1 wrote
+version 1 then; every reader rejects a payload holding no filters.
 
 ### `StableBloomFilter` (id 7)
 
@@ -1597,7 +1610,7 @@ filters, the data region for the deletable filter, the cell count for the stable
 and the partition size `s` for the partitioned filter, whose `i`th position goes in the
 `i`th partition. `h` is the 64-bit hash of the item: XxHash3 with seed 0 for hash id 1.
 
-Positions come from 32-bit values in a payload before version 8, and in a version 8
+Positions come from 32-bit values in a payload before version 8, and in a version 8 or 14
 payload whose placement byte is `0`:
 
 ```
@@ -1606,7 +1619,7 @@ high = h >> 32
 position i = ((low + i * high) mod 2^32) mod m,   for i = 0 .. k - 1
 ```
 
-They come from 64-bit values, as `BloomFilter64`'s always have, in a version 8 payload
+They come from 64-bit values, as `BloomFilter64`'s always have, in a version 8 or 14 payload
 whose placement byte is `1`:
 
 ```

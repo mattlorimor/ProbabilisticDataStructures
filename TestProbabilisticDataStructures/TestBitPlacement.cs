@@ -586,7 +586,7 @@ namespace TestProbabilisticDataStructures
                 (f, k) => ((DeletableBloomFilter)f).TestAndAdd(k),
                 (f, k) => ((DeletableBloomFilter)f).TestAndRemove(k)) { Version = 14, Layout14 = "mubqtt" },
             new Kind(nameof(PartitionedBloomFilter),
-                p => new PartitionedBloomFilter(100, 0.01, null, p), 1, 12, 13,
+                p => new PartitionedBloomFilter(100, 0.01, null, p), 1, 20, 21,
                 f => ((PartitionedBloomFilter)f).ToByteArray(),
                 b => Persistence.FromByteArray<PartitionedBloomFilter>(b),
                 f => ((PartitionedBloomFilter)f).Placement,
@@ -594,7 +594,7 @@ namespace TestProbabilisticDataStructures
                 (f, k) => ((PartitionedBloomFilter)f).Test(k),
                 f => ((PartitionedBloomFilter)f).Partitions.SelectMany((partition, i) => Bits(partition, (uint)i)),
                 (f, k) => ((PartitionedBloomFilter)f).TestAndAdd(k),
-                null),
+                null) { Version = 14, Layout14 = "mumbqn" },
             // Seeded, so that its payload is reproducible. Its cells decay, so the cells
             // it reports are checked only for the item just added.
             new Kind(nameof(StableBloomFilter),
@@ -948,7 +948,7 @@ namespace TestProbabilisticDataStructures
                 (f, k) => ((CountingBloomFilter)f).TestAndRemove(k), (a, b) => ((CountingBloomFilter)a).Merge((CountingBloomFilter)b)),
             (nameof(DeletableBloomFilter), () => new DeletableBloomFilter(100, 10, 0.01), f => ((DeletableBloomFilter)f).Count(), 13,
                 (f, k) => ((DeletableBloomFilter)f).TestAndRemove(k), null),
-            (nameof(PartitionedBloomFilter), () => new PartitionedBloomFilter(100, 0.01), f => ((PartitionedBloomFilter)f).Count(), 13,
+            (nameof(PartitionedBloomFilter), () => new PartitionedBloomFilter(100, 0.01), f => ((PartitionedBloomFilter)f).Count(), 21,
                 null, (a, b) => ((PartitionedBloomFilter)a).Merge((PartitionedBloomFilter)b)),
         };
 

@@ -140,6 +140,24 @@ namespace ProbabilisticDataStructures
         /// </remarks>
         internal static Buckets64 Restore(ulong count, byte bucketSize, byte[][] data)
         {
+            var arrayBits = ArrayBits;
+            CheckRestorable(count, bucketSize, (ulong)data.Length);
+            for (int i = 0; i < data.Length; i++)
+            {
+                CheckStoredArray(count, bucketSize, (ulong)i, data[i].Length);
+            }
+
+            return new Buckets64(count, bucketSize, data, arrayBits);
+        }
+
+        /// <summary>
+        /// Refuses a stored table's count, bucket size and number of arrays where
+        /// <see cref="Restore"/> would, so that a price can refuse them as its reader does
+        /// before anything is allocated.
+        /// </summary>
+        /// <exception cref="InvalidDataException">They are not a table this type holds.</exception>
+        internal static void CheckRestorable(ulong count, byte bucketSize, ulong arrays)
+        {
             CheckStoredBucketSize(bucketSize);
 
             if (count > MaxCount)
@@ -149,30 +167,34 @@ namespace ProbabilisticDataStructures
                     "which is beyond anything this library builds.");
             }
 
-            var arrayBits = ArrayBits;
-            var arraySize = 1UL << arrayBits;
-            var arrays = count / arraySize + 1;
-            if ((ulong)data.Length != arrays)
+            var needed = count / ArraySize + 1;
+            if (arrays != needed)
             {
                 throw new InvalidDataException(
-                    $"{count} buckets of {bucketSize} bits need {arrays} " +
-                    $"arrays and {data.Length} were stored.");
+                    $"{count} buckets of {bucketSize} bits need {needed} " +
+                    $"arrays and {arrays} were stored.");
             }
+        }
 
-            var bytesLeft = (count * bucketSize + 7) / 8;
-            for (int i = 0; i < data.Length; i++)
+        /// <summary>
+        /// Refuses array <paramref name="index"/> of a stored table whose count and bucket
+        /// size <see cref="CheckRestorable"/> accepted, unless it holds the bytes that array
+        /// packs: every array but the last is whole, the last holds what is left, and an
+        /// array past the bytes the buckets need holds none.
+        /// </summary>
+        /// <exception cref="InvalidDataException">It holds some other length.</exception>
+        internal static void CheckStoredArray(ulong count, byte bucketSize, ulong index, long length)
+        {
+            var arraySize = ArraySize;
+            var bytes = (count * bucketSize + 7) / 8;
+            var before = Math.Min(bytes, index * arraySize);
+            var needed = Math.Min(bytes - before, arraySize);
+            if ((ulong)length != needed)
             {
-                var needed = Math.Min(bytesLeft, arraySize);
-                if ((ulong)data[i].Length != needed)
-                {
-                    throw new InvalidDataException(
-                        $"Array {i} of the bucket data needs {needed} " +
-                        $"bytes and {data[i].Length} were stored.");
-                }
-                bytesLeft -= needed;
+                throw new InvalidDataException(
+                    $"Array {index} of the bucket data needs {needed} " +
+                    $"bytes and {length} were stored.");
             }
-
-            return new Buckets64(count, bucketSize, data, arrayBits);
         }
 
         /// <summary>

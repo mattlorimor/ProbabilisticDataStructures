@@ -605,24 +605,40 @@ namespace TestProbabilisticDataStructures
             new Claim("Below 2^27 the excess is at most about 0.07% of the rate at 1%", () =>
                 Rounds(LargestFoldBelowWide() * 100, 0.07, 2)),
             // Small and large alike: a small filter of each, placed either way.
-            new Claim("Every save of `BloomFilter` and `PartitionedBloomFilter`, whatever its size, is written at format version 8", () =>
+            new Claim("Every save of `BloomFilter`, whatever its size, is written at format version 8", () =>
                 new[] { Placement.Narrow, Placement.Wide }.All(p =>
-                    new BloomFilter(100, 0.01, null, p).ToByteArray()[4] == 8
-                    && new PartitionedBloomFilter(100, 0.01, null, p).ToByteArray()[4] == 8)),
+                    new BloomFilter(100, 0.01, null, p).ToByteArray()[4] == 8)),
             // The counting and deletable layouts: u64 m, u32 k, the placement byte, the u64
             // count, then the first table, whose u64 count follows. The stable filter's: u64
             // m, u32 k, u32 p, the placement byte, then its cells, whose count follows; it
-            // has no item count.
-            new Claim("Every save of `CountingBloomFilter`, `DeletableBloomFilter` and `StableBloomFilter` is written at format version 14, which records the same and its sizes in 64 bits as well", () =>
+            // has no item count. The partitioned filter's: u64 m, u32 k, u64 s, the placement
+            // byte, the u64 count, the u32 partition count, then the first partition, whose
+            // u64 count follows.
+            new Claim("Every save of `CountingBloomFilter`, `DeletableBloomFilter`, `StableBloomFilter` and `PartitionedBloomFilter` is written at format version 14, which records the same and its sizes in 64 bits as well", () =>
                 new[] { (Placement.Narrow, 0), (Placement.Wide, 1) }.All(p =>
                 {
                     var counting = new CountingBloomFilter(100, 4, 0.01, null, p.Item1);
                     var deletable = new DeletableBloomFilter(100, 10, 0.01, null, p.Item1);
                     var stable = new StableBloomFilter(100, 2, 0.01, null, 1, p.Item1);
+                    var partitioned = new PartitionedBloomFilter(100, 0.01, null, p.Item1);
                     for (var i = 0; i < 10; i++)
                     {
                         counting.Add(Key(i));
                         deletable.Add(Key(i));
+                        partitioned.Add(Key(i));
+                    }
+
+                    var parts = partitioned.ToByteArray();
+                    var s = partitioned.Partitions[0].count;
+                    if (!(parts[4] == PersistenceFormat.Bloom64Version
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(parts.AsSpan(14)) == partitioned.Capacity()
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(parts.AsSpan(14 + 12)) == s
+                        && parts[14 + 20] == p.Item2
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(parts.AsSpan(14 + 21)) == 10
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(parts.AsSpan(14 + 29)) == partitioned.K()
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(parts.AsSpan(14 + 33)) == s))
+                    {
+                        return false;
                     }
 
                     var cells = stable.ToByteArray();
@@ -803,16 +819,28 @@ namespace TestProbabilisticDataStructures
 
             // ---- Where a limit refuses -----------------------------------------------------
             new Claim("The filters still on it hold one-bit buckets, and for those that is more than a 32-bit count addresses, so the count is the limit", () =>
-                Buckets.MaxCount(1) == uint.MaxValue
-                && new BloomFilter(100, 0.01).Buckets.BucketSize == 1
-                && new PartitionedBloomFilter(100, 0.01).Partitions.All(p => p.BucketSize == 1)),
+            {
+                // Which filters are still on it is read from the types, so one moved onto it
+                // or off it is seen: the plain filter's bits and the cuckoo filter's mark of
+                // which entries are occupied.
+                const BindingFlags Instance = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+                bool OnIt(Type t) => t == typeof(Buckets) || t == typeof(Buckets[]);
+                var on = typeof(BloomFilter).Assembly.GetExportedTypes()
+                    .Where(t => t.GetProperties(Instance).Any(m => OnIt(m.PropertyType)) || t.GetFields(Instance).Any(f => OnIt(f.FieldType)))
+                    .Select(t => t.Name).OrderBy(n => n, StringComparer.Ordinal);
+                return Buckets.MaxCount(1) == uint.MaxValue
+                    && on.SequenceEqual(new[] { nameof(BloomFilter), nameof(CuckooBloomFilter) })
+                    && new BloomFilter(100, 0.01).Buckets.BucketSize == 1
+                    && new CuckooBloomFilter(100, 0.01).Occupied.BucketSize == 1;
+            }),
             new Claim("and their sizing refuses an `n` past it", () =>
                 Assert.Throws<ArgumentOutOfRangeException>(() => Utils.OptimalM(1_000_000_000, 0.01)) is not null),
             // The filters' own sections say what limits them now, and what did.
-            new Claim("The buckets of the counting, deletable and stable filters are a 64-bit table of arrays, as `BloomFilter64`'s bits are, and have no such limit", () =>
-                new[] { (typeof(CountingBloomFilter), "Buckets"), (typeof(DeletableBloomFilter), "Buckets"),
-                    (typeof(DeletableBloomFilter), "Collisions"), (typeof(StableBloomFilter), "cells") }.All(f =>
-                    f.Item1.GetProperty(f.Item2, BindingFlags.NonPublic | BindingFlags.Instance)!.PropertyType == typeof(Buckets64))),
+            new Claim("The buckets of the counting, deletable, stable and partitioned filters are a 64-bit table of arrays, as `BloomFilter64`'s bits are, and have no such limit", () =>
+                new[] { (typeof(CountingBloomFilter), "Buckets", typeof(Buckets64)), (typeof(DeletableBloomFilter), "Buckets", typeof(Buckets64)),
+                    (typeof(DeletableBloomFilter), "Collisions", typeof(Buckets64)), (typeof(StableBloomFilter), "cells", typeof(Buckets64)),
+                    (typeof(PartitionedBloomFilter), "Partitions", typeof(Buckets64[])) }.All(f =>
+                    f.Item1.GetProperty(f.Item2, BindingFlags.NonPublic | BindingFlags.Instance)!.PropertyType == f.Item3)),
             new Claim("`m` and `Cells()` are `ulong`s and the cells are held as arrays of 2^30 bytes, so what stops the constructor is memory", () =>
                 typeof(StableBloomFilter).GetConstructor(new[] { typeof(ulong), typeof(byte), typeof(double), typeof(Func<ReadOnlySpan<byte>, ulong>), typeof(ulong?) }) is not null
                 && typeof(StableBloomFilter).GetMethod(nameof(StableBloomFilter.Cells))!.ReturnType == typeof(ulong)
@@ -999,12 +1027,24 @@ namespace TestProbabilisticDataStructures
                 && PersistenceFormat.LargeFormThreshold == MaxPayload),
 
             // ---- PartitionedBloomFilter ---------------------------------------------------
-            new Claim("each `m / k` bits", () =>
+            new Claim("each `m / k` bits, rounded up, with the sizing of `BloomFilter64`", () =>
             {
                 var filter = new PartitionedBloomFilter(100_000, 0.01);
+                var k = (ulong)filter.PartitionCount;
                 return filter.PartitionCount == Utils.OptimalK(0.01)
-                    && filter.Partitions.All(p => p.count == (uint)Math.Ceiling((double)filter.BitCount / filter.PartitionCount));
+                    && filter.BitCount == new BloomFilter64(100_000, 0.01).Capacity()
+                    && filter.BitCount % k != 0
+                    && filter.Partitions.All(p => p.count == filter.BitCount / k + 1);
             }),
+            new Claim("`n`, `m` and `Capacity()` are `ulong`s and each partition is held as arrays of 2^30 bytes, so what stops the constructor is memory", () =>
+                typeof(PartitionedBloomFilter).GetConstructor(new[] { typeof(ulong), typeof(double), typeof(Func<ReadOnlySpan<byte>, ulong>) }) is not null
+                && typeof(PartitionedBloomFilter).GetMethod(nameof(PartitionedBloomFilter.Capacity))!.ReturnType == typeof(ulong)
+                && typeof(PartitionedBloomFilter).GetProperty("Partitions", BindingFlags.NonPublic | BindingFlags.Instance)!.PropertyType == typeof(Buckets64[])
+                && Buckets64.maxArraySize == 1u << 30
+                && Buckets64.MaxCount > 1UL << 60),
+            new Claim("it stopped at 448,089,842 items at 1%, as `BloomFilter` does", () =>
+                CapacityRows.LargestSized(0.01) == 448_089_842
+                && CapacityRows.LargestSound(0.01, 1) == 448_089_842),
 
             // ---- CuckooBloomFilter --------------------------------------------------------
             new Claim("`n / 3.8` buckets", () => Near(4 * CapacityRows.CuckooLoadFactor, 3.8)),
@@ -1132,20 +1172,37 @@ namespace TestProbabilisticDataStructures
             // ---- ScalableBloomFilter -------------------------------------------------------
             new Claim("A growth factor of 2 is what a filter built without one takes", () =>
                 ScalableBloomFilter.DefaultGrowth == 2),
-            new Claim("so a `hint` of more items than one can be sized for at the rate, 448,089,842 at 1%, is refused by the " +
+            new Claim("so a `hint` of more items than one can be sized for at the rate, 1,683,964,771,063,398,528 at 1%, is refused by the " +
                 "constructor with an `ArgumentOutOfRangeException` naming `hint` and the largest that builds", () =>
             {
-                var refused = Assert.Throws<ArgumentOutOfRangeException>(() => new ScalableBloomFilter(448_089_843, 0.01, 0.8));
-                return CapacityRows.LargestSized(0.01) == 448_089_842
+                // The most is worked out here, from the bits a 64-bit count holds and the
+                // partitions a 64-bit table holds, rather than asked of the filter.
+                var k = Utils.OptimalK(0.01);
+                var largest = Largest(1, ulong.MaxValue, n =>
+                {
+                    try
+                    {
+                        return (Utils.OptimalM64(n, 0.01) + (BigInteger)k - 1) / k <= Buckets64.MaxCount;
+                    }
+                    catch (ArgumentOutOfRangeException)
+                    {
+                        return false;
+                    }
+                });
+
+                var refused = Assert.Throws<ArgumentOutOfRangeException>(() => new ScalableBloomFilter(largest + 1, 0.01, 0.8));
+                return largest == 1_683_964_771_063_398_528
                     && refused.ParamName == "hint"
-                    && refused.Message.Contains("448,089,842", StringComparison.Ordinal);
+                    && refused.Message.Contains("1,683,964,771,063,398,528", StringComparison.Ordinal);
             }),
+            new Claim("Until the release after 6.2.0 every contained filter was a 32-bit filter, and the largest hint at 1% was 448,089,842", () =>
+                CapacityRows.LargestSized(0.01) == 448_089_842),
             new Claim("a payload written before the factor existed reads back with a growth factor of 1", () =>
             {
-                // A filter that does not grow its filters writes the layout from before the factor,
-                // which carries none, and reads back as one that does not grow them.
-                var old = Persistence.FromByteArray<ScalableBloomFilter>(new ScalableBloomFilter(1000, 0.01, 0.8, 1).ToByteArray());
-                var grown = Persistence.FromByteArray<ScalableBloomFilter>(new ScalableBloomFilter(1000, 0.01, 0.8, 2).ToByteArray());
+                // The stored payloads from before the factor and from when only a filter that
+                // grows wrote it.
+                var old = Persistence.FromByteArray<ScalableBloomFilter>(TestPersistenceFormatStability.ReadFixture("scalablebloomfilter-v1.bin"));
+                var grown = Persistence.FromByteArray<ScalableBloomFilter>(TestPersistenceFormatStability.ReadFixture("scalablebloomfilter-v7.bin"));
                 return old.Growth == 1 && grown.Growth == 2;
             }),
             new Claim("each contained filter is sized for `growth` times as many items as the last", () =>
@@ -1163,11 +1220,18 @@ namespace TestProbabilisticDataStructures
                 var shape = CapacityRows.ShapeOf(1000, 0.01, 0.8, 1);
                 return Math.Abs(shape.Count - 3160) <= 5 && CeilingIs(1000, 0.01, 0.8, 1, shape.Count, typeof(OverflowException));
             }),
-            new Claim("the next filter would need more bits than a contained filter addresses", () =>
+            new Claim("the next filter would need more bits than a contained filter holds", () =>
             {
                 var shape = CapacityRows.ShapeOf(1000, 0.01, 0.8, 2);
-                return CeilingIs(1000, 0.01, 0.8, 2, shape.Count, typeof(ArgumentOutOfRangeException));
+                var scalable = new ScalableBloomFilter(1000, 0.01, 0.8, 2);
+                scalable.Filters.Clear();
+                for (var i = 0; i < shape.Count; i++) scalable.Filters.Add(CapacityRows.Placeholder);
+                var refused = Assert.Throws<InvalidOperationException>(
+                    () => scalable.NextCapacity(0.01 * Math.Pow(0.8, shape.Count)));
+                return refused.Message.Contains("more bits than a contained filter holds", StringComparison.Ordinal);
             }),
+            new Claim("far past any memory", () =>
+                CapacityRows.ShapeOf(1000, 0.01, 0.8, 2)[^1].Units > 1UL << 50),
             new Claim("and the `Add` that needs it throws `InvalidOperationException` with the filter as it was", () =>
             {
                 var scalable = new ScalableBloomFilter(1000, 0.01, 0.8, 1);
@@ -1177,8 +1241,8 @@ namespace TestProbabilisticDataStructures
                 return Assert.Throws<InvalidOperationException>(
                     () => scalable.NextCapacity(0.01 * Math.Pow(0.8, shape.Count))) is not null && scalable.Filters.Count == shape.Count;
             }),
-            new Claim("Reading costs about four times the bytes of the filters", () =>
-                Rounds(Facts["scalable bytes ratio 1000 0.01 0.8"], 4, 0)),
+            new Claim("Reading costs about 4.6 times the bytes of the filters", () =>
+                Rounds(Facts["scalable bytes ratio 1000 0.01 0.8"], 4.6, 1)),
 
             // ---- InfiniFilter and MementoFilter --------------------------------------------
             new Claim("`F + 4` bits", () => ChargeLine.Known.ContainsKey("InfiniFilter 8")),

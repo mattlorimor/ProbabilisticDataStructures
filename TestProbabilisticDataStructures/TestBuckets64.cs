@@ -619,6 +619,105 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A partitioned filter whose partitions each fill several lowered arrays is one
+        /// filter throughout: given the same keys as a filter of the real size, and merged
+        /// with another, it answers as that one does and holds the same bits in every
+        /// partition. Its payload reads back as the bytes it was read from, and a reader that
+        /// has not lowered the size refuses it.
+        /// </summary>
+        [TestMethod]
+        public void TestAPartitionedFilterOfLoweredArraysIsOneFilterThroughout()
+        {
+            static byte[] Key(int i) => BitConverter.GetBytes(i);
+            static (PartitionedBloomFilter Filter, bool[] Answers) Exercised()
+            {
+                var filter = new PartitionedBloomFilter(10_000, 0.01);
+                var other = new PartitionedBloomFilter(10_000, 0.01);
+                for (var i = 0; i < 3_000; i++) filter.Add(Key(i));
+                for (var i = 3_000; i < 5_000; i++) other.Add(Key(i));
+                filter.Merge(other);
+                return (filter, Enumerable.Range(0, 10_000).Select(i => filter.Test(Key(i))).ToArray());
+            }
+
+            var (real, realAnswers) = Exercised();
+            var (filter, bytes, answers) = WithArrayBits(4, () =>
+            {
+                var (exercised, answersHere) = Exercised();
+                Assert.IsTrue(exercised.Partitions.All(p => p.RawData.Count(array => array.Length > 0) > 1),
+                    "premise: every partition fills several arrays");
+
+                var written = exercised.ToByteArray();
+                CollectionAssert.AreEqual(written, Persistence.FromByteArray<PartitionedBloomFilter>(written).ToByteArray(),
+                    "the read filter writes other bytes");
+                return (exercised, written, answersHere);
+            });
+
+            Assert.Contains(false, realAnswers, "premise: some keys are not members");
+            CollectionAssert.AreEqual(realAnswers, answers, "the filters answer otherwise");
+            Assert.AreEqual(real.Count(), filter.Count());
+            Assert.AreEqual(real.Partitions.Length, filter.Partitions.Length);
+            for (var p = 0; p < real.Partitions.Length; p++)
+            {
+                Assert.AreEqual(real.Partitions[p].count, filter.Partitions[p].count, $"partition {p}");
+                for (ulong i = 0; i < real.Partitions[p].count; i++)
+                {
+                    Assert.AreEqual(real.Partitions[p].Get(i), filter.Partitions[p].Get(i), $"partition {p}, bit {i}");
+                }
+            }
+
+            var refused = OnAnotherThread(() =>
+                Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<PartitionedBloomFilter>(bytes)));
+            StringAssert.Contains(refused.Message, "arrays and");
+        }
+
+        /// <summary>
+        /// A partitioned filter saved before version 14 holds each partition as one run, and
+        /// each is laid out as a 64-bit table's arrays, as the counting filter's counters
+        /// are: at arrays of a byte every partition is split, holds the bits of the filter
+        /// read at the real size and saves as it does once narrowed back to version 8; the
+        /// read is priced at what it is charged, and the splits are charged what they
+        /// allocate beyond the unsplit read, to the byte.
+        /// </summary>
+        [TestMethod]
+        [DataRow("partitionedbloomfilter-v1.bin")]
+        [DataRow("partitionedbloomfilter-v8-narrow.bin")]
+        [DataRow("partitionedbloomfilter-v8-wide.bin")]
+        public void TestAnEarlierPartitionedPayloadIsLaidOutAsTablesOfArrays(string fixture)
+        {
+            var bytes = TestPersistenceFormatStability.ReadFixture(fixture);
+            (PartitionedBloomFilter Filter, long Charged, long Allocated) Read()
+            {
+                var budget = new ReadBudget(long.MaxValue, StructureId.PartitionedBloomFilter);
+                var read = Persistence.FromByteArray<PartitionedBloomFilter>(bytes, new ReadOptions(budget));
+                var priced = ((ReadBudgetExceededException)Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<PartitionedBloomFilter>(bytes, new ReadOptions(0))).InnerException!).RequiredBytes;
+                Assert.AreEqual(priced, budget.Spent, $"{fixture} was priced at one sum and charged another");
+                var allocated = TestReadBudget.Allocated(() => Persistence.FromByteArray<PartitionedBloomFilter>(bytes));
+                return (read, budget.Spent, allocated);
+            }
+
+            var real = Read();
+            var split = WithArrayBits(0, Read);
+            for (var p = 0; p < real.Filter.Partitions.Length; p++)
+            {
+                var (kept, laid) = (real.Filter.Partitions[p], split.Filter.Partitions[p]);
+                Assert.AreEqual(1, kept.RawData.Count(array => array.Length > 0), $"partition {p} is not one array at the real size");
+                Assert.IsGreaterThan(1, laid.RawData.Count(array => array.Length > 0), $"premise: partition {p} was split");
+                Assert.IsTrue(laid.RawData.All(array => array.Length <= 1), $"partition {p} has a piece longer than an array");
+                for (ulong i = 0; i < kept.count; i++)
+                {
+                    Assert.AreEqual(kept.Get(i), laid.Get(i), $"partition {p}, bit {i}");
+                }
+            }
+
+            CollectionAssert.AreEqual(TestBitPlacement.Narrowed(real.Filter.ToByteArray(), "mumbqn"),
+                TestBitPlacement.Narrowed(split.Filter.ToByteArray(), "mumbqn"), "the split filter saves another filter");
+            Assert.IsGreaterThan(0L, split.Charged - real.Charged, "premise: the split costs something");
+            Assert.AreEqual(split.Allocated - real.Allocated, split.Charged - real.Charged,
+                "the split was charged other than what it allocated beyond the unsplit read");
+        }
+
+        /// <summary>
         /// Past 2^32 cells a decay run's start and its cells are 64-bit (#232), which no
         /// filter in the suite can be built large enough to show, so the two functions are
         /// held to it directly: the start is the high half of the 128-bit product, which
