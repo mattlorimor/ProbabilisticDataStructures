@@ -217,6 +217,7 @@ namespace TestProbabilisticDataStructures
         // deletable filters, then u64 s for the partitioned one and u32 p for the stable one.
         private const int CountingPlacement14 = 12;
         private const int DeletablePlacement14 = 12;
+        private const int StablePlacement14 = 16;
 
         /// <summary>
         /// The two version 14 fixtures of a filter, with what each was placed with and how
@@ -318,6 +319,64 @@ namespace TestProbabilisticDataStructures
             {
                 CollectionAssert.AreEqual(ReadFixture($"deletablebloomfilter-v8-{placed}.bin"),
                     TestBitPlacement.Narrowed(ReadFixture($"deletablebloomfilter-v14-{placed}.bin"), "mubqtt"),
+                    $"the version 14 {placed} fixture narrowed is not the version 8 one");
+            }
+        }
+
+        /// <summary>
+        /// The stable filter's version 14 fixtures, re-laid by hand from its version 8 ones
+        /// with m a <c>u64</c> and its cells a <c>Buckets64</c>. It reads, resumes the decay
+        /// sequence it was stored partway through, and resets to its stored original state,
+        /// as the version 8 fixture does.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredStableBloomFilterAtVersionFourteenStillReads()
+        {
+            foreach (var (fixture, placement, words) in PlacedAt14("stablebloomfilter", 10))
+            {
+                var f = StableBloomFilter.ReadFrom(Fixture(fixture));
+
+                Assert.AreEqual(1000UL, (ulong)f.Cells());
+                Assert.AreEqual(3u, f.K());
+                Assert.AreEqual(35u, f.P());
+                Assert.AreEqual(placement, f.Placement);
+                AssertAllPresent(f.Test, words);
+                AssertLostWhenPlacedTheOtherWay(fixture, StablePlacement14, b => StableBloomFilter.ReadFrom(new MemoryStream(b)).Test, words);
+
+                var twin = StoredStableTwin(placement);
+                for (var i = 0; i < 300; i++)
+                {
+                    f.Add(Key($"more{i}"));
+                    twin.Add(Key($"more{i}"));
+                }
+
+                CollectionAssert.AreEqual(twin.ToByteArray(), f.ToByteArray(),
+                    "the restored filter did not carry on the sequence it was stored partway through");
+                f.Reset();
+                CollectionAssert.AreEqual(
+                    new StableBloomFilter(1000, 2, 0.01, null, 7, placement).ToByteArray(), f.ToByteArray(),
+                    "Reset did not return the restored filter to its stored original state");
+            }
+        }
+
+        /// <summary>
+        /// Every save of the stable filter is version 14: the version 5 fixture, and the
+        /// version 8 ones placed each way, save again as the version 14 fixture placed as
+        /// they were, and the version 14 fixtures narrowed back are the version 8 ones.
+        /// </summary>
+        [TestMethod]
+        public void TestAnEarlierStablePayloadSavesAgainAsVersionFourteen()
+        {
+            static byte[] Resave(byte[] b) => StableBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray();
+
+            AssertBytes("stablebloomfilter-v14-narrow.bin", Resave(ReadFixture("stablebloomfilter-v5.bin")));
+            AssertBytes("stablebloomfilter-v14-narrow.bin", Resave(ReadFixture("stablebloomfilter-v8-narrow.bin")));
+            AssertBytes("stablebloomfilter-v14-wide.bin", Resave(ReadFixture("stablebloomfilter-v8-wide.bin")));
+
+            foreach (var placed in new[] { "narrow", "wide" })
+            {
+                CollectionAssert.AreEqual(ReadFixture($"stablebloomfilter-v8-{placed}.bin"),
+                    TestBitPlacement.Narrowed(ReadFixture($"stablebloomfilter-v14-{placed}.bin"), "muubtqq"),
                     $"the version 14 {placed} fixture narrowed is not the version 8 one");
             }
         }
@@ -661,6 +720,7 @@ namespace TestProbabilisticDataStructures
                 ("countingbloomfilter-v14-narrow.bin", s => CountingBloomFilter.ReadFrom(s)),
                 ("deletablebloomfilter-v14-narrow.bin", s => DeletableBloomFilter.ReadFrom(s)),
                 ("stablebloomfilter-v8-narrow.bin", s => StableBloomFilter.ReadFrom(s)),
+                ("stablebloomfilter-v14-narrow.bin", s => StableBloomFilter.ReadFrom(s)),
                 ("cuckoobloomfilter-v6.bin", s => CuckooBloomFilter.ReadFrom(s)),
                 ("bloomfilter-v8-narrow.bin", s => BloomFilter.ReadFrom(s)),
                 ("scalablebloomfilter-v7.bin", s => ScalableBloomFilter.ReadFrom(s)),
@@ -2005,7 +2065,7 @@ namespace TestProbabilisticDataStructures
                 stable.Add(Key(word));
             }
 
-            AssertBytes("stablebloomfilter-v8-narrow.bin", stable.ToByteArray());
+            AssertBytes("stablebloomfilter-v14-narrow.bin", stable.ToByteArray());
 
             // The build is deterministic -- a fixed seed sequence over a fixed set --
             // which is what lets its bytes be pinned at all.
@@ -2211,7 +2271,7 @@ namespace TestProbabilisticDataStructures
             AssertBytes("countingbloomfilter-v14-wide.bin", counting.ToByteArray());
             AssertBytes("deletablebloomfilter-v14-wide.bin", deletable.ToByteArray());
             AssertBytes("partitionedbloomfilter-v8-wide.bin", partitioned.ToByteArray());
-            AssertBytes("stablebloomfilter-v8-wide.bin", StoredStableTwin(Placement.Wide).ToByteArray());
+            AssertBytes("stablebloomfilter-v14-wide.bin", StoredStableTwin(Placement.Wide).ToByteArray());
         }
 
         /// <summary>
@@ -2296,6 +2356,8 @@ namespace TestProbabilisticDataStructures
                 ("partitionedbloomfilter-v8-wide.bin", 5, 8),
                 ("stablebloomfilter-v8-narrow.bin", 7, 8),
                 ("stablebloomfilter-v8-wide.bin", 7, 8),
+                ("stablebloomfilter-v14-narrow.bin", 7, 14),
+                ("stablebloomfilter-v14-wide.bin", 7, 14),
                 ("countingbloomfilter-v14-narrow.bin", 3, 14),
                 ("countingbloomfilter-v14-wide.bin", 3, 14),
                 ("cuckoobloomfilter-v2.bin", 9, 2),

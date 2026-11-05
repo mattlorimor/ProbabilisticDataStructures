@@ -30,6 +30,35 @@ namespace TestProbabilisticDataStructures
         private static byte[] X_BYTES = Encoding.ASCII.GetBytes("x");
 
         /// <summary>
+        /// A read allocates a scratch buffer of a position for each hash function, eight bytes
+        /// each since positions are 64-bit (#232), and is charged for it to the byte, as the
+        /// counting filter's is.
+        /// </summary>
+        [TestMethod]
+        public void TestTheScratchBufferIsChargedWhatItAllocates()
+        {
+            // Version 14: u64 m, then the u32 hash count at 8.
+            const int HashCount = 8;
+            var three = TestPersistenceFormatStability.ReadFixture("stablebloomfilter-v14-narrow.bin");
+            Assert.AreEqual(3u, System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(three.AsSpan(14 + HashCount)),
+                "premise: the hash count");
+            var most = TestPersistenceHostilePayloads.PokeUInt32(three, HashCount, Utils.MaxHashCount);
+
+            static (long Charged, long Allocated) Read(byte[] bytes)
+            {
+                var budget = new ReadBudget(long.MaxValue, StructureId.StableBloomFilter);
+                Persistence.FromByteArray<StableBloomFilter>(bytes, new ReadOptions(budget));
+                return (budget.Spent, TestReadBudget.Allocated(() => Persistence.FromByteArray<StableBloomFilter>(bytes)));
+            }
+
+            var (fewer, more) = (Read(three), Read(most));
+            Assert.IsGreaterThanOrEqualTo(8L * (Utils.MaxHashCount - 3), more.Allocated - fewer.Allocated,
+                "premise: the buffer is eight bytes a position");
+            Assert.AreEqual(more.Allocated - fewer.Allocated, more.Charged - fewer.Charged,
+                "the read was charged other than the scratch buffer it allocated");
+        }
+
+        /// <summary>
         /// A stable filter's payload is its twenty-two bytes, its cell table whole in a run,
         /// and its two random states. The table is as long as one array can be, and at five
         /// bits a cell or more, a table that long takes the payload past the most one can

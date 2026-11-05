@@ -2233,6 +2233,10 @@ namespace TestProbabilisticDataStructures
                     Filled(new DeletableBloomFilter(200, 10, 0.01)).ToByteArray(),
                     Filled(new DeletableBloomFilter(200, 10, 0.01, null, Placement.Wide)).ToByteArray(),
                     0, 12, (b, o) => Persistence.FromByteArray<DeletableBloomFilter>(b, o)),
+                (nameof(StableBloomFilter),
+                    Filled(new StableBloomFilter(200, 2, 0.01, null, 1, Placement.Narrow)).ToByteArray(),
+                    Filled(new StableBloomFilter(200, 2, 0.01, null, 1, Placement.Wide)).ToByteArray(),
+                    0, 16, (b, o) => Persistence.FromByteArray<StableBloomFilter>(b, o)),
             };
 
             foreach (var (name, narrow, wide, size, placement, readUnder) in reads)
