@@ -132,11 +132,12 @@ namespace TestProbabilisticDataStructures
         /// twice, as it always has.
         /// </summary>
         /// <remarks>
-        /// Measured as the least of five, since a background collection running beside a
-        /// measurement can add a few kilobytes to the counter, as TESTING.md says of a read
-        /// (on the read budget). Each payload is more than sixteen times the bound, so a copy
-        /// of it could not hide in the slack; and the large write must be seen allocating its
-        /// buffer, so a measurement that sees nothing cannot pass.
+        /// Measured as the least of five, each in a no-GC region, since a background
+        /// collection running beside a write adds kilobytes to its count (TESTING.md, on the
+        /// read budget; <see cref="NoGCRegion"/>). Each payload
+        /// is more than sixteen times the bound, so a copy of it could not hide in the slack;
+        /// and the large write must be seen allocating its buffer, so a measurement that sees
+        /// nothing cannot pass.
         /// </remarks>
         [TestMethod]
         public void TestALargeWriteAllocatesItsBufferAndNotItsPayload()
@@ -351,10 +352,9 @@ namespace TestProbabilisticDataStructures
                 try
                 {
                     var arguments = new object[] { sketch };
-                    var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-                    var thrown = Assert.ThrowsExactly<TargetInvocationException>(() => toByteArray.Invoke(null, arguments),
-                        $"{where} of a payload past one array was not refused");
-                    var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+                    TargetInvocationException thrown = null;
+                    var allocated = NoGCRegion.Allocated(() => thrown = Assert.ThrowsExactly<TargetInvocationException>(
+                        () => toByteArray.Invoke(null, arguments), $"{where} of a payload past one array was not refused"));
                     var ex = Assert.IsInstanceOfType<InvalidOperationException>(thrown.InnerException,
                         $"{where} refused a payload past one array with something else: {thrown.InnerException}");
 
@@ -463,11 +463,14 @@ namespace TestProbabilisticDataStructures
 
             var larges = WithLongestRun(run - 1, () =>
             {
-                using var stream = new MemoryStream();
-                var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-                var ex = Assert.ThrowsExactly<InvalidOperationException>(() => filter.WriteTo(stream),
-                    "in the ordinary envelope, a run a byte past the longest was written");
-                var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+                // A stream of its own for each attempt at the measurement, so that what one
+                // attempt wrote is not what the next is held to.
+                MemoryStream stream = null;
+                InvalidOperationException ex = null;
+                var allocated = NoGCRegion.Allocated(
+                    () => ex = Assert.ThrowsExactly<InvalidOperationException>(() => filter.WriteTo(stream),
+                        "in the ordinary envelope, a run a byte past the longest was written"),
+                    first: () => stream = new MemoryStream());
                 StringAssert.Contains(ex.Message, run.ToString("N0"), $"the refusal did not name the run: {ex.Message}");
                 StringAssert.Contains(ex.Message, (run - 1).ToString("N0"), $"the refusal did not name the bound: {ex.Message}");
                 Assert.AreEqual(0L, stream.Length, "a run past the longest was refused after writing began");
@@ -853,12 +856,8 @@ namespace TestProbabilisticDataStructures
             }
         }
 
-        private static long LeastAllocated(Action write) => Enumerable.Range(0, 5).Min(_ =>
-        {
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            write();
-            return GC.GetAllocatedBytesForCurrentThread() - before;
-        });
+        private static long LeastAllocated(Action write) =>
+            Enumerable.Range(0, 5).Min(_ => NoGCRegion.Allocated(write));
 
         /// <summary>
         /// A body of eight-byte fields that looks at the stream it is being written to as it

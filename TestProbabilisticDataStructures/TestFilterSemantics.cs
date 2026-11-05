@@ -533,13 +533,24 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(empty.Fingerprints.Length, loaded.Fingerprints.Length);
             Assert.AreEqual(empty.Occupied.count, loaded.Occupied.count);
 
-            // And adding allocates nothing that the filter keeps.
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (int i = 5000; i < 5100; i++)
-            {
-                loaded.Add(Key($"later-{i}"));
-            }
-            var perAdd = (GC.GetAllocatedBytesForCurrentThread() - before) / 100;
+            // And adding allocates nothing that the filter keeps. Counted in a no-GC region,
+            // with keys of their own made for each attempt at the measurement, since one can
+            // be repeated.
+            byte[][] later = null;
+            var attempt = 0;
+            var perAdd = NoGCRegion.Allocated(
+                () =>
+                {
+                    foreach (var key in later)
+                    {
+                        loaded.Add(key);
+                    }
+                },
+                first: () =>
+                {
+                    attempt++;
+                    later = Enumerable.Range(5000, 100).Select(i => Key($"later-{attempt}-{i}")).ToArray();
+                }) / 100;
 
             Assert.IsLessThan(512, perAdd,
                 $"Add allocated {perAdd} bytes per call; the filter's storage is fixed, " +

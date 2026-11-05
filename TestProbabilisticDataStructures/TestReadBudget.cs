@@ -269,8 +269,10 @@ namespace TestProbabilisticDataStructures
         /// collection started just before it, a loop allocating what
         /// <see cref="DpswSketch"/>'s large-form read keeps came to 1,632 bytes more every
         /// time; with background collection turned off, that read measured exact with
-        /// blocking collections landing in the middle of it (#287). That noise only ever
-        /// adds, so the least of a few repeats is the read's own allocation.
+        /// blocking collections landing in the middle of it (#287). The least of a few
+        /// repeats was the defence, and a loaded run defeated it with a collection beside
+        /// every repeat (#293), so each repeat is counted in a no-GC region, where none can
+        /// run: see <see cref="NoGCRegion"/>.
         /// </remarks>
         internal static long Allocated(Func<object> read, int repeats = 5) =>
             LeastAllocated(read, repeats, () => { });
@@ -289,17 +291,17 @@ namespace TestProbabilisticDataStructures
                 GC.Collect();
             });
 
-        private static long LeastAllocated(Func<object> read, int repeats, Action first)
+        /// <summary>
+        /// The least of <paramref name="repeats"/> measurements of what
+        /// <paramref name="read"/> allocates on this thread, each in a no-GC region of its
+        /// own entered after <paramref name="first"/>, which is not measured.
+        /// </summary>
+        internal static long LeastAllocated(Func<object> read, int repeats, Action first)
         {
             var least = long.MaxValue;
             for (var i = 0; i < repeats; i++)
             {
-                first();
-                var before = GC.GetAllocatedBytesForCurrentThread();
-                var result = read();
-                var after = GC.GetAllocatedBytesForCurrentThread();
-                GC.KeepAlive(result);
-                least = Math.Min(least, after - before);
+                least = Math.Min(least, NoGCRegion.Allocated(read, first));
             }
             return least;
         }

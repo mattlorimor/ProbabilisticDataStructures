@@ -541,22 +541,28 @@ namespace TestProbabilisticDataStructures
                 bloom.Test(s); cms.Count(s); qf.Test(s);
             }
 
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
-            var before = GC.GetAllocatedBytesForCurrentThread();
-
+            // Counted in a no-GC region, so that a background collection running beside the
+            // queries cannot add to the count, after the collections this always made first.
             var sink = 0;
-            for (int i = 0; i < Iterations; i++)
-            {
-                var slice = slices[i % Items];
-                var s = buffer.AsSpan(slice.Offset, slice.Length);
-                if (bloom.Test(s)) sink++;
-                sink += (int)cms.Count(s);
-                if (qf.Test(s)) sink++;
-            }
-
-            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            var allocated = NoGCRegion.Allocated(
+                () =>
+                {
+                    sink = 0;
+                    for (int i = 0; i < Iterations; i++)
+                    {
+                        var slice = slices[i % Items];
+                        var s = buffer.AsSpan(slice.Offset, slice.Length);
+                        if (bloom.Test(s)) sink++;
+                        sink += (int)cms.Count(s);
+                        if (qf.Test(s)) sink++;
+                    }
+                },
+                first: () =>
+                {
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
+                    GC.Collect();
+                });
             Console.WriteLine($"{Iterations * 3} span queries allocated {allocated} bytes (sink={sink})");
 
             Assert.IsLessThanOrEqualTo(1024L, allocated,

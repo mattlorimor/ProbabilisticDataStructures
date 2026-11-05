@@ -476,35 +476,47 @@ namespace TestProbabilisticDataStructures
                     // Past one array the write goes on to the large form's header, and is
                     // stopped at the stream; within one, at the count, before the ordinary
                     // envelope's buffer is allocated at the length claimed.
-                    using var stream = new FirstWriteStops();
-                    PersistenceFormat.Counted = (body, length) =>
-                    {
-                        if (ReferenceEquals(body, structure))
+                    // Counted in a no-GC region (#293), with a stream, a hook and a record of
+                    // its own for each attempt, since an attempt can be repeated and what one
+                    // wrote and declared is not what the next is held to.
+                    FirstWriteStops stream = null;
+                    allocated = NoGCRegion.Allocated(
+                        () =>
                         {
-                            declared = length;
-                            if (!build.PastOneArray)
+                            try
                             {
-                                throw new Stopped();
+                                structure.GetType().GetMethod("WriteTo", new[] { typeof(Stream) })!
+                                    .Invoke(structure, new object[] { stream });
                             }
-                        }
-                    };
+                            catch (TargetInvocationException e)
+                            {
+                                thrown = e.InnerException;
+                            }
+                            finally
+                            {
+                                PersistenceFormat.Counted = null;
+                            }
+                        },
+                        first: () =>
+                        {
+                            stream?.Dispose();
+                            stream = new FirstWriteStops();
+                            declared = -1;
+                            thrown = null;
+                            PersistenceFormat.Counted = (body, length) =>
+                            {
+                                if (ReferenceEquals(body, structure))
+                                {
+                                    declared = length;
+                                    if (!build.PastOneArray)
+                                    {
+                                        throw new Stopped();
+                                    }
+                                }
+                            };
+                        });
 
-                    var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-                    try
-                    {
-                        structure.GetType().GetMethod("WriteTo", new[] { typeof(Stream) })!
-                            .Invoke(structure, new object[] { stream });
-                    }
-                    catch (TargetInvocationException e)
-                    {
-                        thrown = e.InnerException;
-                    }
-                    finally
-                    {
-                        PersistenceFormat.Counted = null;
-                    }
-
-                    allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+                    using var kept = stream;
                     written = stream.ToArray();
 
                     if (build.PastOneArray)

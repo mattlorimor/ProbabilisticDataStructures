@@ -375,10 +375,10 @@ namespace TestProbabilisticDataStructures
         /// entries can hide in it, and well above the few kilobytes of noise below.
         /// <para>
         /// The target is read from a payload each time so that every repeat merges into
-        /// the same table, and the measurement is the least of five, as
-        /// <see cref="TestReadBudget"/> takes it: a background collection running beside the
-        /// merge can add a few kilobytes to the counter that the merge did not ask for, as
-        /// TESTING.md says of a read. That noise only ever adds.
+        /// the same table, and the measurement is the least of five, each in a no-GC region,
+        /// as <see cref="TestReadBudget"/> takes it: a background collection running beside
+        /// the merge makes the counter report kilobytes the merge did not ask for
+        /// (<see cref="NoGCRegion"/>).
         /// </para>
         /// </remarks>
         [TestMethod]
@@ -398,11 +398,10 @@ namespace TestProbabilisticDataStructures
             var least = long.MaxValue;
             for (var run = 0; run < 5; run++)
             {
-                var merged = Persistence.FromByteArray<QuotientFilter>(payload);
-
-                var before = GC.GetAllocatedBytesForCurrentThread();
-                merged.Merge(source);
-                least = Math.Min(least, GC.GetAllocatedBytesForCurrentThread() - before);
+                QuotientFilter merged = null;
+                least = Math.Min(least, NoGCRegion.Allocated(
+                    () => merged.Merge(source),
+                    first: () => merged = Persistence.FromByteArray<QuotientFilter>(payload)));
 
                 // The merge did the work the allocation is being asked about.
                 Assert.AreEqual((uint)(2 * each), merged.Count());

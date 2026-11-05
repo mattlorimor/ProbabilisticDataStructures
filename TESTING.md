@@ -870,9 +870,10 @@ rest of a message survives, as it should, and one that deletes the guard does no
   `GC.GetAllocatedBytesForCurrentThread`, to that plus a stated slack, on a sample large
   enough that anything missing could not hide in the slack. Two things learned getting
   there: the counter is exact for what a read allocates, but a background collection
-  running beside a read can add a few kilobytes to it, so the measurement is the least
-  of five; and the first undercharge found was in the accounting itself, a `params`
-  array allocated by every call that summed the charges.
+  running beside a read can add a few kilobytes to it, so each of the five repeats a
+  measurement takes the least of is counted where none can run (below); and the first
+  undercharge found was in the accounting itself, a `params` array allocated by every
+  call that summed the charges.
 - **What a read allocates does not depend on when the last collection ran.** The least of
   five removes noise that comes and goes, not an allocation a read makes only sometimes.
   Every read named its structure with `ToString` as its budget was made, and the runtime
@@ -889,6 +890,24 @@ rest of a message survives, as it should, and one that deletes the guard does no
   the same way to cost more after a collection, so the sweep cannot pass by measuring
   nothing. What a read would ask of a runtime cache -- an enum's names or values,
   reflection -- belongs in its refusal, not its read.
+- **An allocation is counted where no collection can run.** The least of five assumed
+  the noise came and went, and a loaded run had a background collection beside all five
+  repeats of a `DpswSketch` read: 4,656,208 bytes against 4,648,320, failing a margin of
+  a few hundred (#293). Every measurement the suite holds code to now goes through
+  `NoGCRegion`, which counts the work inside `GC.TryStartNoGCRegion`: entering a region
+  waits for a background collection to finish, and none starts inside one. A region is
+  the process's, so measurements take turns and every thread's allocations spend its
+  room. One that a collection ended is measured again, so measured work must be
+  repeatable and rebuild what it changes before each attempt, and work that cannot get
+  a region fails saying so rather than being counted without one. A room must be one
+  every runner gives: macOS collects on segments, which refuse a region of more than
+  255,637,165 bytes there, where the regions Linux and Windows collect on refuse none
+  that size, so `NoGCRegion` refuses a larger room on every runner and not only on macOS.
+  `TestAReadIsMeasuredExactlyWithABackgroundCollectionRunning` starts a background
+  collection before each repeat of that read and asks for the quiet figure, and its
+  guard needs the same read, counted without a region, to come out high, so that a
+  runtime whose counter no longer minds fails the test rather than passing it. A new
+  measurement uses the helper, not the counter.
 - **A refusal's number is held to loading.** Honest charges were not enough: a refusal
   named the running total at the charge that failed, so a read refused needing a number
   was refused again, needing more, under exactly that number. Every read is now priced

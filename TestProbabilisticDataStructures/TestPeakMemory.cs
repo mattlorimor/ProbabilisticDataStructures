@@ -14,12 +14,13 @@ namespace TestProbabilisticDataStructures
     /// </summary>
     /// <remarks>
     /// Every figure is the least of several measurements with
-    /// <see cref="GC.GetAllocatedBytesForCurrentThread"/>, as <c>TestReadBudget</c> measures a
-    /// read: the counter is exact for what the thread allocates, but a background collection
-    /// running beside a measurement can add a few kilobytes to it, and that noise only ever
-    /// adds. The least removes noise that comes and goes, not an allocation made only after a
-    /// collection, such as a runtime cache built again once a collection has reclaimed it
-    /// (TESTING.md, on what a read allocates, and #287). None of these builds anything near the sizes the issue describes; each holds the
+    /// <see cref="GC.GetAllocatedBytesForCurrentThread"/>, each in a no-GC region, as
+    /// <c>TestReadBudget</c> measures a read: the counter is exact for what the thread
+    /// allocates while no collection runs, and a background collection running beside a
+    /// measurement adds kilobytes to it (<see cref="NoGCRegion"/>, #293). The least of
+    /// several removes nothing allocated only after a collection, such as a runtime cache
+    /// built again once a collection has reclaimed it (TESTING.md, on what a read allocates,
+    /// and #287). None of these builds anything near the sizes the issue describes; each holds the
     /// allocation to what does not grow with the size, at a size where the old allocation is
     /// megabytes.
     /// </remarks>
@@ -28,19 +29,16 @@ namespace TestProbabilisticDataStructures
     {
         /// <summary>
         /// The least of several measurements of what <paramref name="act"/> allocates on this
-        /// thread. What it returns is kept alive until it is measured, so that a constructor's
-        /// result is not a candidate for collection while it is being counted.
+        /// thread, each in a no-GC region. What it returns is kept alive until it is measured,
+        /// so that a constructor's result is not a candidate for collection while it is being
+        /// counted.
         /// </summary>
         private static long Allocated(Func<object> act, int repeats = 5)
         {
             var least = long.MaxValue;
             for (var i = 0; i < repeats; i++)
             {
-                var before = GC.GetAllocatedBytesForCurrentThread();
-                var result = act();
-                var after = GC.GetAllocatedBytesForCurrentThread();
-                GC.KeepAlive(result);
-                least = Math.Min(least, after - before);
+                least = Math.Min(least, NoGCRegion.Allocated(act));
             }
 
             return least;
@@ -378,19 +376,21 @@ namespace TestProbabilisticDataStructures
             var least = long.MaxValue;
             for (var run = 0; run < 5; run++)
             {
-                var filter = new InfiniFilter(initialCapacity: entries, fingerprintBits: 8);
-                Assert.AreEqual(quotientBits, filter.Segments[0].QuotientBits, "premise: the table's size");
-                for (var i = 0; i < entries; i++)
+                // Built afresh before each attempt at the measurement, since the add it
+                // measures changes the filter and an attempt can be repeated.
+                InfiniFilter filter = null;
+                var allocated = NoGCRegion.Allocated(() => filter.Add(keys[entries]), first: () =>
                 {
-                    filter.Add(keys[i]);
-                }
+                    filter = new InfiniFilter(initialCapacity: entries, fingerprintBits: 8);
+                    Assert.AreEqual(quotientBits, filter.Segments[0].QuotientBits, "premise: the table's size");
+                    for (var i = 0; i < entries; i++)
+                    {
+                        filter.Add(keys[i]);
+                    }
 
-                Assert.AreEqual(0u, filter.ExpansionCount(), "premise: the table is full and has not doubled");
-                Assert.AreEqual((uint)entries, filter.Segments[0].Count);
-
-                var before = GC.GetAllocatedBytesForCurrentThread();
-                filter.Add(keys[entries]);
-                var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+                    Assert.AreEqual(0u, filter.ExpansionCount(), "premise: the table is full and has not doubled");
+                    Assert.AreEqual((uint)entries, filter.Segments[0].Count);
+                });
 
                 Assert.AreEqual(1u, filter.ExpansionCount(), "premise: that add doubled the table");
                 Assert.AreEqual(quotientBits + 1, filter.Segments[0].QuotientBits);
@@ -431,23 +431,28 @@ namespace TestProbabilisticDataStructures
 
             for (var run = 0; run < 5; run++)
             {
-                var filter = new InfiniFilter(initialCapacity: 16, fingerprintBits: fingerprintBits);
-                var added = 0;
-                while (filter.Segments[0].QuotientBits < quotientBits || filter.Segments[0].Load < 0.75)
+                // Built afresh before each attempt at the measurement, since the add it
+                // measures changes the filter and an attempt can be repeated.
+                InfiniFilter filter = null;
+                InfiniSegment[] before = null;
+                var held = 0L;
+                byte[] last = null;
+                var allocated = NoGCRegion.Allocated(() => filter.Add(last), first: () =>
                 {
-                    filter.Add(Key(added++));
-                }
+                    filter = new InfiniFilter(initialCapacity: 16, fingerprintBits: fingerprintBits);
+                    var added = 0;
+                    while (filter.Segments[0].QuotientBits < quotientBits || filter.Segments[0].Load < 0.75)
+                    {
+                        filter.Add(Key(added++));
+                    }
 
-                var active = filter.Segments[0];
-                Assert.AreEqual(quotientBits, active.QuotientBits, "premise: the table's size");
-                voided = active.Entries().Count(entry => active.IsVoid(entry.Field));
-                var before = filter.Segments.ToArray();
-                var held = before.Sum(segment => (long)segment.Count);
-                var last = Key(added);
-
-                var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-                filter.Add(last);
-                var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+                    var active = filter.Segments[0];
+                    Assert.AreEqual(quotientBits, active.QuotientBits, "premise: the table's size");
+                    voided = active.Entries().Count(entry => active.IsVoid(entry.Field));
+                    before = filter.Segments.ToArray();
+                    held = before.Sum(segment => (long)segment.Count);
+                    last = Key(added);
+                });
 
                 var after = filter.Segments.ToArray();
                 Assert.AreEqual(quotientBits + 1, after[0].QuotientBits, "premise: that add doubled the table");

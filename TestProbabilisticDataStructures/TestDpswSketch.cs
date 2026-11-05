@@ -207,10 +207,8 @@ namespace TestProbabilisticDataStructures
                 var least = long.MaxValue;
                 for (var run = 0; run < 3; run++)
                 {
-                    var before = GC.GetAllocatedBytesForCurrentThread();
-                    Assert.ThrowsExactly<ArgumentOutOfRangeException>(
-                        () => new DpswSketch(1_000_000_000, GenerousBudget, width: width, depth: depth));
-                    least = Math.Min(least, GC.GetAllocatedBytesForCurrentThread() - before);
+                    least = Math.Min(least, NoGCRegion.Allocated(() => Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                        () => new DpswSketch(1_000_000_000, GenerousBudget, width: width, depth: depth))));
                 }
 
                 Assert.IsLessThan(64 * 1024, least,
