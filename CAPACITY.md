@@ -81,9 +81,12 @@ the structure with an exception that names the limit, before anything changes, a
   array in 32 bits built a filter whose bits passed 2^32 with an array too short for them,
   without an error, and it failed on `Add`; a payload written then is refused when read,
   with that said.
-- **A table of 2^32 slots is not a table.** `InfiniFilter` and `MementoFilter` double their
-  table when three quarters full, up to 2^31 slots, or 2^30 for a Memento slot of 64 bits,
-  and the `Add` that would double it past that throws, with the filter as it was.
+- **A table that doubles is one array.** `InfiniFilter` and `MementoFilter` double their
+  table when three quarters full, and the `Add` that would double it past its limit throws,
+  with the filter as it was. An `InfiniFilter` table is as wide as one array holds its
+  words: 2^34 slots for the narrowest fingerprints, down to 2^31 for the widest. A
+  `MementoFilter` table counts its slots with a `uint`, up to 2^31 slots, or 2^30 for a
+  Memento slot of 64 bits.
 - **A Sublime row is at most 2^30 counters.** The `Add` that would double it past that
   throws, with the sketch as it was.
 - **A Memento slot is at most 64 bits.** The constructor refuses a fingerprint and a range
@@ -361,9 +364,11 @@ load. A slot is the fingerprint, its age counter and 3 bits of bookkeeping: `F +
 Fingerprints that have aged out of the table move to smaller tables beneath it, which are
 a sliver of the main one.
 
-A table of 2^31 slots is the largest that works, which is the figure in the table; the
-`Add` that would double it throws, with the filter as it was. A read is charged three times
-the table, which at 8 or 16 bits is the table of 2^27 slots. The fingerprint width does
+A table is as wide as one array holds its words, so the largest that works depends on the
+fingerprint: 2^33 slots at 8 bits and 2^32 at 16, which are the figures in the table; the
+`Add` that would double it throws, with the filter as it was. Until the release after 6.2.0
+every table stopped at 2^31 slots, its slot count being a `uint`. A read is charged three
+times the table, which at 8 or 16 bits is the table of 2^27 slots. The fingerprint width does
 not move that number, because the table doubles at the same load whatever the width, and
 2^28 slots do not fit either way.
 

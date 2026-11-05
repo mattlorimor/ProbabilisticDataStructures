@@ -231,8 +231,8 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `ScalableBloomFilter` | items added, hint 1,000, growth 2, fp 1%, r 0.9 | ≈ 490.25 million | ≈ 123.41 million | as built |
 | `ScalableBloomFilter` | items added, hint 1,000, growth 1, fp 1%, r 0.8 | ≈ 3.16 million | ≈ 2.83 million | as built |
 | `ScalableBloomFilter` | items added, hint 1,000, growth 1, fp 1%, r 0.9 | ≈ 6.68 million | ≈ 4.10 million | as built |
-| `InfiniFilter` | items added, 8-bit fingerprints | 1,610,612,736 | 100,663,296 | 805,306,368 |
-| `InfiniFilter` | items added, 16-bit fingerprints | 1,610,612,736 | 100,663,296 | 402,653,184 |
+| `InfiniFilter` | items added, 8-bit fingerprints | 6,442,450,944 | 100,663,296 | 805,306,368 |
+| `InfiniFilter` | items added, 16-bit fingerprints | 3,221,225,472 | 100,663,296 | 402,653,184 |
 | `MementoFilter` | items added, one per block, range 256, 8-bit fingerprints | 1,610,612,736 | 100,663,296 | 402,653,184 |
 | `MementoFilter` | items added, one per block, range 65,536, 8-bit fingerprints | 1,610,612,736 | 50,331,648 | 402,653,184 |
 
@@ -645,10 +645,12 @@ The ceiling of 4.29 billion bits is the 32-bit Bloom filters' own, and the other
 have limits of their own, nearer 2^31. `CuckooBloomFilter` numbers its entries with a
 `uint`, so a table holds at most 2^31 of them, and half that at a rate fine enough for
 64-bit fingerprints, where the fingerprints pass what one .NET array holds.
-`QuotientFilter`, `InfiniFilter` and `MementoFilter` count their slots with a `uint` and
-stop at 2^31. `BinaryFuseFilter` keeps its fingerprints in one array, which holds
-2,147,483,591 bytes: that is 1,908,641,337 keys at 8-bit fingerprints and 954,204,160 at
-16. How many items each of these is built for is in [the table](#how-much-each-one-holds).
+`QuotientFilter` and `MementoFilter` count their slots with a `uint` and stop at 2^31.
+An `InfiniFilter` table is as wide as one array holds its words: 2^34 slots for the
+narrowest fingerprints, down to 2^31 for the widest. `BinaryFuseFilter` keeps its
+fingerprints in one array, which holds 2,147,483,591 bytes: that is 1,908,641,337 keys at
+8-bit fingerprints and 954,204,160 at 16. How many items each of these is built for is in
+[the table](#how-much-each-one-holds).
 The sketches — `HyperLogLogPlus`, `ThetaSketch`, `CountMinSketch`, `TopK`, `DDSketch` —
 are a few hundred kilobytes at their largest sensible settings however much data passes
 through them. Their counters are already 64-bit.
@@ -918,7 +920,7 @@ right after it grows, so memory arrives in steps rather than smoothly.
 
 ```C#
 var filter = new InfiniFilter(initialCapacity: 1024, fingerprintBits: 8);
-filter.Add(bytes);              // grows itself, to 2^31 slots (about 1.6 billion items)
+filter.Add(bytes);              // grows itself, to 2^33 slots (about 6.4 billion items)
 
 bool maybe = filter.Test(bytes);
 bool wasThere = filter.TestAndRemove(bytes);

@@ -541,7 +541,7 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestTheVersionAfterTheNewestIsRefused()
         {
-            // Eleven is one past the newest, version 10. It is written out rather than
+            // Fourteen is one past the newest, version 13. It is written out rather than
             // computed from the library's ceiling, which is the thing being checked.
             var newest = new (string Fixture, Func<Stream, object> Read)[]
             {
@@ -555,13 +555,14 @@ namespace TestProbabilisticDataStructures
                 ("inversebloomfilter-v9-narrow.bin", s => InverseBloomFilter.ReadFrom(s)),
                 ("dpswsketch-v9-narrow.bin", s => DpswSketch.ReadFrom(s)),
                 ("sublimecountminsketch-v10.bin", s => SublimeCountMinSketch.ReadFrom(s)),
+                ("infinifilter-v13.bin", s => InfiniFilter.ReadFrom(s)),
             };
 
             foreach (var (fixture, read) in newest)
             {
-                var bytes = Relabeled(ReadFixture(fixture), 11);
+                var bytes = Relabeled(ReadFixture(fixture), 14);
                 var ex = Assert.ThrowsExactly<InvalidDataException>(() => read(new MemoryStream(bytes)), fixture);
-                StringAssert.Contains(ex.Message, "format version 11", fixture);
+                StringAssert.Contains(ex.Message, "format version 14", fixture);
                 StringAssert.Contains(ex.Message, "written by a later version", fixture);
             }
         }

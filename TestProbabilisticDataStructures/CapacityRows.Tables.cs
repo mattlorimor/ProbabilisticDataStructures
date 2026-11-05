@@ -33,8 +33,9 @@ namespace TestProbabilisticDataStructures
             .GetField("ExpansionThreshold", BindingFlags.NonPublic | BindingFlags.Static)!.GetRawConstantValue()!;
 
         /// <summary>
-        /// The most a quotient table of this kind can have in a uint's worth of slots: it
-        /// expands when three quarters full, so it is the items that fill the largest.
+        /// The items a quotient table of this kind of 2^<paramref name="quotientBits"/> slots
+        /// holds before it expands, which it does when three quarters full; at its largest
+        /// table, the most it holds.
         /// </summary>
         private static ulong ItemsAtTable(double threshold, int quotientBits) =>
             (ulong)(threshold * (1UL << quotientBits));
@@ -43,24 +44,26 @@ namespace TestProbabilisticDataStructures
             StructureId.InfiniFilter, $"items added, {f}-bit fingerprints",
             () =>
             {
-                // A table has a uint's worth of slots, so none has more than 2^31 addresses
-                // bits; the expansion past that makes a table of one slot.
-                Assert.AreEqual(typeof(uint),
+                // A table's slots are 64-bit, and it is as wide as one array holds its words
+                // (#231), which depends on the fingerprint: the table one bit wider does not
+                // fit, and the Add that would double into it throws.
+                Assert.AreEqual(typeof(ulong),
                     typeof(InfiniSegment).GetProperty(nameof(InfiniSegment.Slots), BindingFlags.Instance | BindingFlags.NonPublic)!.PropertyType);
-                Assert.AreEqual(1u, new InfiniSegment(32, f).Slots,
-                    "a table of 32 address bits is no longer a table of one slot");
-                return Exact(ItemsAtTable(InfiniThreshold, 31));
+                var widest = InfiniFilter.QuotientBitsLimitFor(f);
+                Assert.IsLessThanOrEqualTo(Array.MaxLength, InfiniSegment.Words(widest, f), "the widest table does not fit an array");
+                Assert.IsGreaterThan(Array.MaxLength, InfiniSegment.Words(widest + 1, f), "the table past the widest fits an array");
+                return Exact(ItemsAtTable(InfiniThreshold, widest));
             },
             () =>
             {
-                long Words(int q) => (((long)(1u << q)) * (f + 4) >> 6) + 2;
+                long Words(int q) => ((1L << q) * (f + 4) >> 6) + 2;
                 ChargeLine Line() => ChargeLine.Fit($"InfiniFilter {f}", 64,
                     Enumerable.Range(12, 4).Select(q =>
                     {
-                        var filter = new InfiniFilter((uint)ItemsAtTable(InfiniThreshold, q), f);
+                        var filter = new InfiniFilter(ItemsAtTable(InfiniThreshold, q), f);
                         filter.Add(Key(1));
                         Assert.HasCount(1, filter.Segments);
-                        Assert.AreEqual(1u << q, filter.Segments[0].Slots);
+                        Assert.AreEqual(1UL << q, filter.Segments[0].Slots);
                         return (Words(q), ChargeOf(StructureId.InfiniFilter, filter));
                     }).ToArray());
                 var line = Line();
@@ -70,7 +73,7 @@ namespace TestProbabilisticDataStructures
                 var grown = new InfiniFilter(1, f);
                 var items = (int)ItemsAtTable(InfiniThreshold, 12);
                 for (var i = 0; i < items; i++) grown.Add(Key(i));
-                Assert.AreEqual(1u << 12, grown.Segments[0].Slots, "the filter is not at the table the line was measured at");
+                Assert.AreEqual(1UL << 12, grown.Segments[0].Slots, "the filter is not at the table the line was measured at");
                 if (f <= 8)
                 {
                     // An entry ages out after F expansions, which a table this small

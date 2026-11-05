@@ -544,6 +544,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.117 s. The ordinary envelope, already read from memory, went from 0.166 s to 0.125 s.
   (#289)
 
+- **An `InfiniFilter`'s table can pass 2^31 slots, it takes a `ulong` initial capacity, and it
+  saves at format version 13; the capacity's type is a breaking change.** A table counted its
+  slots with a `uint`, so every table stopped at 2^31 slots, and a filter at about 1.6 billion
+  items whatever its fingerprint. Its slots, its entries and every index into its tables are
+  now 64-bit, and a table is as wide as one array holds its words: 2^34 slots for the
+  narrowest fingerprints, down to 2^31 for the widest. At the default 8 bits that is 2^33
+  slots, about 6.4 billion items, and at 16 bits 2^32, about 3.2 billion. The `Add` that would
+  double a table past its limit throws, with the filter as it was, as it did at 2^31. A
+  doubling walks the old table in place rather than listing its entries (#238), which at the
+  widest it has to: the list for the doubling into 2^34 slots would be 103 GB.
+  <br><br>
+  `InfiniFilter(ulong initialCapacity, ...)` takes a `ulong` where it took a `uint`, so a
+  capacity past 4,294,967,295 starts the table as wide as it needs and the fingerprint
+  allows. Code compiled against 6.2.0 has to be rebuilt. A constant or a `uint` compiles
+  unchanged, and an `int` or `long` variable needs a cast. `Count()` and `Capacity()` were
+  already `ulong`.
+  <br><br>
+  Every save, whatever the size of its tables, is now format version 13, which stores each
+  table's count of entries and of words as a `u64`, so no new save is readable by 6.2.0.
+  Stored filters still load: a version 1 payload reads as it did, its entries where they
+  were, and saves again as version 13. A filter whose payload passes 2 GiB is written in the
+  large form of the envelope by `WriteTo(Stream)`, and refused by `ToByteArray`. (#231)
+
 ### Fixed
 
 - **FORMAT.md gives 3.2.0 as the release that first wrote format version 1.** Its version
@@ -1278,16 +1301,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   disagreed with its own claim; no writer produced such a payload. Every release since
   `InfiniFilter` and `MementoFilter` shipped in 6.2.0 is affected.
   <br><br>
-  A table now has at most 31 bits of address, the same limit and the same reason as
-  `QuotientFilter`'s: the slot count is a 32-bit number holding 2^q. The add that would
-  expand past it throws an `InvalidOperationException` first, naming the table's size and
-  the limit, and changes nothing; the filter can still be queried and written, and removing
-  keys makes room. The readers refuse more than 31 bits of address and say what the limit
-  is. A bigger table is not a matter of wider arithmetic: it could not be written (at the
-  narrowest fingerprint it is three gibibytes of payload, in an envelope that holds two) and
-  the expansion into it lists every entry it moves, 1.6 billion at sixteen bytes. An initial
-  capacity past three quarters of 2^31 starts the first table at the widest, as it did,
-  now by a rule and not by a saturating conversion. No size that worked is refused.
+  A `MementoFilter` table now has at most 31 bits of address, the same limit and the same
+  reason as `QuotientFilter`'s: the slot count is a 32-bit number holding 2^q. The add that
+  would expand past it throws an `InvalidOperationException` first, naming the table's size
+  and the limit, and changes nothing; the filter can still be queried and written, and
+  removing keys makes room. The reader refuses more than 31 bits of address and says what the
+  limit is. An initial capacity past three quarters of 2^31 starts the first table at the
+  widest, as it did, now by a rule and not by a saturating conversion. No size that worked is
+  refused. An `InfiniFilter` table was given the same limit, and has since been widened past
+  it, to as wide as one array holds its words, with the same refusal at that limit (#231,
+  under Changed).
 
 - **A `MementoFilter` whose slots came to 64 bits stored no key at all, and one past 64 lost
   almost every key.** A slot is three bits of metadata and a field of the fingerprint, a bit

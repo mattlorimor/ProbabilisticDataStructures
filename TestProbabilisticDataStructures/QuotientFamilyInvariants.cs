@@ -267,14 +267,19 @@ namespace TestProbabilisticDataStructures
                 var f = segment.FingerprintBits;
                 var bits = f + 1 + 3;
 
-                Assert.AreEqual(1u << q, segment.Slots, $"{what}: slot count.");
+                Assert.AreEqual(1UL << q, segment.Slots, $"{what}: slot count.");
                 Assert.AreEqual((((long)segment.Slots * bits) >> 6) + 2, segment.Data.LongLength,
                     $"{what}: the table is not the length its shape implies.");
-                SpareBitsAreClear(what, segment.Data, bits, segment.Slots);
 
-                var entries = DecodeTable(what, segment.Slots,
+                // The decoder counts in 32 bits, which every table it is given here fits: they
+                // are the small tables of the sequences and the exhaustive runs. A wider one is
+                // refused by the cast rather than decoded wrapped.
+                var slots = checked((uint)segment.Slots);
+                SpareBitsAreClear(what, segment.Data, bits, slots);
+
+                var entries = DecodeTable(what, slots,
                     i => Slot(segment.Data, bits, i), sortedRuns: true, nonZeroFields: true);
-                Assert.AreEqual(segment.Count, (uint)entries.Count,
+                Assert.AreEqual(segment.Count, (ulong)entries.Count,
                     $"{what}: the count disagrees with the entries the table holds.");
 
                 foreach (var (quotient, field) in entries)

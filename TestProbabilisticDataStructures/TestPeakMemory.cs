@@ -413,9 +413,9 @@ namespace TestProbabilisticDataStructures
         /// reset that left it as it was would write something a new filter does not and would
         /// count reads.
         /// </summary>
-        private static void AssertHoldsEntries(string what, uint count, long slotReads, ulong[] words)
+        private static void AssertHoldsEntries(string what, ulong count, long slotReads, ulong[] words)
         {
-            Assert.IsGreaterThan(0u, count, $"premise: {what} holds entries");
+            Assert.IsGreaterThan(0UL, count, $"premise: {what} holds entries");
             Assert.IsGreaterThan(0L, slotReads, $"premise: {what} has read slots");
             Assert.IsTrue(words.AsSpan().IndexOfAnyExcept(0UL) >= 0, $"premise: {what} has a word set");
         }
