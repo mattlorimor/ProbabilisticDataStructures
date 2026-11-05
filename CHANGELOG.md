@@ -412,6 +412,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a shared machine. It refuses what it refused, in the same order, and builds every map to
   the same bytes.
 
+- **A `HyperLogLog`'s reset holds one register array.** No answer and no stored byte
+  changes. (#277)
+  <br><br>
+  `HyperLogLog.Reset` clears the registers where they are. It allocated a new array while
+  the old one was still held, so a reset needed twice the estimator at once: 2 GiB at the
+  2^30 registers of the largest.
+
 - **`VarOpt` now says what is exact about its total weight, and keeps the arithmetic.**
   The documentation said the sampled weights sum to *exactly* the stream's total weight.
   What holds is that no weight is lost when an item is dropped, because the survivors
