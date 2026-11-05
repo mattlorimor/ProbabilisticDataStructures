@@ -1974,6 +1974,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adds or removes the key once. No key raises different counters, and nothing a sketch
   writes changes. (#242)
 
+- **A `SublimeCountMinSketch` `Add` that ran out of memory moving a chunk to a tails array
+  lost counts.** An increment that outgrows its chunk's pool moves the chunk to a tails
+  array, which allocates, and it wrote the counter's stub before it allocated. An `Add` that
+  did not crowd the rows took each row's increment in turn, so one that ran out of memory
+  there left that counter with its stub carried and its high bits not: at nought where it
+  had held 31, and the estimate at nought with it, below what was added, which Count-Min
+  promises never to be. The rows before it had counted the key. The `Add` now asks each row
+  whose stub is full whether its increment moves a chunk, as the crowded `Add` already did,
+  allocates those tails arrays first, and only then takes the increments. One that runs out
+  of memory throws the `OutOfMemoryException` with the sketch exactly as it was, and adding
+  the key again counts it once. Measured on five rows of 2^16 counters, an add costs what it
+  did, within the noise of the machine. No key raises different counters, and nothing a
+  sketch writes changes. (#274)
+
 - **A read refused for its budget named a number that did not load it.**
   `ReadBudgetExceededException.RequiredBytes` was the running total at the allocation
   that failed, so a payload was refused at its first allocation the budget did not cover,

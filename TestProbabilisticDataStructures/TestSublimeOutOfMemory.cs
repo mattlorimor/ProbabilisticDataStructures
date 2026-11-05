@@ -45,6 +45,11 @@ namespace TestProbabilisticDataStructures
     /// each of them to the same rule as the first: whatever allocation fails, the sketch is as
     /// it was before the call, in its payload and in its rows and how they are packed.
     /// </para>
+    /// <para>
+    /// #274 found one more, in an add that resizes nothing: one whose increments move chunks to
+    /// tails arrays without crowding the rows took them in turn, and the increment that moved a
+    /// chunk wrote its counter's stub before it allocated the array. It is swept the same way.
+    /// </para>
     /// </remarks>
     [TestClass]
     public class TestSublimeOutOfMemory
