@@ -524,6 +524,124 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A stable filter whose cells fill several lowered arrays is one filter throughout:
+        /// seeded alike and given the same keys as a filter of the real size, it decays the
+        /// same cells, its runs crossing from one array into the next, and answers and holds
+        /// as that one does. Its payload reads back as the bytes it was read from, the copy's
+        /// reset clears every array, and a reader that has not lowered the size refuses it.
+        /// </summary>
+        [TestMethod]
+        public void TestAStableFilterOfLoweredArraysIsOneFilterThroughout()
+        {
+            static byte[] Key(int i) => BitConverter.GetBytes(i);
+            static (StableBloomFilter Filter, bool[] Answers) Exercised()
+            {
+                var filter = new StableBloomFilter(2_000, 3, 0.01, null, 11);
+                for (var i = 0; i < 3_000; i++) filter.Add(Key(i));
+                return (filter, Enumerable.Range(0, 6_000).Select(i => filter.Test(Key(i))).ToArray());
+            }
+
+            var (real, realAnswers) = Exercised();
+            var (filter, bytes, answers, reset) = WithArrayBits(4, () =>
+            {
+                var (exercised, answersHere) = Exercised();
+                Assert.IsGreaterThan(1, exercised.cells.RawData.Count(array => array.Length > 0),
+                    "premise: the cells fill several arrays");
+
+                var written = exercised.ToByteArray();
+                var read = Persistence.FromByteArray<StableBloomFilter>(written);
+                CollectionAssert.AreEqual(written, read.ToByteArray(), "the read filter writes other bytes");
+                read.Reset();
+                return (exercised, written, answersHere, read);
+            });
+
+            Assert.Contains(false, realAnswers.Take(3_000).ToArray(), "premise: the filter forgot some keys");
+            CollectionAssert.AreEqual(realAnswers, answers, "the filters answer otherwise");
+            Assert.AreEqual(real.cells.count, filter.cells.count);
+            for (ulong i = 0; i < real.cells.count; i++)
+            {
+                Assert.AreEqual(real.cells.Get(i), filter.cells.Get(i), $"cell {i}");
+            }
+
+            Assert.IsTrue(reset.cells.RawData.All(array => array.AsSpan().IndexOfAnyExcept((byte)0) < 0),
+                "the reset left a cell set");
+            var refused = OnAnotherThread(() =>
+                Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<StableBloomFilter>(bytes)));
+            StringAssert.Contains(refused.Message, "arrays and");
+        }
+
+        /// <summary>
+        /// A stable filter saved before version 14 holds its cells as one run, laid out as a
+        /// 64-bit table's arrays as the counting filter's counters are: at arrays of a byte
+        /// the cells are split, hold what the read at the real size holds and save as it
+        /// does once narrowed back to version 8; the read is priced at what it is charged,
+        /// and the split is charged what it allocates beyond the unsplit read, to the byte.
+        /// </summary>
+        [TestMethod]
+        [DataRow("stablebloomfilter-v1.bin")]
+        [DataRow("stablebloomfilter-v5.bin")]
+        [DataRow("stablebloomfilter-v8-narrow.bin")]
+        [DataRow("stablebloomfilter-v8-wide.bin")]
+        public void TestAnEarlierStablePayloadIsLaidOutAsATableOfArrays(string fixture)
+        {
+            var bytes = TestPersistenceFormatStability.ReadFixture(fixture);
+            (StableBloomFilter Filter, long Charged, long Allocated) Read()
+            {
+                var budget = new ReadBudget(long.MaxValue, StructureId.StableBloomFilter);
+                var read = Persistence.FromByteArray<StableBloomFilter>(bytes, new ReadOptions(budget));
+                var priced = ((ReadBudgetExceededException)Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<StableBloomFilter>(bytes, new ReadOptions(0))).InnerException!).RequiredBytes;
+                Assert.AreEqual(priced, budget.Spent, $"{fixture} was priced at one sum and charged another");
+                var allocated = TestReadBudget.Allocated(() => Persistence.FromByteArray<StableBloomFilter>(bytes));
+                return (read, budget.Spent, allocated);
+            }
+
+            var real = Read();
+            var split = WithArrayBits(0, Read);
+            Assert.AreEqual(1, real.Filter.cells.RawData.Count(array => array.Length > 0), "the cells are not one array at the real size");
+            Assert.IsGreaterThan(1, split.Filter.cells.RawData.Count(array => array.Length > 0), "premise: the cells were split");
+            for (ulong i = 0; i < real.Filter.cells.count; i++)
+            {
+                Assert.AreEqual(real.Filter.cells.Get(i), split.Filter.cells.Get(i), $"cell {i}");
+            }
+
+            // A version 1 payload has no stored generator state, so each read takes an
+            // unpredictable one, and only its cells are compared.
+            if (!fixture.EndsWith("v1.bin", StringComparison.Ordinal))
+            {
+                CollectionAssert.AreEqual(TestBitPlacement.Narrowed(real.Filter.ToByteArray(), "muubtqq"),
+                    TestBitPlacement.Narrowed(split.Filter.ToByteArray(), "muubtqq"), "the split filter saves another filter");
+            }
+
+            Assert.IsGreaterThan(0L, split.Charged - real.Charged, "premise: the split costs something");
+            Assert.AreEqual(split.Allocated - real.Allocated, split.Charged - real.Charged,
+                "the split was charged other than what it allocated beyond the unsplit read");
+        }
+
+        /// <summary>
+        /// Past 2^32 cells a decay run's start and its cells are 64-bit (#232), which no
+        /// filter in the suite can be built large enough to show, so the two functions are
+        /// held to it directly: the start is the high half of the 128-bit product, which
+        /// reaches past 2^32 and stays below m, and a run wraps from the last cell to the
+        /// first. Below 2^32 cells they give what the 32-bit ones gave, which
+        /// TestStableDecayDraw holds.
+        /// </summary>
+        [TestMethod]
+        public void TestADecayRunPastTwoToTheThirtyTwoCellsIsPlacedInSixtyFourBits()
+        {
+            var m = (1UL << 40) + 5;
+            Assert.AreEqual(0UL, StableBloomFilter.DecayStart(0, m));
+            Assert.AreEqual(m - 1, StableBloomFilter.DecayStart(ulong.MaxValue, m));
+            Assert.AreEqual(m / 2, StableBloomFilter.DecayStart(1UL << 63, m));
+            Assert.IsGreaterThan((ulong)uint.MaxValue, StableBloomFilter.DecayStart(1UL << 63, m), "premise: a start past 2^32");
+
+            Assert.AreEqual(m - 1, StableBloomFilter.DecayCell(m - 2, 1, m));
+            Assert.AreEqual(0UL, StableBloomFilter.DecayCell(m - 1, 1, m));
+            Assert.AreEqual(2UL, StableBloomFilter.DecayCell(m - 1, 3, m));
+            Assert.AreEqual((1UL << 32) + 1, StableBloomFilter.DecayCell(1UL << 32, 1, m));
+        }
+
+        /// <summary>
         /// The one boundary in laying out a run of buckets as a 64-bit table, at arrays of 16
         /// bytes: runs of 15 and 16 eight-bit buckets fit the first array and are kept, the
         /// 16's second array empty, and one of 17 is split into 16 bytes and 1, which copies

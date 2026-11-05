@@ -253,9 +253,9 @@ building at the scale it describes, which is the measurement as of commit 426348
 
 | Structure | Counts | Builds up to | Loads by default up to | As a byte array |
 | --- | --- | --- | --- | --- |
-| `StableBloomFilter` | m cells, 1-bit cells, fp 1% | 4,294,967,295 | ≈ 4.29 billion | as built |
-| `StableBloomFilter` | m cells, 3-bit cells, fp 1% | 4,294,967,295 | ≈ 1.43 billion | as built |
-| `StableBloomFilter` | m cells, 8-bit cells, fp 1% | 2,147,483,591 | ≈ 536.87 million | 2,147,483,535 |
+| `StableBloomFilter` | m cells, 1-bit cells, fp 1% | memory | ≈ 4.29 billion | 17,179,867,704 |
+| `StableBloomFilter` | m cells, 3-bit cells, fp 1% | memory | ≈ 1.43 billion | 5,726,622,674 |
+| `StableBloomFilter` | m cells, 8-bit cells, fp 1% | memory | ≈ 536.87 million | 2,147,483,519 |
 | `HyperLogLog` | registers m (a power of two) | 1,073,741,824 | 268,435,456 | as built |
 | `HyperLogLogPlus` | registers 2^p, p up to 18 | 262,144 | any | as built |
 | `UltraLogLog` | registers 2^p, p up to 26 | 67,108,864 | any | as built |
@@ -964,6 +964,11 @@ Console.WriteLine(filter.StablePoint());   // the rate it converges to
 
 Described by Deng and Rafiei in
 [Approximately Detecting Duplicates for Streaming Data using Stable Bloom Filters](https://webdocs.cs.ualberta.ca/~drafiei/papers/DupDet06Sigmod.pdf).
+
+It is sized in 64 bits: `m` and `Cells()` are `ulong`s and its cells are held as arrays of
+2^30 bytes, so it is limited by memory rather than by one array, and a payload too large
+for one array is saved to a stream. Until the release after 6.2.0 its size was a `uint`,
+and it held 2,147,483,591 eight-bit cells.
 
 ### `InverseBloomFilter`
 

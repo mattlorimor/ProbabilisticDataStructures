@@ -194,11 +194,6 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         private static IEnumerable<LargestBuild> LargestBuilds()
         {
-            yield return new(StructureId.StableBloomFilter, "8-bit cells, as many as one array holds", true,
-                () => Filled(new StableBloomFilter(200, 8, 0.01, seed: 1), (f, k) => f.Add(k)),
-                s => new[] { new Claim(Get(s, "cells"), "count", Buckets.MaxCount(8)) },
-                s => BucketBytes(Get(s, "cells")));
-
             yield return new(StructureId.PartitionedBloomFilter, "2^32 - 1 bits across its partitions", false,
                 () => Filled(new PartitionedBloomFilter(200, 0.01), (f, k) => f.Add(k)),
                 s =>
@@ -394,6 +389,7 @@ namespace TestProbabilisticDataStructures
             new(StructureId.BloomFilter64, typeof(Buckets64), "Data"),
             new(StructureId.CountingBloomFilter, typeof(Buckets64), "Data"),
             new(StructureId.DeletableBloomFilter, typeof(Buckets64), "Data"),
+            new(StructureId.StableBloomFilter, typeof(Buckets64), "Data"),
             new(StructureId.HyperLogLog, typeof(HyperLogLog), "Registers"),
             new(StructureId.UltraLogLog, typeof(UltraLogLog), "Registers"),
             new(StructureId.HyperLogLogPlus, typeof(HyperLogLogPlus), "registers", "sparse"),

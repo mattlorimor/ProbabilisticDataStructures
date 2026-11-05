@@ -604,32 +604,39 @@ namespace TestProbabilisticDataStructures
                 && new StableBloomFilter(100, 2, 0.01).Placement == Placement.Narrow),
             new Claim("Below 2^27 the excess is at most about 0.07% of the rate at 1%", () =>
                 Rounds(LargestFoldBelowWide() * 100, 0.07, 2)),
-            // Small and large alike: a small filter of each of the five, placed either way.
-            new Claim("Every save of `BloomFilter`, `StableBloomFilter` and `PartitionedBloomFilter`, whatever its size, is written at format version 8", () =>
+            // Small and large alike: a small filter of each, placed either way.
+            new Claim("Every save of `BloomFilter` and `PartitionedBloomFilter`, whatever its size, is written at format version 8", () =>
                 new[] { Placement.Narrow, Placement.Wide }.All(p =>
                     new BloomFilter(100, 0.01, null, p).ToByteArray()[4] == 8
-                    && new PartitionedBloomFilter(100, 0.01, null, p).ToByteArray()[4] == 8
-                    && new StableBloomFilter(100, 2, 0.01, null, 1, p).ToByteArray()[4] == 8)),
-            // Their layout: u64 m, u32 k, the placement byte, the u64 count, then the first
-            // table, whose u64 count follows: the counters, or the data region.
-            new Claim("Every save of `CountingBloomFilter` and `DeletableBloomFilter` is written at format version 14, which records the same and its sizes in 64 bits as well", () =>
+                    && new PartitionedBloomFilter(100, 0.01, null, p).ToByteArray()[4] == 8)),
+            // The counting and deletable layouts: u64 m, u32 k, the placement byte, the u64
+            // count, then the first table, whose u64 count follows. The stable filter's: u64
+            // m, u32 k, u32 p, the placement byte, then its cells, whose count follows; it
+            // has no item count.
+            new Claim("Every save of `CountingBloomFilter`, `DeletableBloomFilter` and `StableBloomFilter` is written at format version 14, which records the same and its sizes in 64 bits as well", () =>
                 new[] { (Placement.Narrow, 0), (Placement.Wide, 1) }.All(p =>
                 {
                     var counting = new CountingBloomFilter(100, 4, 0.01, null, p.Item1);
                     var deletable = new DeletableBloomFilter(100, 10, 0.01, null, p.Item1);
+                    var stable = new StableBloomFilter(100, 2, 0.01, null, 1, p.Item1);
                     for (var i = 0; i < 10; i++)
                     {
                         counting.Add(Key(i));
                         deletable.Add(Key(i));
                     }
 
+                    var cells = stable.ToByteArray();
                     return PersistenceFormat.Bloom64Version == 14
                         && new[] { (counting.ToByteArray(), counting.Capacity()), (deletable.ToByteArray(), deletable.Capacity()) }.All(f =>
                             f.Item1[4] == PersistenceFormat.Bloom64Version
                             && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(f.Item1.AsSpan(14)) == f.Item2
                             && f.Item1[14 + 12] == p.Item2
                             && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(f.Item1.AsSpan(14 + 13)) == 10
-                            && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(f.Item1.AsSpan(14 + 21)) == f.Item2);
+                            && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(f.Item1.AsSpan(14 + 21)) == f.Item2)
+                        && cells[4] == PersistenceFormat.Bloom64Version
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(cells.AsSpan(14)) == stable.Cells()
+                        && cells[14 + 16] == p.Item2
+                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(cells.AsSpan(14 + 17)) == stable.Cells();
                 })),
             // The plain filter's layout: u32 m, u32 k, the placement byte, the u64 count,
             // then the bucket array, whose count follows.
@@ -795,15 +802,23 @@ namespace TestProbabilisticDataStructures
                 Near(Facts["inverse slot bytes"], 16, 0.01)),
 
             // ---- Where a limit refuses -----------------------------------------------------
-            new Claim("4,294,967,182 four-bit cells, or 2,147,483,591 eight-bit ones", () =>
-                Buckets.MaxCount(4) == 4_294_967_182 && Buckets.MaxCount(8) == 2_147_483_591
-                && Buckets.MaxCount(1) == uint.MaxValue && Buckets.MaxCount(3) == uint.MaxValue),
-            new Claim("and the filters refuse more against the parameter that chose it", () =>
-                Assert.Throws<ArgumentOutOfRangeException>(
-                    () => new StableBloomFilter(Buckets.MaxCount(8) + 1, 8, 0.01, seed: 1)).ParamName == "m"),
-            // The counting filter's own section says what limits it now, and what did.
-            new Claim("A counting filter's counters are a 64-bit table of arrays, as `BloomFilter64`'s bits are, and have no such limit", () =>
-                typeof(CountingBloomFilter).GetProperty("Buckets", BindingFlags.NonPublic | BindingFlags.Instance)!.PropertyType == typeof(Buckets64)),
+            new Claim("The filters still on it hold one-bit buckets, and for those that is more than a 32-bit count addresses, so the count is the limit", () =>
+                Buckets.MaxCount(1) == uint.MaxValue
+                && new BloomFilter(100, 0.01).Buckets.BucketSize == 1
+                && new PartitionedBloomFilter(100, 0.01).Partitions.All(p => p.BucketSize == 1)),
+            new Claim("and their sizing refuses an `n` past it", () =>
+                Assert.Throws<ArgumentOutOfRangeException>(() => Utils.OptimalM(1_000_000_000, 0.01)) is not null),
+            // The filters' own sections say what limits them now, and what did.
+            new Claim("The buckets of the counting, deletable and stable filters are a 64-bit table of arrays, as `BloomFilter64`'s bits are, and have no such limit", () =>
+                new[] { (typeof(CountingBloomFilter), "Buckets"), (typeof(DeletableBloomFilter), "Buckets"),
+                    (typeof(DeletableBloomFilter), "Collisions"), (typeof(StableBloomFilter), "cells") }.All(f =>
+                    f.Item1.GetProperty(f.Item2, BindingFlags.NonPublic | BindingFlags.Instance)!.PropertyType == typeof(Buckets64))),
+            new Claim("`m` and `Cells()` are `ulong`s and the cells are held as arrays of 2^30 bytes, so what stops the constructor is memory", () =>
+                typeof(StableBloomFilter).GetConstructor(new[] { typeof(ulong), typeof(byte), typeof(double), typeof(Func<ReadOnlySpan<byte>, ulong>), typeof(ulong?) }) is not null
+                && typeof(StableBloomFilter).GetMethod(nameof(StableBloomFilter.Cells))!.ReturnType == typeof(ulong)
+                && Buckets64.maxArraySize == 1u << 30),
+            new Claim("from four bits up the most cells fell in proportion to `d`: 2,147,483,591 at eight bits", () =>
+                Buckets.MaxCount(4) == 4_294_967_182 && Buckets.MaxCount(8) == 2_147_483_591),
             new Claim("it stopped at 448,089,830 items at four-bit counters and 1%, and at half that at eight", () =>
                 CapacityRows.LargestSound(0.01, 4) == 448_089_830
                 && CapacityRows.LargestSound(0.01, 8) == 224_044_915),

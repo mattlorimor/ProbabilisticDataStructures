@@ -338,8 +338,8 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// The bucket array's limit is the same whichever way a filter places: the counting
-        /// filter refuses a size past <c>Buckets64.MaxCount</c>, and the stable filter one
-        /// past <c>Buckets.MaxCount</c>, placed either way, against the same parameter and
+        /// filter refuses a size past <c>Buckets64.MaxCount</c>, and so does the stable filter,
+        /// placed either way, against the same parameter and
         /// with the same words as the public constructor.
         /// </summary>
         /// <remarks>
@@ -368,7 +368,7 @@ namespace TestProbabilisticDataStructures
                 Assert.AreEqual(counting.Message, ex.Message);
             }
 
-            var cells = Buckets.MaxCount(8) + 1;
+            var cells = Buckets64.MaxCount + 1;
             var stable = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
                 () => new StableBloomFilter(cells, 8, 0.01, seed: 1));
             Assert.AreEqual("m", stable.ParamName);
@@ -598,7 +598,7 @@ namespace TestProbabilisticDataStructures
             // Seeded, so that its payload is reproducible. Its cells decay, so the cells
             // it reports are checked only for the item just added.
             new Kind(nameof(StableBloomFilter),
-                p => new StableBloomFilter(1000, 2, 0.01, null, 7, p), 5, 12, -1,
+                p => new StableBloomFilter(1000, 2, 0.01, null, 7, p), 5, 16, -1,
                 f => ((StableBloomFilter)f).ToByteArray(),
                 b => Persistence.FromByteArray<StableBloomFilter>(b),
                 f => ((StableBloomFilter)f).Placement,
@@ -606,7 +606,7 @@ namespace TestProbabilisticDataStructures
                 (f, k) => ((StableBloomFilter)f).Test(k),
                 f => Bits(((StableBloomFilter)f).cells),
                 (f, k) => ((StableBloomFilter)f).TestAndAdd(k),
-                null),
+                null) { Version = 14, Layout14 = "muubtqq" },
         };
 
         /// <summary>

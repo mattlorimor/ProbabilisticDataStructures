@@ -206,16 +206,24 @@ namespace TestProbabilisticDataStructures
 
         internal static CapacityRow StableBloomFilter(byte d, double fp, string label) => Row(
             StructureId.StableBloomFilter, $"m cells, {d}-bit cells, fp {label}",
-            () => Exact(Largest(1, uint.MaxValue, m => BucketsAreSound(m, d))),
+            () =>
+            {
+                // Sized in 64 bits since #232, its cells on a 64-bit table, as the counting
+                // filter's counters are.
+                Assert.IsGreaterThan(1UL << 60, Buckets64.MaxCount);
+                return Memory;
+            },
             () =>
             {
                 var line = ChargeLine.Fit("StableBloomFilter", 64,
-                    new[] { 100_000u, 200_000u, 400_000u, 800_000u }
+                    new[] { 100_000UL, 200_000UL, 400_000UL, 800_000UL }
                         .Select(m => ((long)TrueBytes(m, d),
                             ChargeOf(StructureId.StableBloomFilter, new StableBloomFilter(m, d, fp, seed: 1))))
-                        .ToArray());
-                var sound = Largest(1, uint.MaxValue, m => BucketsAreSound(m, d));
-                return LoadsAbout(line, sound, m => TrueBytes(m, d));
+                        .ToArray())
+                    // Past 2^30 bytes the cells are in more than one array, and each array
+                    // is charged a few more bytes; none can be built here to measure them.
+                    .Widen(5 * 48);
+                return LoadsAbout(line, 1UL << 40, m => TrueBytes(m, d));
             });
 
         /// <summary>The rows built from the Bloom filters.</summary>

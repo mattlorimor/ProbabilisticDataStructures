@@ -974,42 +974,33 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The same for the stable filter's cells, which are its own parameter.
+        /// The same for the stable filter's cells, which are its own parameter and have
+        /// been a 64-bit table since #232: one cell past the table's most is refused naming
+        /// <c>m</c>, and a payload is refused one cell past it as beyond anything built and
+        /// at it only for the arrays it lacks.
         /// </summary>
         [TestMethod]
         public void TestStableFilterLimitIsShared()
         {
-            Assert.AreEqual((long)Array.MaxLength, Buckets.MaxDataBytes);
+            var limit = Buckets64.MaxCount;
+            Assert.AreEqual("m", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => new StableBloomFilter(limit + 1, 8, 0.01, seed: 1)).ParamName);
 
-            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
-                () => new StableBloomFilter((uint)Array.MaxLength + 1, 8, 0.01, seed: 1));
+            // u64 m, u32 k, u32 p, u8 placement, then the table: u64 count, u8 width,
+            // u32 arrays, a run each.
+            const int TableCount = 8 + 4 + 4 + 1;
+            var bytes = new StableBloomFilter(1000, 8, 0.01, null, 1, Placement.Wide).ToByteArray();
 
-            // u32 m, u32 k, u32 p, u8 placement, then the buckets.
-            var bytes = new StableBloomFilter(1000, 8, 0.01, seed: 1).ToByteArray();
-            AssertBucketLimitIsShared<StableBloomFilter>(bytes, 0, 13);
-        }
+            AssertRefused<StableBloomFilter>(
+                PokeUInt64(PokeUInt64(bytes, 0, limit + 1), TableCount, limit + 1), PastTheLimit);
 
-        /// <summary>
-        /// A reader past the limit says so, and at it asks only for the table. The
-        /// payload's two counts are raised together because a filter checks them against
-        /// each other.
-        /// </summary>
-        private static void AssertBucketLimitIsShared<T>(byte[] eightBit, int mOffset, int bucketCountOffset)
-            where T : IBinaryPersistable<T>
-        {
-            var limit = (uint)Buckets.MaxCount(8);
-            Assert.AreEqual((uint)Array.MaxLength, limit);
-
-            AssertRefused<T>(
-                PokeUInt32(PokeUInt32(eightBit, mOffset, limit + 1), bucketCountOffset, limit + 1),
-                PastTheLimit);
-
-            var ex = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<T>(
-                PokeUInt32(PokeUInt32(eightBit, mOffset, limit), bucketCountOffset, limit)));
-            StringAssert.Contains(ex.Message, "were stored",
-                "a payload at the limit should be refused for its table, not its size");
+            var ex = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<StableBloomFilter>(
+                PokeUInt64(PokeUInt64(bytes, 0, limit), TableCount, limit)));
+            StringAssert.Contains(ex.Message, "arrays and 1 were stored",
+                "a payload at the limit should be refused for its arrays, not its size");
             Assert.DoesNotContain(PastTheLimit, ex.Message);
         }
+
 
         /// <summary>
         /// The quotient filter was the other way round: its reader's limits were the
@@ -1614,8 +1605,7 @@ namespace TestProbabilisticDataStructures
             {
                 [("CuckooBloomFilter", "entries, `m` × `b`")] = CuckooBloomFilter.MaxEntries,
                 [("CountingBloomFilter", "counters, `m`")] = Buckets64.MaxCount,
-                [("StableBloomFilter", "bytes of cells, `m` × `d` bits, rounded up")] =
-                    (ulong)Buckets.MaxDataBytes,
+                [("StableBloomFilter", "cells, `m`")] = Buckets64.MaxCount,
                 [("ThetaSketch", "`k`")] = ThetaSketch.MaxNominalEntries,
                 [("TupleSketch", "`k`")] = TupleSketch.MaxNominalEntries,
                 [("MinHashSignature", "`k`")] = (ulong)MinHashSignature.MaxValues,

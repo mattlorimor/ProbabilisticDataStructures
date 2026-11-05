@@ -261,15 +261,28 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// A stable filter's cells are its own parameter, and the refusal is against it.
-        /// Two to the 31st eight-bit cells is the sizing that wrapped to no array at all.
+        /// Its cells have been a 64-bit table since #232, so the line is the table's: one
+        /// cell past <see cref="Buckets64.MaxCount"/> is refused naming <c>m</c>, by the
+        /// constructor and by the factory of an unstable filter, and the count at the line
+        /// passes the check both make. Until then two to the 31st eight-bit cells, which
+        /// one array cannot hold, was refused, and before that it wrapped to no array.
         /// </summary>
         [TestMethod]
-        public void TestAStableFilterBeyondAnArrayIsRefusedNamingM()
+        [DataRow((byte)1)]
+        [DataRow((byte)8)]
+        public void TestAStableFilterBeyondItsTableIsRefusedNamingM(byte d)
         {
+            var past = Buckets64.MaxCount + 1;
+            Buckets64.CheckSize(Buckets64.MaxCount, d, "m");
             var ex = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
-                () => new StableBloomFilter(1u << 31, 8, 0.01, seed: 1));
+                () => new StableBloomFilter(past, d, 0.01, seed: 1));
             Assert.AreEqual("m", ex.ParamName);
-            StringAssert.Contains(ex.Message, Array.MaxLength.ToString("N0"));
+            StringAssert.Contains(ex.Message, Buckets64.MaxCount.ToString("N0"));
+
+            var unstable = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => StableBloomFilter.NewUnstableBloomFilter(past, 0.01));
+            Assert.AreEqual("m", unstable.ParamName);
+            StringAssert.Contains(unstable.Message, Buckets64.MaxCount.ToString("N0"));
         }
 
         /// <summary>

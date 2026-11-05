@@ -33,18 +33,19 @@ namespace TestProbabilisticDataStructures
     public class TestStableLongDecayRuns
     {
         private const int PayloadStart = 14;
-        private const int POffset = 8;
+        // Version 14: u64 m, u32 k, then u32 p.
+        private const int POffset = 12;
 
         private static byte[] Key(string s) => Encoding.ASCII.GetBytes(s);
 
         /// <summary>The cells the filter's own add sets for <paramref name="data"/>.</summary>
         private static HashSet<uint> CellsOf(StableBloomFilter f, byte[] data)
         {
-            var positions = Positions.Of(data, Defaults.GetDefaultHashFunction(), f.Placement, f.Cells());
+            var positions = Positions64.Of(data, Defaults.GetDefaultHashFunction(), f.Placement, f.Cells());
             var cells = new HashSet<uint>();
             for (uint i = 0; i < f.K(); i++)
             {
-                cells.Add(positions[i]);
+                cells.Add(checked((uint)positions[i]));
             }
 
             return cells;
@@ -176,7 +177,7 @@ namespace TestProbabilisticDataStructures
 
                 if (p < 1_000_000)
                 {
-                    PlainLoop(expected, m, p, start);
+                    PlainLoop(expected, m, p, checked((uint)start));
                 }
                 else
                 {
@@ -230,7 +231,7 @@ namespace TestProbabilisticDataStructures
                         foreach (var start in new uint[] { 0, 1, m - 1, m / 2 }.Where(s => s < m).Distinct())
                         {
                             var loop = Filled(m, d, random);
-                            var decay = new Buckets(m, d);
+                            var decay = new Buckets64(m, d);
                             for (uint c = 0; c < m; c++)
                             {
                                 decay.Set(c, (byte)loop.Get(c));
@@ -341,7 +342,7 @@ namespace TestProbabilisticDataStructures
                 {
                     foreach (var p in new uint[] { (uint)int.MaxValue + 1, uint.MaxValue })
                     {
-                        var cells = new Buckets(m, d);
+                        var cells = new Buckets64(m, d);
                         for (uint c = 0; c < m; c++)
                         {
                             cells.Set(c, cells.MaxBucketValue());

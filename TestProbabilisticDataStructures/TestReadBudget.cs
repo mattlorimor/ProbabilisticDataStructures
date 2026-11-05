@@ -1004,7 +1004,7 @@ namespace TestProbabilisticDataStructures
         public void TestAStableFilterHashCountLargerThanTheBudgetIsRefused()
         {
             var bytes = new StableBloomFilter(1000, 3, 0.01, seed: 1).ToByteArray();
-            AssertRefusedForItsHashCountBeforeAllocating<StableBloomFilter>(Poke(bytes, 4, 1u << 24));
+            AssertRefusedForItsHashCountBeforeAllocating<StableBloomFilter>(Poke(bytes, 8, 1u << 24));
         }
 
         /// <summary>An inverse filter's slots are allocated whole, occupied or not.</summary>

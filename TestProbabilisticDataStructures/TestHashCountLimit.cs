@@ -84,7 +84,7 @@ namespace TestProbabilisticDataStructures
             // The stable filter's constructor halves the count, so it reaches the ceiling
             // only through the factory that builds an ordinary Bloom filter out of cells.
             [typeof(StableBloomFilter)] = Of(
-                () => new StableBloomFilter(1000, 3, 0.01, seed: 1), new[] { 4 },
+                () => new StableBloomFilter(1000, 3, 0.01, seed: 1), new[] { 8 },
                 rate => StableBloomFilter.NewUnstableBloomFilter(2000, rate), f => f.K()),
         };
 

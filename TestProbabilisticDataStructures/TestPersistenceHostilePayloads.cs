@@ -2290,8 +2290,8 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestStableFilterWithNoHashFunctionsIsRefused()
         {
-            // u32 m, then k.
-            const int KOffset = 4;
+            // u64 m, then k.
+            const int KOffset = 8;
 
             var bytes = Filled(new StableBloomFilter(200, 2, 0.01, seed: 5)).ToByteArray();
 

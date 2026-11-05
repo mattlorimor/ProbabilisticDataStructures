@@ -74,11 +74,10 @@ the structure with an exception that names the limit, before anything changes, a
 "Builds up to" figures are the sizes that refuse nothing.
 
 - **A bucket array is one .NET array.** `Buckets` sizes it in 64 bits, up to the
-  2,147,483,591 bytes an array holds, and the filters refuse more against the parameter
-  that chose it. For buckets of one to three bits that is more than a 32-bit count
-  addresses, so the count is the limit; from four bits up it is the array:
-  4,294,967,182 four-bit cells, or 2,147,483,591 eight-bit ones. A counting filter's
-  counters are a 64-bit table of arrays, as `BloomFilter64`'s bits are, and have no such
+  2,147,483,591 bytes an array holds. The filters still on it hold one-bit buckets, and
+  for those that is more than a 32-bit count addresses, so the count is the limit, and
+  their sizing refuses an `n` past it. The buckets of the counting, deletable and stable
+  filters are a 64-bit table of arrays, as `BloomFilter64`'s bits are, and have no such
   limit. Versions that sized the array in 32 bits built a filter whose bits passed 2^32
   with an array too short for them, without an error, and it failed on `Add`; a payload
   written then is refused when read, with that said.
@@ -112,11 +111,11 @@ more — 16 MiB of bits, about 14 million items at 1%, and for the partitioned f
 partition — places them with 64-bit values, exactly as `BloomFilter64` does. At m = 0.75 ·
 2^32 sized for 1% it measured 1.004%, as `BloomFilter64` did. A smaller filter is placed
 as before. Below 2^27 the excess is at most about 0.07% of the rate at 1%, too small to
-measure. Every save of `BloomFilter`, `StableBloomFilter` and `PartitionedBloomFilter`,
-whatever its size, is written at format version 8, which records the placement in a byte
-of its own and the item count in 64 bits, and which 6.2.0 and earlier refuse. Every save
-of `CountingBloomFilter` and `DeletableBloomFilter` is written at format version 14, which
-records the same and its sizes in 64 bits as well. A filter read from a payload written
+measure. Every save of `BloomFilter` and `PartitionedBloomFilter`, whatever its size, is
+written at format version 8, which records the placement in a byte of its own and the
+item count in 64 bits, and which 6.2.0 and earlier refuse. Every save of
+`CountingBloomFilter`, `DeletableBloomFilter` and `StableBloomFilter` is written at format
+version 14, which records the same and its sizes in 64 bits as well. A filter read from a payload written
 before the release after 6.2.0 keeps the 32-bit placement, and the rate that goes with it, whatever its size, and
 records it when saved again. It does not merge with a new filter of the same size; to have
 the rate it was sized for, add its items to a new filter.
@@ -440,9 +439,10 @@ bytes for each unit of `k`: 80 GiB at the largest `k`, 2,147,483,590.
 ### `StableBloomFilter`
 
 `m` cells of `d` bits each, holding the most recent items and forgetting the rest, so the
-items it takes are unlimited and what you choose is the cells. The packed array is `m · d`
-bits and is one array, so from four bits up the most cells falls in proportion to `d`, as
-the rows of the table show. Past that the constructor refuses, naming `m`.
+items it takes are unlimited and what you choose is the cells. `m` and `Cells()` are
+`ulong`s and the cells are held as arrays of 2^30 bytes, so what stops the constructor is
+memory. Until the release after 6.2.0 its size was a `uint` and its cells one array, so
+from four bits up the most cells fell in proportion to `d`: 2,147,483,591 at eight bits.
 
 ### `HyperLogLog`
 

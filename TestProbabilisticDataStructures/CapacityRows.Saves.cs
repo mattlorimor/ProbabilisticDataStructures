@@ -107,12 +107,14 @@ namespace TestProbabilisticDataStructures
             },
             StructureId.StableBloomFilter => () =>
             {
+                // As the counting filter's: the fields, the cells, and a length for each of
+                // the table's arrays, which are as many as its count implies (#232).
                 var d = byte.Parse(Regex.Match(row.Counts, @"(\d)-bit").Groups[1].Value);
-                var payload = PayloadLine("StableBloomFilter", StructureId.StableBloomFilter);
-                var most = Largest(1, uint.MaxValue, m => BucketsAreSound(m, d));
-                return payload.Upper(TrueBytes(most, d)) <= MaxPayload
-                    ? AsBuilt
-                    : Saved(payload, most, m => TrueBytes(m, d));
+                var small = new StableBloomFilter(100_000, d, 0.01, seed: 1);
+                var fixedBytes = PayloadOf(small) - (long)TrueBytes(small.Cells(), d) - 4;
+                var most = Largest(1, 1UL << 40, m =>
+                    fixedBytes + (long)TrueBytes(m, d) + 4 * (long)(m / Buckets64.maxArraySize + 1) <= MaxPayload);
+                return Exact(most);
             },
             StructureId.InverseBloomFilter => () =>
             {

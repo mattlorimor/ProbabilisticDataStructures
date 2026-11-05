@@ -279,6 +279,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   payload placed with 32-bit values past 4,294,967,295 bits is refused, as the counting
   filter's is. (#232)
 
+- **`StableBloomFilter` is sized in 64 bits, and saves at format version 14, and that is a
+  breaking change.** Its `m` and `Cells()` are `ulong`s where they were `uint`s, in the
+  constructor, `NewDefaultStableBloomFilter` and `NewUnstableBloomFilter`: a caller passing
+  a `uint` compiles as it did, one keeping `Cells()` in a `uint` needs a cast or a wider
+  variable, and code compiled against an earlier release has to be rebuilt. Its cells are
+  held as arrays of 2^30 bytes, so it is limited by memory rather than by one array, which
+  stopped it at 2,147,483,591 eight-bit cells; `NewUnstableBloomFilter` now refuses a size
+  past what the table holds, naming `m`, as the constructor does. `p` stays a `uint`, and
+  a decay run of it starts where it did for any filter below 2^32 cells.
+  <br><br>
+  Every save is [format version 14](FORMAT.md#format-versions): version 8's layout with `m`
+  a `u64` and the cells a `Buckets64`. **No earlier release reads it.** Stored filters still
+  load, from every earlier version, and save again as version 14, resuming the decay
+  sequence they were stored partway through. (#232)
+
 - **`BloomFilter64` is faster, the structures placed with 64-bit values test faster, and
   every bit is where it was.** The 64-bit placement hashes the first value's eight little-endian
   bytes for the second value, and both places that do it wrote those bytes into a

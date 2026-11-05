@@ -340,7 +340,7 @@ namespace ProbabilisticDataStructures
             [StructureId.ScalableBloomFilter] = [DefaultVersion, ScalableGrowthVersion],
             [StructureId.StableBloomFilter] =
                 [DefaultVersion, RandomStateVersion, StableOriginalStateVersion,
-                 PlacementVersion],
+                 PlacementVersion, Bloom64Version],
             [StructureId.InverseBloomFilter] = [DefaultVersion, ColumnPlacementVersion],
             [StructureId.CuckooBloomFilter] =
                 [DefaultVersion, RandomStateVersion, CuckooPackedVersion,

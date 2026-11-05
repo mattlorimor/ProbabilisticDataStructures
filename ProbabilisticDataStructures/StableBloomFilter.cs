@@ -30,10 +30,15 @@ namespace ProbabilisticDataStructures
     /// positives and minimal false negatives.
     /// </summary>
     /// <remarks>
+    /// Sized in 64 bits: <c>m</c> and <see cref="Cells"/> are <c>ulong</c>s, and the cells
+    /// are a table of arrays of 2^30 bytes, so what stops the constructor is memory. Before
+    /// the release after 6.2.0 its size was a <c>uint</c> and its cells one array:
+    /// CAPACITY.md has what that held. Every save is format version 14, which records the
+    /// placement in a byte of its own and the size in 64 bits, and which libraries before
+    /// this one cannot read; a payload of an earlier version still reads. The stable
+    /// filter has no item count to widen.
     /// A filter of 2^27 cells or more places items with 64-bit hash values; a smaller one
-    /// places with 32-bit values, as it always did. Every save is format version 8, which
-    /// records the placement in a byte of its own and which libraries before this one
-    /// cannot read; the stable filter has no item count to widen. Placing a
+    /// places with 32-bit values, as it always did. Placing a
     /// large filter with 32-bit values crowds its first cells and raises its false
     /// positive rate, as it does for <see cref="BloomFilter"/>, where the details are. A
     /// filter read back keeps the scheme its payload was placed with, and
@@ -44,7 +49,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Filter data
         /// </summary>
-        internal Buckets cells { get; set; } = null!;
+        internal Buckets64 cells { get; set; } = null!;
         /// <summary>
         /// Hash algorightm
         /// </summary>
@@ -52,7 +57,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Number of cells
         /// </summary>
-        internal uint M { get; set; }
+        internal ulong M { get; set; }
         /// <summary>
         /// Number of cells to decrement
         /// </summary>
@@ -68,7 +73,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Buffer used to cache indices
         /// </summary>
-        private uint[] IndexBuffer { get; set; } = null!;
+        private ulong[] IndexBuffer { get; set; } = null!;
         /// <summary>
         /// How an item's hash becomes the cells it sets and tests.
         /// </summary>
@@ -93,7 +98,7 @@ namespace ProbabilisticDataStructures
         {
             get
             {
-                for (uint i = 0; i < this.cells.count; i++)
+                for (ulong i = 0; i < this.cells.count; i++)
                 {
                     if (this.cells.Get(i) != 0)
                     {
@@ -130,7 +135,7 @@ namespace ProbabilisticDataStructures
         /// unpredictably. Supplying one makes the filter reproducible, which is what
         /// makes its behavior assertable rather than only describable.
         /// </param>
-        public StableBloomFilter(uint m, byte d, double fpRate,
+        public StableBloomFilter(ulong m, byte d, double fpRate,
             Func<ReadOnlySpan<byte>, ulong>? hash = null, ulong? seed = null)
             : this(m, d, fpRate, hash, seed, null)
         {
@@ -145,7 +150,7 @@ namespace ProbabilisticDataStructures
         /// large to build in numbers in a test. This lets a test have a small filter
         /// place items the way a large one does.
         /// </remarks>
-        internal StableBloomFilter(uint m, byte d, double fpRate,
+        internal StableBloomFilter(ulong m, byte d, double fpRate,
             Func<ReadOnlySpan<byte>, ulong>? hash, ulong? seed, Placement? placement)
         {
             Guard.ValidItemCount(m, nameof(m));
@@ -154,17 +159,18 @@ namespace ProbabilisticDataStructures
             var k = Utils.OptimalK(fpRate) / 2;
             if (k > m)
             {
-                k = m;
+                // m is below k here, which is a uint.
+                k = (uint)m;
             }
             else if (k <= 0)
             {
                 k = 1;
             }
 
-            Buckets.CheckSize(m, d, nameof(m),
+            Buckets64.CheckSize(m, d, nameof(m),
                 $"A stable filter of {m:N0} cells of {d} bits",
                 "Use fewer cells or narrower ones.");
-            var cells = new Buckets(m, d);
+            var cells = new Buckets64(m, d);
 
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.random = seed is null
@@ -176,7 +182,7 @@ namespace ProbabilisticDataStructures
             this.p = OptimalStableP(m, k, d, fpRate);
             this.Max = cells.MaxBucketValue();
             this.cells = cells;
-            this.IndexBuffer = new uint[k];
+            this.IndexBuffer = new ulong[k];
             this.Placement = placement ?? BitPlacement.For(m);
         }
 
@@ -187,7 +193,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="m">Number of cells to decrement</param>
         /// <param name="fpRate">Desired false-positive rate</param>
-        public static StableBloomFilter NewDefaultStableBloomFilter(uint m, double fpRate)
+        public static StableBloomFilter NewDefaultStableBloomFilter(ulong m, double fpRate)
         {
             return new StableBloomFilter(m, 1, fpRate);
         }
@@ -201,9 +207,12 @@ namespace ProbabilisticDataStructures
         /// <param name="m">Number of cells to decrement</param>
         /// <param name="fpRate">Desired false-positive rate</param>
         /// <returns></returns>
-        public static StableBloomFilter NewUnstableBloomFilter(uint m, double fpRate)
+        public static StableBloomFilter NewUnstableBloomFilter(ulong m, double fpRate)
         {
-            var cells = new Buckets(m, 1);
+            Buckets64.CheckSize(m, 1, nameof(m),
+                $"An unstable filter of {m:N0} cells",
+                "Use fewer cells.");
+            var cells = new Buckets64(m, 1);
             var k = Utils.OptimalK(fpRate);
 
             // The generator is left at its default, zero, and so is the state it
@@ -217,7 +226,7 @@ namespace ProbabilisticDataStructures
                 p = 0,
                 Max = cells.MaxBucketValue(),
                 cells = cells,
-                IndexBuffer = new uint[k],
+                IndexBuffer = new ulong[k],
                 Placement = BitPlacement.For(m),
             };
         }
@@ -226,7 +235,7 @@ namespace ProbabilisticDataStructures
         /// Returns the number of cells in the Stable Bloom Filter.
         /// </summary>
         /// <returns>The number of cells in the Stable Bloom Filter</returns>
-        public uint Cells()
+        public ulong Cells()
         {
             return this.M;
         }
@@ -295,7 +304,7 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="Test(byte[])"/>
         public bool Test(ReadOnlySpan<byte> data)
         {
-            var positions = Positions.Of(data, this.Hash, this.Placement, this.M);
+            var positions = Positions64.Of(data, this.Hash, this.Placement, this.M);
 
             // If any of the K cells are 0, then it's not a member.
             for (uint i = 0; i < this.k; i++)
@@ -327,7 +336,7 @@ namespace ProbabilisticDataStructures
             // Randomly decrement p cells to make room for new elements.
             this.Decrement();
 
-            var positions = Positions.Of(data, this.Hash, this.Placement, this.M);
+            var positions = Positions64.Of(data, this.Hash, this.Placement, this.M);
 
             // Set the K cells to max.
             for (uint i = 0; i < this.k; i++)
@@ -354,7 +363,7 @@ namespace ProbabilisticDataStructures
         /// <inheritdoc cref="TestAndAdd(byte[])"/>
         public bool TestAndAdd(ReadOnlySpan<byte> data)
         {
-            var positions = Positions.Of(data, this.Hash, this.Placement, this.M);
+            var positions = Positions64.Of(data, this.Hash, this.Placement, this.M);
             var member = true;
 
             // If any of the K cells are 0, then it's not a member.
@@ -419,17 +428,17 @@ namespace ProbabilisticDataStructures
 
         EnvelopeHeader IPayloadBody.WritePayload(PayloadWriter payload)
         {
-            payload.WriteUInt32(this.M);
+            payload.WriteUInt64(this.M);
             payload.WriteUInt32(this.k);
             payload.WriteUInt32(this.p);
             BitPlacement.Write(payload, this.Placement);
-            PersistenceFormat.WriteBuckets(payload, this.cells);
+            PersistenceFormat.WriteBuckets64(payload, this.cells);
             payload.WriteUInt64(this.random.State);
             payload.WriteUInt64(this.originalRandomState);
 
             return new(
                 StructureId.StableBloomFilter, PersistenceFormat.Identify(this.Hash),
-                PersistenceFormat.PlacementVersion);
+                PersistenceFormat.Bloom64Version);
         }
 
         /// <summary>
@@ -517,13 +526,16 @@ namespace ProbabilisticDataStructures
         {
             var budget = reader.Budget;
 
-            var m = reader.ReadUInt32();
+            var wide = version >= PersistenceFormat.Bloom64Version;
+            var m = wide ? reader.ReadUInt64() : reader.ReadUInt32();
             var k = reader.ReadUInt32();
             var p = reader.ReadUInt32();
             // From the payload, never from m: a payload before version 8 of any size was
-            // placed with 32-bit values, and a version 8 one says how it was placed.
-            var placement = BitPlacement.Read(ref reader, version);
-            var cells = PersistenceFormat.ReadBuckets(ref reader);
+            // placed with 32-bit values, and a later one says how it was placed.
+            var placement = BitPlacement.ReadFor(ref reader, version, m);
+            var cells = wide
+                ? PersistenceFormat.ReadBuckets64(ref reader)
+                : PersistenceFormat.ReadBucketsAs64(ref reader);
 
             // Version 1 predates the stored generator state. Such a filter resumes with
             // an unpredictable one: its cells are exactly right, and only the sequence of
@@ -555,7 +567,7 @@ namespace ProbabilisticDataStructures
                 p = p,
                 // Follows from the cell width, which the cells carry.
                 Max = cells.MaxBucketValue(),
-                IndexBuffer = new uint[k],
+                IndexBuffer = new ulong[k],
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
                 random = random,
                 originalRandomState = originalRandomState,
@@ -571,11 +583,14 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
-            var m = reader.ReadUInt32();
+            var wide = version >= PersistenceFormat.Bloom64Version;
+            var m = wide ? reader.ReadUInt64() : reader.ReadUInt32();
             var k = reader.ReadUInt32();
             reader.ReadUInt32();
-            BitPlacement.Read(ref reader, version);
-            var cells = PersistenceFormat.PriceBuckets(ref reader);
+            BitPlacement.ReadFor(ref reader, version, m);
+            var cells = wide
+                ? PersistenceFormat.PriceBuckets64(ref reader)
+                : PersistenceFormat.PriceBucketsAs64(ref reader);
             if (version >= PersistenceFormat.RandomStateVersion)
             {
                 reader.ReadUInt64();
@@ -590,7 +605,7 @@ namespace ProbabilisticDataStructures
             reader.Budget.Price(ScratchCost(k));
         }
 
-        private static void CheckShape(uint m, uint k, uint cells)
+        private static void CheckShape(ulong m, uint k, ulong cells)
         {
             if (m == 0 || cells != m)
             {
@@ -603,7 +618,7 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>The scratch buffer of a filter of <paramref name="k"/> hash functions.</summary>
-        private static long ScratchCost(uint k) => ReadBudget.ArrayOf(k, sizeof(uint));
+        private static long ScratchCost(uint k) => ReadBudget.ArrayOf(k, sizeof(ulong));
 
         /// <summary>
         /// Sets the hashing function used in the filter.
@@ -667,7 +682,7 @@ namespace ProbabilisticDataStructures
         /// </para>
         /// </remarks>
         /// <returns>The cell updates it made, counted as it makes them.</returns>
-        internal static uint DecayRun(Buckets cells, uint m, uint p, uint start)
+        internal static uint DecayRun(Buckets64 cells, ulong m, uint p, ulong start)
         {
             var laps = p / m;
             var rest = p % m;
@@ -720,9 +735,9 @@ namespace ProbabilisticDataStructures
         /// that start a run at each cell without a filter of that size.
         /// </para>
         /// </remarks>
-        internal static uint DecayStart(ulong next, uint m)
+        internal static ulong DecayStart(ulong next, ulong m)
         {
-            return (uint)Math.BigMul(next, m, out _);
+            return Math.BigMul(next, m, out _);
         }
 
         /// <summary>
@@ -733,9 +748,9 @@ namespace ProbabilisticDataStructures
         /// The sum is taken in 64 bits. In 32 it wrapped once m was within p of 2^32, and
         /// sent the rest of that run 2^32 - m cells short of where it belonged.
         /// </remarks>
-        internal static uint DecayCell(uint start, uint i, uint m)
+        internal static ulong DecayCell(ulong start, uint i, ulong m)
         {
-            return (uint)(((ulong)start + i) % m);
+            return (start + i) % m;
         }
 
         /// <summary>
@@ -747,7 +762,7 @@ namespace ProbabilisticDataStructures
         /// <param name="d">Bits per cell</param>
         /// <param name="fpRate">Desired false-positive rate</param>
         /// <returns>Optimal number of cells to decrement</returns>
-        private static uint OptimalStableP(uint m, uint k, byte d, double fpRate)
+        private static uint OptimalStableP(ulong m, uint k, byte d, double fpRate)
         {
             var max = Math.Pow(2, d) - 1;
             var subDenom = Math.Pow(1 - Math.Pow(fpRate, 1.0 / k), 1.0 / max);

@@ -179,9 +179,9 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestAnEarlierPayloadSavesAgainAsVersionEight()
         {
-            // The counting and deletable filters save as version 14 now, which their
+            // The counting, deletable and stable filters save as version 14 now, which their
             // TestAnEarlier...PayloadSavesAgainAsVersionFourteen tests hold, so their rows have
-            // no save: each version 8 fixture is still exactly the version 1 one with the byte.
+            // no save: each version 8 fixture is still exactly the earlier one with the byte.
             var earlier = new (string Earlier, string Current, ushort Version, int Placement, int Count, Func<byte[], byte[]> Resave)[]
             {
                 ("bloomfilter-v1.bin", "bloomfilter-v8-narrow.bin", 1, PlainPlacement, PlainPlacement + 1,
@@ -190,8 +190,7 @@ namespace TestProbabilisticDataStructures
                 ("deletablebloomfilter-v1.bin", "deletablebloomfilter-v8-narrow.bin", 1, PlainPlacement, PlainPlacement + 1, null),
                 ("partitionedbloomfilter-v1.bin", "partitionedbloomfilter-v8-narrow.bin", 1, PartitionedPlacement, PartitionedPlacement + 1,
                     b => PartitionedBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray()),
-                ("stablebloomfilter-v5.bin", "stablebloomfilter-v8-narrow.bin", 5, StablePlacement, -1,
-                    b => StableBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray()),
+                ("stablebloomfilter-v5.bin", "stablebloomfilter-v8-narrow.bin", 5, StablePlacement, -1, null),
             };
 
             foreach (var (old, current, version, placement, count, resave) in earlier)
@@ -2420,7 +2419,7 @@ namespace TestProbabilisticDataStructures
                 "an unchanged structure started writing a later format version");
             Assert.AreEqual(8, new BloomFilter(100, 0.01).ToByteArray()[4],
                 "a small BloomFilter is not writing the version its layout needs");
-            Assert.AreEqual(8, new StableBloomFilter(100, 2, 0.01).ToByteArray()[4],
+            Assert.AreEqual(14, new StableBloomFilter(100, 2, 0.01).ToByteArray()[4],
                 "the stable filter is not writing the version its layout needs");
             Assert.AreEqual(6, new CuckooBloomFilter(100, 0.01).ToByteArray()[4],
                 "the cuckoo filter is not writing the version its layout needs");
