@@ -43,6 +43,27 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         internal const long Room = 256L << 20;
 
+        /// <summary>
+        /// The largest room every runner the suite runs on gives one region: what a 64-bit
+        /// workstation collector on segments, the one macOS runs, allows on 16 KiB pages.
+        /// </summary>
+        /// <remarks>
+        /// macOS builds of the runtime collect on segments rather than regions: gcpriv.h
+        /// defines <c>USE_REGIONS</c> only for a 64-bit host that is not <c>__APPLE__</c> or
+        /// <c>__sun</c>, and not for a standalone collector (dotnet/runtime v10.0.14). On
+        /// segments, <c>gc_heap::prepare_for_no_gc_region</c> (gc.cpp) refuses as too large a
+        /// room past <c>(soh_segment_size - segment_info_size - eph_gen_starts_size) / 1.05</c>.
+        /// A workstation collector's segment is <c>INITIAL_ALLOC</c>, 256 MiB on a 64-bit host
+        /// whatever its processors or memory, unless a hard limit or <c>GCSegmentSize</c> sets
+        /// another (<c>get_valid_segment_size</c>); the segment's own information takes one OS
+        /// page, 16 KiB on Apple silicon; and the generations' starts take two of the smallest
+        /// object, 24 bytes. Measured with <c>libclrgc.so</c>, the standalone collector, which
+        /// is on segments, on a Linux host with 4 KiB pages, the largest room accepted was
+        /// 255,648,868 bytes with 3 processors and with 32, as the same sum gives there. On
+        /// regions, which Linux and Windows run, a room of 1 TiB was not refused as too large.
+        /// </remarks>
+        internal const long Largest = 255_637_165;
+
         /// <summary>How many regions a measurement may lose to collections before it fails.</summary>
         internal const int Attempts = 50;
 

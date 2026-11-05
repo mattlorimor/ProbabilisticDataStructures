@@ -140,6 +140,62 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A room past the largest every runner gives one region fails a measurement on every
+        /// runner, saying so, and not only on the runner that refuses it. A room of 256 MiB
+        /// was given here, on regions, and refused on macOS, which collects on segments, so
+        /// that every measurement passed on four runners and failed on the fifth (#293).
+        /// </summary>
+        [TestMethod]
+        public void TestARoomPastTheLargestEveryRunnerGivesFailsOnEveryRunnerSayingSo()
+        {
+            var refused = Assert.ThrowsExactly<AssertFailedException>(
+                () => NoGCRegion.Allocated(() => new object(), room: NoGCRegion.Largest + 1),
+                "work was measured in a region larger than macOS gives one");
+            StringAssert.Contains(refused.Message,
+                $"is more than the {NoGCRegion.Largest:N0} bytes", refused.Message);
+        }
+
+        /// <summary>
+        /// The largest room is given: work is counted in a region of exactly
+        /// <see cref="NoGCRegion.Largest"/>, so the bound refuses no room a runner gives. On
+        /// macOS, whose collector refuses a room past it, this checks its derivation.
+        /// </summary>
+        [TestMethod]
+        public void TestTheLargestRoomEveryRunnerGivesIsGiven()
+        {
+            var measured = NoGCRegion.Allocated(() => { }, room: NoGCRegion.Largest);
+            Assert.AreEqual(0, measured, $"work that allocates nothing was measured at {measured:N0} bytes");
+        }
+
+        /// <summary>
+        /// The room a measurement is given unless it asks for another is one every runner
+        /// gives.
+        /// </summary>
+        [TestMethod]
+        public void TestTheDefaultRoomIsOneEveryRunnerGives()
+        {
+            Assert.IsLessThanOrEqualTo(NoGCRegion.Largest, NoGCRegion.Room,
+                $"the default room, {NoGCRegion.Room:N0} bytes, is more than the {NoGCRegion.Largest:N0} " +
+                "macOS gives one region, so every measurement that takes it is refused there");
+        }
+
+        /// <summary>
+        /// <see cref="NoGCRegion.Largest"/> is the bound its remarks derive from gc.cpp, worked
+        /// out here from the same terms: a 64-bit workstation collector's 256 MiB segment, less
+        /// one 16 KiB page for its information and two 24-byte objects for the generations'
+        /// starts, over the 1.05 <c>prepare_for_no_gc_region</c> scales a room by, truncated.
+        /// </summary>
+        [TestMethod]
+        public void TestTheLargestRoomIsTheBoundASegmentsCollectorPutsOnOneRegion()
+        {
+            const long segment = 256L << 20;
+            const long page = 16L << 10;
+            const long starts = 2 * 24;
+            var bound = (long)((ulong)(segment - page - starts) / 1.05);
+            Assert.AreEqual(NoGCRegion.Largest, bound, "the largest room is not the bound gc.cpp gives one region on segments");
+        }
+
+        /// <summary>
         /// A region already in progress, entered by something that does not take turns with
         /// <see cref="NoGCRegion"/>, fails a measurement, saying so, rather than letting it be
         /// counted in a region it does not hold. Not run in parallel, since while this test's
