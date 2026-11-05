@@ -146,8 +146,9 @@ namespace TestProbabilisticDataStructures
         /// this sketch's write allocated 240,432 bytes: its cells staged in an array of their
         /// own, and a writer's buffer started small and grown to hold them. A writer grown by
         /// doubling, as one is that is not given the counted length, allocates more again.
-        /// Measured as the least of five, since a collection landing mid-write can add a
-        /// retired allocation context's worth (TESTING.md, on the read budget).
+        /// Measured as the least of five, since a background collection running beside a
+        /// measurement can add a few kilobytes to the counter, as TESTING.md says of a read
+        /// (on the read budget).
         /// </summary>
         [TestMethod]
         public void TestAPayloadThatFitsIsBuiltOnceAtItsCountedLength()
