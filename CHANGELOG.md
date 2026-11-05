@@ -1623,6 +1623,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with its checksum repaired; every payload this library wrote holds its counters and
   reads as before, and the format is unchanged.
 
+- **A `SublimeCountMinSketch` payload with a count to fold back at and no record to fold
+  back by was read.** A sketch folds its rows back by the record of the doubling that
+  widened them, and holds a folding count only while it holds a record. A payload of a
+  sketch that never doubled, with that count edited and its checksum repaired, was read and
+  written back with the claim in it, though no removal could fold at it. It is now refused,
+  naming the missing record. 6.2.0 wrote such a payload itself: its removal took the record
+  off before it allocated the folded rows (#213), so one that ran out of memory folding a
+  sketch of one record left it with none and its folding count kept. Measured by hand, on
+  rows of 2^22 under a heap limit of 1 GiB, 6.2.0 wrote that sketch, and both its reader and
+  the one before this read it back; it is now refused too, and the refusal says how it came
+  about. Every payload this library now writes reads as before, and the format is unchanged.
+
 - **`DpswSketch.Add` on a window at the largest position wrapped the position to
   `long.MinValue`.** The reader accepts any position that is not negative, `long.MaxValue`
   included, since the format can hold it, and `Add` incremented it unchecked. A window
