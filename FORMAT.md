@@ -1440,8 +1440,9 @@ read another", so a small count costs as much as one memento and a large one sti
 
 A reader rejects an impossible memento width, a chain of no tables or absurdly many, a
 table with more than 31 bits of address (as `InfiniFilter`'s did before version 13), a table whose slots are wider
-than 64 bits, a table with more entries than slots, and a word count disagreeing with the
-shape claimed. Before it prices or allocates a table, it checks that the rest of the payload
+than 64 bits, a table with more entries than slots, a word count disagreeing with the
+shape claimed, and a table of more words than one array holds, which 2^31 slots of 64 bits
+are. Before it prices or allocates a table, it checks that the rest of the payload
 holds the table's words. It then checks each table's metadata as `QuotientFilter`'s reader does, with
 the count of slots used held to the slots whose metadata has any bit set, and refuses the
 same tables, before any run is decoded, since decoding one walks the metadata. Then it

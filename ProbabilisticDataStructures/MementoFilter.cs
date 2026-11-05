@@ -1034,6 +1034,21 @@ namespace ProbabilisticDataStructures
                     $"{expected}.");
             }
 
+            // A table is one array of words, and 2^31 slots of 64 bits are 2^31 + 2 of them,
+            // more than an array holds. A payload in the large form can hold that many, so the
+            // check that it holds a table's words lets them through, and the read went on to
+            // allocate them. The shape is refused here instead, by name, before anything is
+            // priced or allocated for it, by the price and the read alike. No writer wrote such
+            // a table: the constructor and every doubling stop short of it.
+            if (expected > Array.MaxLength)
+            {
+                throw new InvalidDataException(
+                    $"Table {i} claims {slots:N0} slots of {slotBits} bits, which are " +
+                    $"{expected:N0} words, and a table is one array, which holds at most " +
+                    $"{Array.MaxLength:N0}. No table of {slotBits}-bit slots is wider than " +
+                    $"2^{QuotientBitsLimitFor(slotBits)} slots.");
+            }
+
             return slotBits;
         }
     }

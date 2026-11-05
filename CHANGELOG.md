@@ -746,6 +746,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as every structure's is: the sweep's cut of 44,465 bytes priced 226,680 bytes, and prices
   114,952. Nothing the library wrote is refused.
 
+- **A `MementoFilter` payload claiming a table no array holds is refused for that by name,
+  before anything is priced or allocated for it.** A table is one array of words, and 2^31
+  slots of 64 bits are 2^31 + 2 of them, more than an array holds. The reader and its price
+  checked that a payload held a table's words, which no payload in the ordinary envelope
+  can for this table, but never checked the words against what an array holds. So a
+  payload in the large form that held them, 17 GB, passed every check: under the default
+  budget it was refused for its cost, and under `ReadOptions.Unlimited` its reader went on
+  to allocate the table and threw `OverflowException`. Both now refuse the shape by name, as
+  an `InfiniFilter`'s already did, under no budget and under the default one alike, and the
+  widest table an array holds, 2^31 slots of 63 bits, is still taken and priced for its words.
+  No writer wrote such a table: the constructor and every doubling stop short of it.
+
 - **An `InfiniFilter` or `MementoFilter` payload claiming more expansions than its first
   table can have had is refused.** A first table starts with at least two bits of address
   and gains one with each expansion, and `Reset` builds the table the filter started with
