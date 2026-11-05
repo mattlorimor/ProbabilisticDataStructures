@@ -338,22 +338,22 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// The bucket array's limit is the same whichever way a filter places: the counting
-        /// and stable filters refuse a size past <c>Buckets.MaxCount</c> placed either way,
-        /// against the same parameter and with the same words as the public constructor.
+        /// filter refuses a size past <c>Buckets64.MaxCount</c>, and the stable filter one
+        /// past <c>Buckets.MaxCount</c>, placed either way, against the same parameter and
+        /// with the same words as the public constructor.
         /// </summary>
         /// <remarks>
         /// Through the public constructors this cannot tell the placements apart, because
         /// every size past the limit is far past 2^27 and so places with 64-bit values; a
         /// check skipped for 32-bit placement would pass every public test. The internal
-        /// constructor reaches a 32-bit filter of that size, which is what a payload
-        /// written before version 8 describes, so it is held here. Each is refused before
-        /// anything is allocated.
+        /// constructor reaches a 32-bit filter of that size, so it is held here. Each is
+        /// refused before anything is allocated.
         /// </remarks>
         [TestMethod]
         public void TestBothPlacementsRefuseWhatTheBucketLimitRefuses()
         {
-            var limit = (ulong)Buckets.MaxCount(8);
-            var n = SmallestCountReaching(limit + 1, 0.01);
+            var limit = Buckets64.MaxCount;
+            var n = SmallestCountReaching64(limit + 1, 0.01);
             Assert.IsGreaterThan(Threshold, limit, "the limit is not past the threshold, so this checks nothing about it");
 
             var counting = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
@@ -368,7 +368,7 @@ namespace TestProbabilisticDataStructures
                 Assert.AreEqual(counting.Message, ex.Message);
             }
 
-            var cells = (uint)limit + 1;
+            var cells = Buckets.MaxCount(8) + 1;
             var stable = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
                 () => new StableBloomFilter(cells, 8, 0.01, seed: 1));
             Assert.AreEqual("m", stable.ParamName);
@@ -380,6 +380,35 @@ namespace TestProbabilisticDataStructures
                 Assert.AreEqual(stable.ParamName, ex.ParamName);
                 Assert.AreEqual(stable.Message, ex.Message);
             }
+        }
+
+        /// <summary>
+        /// The smallest item count whose filter, sized in 64 bits at this rate, has at least
+        /// this many bits.
+        /// </summary>
+        internal static ulong SmallestCountReaching64(ulong bits, double fpRate)
+        {
+            ulong low = 1, high = 2;
+            while (Utils.OptimalM64(high, fpRate) < bits)
+            {
+                low = high;
+                high *= 2;
+            }
+
+            while (low < high)
+            {
+                var mid = low + (high - low) / 2;
+                if (Utils.OptimalM64(mid, fpRate) >= bits)
+                {
+                    high = mid;
+                }
+                else
+                {
+                    low = mid + 1;
+                }
+            }
+
+            return low;
         }
 
         /// <summary>
@@ -465,13 +494,56 @@ namespace TestProbabilisticDataStructures
             Func<object, byte[], bool> Test,
             Func<object, IEnumerable<(uint Modulus, uint Index, uint Position, bool Set)>> Cells,
             Func<object, byte[], bool> TestAndAdd,
-            Func<object, byte[], bool> TestAndRemove);
+            Func<object, byte[], bool> TestAndRemove)
+        {
+            /// <summary>
+            /// The version every save of the filter is written at: 8, or 14 for the filters
+            /// widened to 64-bit sizes (#232), whose offsets above are in that layout.
+            /// </summary>
+            internal ushort Version { get; init; } = 8;
+
+            /// <summary>
+            /// The fields of a version 14 payload, as <see cref="Narrowed"/> reads them, for a
+            /// filter written at 14; null for one written at 8.
+            /// </summary>
+            internal string Layout14 { get; init; }
+
+            /// <summary>
+            /// The payload a release before version 8 wrote for the filter a current payload
+            /// placed with 32-bit values holds: a version 14 payload is first narrowed to the
+            /// version 8 one, whose placement byte and count are where the plain filter's are,
+            /// or, for the partitioned and stable filters, four bytes later.
+            /// </summary>
+            internal byte[] Earlier(byte[] current)
+            {
+                if (this.Layout14 is null)
+                {
+                    return Downgraded(current, this.EarlierVersion, this.PlacementOffset, this.CountOffset);
+                }
+
+                var placement8 = this.PlacementOffset - 4 - (this.Layout14.StartsWith("mum", StringComparison.Ordinal) ? 4 : 0);
+                return Downgraded(Narrowed(current, this.Layout14), this.EarlierVersion,
+                    placement8, this.CountOffset < 0 ? -1 : placement8 + 1);
+            }
+        }
 
         private static IEnumerable<(uint, uint, uint, bool)> Bits(Buckets buckets, uint index = 0)
         {
             for (uint b = 0; b < buckets.count; b++)
             {
                 yield return (buckets.count, index, b, buckets.Get(b) != 0);
+            }
+        }
+
+        /// <summary>
+        /// The bits of a 64-bit table, as <see cref="Bits(Buckets, uint)"/> gives a table's:
+        /// the filters here are small, and a count past a <c>uint</c> would throw.
+        /// </summary>
+        private static IEnumerable<(uint, uint, uint, bool)> Bits(Buckets64 buckets, uint index = 0)
+        {
+            for (ulong b = 0; b < buckets.count; b++)
+            {
+                yield return (checked((uint)buckets.count), index, (uint)b, buckets.Get(b) != 0);
             }
         }
 
@@ -494,7 +566,7 @@ namespace TestProbabilisticDataStructures
                 (f, k) => ((BloomFilter)f).TestAndAdd(k),
                 null),
             new Kind(nameof(CountingBloomFilter),
-                p => new CountingBloomFilter(100, 4, 0.01, null, p), 1, 8, 9,
+                p => new CountingBloomFilter(100, 4, 0.01, null, p), 1, 12, 13,
                 f => ((CountingBloomFilter)f).ToByteArray(),
                 b => Persistence.FromByteArray<CountingBloomFilter>(b),
                 f => ((CountingBloomFilter)f).Placement,
@@ -502,7 +574,7 @@ namespace TestProbabilisticDataStructures
                 (f, k) => ((CountingBloomFilter)f).Test(k),
                 f => Bits(((CountingBloomFilter)f).Buckets),
                 (f, k) => ((CountingBloomFilter)f).TestAndAdd(k),
-                (f, k) => ((CountingBloomFilter)f).TestAndRemove(k)),
+                (f, k) => ((CountingBloomFilter)f).TestAndRemove(k)) { Version = 14, Layout14 = "mubqt" },
             new Kind(nameof(DeletableBloomFilter),
                 p => new DeletableBloomFilter(100, 10, 0.01, null, p), 1, 8, 9,
                 f => ((DeletableBloomFilter)f).ToByteArray(),
@@ -648,13 +720,13 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Every new save of these filters is format version 8, whatever its size or
-        /// placement, and its placement byte says which scheme placed it: 0 for 32-bit
-        /// values, 1 for 64-bit ones. A small filter from the public constructor is no
-        /// exception.
+        /// Every new save of these filters is written at the filter's format version, 8, or
+        /// 14 for the filters widened to 64-bit sizes, whatever its size or placement, and its
+        /// placement byte says which scheme placed it: 0 for 32-bit values, 1 for 64-bit ones.
+        /// A small filter from the public constructor is no exception.
         /// </summary>
         [TestMethod]
-        public void TestEveryNewSaveIsVersionEightAndRecordsItsPlacement()
+        public void TestEveryNewSaveIsItsVersionAndRecordsItsPlacement()
         {
             foreach (var kind in Kinds())
             {
@@ -672,7 +744,7 @@ namespace TestProbabilisticDataStructures
                          { (wide, 1, "placed with 64-bit values"), (narrow, 0, "placed with 32-bit values"), (small, 0, "built small") })
                 {
                     var bytes = kind.Write(filter);
-                    Assert.AreEqual((ushort)8, VersionOf(bytes), $"{kind.Name} {what}");
+                    Assert.AreEqual(kind.Version, VersionOf(bytes), $"{kind.Name} {what}");
                     Assert.AreEqual((byte)field, bytes[Header + kind.PlacementOffset], $"{kind.Name} {what}: its placement byte");
                 }
             }
@@ -751,7 +823,7 @@ namespace TestProbabilisticDataStructures
                     StringAssert.Contains(ex.Message, unknown.ToString());
                 }
 
-                var earlier = Downgraded(narrow, kind.EarlierVersion, kind.PlacementOffset, kind.CountOffset);
+                var earlier = kind.Earlier(narrow);
                 var old = kind.Read(earlier);
                 Assert.AreEqual(Placement.Narrow, kind.PlacementOf(old), $"{kind.Name} at version {kind.EarlierVersion}");
                 foreach (var word in Words)
@@ -759,7 +831,7 @@ namespace TestProbabilisticDataStructures
                     Assert.IsTrue(kind.Test(old, Key(word)), $"{kind.Name} at version {kind.EarlierVersion} does not find {word}");
                 }
                 CollectionAssert.AreEqual(narrow, kind.Write(old),
-                    $"{kind.Name} read at version {kind.EarlierVersion} does not save as the version 8 payload of the same filter");
+                    $"{kind.Name} read at version {kind.EarlierVersion} does not save as the version {kind.Version} payload of the same filter");
             }
         }
 
@@ -816,7 +888,7 @@ namespace TestProbabilisticDataStructures
 
                 var current = kind.Write(built);
                 built = null;
-                var earlier = Downgraded(current, kind.EarlierVersion, kind.PlacementOffset, kind.CountOffset);
+                var earlier = kind.Earlier(current);
                 Assert.AreEqual(kind.EarlierVersion, VersionOf(earlier));
 
                 var read = kind.Read(earlier);
@@ -829,7 +901,7 @@ namespace TestProbabilisticDataStructures
 
                 var again = kind.Write(read);
                 Assert.IsTrue(current.AsSpan().SequenceEqual(again),
-                    $"{kind.Name} read back does not save as the version 8 payload of the same filter");
+                    $"{kind.Name} read back does not save as the version {kind.Version} payload of the same filter");
                 current = null;
                 again = null;
 
@@ -872,7 +944,7 @@ namespace TestProbabilisticDataStructures
         {
             (nameof(BloomFilter), () => new BloomFilter(100, 0.01), f => ((BloomFilter)f).Count(), 9,
                 null, (a, b) => ((BloomFilter)a).Merge((BloomFilter)b)),
-            (nameof(CountingBloomFilter), () => new CountingBloomFilter(100, 4, 0.01), f => ((CountingBloomFilter)f).Count(), 9,
+            (nameof(CountingBloomFilter), () => new CountingBloomFilter(100, 4, 0.01), f => ((CountingBloomFilter)f).Count(), 13,
                 (f, k) => ((CountingBloomFilter)f).TestAndRemove(k), (a, b) => ((CountingBloomFilter)a).Merge((CountingBloomFilter)b)),
             (nameof(DeletableBloomFilter), () => new DeletableBloomFilter(100, 10, 0.01), f => ((DeletableBloomFilter)f).Count(), 9,
                 (f, k) => ((DeletableBloomFilter)f).TestAndRemove(k), null),
@@ -997,6 +1069,92 @@ namespace TestProbabilisticDataStructures
             var result = new byte[Header + body.Count + 4];
             frame.AsSpan(0, Header).CopyTo(result);
             BinaryPrimitives.WriteUInt16LittleEndian(result.AsSpan(4), version);
+            BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(10), (uint)body.Count);
+            body.CopyTo(result, Header);
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                result.AsSpan(result.Length - 4),
+                Crc32.HashToUInt32(result.AsSpan(4, result.Length - 8)));
+            return result;
+        }
+
+        /// <summary>
+        /// The version 8 payload of the filter a version 14 payload holds: each size narrowed
+        /// back to a <c>u32</c> and each <c>Buckets64</c> back to a <c>Buckets</c>, from
+        /// FORMAT.md's two layouts and not from the library's reader, with the length and
+        /// checksum to match. <paramref name="layout"/> lists the fields: <c>m</c> a size,
+        /// a <c>u64</c> at 14 and a <c>u32</c> at 8; <c>u</c> a <c>u32</c>, <c>b</c> a
+        /// <c>u8</c> and <c>q</c> a <c>u64</c>, the same at both; <c>t</c> a table; and
+        /// <c>n</c> a <c>u32</c> count of the tables that follow.
+        /// </summary>
+        internal static byte[] Narrowed(byte[] frame, string layout)
+        {
+            Assert.AreEqual((ushort)14, VersionOf(frame), "only a version 14 payload narrows to version 8");
+            var payload = frame.AsSpan(Header, frame.Length - Header - 4);
+            var body = new List<byte>(payload.Length);
+            var at = 0;
+
+            void Table(ReadOnlySpan<byte> p)
+            {
+                var count = BinaryPrimitives.ReadUInt64LittleEndian(p[at..]);
+                var width = p[at + 8];
+                var arrays = BinaryPrimitives.ReadUInt32LittleEndian(p[(at + 9)..]);
+                at += 13;
+                Assert.IsLessThanOrEqualTo((ulong)uint.MaxValue, count, "a table past 2^32 buckets was never written before version 14");
+                var data = new List<byte>();
+                for (var i = 0; i < arrays; i++)
+                {
+                    var length = (int)BinaryPrimitives.ReadUInt32LittleEndian(p[at..]);
+                    data.AddRange(p.Slice(at + 4, length).ToArray());
+                    at += 4 + length;
+                }
+
+                Assert.AreEqual((count * width + 7) / 8, (ulong)data.Count, "the table's arrays are not the bytes its count gives");
+                body.AddRange(BitConverter.GetBytes((uint)count));
+                body.Add(width);
+                body.AddRange(BitConverter.GetBytes((uint)data.Count));
+                body.AddRange(data);
+            }
+
+            foreach (var field in layout)
+            {
+                switch (field)
+                {
+                    case 'm':
+                        var size = BinaryPrimitives.ReadUInt64LittleEndian(payload[at..]);
+                        Assert.IsLessThanOrEqualTo((ulong)uint.MaxValue, size, "a size past 2^32 was never written before version 14");
+                        body.AddRange(BitConverter.GetBytes((uint)size));
+                        at += 8;
+                        break;
+                    case 'u':
+                        body.AddRange(payload.Slice(at, 4).ToArray());
+                        at += 4;
+                        break;
+                    case 'b':
+                        body.Add(payload[at]);
+                        at += 1;
+                        break;
+                    case 'q':
+                        body.AddRange(payload.Slice(at, 8).ToArray());
+                        at += 8;
+                        break;
+                    case 't':
+                        Table(payload);
+                        break;
+                    case 'n':
+                        var tables = BinaryPrimitives.ReadUInt32LittleEndian(payload[at..]);
+                        body.AddRange(payload.Slice(at, 4).ToArray());
+                        at += 4;
+                        for (var i = 0; i < tables; i++) Table(payload);
+                        break;
+                    default:
+                        throw new ArgumentException($"no field is written {field}", nameof(layout));
+                }
+            }
+
+            Assert.AreEqual(payload.Length, at, "the layout does not cover the payload");
+            var result = new byte[Header + body.Count + 4];
+            frame.AsSpan(0, Header).CopyTo(result);
+            BinaryPrimitives.WriteUInt16LittleEndian(result.AsSpan(4), 8);
             BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(10), (uint)body.Count);
             body.CopyTo(result, Header);
             BinaryPrimitives.WriteUInt32LittleEndian(

@@ -74,12 +74,17 @@ namespace TestProbabilisticDataStructures
             },
             StructureId.CountingBloomFilter => () =>
             {
+                // As BloomFilter64's: the fields, the counters, and a length for each of the
+                // table's arrays, which are as many as its count implies (#232).
                 var b = byte.Parse(Regex.Match(row.Counts, @"(\d)-bit").Groups[1].Value);
-                var payload = PayloadLine("CountingBloomFilter", StructureId.CountingBloomFilter);
-                var most = LargestSound(0.01, b);
-                return payload.Upper(BitsOf(most, 0.01, b)) <= MaxPayload
-                    ? AsBuilt
-                    : Saved(payload, most, n => BitsOf(n, 0.01, b));
+                var small = new CountingBloomFilter(100_000, b, 0.01);
+                var fixedBytes = PayloadOf(small) - (long)TrueBytes(small.Capacity(), b) - 4;
+                var most = Largest(1, 1UL << 40, n =>
+                {
+                    var m = Utils.OptimalM64(n, 0.01);
+                    return fixedBytes + (long)TrueBytes(m, b) + 4 * (long)(m / Buckets64.maxArraySize + 1) <= MaxPayload;
+                });
+                return About(most, most, 2);
             },
             StructureId.DeletableBloomFilter => () =>
             {

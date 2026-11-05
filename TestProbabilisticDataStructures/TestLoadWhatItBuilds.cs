@@ -94,6 +94,19 @@ namespace TestProbabilisticDataStructures
             return bytes;
         }
 
+        private static byte[] PokeUInt64(byte[] original, int payloadOffset, ulong value)
+        {
+            var bytes = (byte[])original.Clone();
+            BinaryPrimitives.WriteUInt64LittleEndian(
+                bytes.AsSpan(PayloadStart + payloadOffset), value);
+
+            var crc = new Crc32();
+            crc.Append(bytes.AsSpan(4, bytes.Length - 8));
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                bytes.AsSpan(bytes.Length - 4), crc.GetCurrentHashAsUInt32());
+            return bytes;
+        }
+
         /// <summary>
         /// Asserts a reader got past its size check on a count and refused the payload
         /// only because the bytes behind that count are not there.
@@ -925,28 +938,39 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The counters are one array, so the largest counting filter is the most counters
-        /// one holds at the width asked for, 2,147,483,591 at eight bits. Structural at the
-        /// limit, where the table is two gigabytes: the constructor's side is its sizing,
-        /// reached with the first item count to size past the limit, and the reader's is
-        /// a small payload with its count raised, which is refused one counter past the
-        /// limit as beyond anything built and at the limit only for the table it lacks.
+        /// The counters are a 64-bit table (#232), so the largest counting filter is the most
+        /// counters the table holds, <c>Buckets64.MaxCount</c>, at any width. Structural at
+        /// the limit, where the table is 2^61 bytes: the constructor's side is its sizing,
+        /// reached with the first item count to size past the limit, and the reader's is a
+        /// small payload with its two counts raised, which is refused one counter past the
+        /// limit as beyond anything built and at the limit only for the arrays it lacks.
+        /// The filter is placed with 64-bit values, since the 32-bit scheme is refused past
+        /// 2^32 - 1 positions before the table is read.
         /// </summary>
         [TestMethod]
         public void TestCountingFilterLimitIsShared()
         {
-            // The counters are an array.
-            Assert.AreEqual((long)Array.MaxLength, Buckets.MaxDataBytes);
+            var limit = Buckets64.MaxCount;
+            Assert.AreEqual((ulong)Array.MaxLength * Buckets64.maxArraySize - 1, limit);
 
             // The first item count to size past the limit is refused, against n.
-            var n = TestBucketSizes.FirstItemCountSizedAbove((ulong)Array.MaxLength, 0.01);
+            var n = TestBitPlacement.SmallestCountReaching64(limit + 1, 0.01);
             Assert.AreEqual("n", Assert.ThrowsExactly<ArgumentOutOfRangeException>(
                 () => new CountingBloomFilter(n, 8, 0.01)).ParamName);
 
-            // u32 m, u32 k, u8 placement, u64 count, then the buckets: u32 count, u8
-            // width, bytes.
-            var bytes = new CountingBloomFilter(1000, 8, 0.01).ToByteArray();
-            AssertBucketLimitIsShared<CountingBloomFilter>(bytes, 0, 17);
+            // u64 m, u32 k, u8 placement, u64 count, then the table: u64 count, u8 width,
+            // u32 arrays, a run each.
+            const int TableCount = 8 + 4 + 1 + 8;
+            var bytes = new CountingBloomFilter(1000, 8, 0.01, null, Placement.Wide).ToByteArray();
+
+            AssertRefused<CountingBloomFilter>(
+                PokeUInt64(PokeUInt64(bytes, 0, limit + 1), TableCount, limit + 1), PastTheLimit);
+
+            var ex = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<CountingBloomFilter>(
+                PokeUInt64(PokeUInt64(bytes, 0, limit), TableCount, limit)));
+            StringAssert.Contains(ex.Message, "arrays and 1 were stored",
+                "a payload at the limit should be refused for its arrays, not its size");
+            Assert.DoesNotContain(PastTheLimit, ex.Message);
         }
 
         /// <summary>
@@ -1589,8 +1613,7 @@ namespace TestProbabilisticDataStructures
             var expected = new Dictionary<(string Structure, string Size), ulong>
             {
                 [("CuckooBloomFilter", "entries, `m` × `b`")] = CuckooBloomFilter.MaxEntries,
-                [("CountingBloomFilter", "bytes of counters, `m` × `b` bits, rounded up")] =
-                    (ulong)Buckets.MaxDataBytes,
+                [("CountingBloomFilter", "counters, `m`")] = Buckets64.MaxCount,
                 [("StableBloomFilter", "bytes of cells, `m` × `d` bits, rounded up")] =
                     (ulong)Buckets.MaxDataBytes,
                 [("ThetaSketch", "`k`")] = ThetaSketch.MaxNominalEntries,

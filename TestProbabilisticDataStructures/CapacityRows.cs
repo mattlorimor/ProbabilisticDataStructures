@@ -140,15 +140,25 @@ namespace TestProbabilisticDataStructures
 
         internal static CapacityRow CountingBloomFilter(byte b, double fp, string label) => Row(
             StructureId.CountingBloomFilter, $"n, {b}-bit counters, fp {label}",
-            () => Exact(LargestSound(fp, b)),
+            () =>
+            {
+                // Sized in 64 bits since #232, on a 64-bit table, as BloomFilter64 is: the
+                // sizing and the table both reach far past any memory.
+                Assert.IsGreaterThan(0UL, Utils.OptimalM64(1UL << 50, fp));
+                Assert.IsGreaterThan(1UL << 60, Buckets64.MaxCount);
+                return Memory;
+            },
             () =>
             {
                 var line = ChargeLine.Fit("CountingBloomFilter", 64,
-                    new[] { 100_000u, 200_000u, 400_000u, 800_000u }
-                        .Select(n => ((long)TrueBytes(Utils.OptimalM(n, fp), b),
+                    new[] { 100_000UL, 200_000UL, 400_000UL, 800_000UL }
+                        .Select(n => ((long)TrueBytes(Utils.OptimalM64(n, fp), b),
                             ChargeOf(StructureId.CountingBloomFilter, new CountingBloomFilter(n, b, fp))))
-                        .ToArray());
-                return LoadsAbout(line, LargestSound(fp, b), n => BitsOf(n, fp, b));
+                        .ToArray())
+                    // Past 2^30 counters they are in more than one array, and each array is
+                    // charged a few more bytes; none can be built here to measure them.
+                    .Widen(5 * 48);
+                return LoadsAbout(line, 1UL << 40, n => TrueBytes(Utils.OptimalM64(n, fp), b));
             });
 
         internal static CapacityRow DeletableBloomFilter(uint r, double fp, string label) => Row(

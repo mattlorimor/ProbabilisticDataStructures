@@ -247,6 +247,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds. A `ScalableBloomFilter` keeps its own version, 1 or 7, and its contained filters,
   each in its own envelope, are version 8.
 
+- **`CountingBloomFilter` is sized in 64 bits, and saves at format version 14, and that is a
+  breaking change.** Its `n` and `Capacity()` are `ulong`s where they were `uint`s, in the
+  constructor and `NewDefaultCountingBloomFilter`: a caller passing a `uint` compiles as it
+  did, and one keeping `Capacity()` in a `uint` needs a cast or a wider variable; code
+  compiled against an earlier release has to be rebuilt. Its counters are held as arrays of
+  2^30 bytes, as `BloomFilter64`'s bits are, so it is limited by memory rather than by one
+  array, which stopped it at 448,089,830 items at four-bit counters and 1%. A filter of
+  2^27 counters or more places with 64-bit values, as it did, and a filter past 2^32
+  counters places among all of them. `Merge` adds the counters table-wise, held at the most
+  a counter carries, as it did.
+  <br><br>
+  Every save is [format version 14](FORMAT.md#format-versions): version 8's layout with `m`
+  a `u64` and the counters a `Buckets64`. **No earlier release reads it.** Stored filters
+  still load, from every earlier version, and save again as version 14. A version 14
+  payload placed with 32-bit values among more than 4,294,967,295 counters is refused, since
+  that scheme is reduced modulo a 32-bit count. (#232)
+
 - **`BloomFilter64` is faster, the structures placed with 64-bit values test faster, and
   every bit is where it was.** The 64-bit placement hashes the first value's eight little-endian
   bytes for the second value, and both places that do it wrote those bytes into a

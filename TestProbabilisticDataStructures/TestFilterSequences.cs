@@ -703,7 +703,7 @@ namespace TestProbabilisticDataStructures
                     Merge = (a, c) => a.Merge(c),
                     Count = f => f.Count(),
                     NeverForgets = true,
-                    Model = (f, tally) => new CountingModel(f.Capacity(), f.K(), b, tally),
+                    Model = (f, tally) => new CountingModel(checked((uint)f.Capacity()), f.K(), b, tally),
                     MergeSize = mergeSize,
                 };
                 var config = $"n={n},b={b},p={p}";

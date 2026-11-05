@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.ExceptionServices;
@@ -290,6 +292,245 @@ namespace TestProbabilisticDataStructures
                 Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<BloomFilter64>(bytes)));
             StringAssert.Contains(refused.Message, "arrays and");
         }
+
+        /// <summary>
+        /// A counting filter whose counters fill several lowered arrays is one filter
+        /// throughout, as a <see cref="BloomFilter64"/> is: given the same keys as a filter of
+        /// the real size, it removes, merges, counts and answers as that one does and holds
+        /// the same counters, one of them held at its maximum by the merge. Its payload reads
+        /// back as the bytes it was read from, the reset of the copy clears every array, and a
+        /// reader that has not lowered the size refuses the payload, which holds more arrays
+        /// than its count implies at the real size.
+        /// </summary>
+        [TestMethod]
+        public void TestACountingFilterOfLoweredArraysIsOneFilterThroughout()
+        {
+            static byte[] Key(int i) => BitConverter.GetBytes(i);
+            static (CountingBloomFilter Filter, bool[] Removed, bool[] Answers) Exercised()
+            {
+                var first = new CountingBloomFilter(10_000, 4, 0.01);
+                var second = new CountingBloomFilter(10_000, 4, 0.01);
+                for (var i = 0; i < 1_000; i++) first.Add(Key(i));
+                for (var i = 500; i < 1_500; i++) second.Add(Key(i));
+                for (var i = 0; i < 10; i++)
+                {
+                    first.Add(Key(-1));
+                    second.Add(Key(-1));
+                }
+
+                var removed = Enumerable.Range(0, 400).Select(i => first.TestAndRemove(Key(3 * i))).ToArray();
+                first.Merge(second);
+                return (first, removed, Enumerable.Range(-1, 3_000).Select(i => first.Test(Key(i))).ToArray());
+            }
+
+            var (real, realRemoved, realAnswers) = Exercised();
+            Assert.Contains(real.Buckets.MaxBucketValue(),
+                Enumerable.Range(0, checked((int)real.Buckets.count)).Select(i => real.Buckets.Get((ulong)i)).ToArray(),
+                "premise: the merge holds a counter at its maximum");
+
+            var (filter, bytes, removed, answers) = WithArrayBits(10, () =>
+            {
+                var (exercised, removedHere, answersHere) = Exercised();
+                Assert.IsGreaterThan(1, exercised.Buckets.RawData.Count(array => array.Length > 0),
+                    "premise: the counters fill several arrays");
+
+                var written = exercised.ToByteArray();
+                var read = Persistence.FromByteArray<CountingBloomFilter>(written);
+                CollectionAssert.AreEqual(written, read.ToByteArray(), "the read filter writes other bytes");
+
+                read.Reset();
+                Assert.IsTrue(read.Buckets.RawData.All(array => array.AsSpan().IndexOfAnyExcept((byte)0) < 0),
+                    "the reset left a counter set");
+                return (exercised, written, removedHere, answersHere);
+            });
+
+            CollectionAssert.AreEqual(realRemoved, removed, "the filters removed other keys");
+            CollectionAssert.AreEqual(realAnswers, answers, "the filters answer otherwise");
+            Assert.AreEqual(real.Count(), filter.Count());
+            Assert.AreEqual(real.Buckets.count, filter.Buckets.count);
+            for (ulong i = 0; i < real.Buckets.count; i++)
+            {
+                Assert.AreEqual(real.Buckets.Get(i), filter.Buckets.Get(i), $"counter {i}");
+            }
+
+            var refused = OnAnotherThread(() =>
+                Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<CountingBloomFilter>(bytes)));
+            StringAssert.Contains(refused.Message, "arrays and");
+        }
+
+        /// <summary>
+        /// A counting filter saved before version 14 holds its counters as one run, which
+        /// is kept as the first array of a 64-bit table when it fits one and split into arrays
+        /// of the table's size when it does not. Unsplit, the run is the first array and the
+        /// rest are empty. Split, the counters are the same: with arrays of 16 bytes, the
+        /// filter read holds the counters of the one read at the real size, and saves as it
+        /// does once both are narrowed back to version 8. Either way it is charged what it
+        /// was priced at, and the split, which copies the run once, is charged what it
+        /// allocates beyond the unsplit read, to the byte.
+        /// </summary>
+        [TestMethod]
+        [DataRow("countingbloomfilter-v1.bin")]
+        [DataRow("countingbloomfilter-v8-narrow.bin")]
+        [DataRow("countingbloomfilter-v8-wide.bin")]
+        public void TestAnEarlierCountingPayloadIsLaidOutAsOneTableOfArrays(string fixture)
+        {
+            const int Bits = 4, Size = 16;
+            var bytes = TestPersistenceFormatStability.ReadFixture(fixture);
+            (CountingBloomFilter Filter, long Charged, long Allocated) Read()
+            {
+                var budget = new ReadBudget(long.MaxValue, StructureId.CountingBloomFilter);
+                var read = Persistence.FromByteArray<CountingBloomFilter>(bytes, new ReadOptions(budget));
+
+                // A charge past the price raises it, so the price alone is what a budget of
+                // nothing is refused for.
+                var priced = ((ReadBudgetExceededException)Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<CountingBloomFilter>(bytes, new ReadOptions(0))).InnerException!).RequiredBytes;
+                Assert.AreEqual(priced, budget.Spent, $"{fixture} was priced at one sum and charged another");
+                var allocated = TestReadBudget.Allocated(() => Persistence.FromByteArray<CountingBloomFilter>(bytes));
+                return (read, budget.Spent, allocated);
+            }
+
+            var real = Read();
+            var run = checked((int)((real.Filter.Buckets.count * real.Filter.Buckets.BucketSize + 7) / 8));
+            var arrays = real.Filter.Buckets.RawData;
+            Assert.AreEqual(run, arrays[0].Length, "the run is not the first array");
+            Assert.IsTrue(arrays.Skip(1).All(array => array.Length == 0), "an array past the first holds something");
+
+            var split = WithArrayBits(Bits, Read);
+            var pieces = split.Filter.Buckets.RawData.Where(array => array.Length > 0).ToArray();
+            Assert.AreEqual((run + Size - 1) / Size, pieces.Length, "premise: the run was split into arrays of 16 bytes");
+            Assert.IsTrue(pieces.All(piece => piece.Length <= Size), "a piece is longer than an array");
+            Assert.AreEqual(run, pieces.Sum(piece => piece.Length));
+            for (ulong i = 0; i < real.Filter.Buckets.count; i++)
+            {
+                Assert.AreEqual(real.Filter.Buckets.Get(i), split.Filter.Buckets.Get(i), $"counter {i}");
+            }
+
+            CollectionAssert.AreEqual(TestBitPlacement.Narrowed(real.Filter.ToByteArray(), "mubqt"),
+                TestBitPlacement.Narrowed(split.Filter.ToByteArray(), "mubqt"), "the split filter saves another filter");
+
+            Console.WriteLine($"[LAID-OUT] {fixture}: run {run}, charged {real.Charged} and {split.Charged}, " +
+                $"allocated {real.Allocated} and {split.Allocated}");
+            Assert.IsGreaterThan(0L, split.Charged - real.Charged, "premise: the split costs something");
+            Assert.AreEqual(split.Allocated - real.Allocated, split.Charged - real.Charged,
+                "the split was charged other than what it allocated beyond the unsplit read");
+        }
+
+        /// <summary>
+        /// The one boundary in laying out a run of buckets as a 64-bit table, at arrays of 16
+        /// bytes: runs of 15 and 16 eight-bit buckets fit the first array and are kept, the
+        /// 16's second array empty, and one of 17 is split into 16 bytes and 1, which copies
+        /// it. Each is read with the buckets it holds and priced at what it is charged. What
+        /// each allocates beyond its charge is, to the byte, what reading a table stored at
+        /// version 14 allocates beyond its own: the two readers build the same table, so
+        /// what differs is the arrays, and each is charged for the arrays it allocates.
+        /// </summary>
+        [TestMethod]
+        public void TestARunIsChargedWhatLayingItOutAsATableAllocates()
+        {
+            const int Size = 16;
+            static byte[] Run(int length)
+            {
+                // Version 8: u32 count, u8 width, then the run's u32 length and its bytes.
+                var payload = new List<byte>(BitConverter.GetBytes((uint)length)) { 8 };
+                payload.AddRange(BitConverter.GetBytes((uint)length));
+                payload.AddRange(Enumerable.Range(1, length).Select(i => (byte)i));
+                return payload.ToArray();
+            }
+
+            static byte[] Table(int length)
+            {
+                // Version 14: u64 count, u8 width, u32 array count, then each array's run.
+                var arrays = length / Size + 1;
+                var payload = new List<byte>(BitConverter.GetBytes((ulong)length)) { 8 };
+                payload.AddRange(BitConverter.GetBytes((uint)arrays));
+                for (var a = 0; a < arrays; a++)
+                {
+                    var piece = Math.Clamp(length - Size * a, 0, Size);
+                    payload.AddRange(BitConverter.GetBytes((uint)piece));
+                    payload.AddRange(Enumerable.Range(Size * a + 1, piece).Select(i => (byte)i));
+                }
+
+                return payload.ToArray();
+            }
+
+            static (Buckets64 Buckets, long Beyond) Read(byte[] payload, TableReader read)
+            {
+                ReadBudget budget = null;
+                var allocated = NoGCRegion.Allocated(() =>
+                {
+                    var reader = new PayloadReader(payload, budget);
+                    return read(ref reader);
+                }, () => budget = new ReadBudget(long.MaxValue, StructureId.CountingBloomFilter));
+                var again = new PayloadReader(payload, new ReadBudget(long.MaxValue, StructureId.CountingBloomFilter));
+                return (read(ref again), allocated - budget.Spent);
+            }
+
+            (int[] Lengths, long Beyond, long Stored) LaidOut(int length)
+            {
+                var payload = Run(length);
+                var priced = new ReadBudget(long.MaxValue, StructureId.CountingBloomFilter);
+                var pricer = new PayloadReader(payload, priced);
+                Assert.AreEqual((ulong)length, PersistenceFormat.PriceBucketsAs64(ref pricer), "the price read another count");
+
+                var charged = new ReadBudget(long.MaxValue, StructureId.CountingBloomFilter);
+                var once = new PayloadReader(payload, charged);
+                PersistenceFormat.ReadBucketsAs64(ref once);
+                Assert.AreEqual(priced.Charged, charged.Spent, $"a run of {length} was priced at one sum and charged another");
+
+                var (buckets, beyond) = Read(payload, PersistenceFormat.ReadBucketsAs64);
+                var (stored, storedBeyond) = Read(Table(length), PersistenceFormat.ReadBuckets64);
+                for (ulong i = 0; i < (ulong)length; i++)
+                {
+                    Assert.AreEqual((uint)i + 1, buckets.Get(i), $"bucket {i} of a run of {length}");
+                    Assert.AreEqual((uint)i + 1, stored.Get(i), $"bucket {i} of the stored table of {length}");
+                }
+
+                Console.WriteLine($"[RUN] {length}: beyond its charge {beyond}, and stored at version 14 {storedBeyond}");
+                return (buckets.RawData.Select(array => array.Length).ToArray(), beyond, storedBeyond);
+            }
+
+            var (shorter, kept, split) = WithArrayBits(4, () => (LaidOut(Size - 1), LaidOut(Size), LaidOut(Size + 1)));
+            CollectionAssert.AreEqual(new[] { Size - 1 }, shorter.Lengths, "a run shorter than an array was not kept whole");
+            CollectionAssert.AreEqual(new[] { Size, 0 }, kept.Lengths, "a run as long as an array was not kept whole");
+            CollectionAssert.AreEqual(new[] { Size, 1 }, split.Lengths, "a run a byte longer was not split at the array");
+
+            // The stored tables of 15 and 17 hold no empty array, and those are the
+            // reference: a stored table's reader charges an empty run as the array of
+            // nothing it would be, and allocates none, so the stored table of 16 is charged
+            // a little more than it allocates, where the run laid out as it holds no such array.
+            Assert.AreEqual(shorter.Stored, split.Stored, "premise: the stored tables allocate beyond their charge alike");
+            foreach (var (what, layout) in new[] { ("shorter", shorter), ("kept", kept), ("split", split) })
+            {
+                Assert.AreEqual(split.Stored, layout.Beyond,
+                    $"the {what} run allocated other than it was charged, beyond what a stored table does");
+            }
+        }
+
+        /// <summary>
+        /// A run's price checks it as its reader does, before it prices the table its count
+        /// implies. A version 8 counting payload whose bucket count is edited to the most
+        /// four-bit buckets one array holds, against its run of 480 bytes, is refused for
+        /// that by its reader. At arrays of 16 bytes that count implies an array of 2^28
+        /// arrays, 2 GiB, which a price that did not check the run first would charge, and
+        /// under a budget of a mebibyte the read would be refused for the budget instead.
+        /// </summary>
+        [TestMethod]
+        public void TestARunWhoseCountDisagreesIsRefusedForThatUnderABudget()
+        {
+            // Version 8: u32 m, u32 k, u8 placement, u64 count, then the run's u32 count.
+            const int RunCount = 17;
+            var bytes = TestPersistenceFormatStability.ReadFixture("countingbloomfilter-v8-narrow.bin");
+            Assert.AreEqual(959u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(14 + RunCount)), "premise: the run's count");
+            var edited = TestPersistenceHostilePayloads.PokeUInt32(bytes, RunCount, Buckets.MaxCount(4));
+
+            var refused = WithArrayBits(4, () => Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<CountingBloomFilter>(edited, new ReadOptions(1 << 20))));
+            Assert.IsNotInstanceOfType<ReadBudgetExceededException>(refused.InnerException, "the run was refused for the budget");
+            StringAssert.Contains(refused.Message, "bytes and 480 were stored");
+        }
+
+        private delegate Buckets64 TableReader(ref PayloadReader reader);
 
         // ---- Adding one table of counters to another (#232) -------------------------------
 

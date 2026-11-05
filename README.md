@@ -203,8 +203,8 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `BloomFilter` | n, fp 0.1% | 298,726,561 | ≈ 298.73 million | as built |
 | `BloomFilter64` | n, fp 1% | memory | ≈ 448.09 million | ≈ 1.79 billion |
 | `BloomFilter64` | n, fp 0.1% | memory | ≈ 298.73 million | ≈ 1.19 billion |
-| `CountingBloomFilter` | n, 4-bit counters, fp 1% | 448,089,830 | ≈ 112.02 million | 448,089,821 |
-| `CountingBloomFilter` | n, 8-bit counters, fp 1% | 224,044,915 | ≈ 56.01 million | 224,044,910 |
+| `CountingBloomFilter` | n, 4-bit counters, fp 1% | memory | ≈ 112.02 million | ≈ 448.09 million |
+| `CountingBloomFilter` | n, 8-bit counters, fp 1% | memory | ≈ 56.01 million | ≈ 224.04 million |
 | `DeletableBloomFilter` | n, r 1,000, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
 | `PartitionedBloomFilter` | n, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
 | `CuckooBloomFilter` | n, fp 1%, empty | 2,040,109,465 | 510,027,366 | as built |
@@ -625,14 +625,11 @@ placement it was written with, whose rate rises at large sizes: sized for 1%, it
 placements differ, and what was measured, are in
 [CAPACITY.md](CAPACITY.md#how-the-32-bit-filters-place-their-bits).
 
-`CountingBloomFilter` and `DeletableBloomFilter` size in 32 bits too, and **this structure
-is not a replacement for either**: it cannot delete. For a set that large that has to
-shrink, `CuckooBloomFilter` and `QuotientFilter` hold well over a billion items. A
-`CountingBloomFilter` reaches its limit sooner than 4.29 billion bits the wider its
-counters are, since its array is `m` buckets of `b` bits and one .NET array holds at most
-2,147,483,591 bytes: 4,294,967,182 four-bit counters, or 2,147,483,591 eight-bit ones. It
-refuses a size past that, naming `n`; the "Builds up to" figures are in
-[the table](#how-much-each-one-holds).
+`DeletableBloomFilter` sizes in 32 bits too, and **this structure is not a replacement for
+it**: it cannot delete. For a set that large that has to shrink, `CuckooBloomFilter` and
+`QuotientFilter` hold well over a billion items, and `CountingBloomFilter` sizes in 64 bits
+as this one does, its counters held as arrays of 2^30 bytes, so what stops it is memory:
+`b` times this one's, at `b`-bit counters.
 
 **Look elsewhere otherwise.** Below 4.29 billion bits it is the same filter with wider
 arithmetic, so `BloomFilter` is the plainer choice. And if you do not know the size
@@ -683,12 +680,13 @@ merging at lower memory, in which case `QuotientFilter`.
 A counter that saturates stops being decrementable, so an element added far more often than
 the counter width allows may not be fully removable.
 
-Its counters are one array, which holds at most 2,147,483,591 bytes. The constructor refuses
-a size past that, naming `n`, and says how many counters of that width fit: 4,294,967,182
-at four bits and 2,147,483,591 at eight. Anything smaller works. Before this was fixed, a
-filter whose counters came to 512 MiB or more was built with a table of the wrong length
-and failed on an add; one stored then is refused with an explanation when read, and has to
-be built again.
+It is sized in 64 bits, as `BloomFilter64` is: `n` and `Capacity()` are `ulong`s and its
+counters are held as arrays of 2^30 bytes, so it is limited by memory rather than by one
+array, and a payload too large for one array is saved to a stream. Until the release after
+6.2.0 its counters were one array, which held 448,089,830 items at four-bit counters and
+1%. Before that was fixed, a filter whose counters came to 512 MiB or more was built with a
+table of the wrong length and failed on an add; one stored then is refused with an
+explanation when read, and has to be built again.
 
 ```C#
 var filter = new CountingBloomFilter(10000, 4, 0.01);

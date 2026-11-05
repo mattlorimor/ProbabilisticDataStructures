@@ -986,9 +986,9 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestACountingFilterHashCountLargerThanTheBudgetIsRefused()
         {
-            // u32 m, then u32 k at 4: 2^24 four-byte indexes, 64 MiB.
+            // u64 m, then u32 k at 8: 2^24 eight-byte indexes, 128 MiB.
             var bytes = new CountingBloomFilter(1000, 4, 0.01).ToByteArray();
-            AssertRefusedForItsHashCountBeforeAllocating<CountingBloomFilter>(Poke(bytes, 4, 1u << 24));
+            AssertRefusedForItsHashCountBeforeAllocating<CountingBloomFilter>(Poke(bytes, 8, 1u << 24));
         }
 
         /// <summary>The deletable filter's scratch buffer, likewise.</summary>

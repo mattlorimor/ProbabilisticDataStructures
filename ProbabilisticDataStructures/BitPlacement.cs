@@ -160,6 +160,39 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Reads how a Bloom filter's payload of <paramref name="version"/>, which places among
+        /// <paramref name="positions"/>, was placed, as <see cref="Read(ref PayloadReader, ushort)"/>
+        /// does, and refuses the 32-bit scheme among more positions than a <c>u32</c> counts.
+        /// </summary>
+        /// <exception cref="InvalidDataException">
+        /// The byte names no scheme this library knows, or the 32-bit scheme among more than
+        /// 4,294,967,295 positions.
+        /// </exception>
+        /// <remarks>
+        /// The 32-bit scheme is reduced modulo a 32-bit count of positions, which every payload
+        /// placed with it records, and no filter this library builds is placed with it among
+        /// more: a new one is placed so only below 2^27, and one read from a payload before
+        /// version 14 is as large as its <c>u32</c> said. A payload from version 14 can say
+        /// more in a <c>u64</c>, and placing so many with 32-bit values would put every item
+        /// in the first 2^32 of them, which <see cref="Positions64"/> does not do. A reader
+        /// and its price both read the byte through this, before the buckets it sizes.
+        /// </remarks>
+        internal static Placement ReadFor(ref PayloadReader reader, ushort version, ulong positions)
+        {
+            var placement = Read(ref reader, version);
+            if (placement == Placement.Narrow && positions > uint.MaxValue)
+            {
+                throw new InvalidDataException(
+                    $"Payload places {positions:N0} positions with 32-bit values. That scheme is " +
+                    $"reduced modulo a 32-bit count of positions, at most {uint.MaxValue:N0}, which " +
+                    "every payload placed with it records, and no filter this library builds is " +
+                    "placed with it among more.");
+            }
+
+            return placement;
+        }
+
+        /// <summary>
         /// Reads a filter's item count: a u64 at version 8, a u32 before it.
         /// </summary>
         internal static ulong ReadCount(ref PayloadReader reader, ushort version) =>

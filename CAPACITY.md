@@ -77,10 +77,11 @@ the structure with an exception that names the limit, before anything changes, a
   2,147,483,591 bytes an array holds, and the filters refuse more against the parameter
   that chose it. For buckets of one to three bits that is more than a 32-bit count
   addresses, so the count is the limit; from four bits up it is the array:
-  4,294,967,182 four-bit counters, or 2,147,483,591 eight-bit ones. Versions that sized the
-  array in 32 bits built a filter whose bits passed 2^32 with an array too short for them,
-  without an error, and it failed on `Add`; a payload written then is refused when read,
-  with that said.
+  4,294,967,182 four-bit cells, or 2,147,483,591 eight-bit ones. A counting filter's
+  counters are a 64-bit table of arrays, as `BloomFilter64`'s bits are, and have no such
+  limit. Versions that sized the array in 32 bits built a filter whose bits passed 2^32
+  with an array too short for them, without an error, and it failed on `Add`; a payload
+  written then is refused when read, with that said.
 - **A table of 2^32 slots is not a table.** `InfiniFilter` and `MementoFilter` double their
   table when three quarters full, up to 2^31 slots, or 2^30 for a Memento slot of 64 bits,
   and the `Add` that would double it past that throws, with the filter as it was.
@@ -111,10 +112,12 @@ more — 16 MiB of bits, about 14 million items at 1%, and for the partitioned f
 partition — places them with 64-bit values, exactly as `BloomFilter64` does. At m = 0.75 ·
 2^32 sized for 1% it measured 1.004%, as `BloomFilter64` did. A smaller filter is placed
 as before. Below 2^27 the excess is at most about 0.07% of the rate at 1%, too small to
-measure. Every save of these filters, whatever its size, is written at format version 8,
-which records the placement in a byte of its own and the item count in 64 bits, and which
-6.2.0 and earlier refuse. A filter read from a payload written before the release after
-6.2.0 keeps the 32-bit placement, and the rate that goes with it, whatever its size, and
+measure. Every save of `BloomFilter`, `DeletableBloomFilter`, `StableBloomFilter` and
+`PartitionedBloomFilter`, whatever its size, is written at format version 8, which records
+the placement in a byte of its own and the item count in 64 bits, and which 6.2.0 and
+earlier refuse. Every save of `CountingBloomFilter` is written at format version 14, which
+records the same and its sizes in 64 bits as well. A filter read from a payload written
+before the release after 6.2.0 keeps the 32-bit placement, and the rate that goes with it, whatever its size, and
 records it when saved again. It does not merge with a new filter of the same size; to have
 the rate it was sized for, add its items to a new filter.
 
@@ -181,12 +184,14 @@ own.
 
 ### `CountingBloomFilter`
 
-The same sizing, with `b` bits in each bucket instead of one, so `b` times the memory and
-the same false positive rate. Because the bucket array is `m · b` bits and is one array,
-the largest `n` falls in proportion to `b` from four bits up: the table gives 4-bit and
-8-bit counters at 1%, and a constructor asked for more refuses, naming `n`. The array is
-as large as the table, so the largest build is more than the ordinary envelope holds and
-the "As a byte array" figure is lower than the "Builds up to" one. A counter that reaches its
+The sizing of `BloomFilter64`, with `b` bits in each counter instead of one, so `b` times
+the memory and the same false positive rate. `n`, `m` and `Capacity()` are `ulong`s and the
+counters are held as arrays of 2^30 bytes, so what stops the constructor is memory. Until
+the release after 6.2.0 its sizes were `uint`s and its counters one array, and it stopped
+at 448,089,830 items at four-bit counters and 1%, and at half that at eight. Saved as one
+array, or in the ordinary envelope, its payload is at most 2,147,483,573 bytes, which is
+the "As a byte array" figure at 4-bit and 8-bit counters; a larger one is written to a
+stream, in the large form, each of its arrays a run of its own. A counter that reaches its
 maximum stays there rather than wrapping.
 
 ### `DeletableBloomFilter`

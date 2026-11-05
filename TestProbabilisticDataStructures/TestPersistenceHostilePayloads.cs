@@ -36,7 +36,7 @@ namespace TestProbabilisticDataStructures
         /// Overwrites a u32 at an offset within the payload and repairs the checksum, so
         /// that what refuses the result is a guard rather than the CRC.
         /// </summary>
-        private static byte[] PokeUInt32(byte[] original, int payloadOffset, uint value)
+        internal static byte[] PokeUInt32(byte[] original, int payloadOffset, uint value)
         {
             var bytes = (byte[])original.Clone();
             BinaryPrimitives.WriteUInt32LittleEndian(
@@ -69,7 +69,7 @@ namespace TestProbabilisticDataStructures
             return bytes;
         }
 
-        private static byte[] PokeUInt64(byte[] original, int payloadOffset, ulong value)
+        internal static byte[] PokeUInt64(byte[] original, int payloadOffset, ulong value)
         {
             var bytes = (byte[])original.Clone();
             BinaryPrimitives.WriteUInt64LittleEndian(
@@ -2200,8 +2200,66 @@ namespace TestProbabilisticDataStructures
             var bytes = Filled(new CountingBloomFilter(200, 4, 0.01)).ToByteArray();
 
             AssertRefused(
-                () => Persistence.FromByteArray<CountingBloomFilter>(PokeUInt32(bytes, 0, 12_345)),
+                () => Persistence.FromByteArray<CountingBloomFilter>(PokeUInt64(bytes, 0, 12_345)),
                 "do not describe the same filter");
+        }
+
+        /// <summary>
+        /// From version 14 a filter's size is a <c>u64</c>, and the 32-bit scheme is reduced
+        /// modulo a 32-bit count of positions, which every payload placed with it recorded.
+        /// A payload placed with 32-bit values among 2^32 positions is refused for that, before
+        /// its buckets are read, and one among 2^32 - 1 is not: it is refused only for the
+        /// buckets it does not have. So is one placed with 64-bit values among 2^32 more
+        /// positions than its buckets, which a size compared in its low 32 bits would match.
+        /// The read's price stops where its reader refuses it, at the placement byte, so under
+        /// a budget too small for its buckets it is still refused for its placement.
+        /// </summary>
+        /// <remarks>
+        /// Without the refusal, such a filter would reduce its 32-bit sums modulo the low 32
+        /// bits of its size, which at 2^32 is a division by nought.
+        /// </remarks>
+        [TestMethod]
+        public void TestAFilterPlacedWithThirtyTwoBitValuesPastTwoToTheThirtyTwoIsRefused()
+        {
+            const string Placed = "positions with 32-bit values";
+            // The offsets of m and of the placement byte in each version 14 payload.
+            var reads = new (string Name, byte[] Narrow, byte[] Wide, int Size, int Placement, Func<byte[], ReadOptions, object> ReadUnder)[]
+            {
+                (nameof(CountingBloomFilter),
+                    Filled(new CountingBloomFilter(200, 4, 0.01)).ToByteArray(),
+                    Filled(new CountingBloomFilter(200, 4, 0.01, null, Placement.Wide)).ToByteArray(),
+                    0, 12, (b, o) => Persistence.FromByteArray<CountingBloomFilter>(b, o)),
+            };
+
+            foreach (var (name, narrow, wide, size, placement, readUnder) in reads)
+            {
+                object read(byte[] b) => readUnder(b, ReadOptions.Unlimited);
+                var placed = PokeUInt64(narrow, size, 1UL << 32);
+                var ex = Assert.ThrowsExactly<InvalidDataException>(() => read(placed), name);
+                StringAssert.Contains(ex.Message, Placed, $"{name} placed with 32-bit values among 2^32 positions");
+
+                // The price stops where the reader does, at the placement byte, as it stops at
+                // a byte that names no scheme: under a budget of nothing the two are refused
+                // naming the same bytes, which a price that went on to the buckets would not.
+                long Priced(byte[] b) => ((ReadBudgetExceededException)Assert.ThrowsExactly<InvalidDataException>(
+                    () => readUnder(b, new ReadOptions(0)), name).InnerException!).RequiredBytes;
+                Assert.AreEqual(Priced(PokeByte(narrow, placement, 0xFF)), Priced(placed),
+                    $"{name} placed with 32-bit values among 2^32 positions was priced past its placement byte");
+                var priced = Priced(placed);
+                var under = Assert.ThrowsExactly<InvalidDataException>(() => readUnder(placed, new ReadOptions(priced)), name);
+                StringAssert.Contains(under.Message, Placed, $"{name} under the {priced:N0} bytes it was priced at");
+
+                var held = BinaryPrimitives.ReadUInt64LittleEndian(wide.AsSpan(PayloadStart + size));
+                foreach (var (bytes, positions, what) in new[]
+                {
+                    (narrow, (ulong)uint.MaxValue, "32-bit values among 2^32 - 1 positions"),
+                    (wide, (1UL << 32) + held, "64-bit values among 2^32 more positions than it holds"),
+                })
+                {
+                    var other = Assert.ThrowsExactly<InvalidDataException>(() => read(PokeUInt64(bytes, size, positions)), name);
+                    Assert.DoesNotContain(Placed, other.Message, $"{name} placed with {what} was refused for its placement");
+                }
+            }
         }
 
         /// <summary>

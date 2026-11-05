@@ -175,6 +175,52 @@ namespace ProbabilisticDataStructures
             return new Buckets64(count, bucketSize, data, arrayBits);
         }
 
+        /// <summary>
+        /// Lays out buckets held as one array, as a <see cref="Buckets"/> holds them and a
+        /// payload before format version 14 stores them, as the arrays of this type: the
+        /// array is kept as the first where it fits one, and split into arrays of
+        /// <see cref="ArraySize"/> where it does not.
+        /// </summary>
+        /// <param name="count">Number of buckets.</param>
+        /// <param name="bucketSize">Number of bits per bucket.</param>
+        /// <param name="data">
+        /// The packed buckets, already checked to be the length the count and bucket size
+        /// imply. A bucket is packed in it where a Buckets64 packs it, so its bytes are the
+        /// bytes of the arrays one after another.
+        /// </param>
+        /// <remarks>
+        /// Every filter of one-bit buckets stored before version 14 holds at most 2^32 - 1
+        /// bits, half an array, so is kept whole. Wider buckets can run longer than an
+        /// array, and are then copied into arrays of their own once, which a read is charged
+        /// for. The arrays past the data, which the count implies, hold nothing and are the
+        /// one empty array.
+        /// </remarks>
+        internal static Buckets64 FromOneArray(ulong count, byte bucketSize, byte[] data)
+        {
+            var arraySize = ArraySize;
+            var arrays = new byte[count / arraySize + 1][];
+            if ((ulong)data.Length <= arraySize)
+            {
+                arrays[0] = data;
+                for (var i = 1; i < arrays.Length; i++)
+                {
+                    arrays[i] = Array.Empty<byte>();
+                }
+            }
+            else
+            {
+                var at = 0UL;
+                for (var i = 0; i < arrays.Length; i++)
+                {
+                    var piece = Math.Min((ulong)data.Length - at, arraySize);
+                    arrays[i] = piece == 0 ? Array.Empty<byte>() : data.AsSpan((int)at, (int)piece).ToArray();
+                    at += piece;
+                }
+            }
+
+            return Restore(count, bucketSize, arrays);
+        }
+
         private Buckets64(ulong count, byte bucketSize, byte[][] data, int arrayBits)
         {
             this.arrayBits = arrayBits;

@@ -1,5 +1,8 @@
 ﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
+using System;
+using System.Buffers.Binary;
+using System.Linq;
 using System.Text;
 
 namespace TestProbabilisticDataStructures
@@ -16,18 +19,18 @@ namespace TestProbabilisticDataStructures
         {
             yield return PayloadState.Of(
                 "10 at 50%, 4 bits, empty", new CountingBloomFilter(10, 4, 0.5),
-                PersistenceFormat.PlacementVersion);
+                PersistenceFormat.Bloom64Version);
 
             var filled = new CountingBloomFilter(200, 8, 0.01);
             for (var i = 0; i < 40; i++) filled.Add(Encoding.ASCII.GetBytes($"w{i % 10}"));
             yield return PayloadState.Of(
-                "200 at 1%, 8 bits, counted", filled, PersistenceFormat.PlacementVersion);
+                "200 at 1%, 8 bits, counted", filled, PersistenceFormat.Bloom64Version);
 
             var odd = new CountingBloomFilter(37, 3, 0.1);
             odd.Add(Encoding.ASCII.GetBytes("a"));
             yield return PayloadState.Of(
                 "37 at 10%, 3 bits, a table that ends inside a byte", odd,
-                PersistenceFormat.PlacementVersion);
+                PersistenceFormat.Bloom64Version);
         }
 
         private static byte[] A_BYTES = Encoding.ASCII.GetBytes("a");
@@ -36,30 +39,55 @@ namespace TestProbabilisticDataStructures
         private static byte[] X_BYTES = Encoding.ASCII.GetBytes("x");
 
         /// <summary>
-        /// A counting filter's payload is its twenty-six bytes, then its bucket table whole in
-        /// a run. The table is as long as one array can be, and at eight bits a bucket, or
-        /// four, a table that long takes the payload past the most one can be:
-        /// 2,147,483,548 buckets of eight bits is the first past it. The buckets are claimed
-        /// by reflection on a small filter, since the run is counted from the table's count
-        /// and width, as its reader checks it.
+        /// A read allocates a scratch buffer of a position for each hash function, eight bytes
+        /// each since positions are 64-bit (#232), and is charged for it to the byte: the
+        /// version 14 fixture with its hash count edited from 7 to the most a filter has
+        /// allocates more by exactly what it is charged more.
         /// </summary>
         [TestMethod]
-        [DataRow((byte)8, 2_147_483_548u, 2_147_483_574L)]
-        [DataRow((byte)8, 2_147_483_591u, 2_147_483_617L)]
-        [DataRow((byte)4, 4_294_967_182u, 2_147_483_617L)]
-        public void TestACountingFilterTooLargeToWriteIsRefusedNamingItsWholeSize(
-            byte b, uint m, long payload)
+        public void TestTheScratchBufferIsChargedWhatItAllocates()
         {
-            Assert.IsLessThanOrEqualTo(Buckets.MaxCount(b), m,
-                "no filter holds this many buckets of this width");
-            Assert.AreEqual(26 + Buckets.DataLength(m, b), payload, "the row's payload is miscomputed");
-            Assert.AreEqual(PersistenceFormat.MaxPayloadLength, 26 + Buckets.DataLength(2_147_483_547u, 8),
-                "one bucket fewer than the first row does not fill a payload exactly");
+            // Version 14: u64 m, then the u32 hash count at 8.
+            const int HashCount = 8;
+            var seven = TestPersistenceFormatStability.ReadFixture("countingbloomfilter-v14-narrow.bin");
+            Assert.AreEqual(7u, BinaryPrimitives.ReadUInt32LittleEndian(seven.AsSpan(14 + HashCount)), "premise: the hash count");
+            var most = TestPersistenceHostilePayloads.PokeUInt32(seven, HashCount, Utils.MaxHashCount);
 
-            var f = new CountingBloomFilter(10, b, 0.5);
+            static (long Charged, long Allocated) Read(byte[] bytes)
+            {
+                var budget = new ReadBudget(long.MaxValue, StructureId.CountingBloomFilter);
+                Persistence.FromByteArray<CountingBloomFilter>(bytes, new ReadOptions(budget));
+                return (budget.Spent, TestReadBudget.Allocated(() => Persistence.FromByteArray<CountingBloomFilter>(bytes)));
+            }
+
+            var (fewer, more) = (Read(seven), Read(most));
+            Assert.IsGreaterThanOrEqualTo(8L * (Utils.MaxHashCount - 7), more.Allocated - fewer.Allocated,
+                "premise: the buffer is eight bytes a position");
+            Assert.AreEqual(more.Allocated - fewer.Allocated, more.Charged - fewer.Charged,
+                "the read was charged other than the scratch buffer it allocated");
+        }
+
+        /// <summary>
+        /// A counting filter's payload is its twenty-one bytes of fields and the thirteen of
+        /// its table's header, then each of the table's arrays in a run of its own (#232). A
+        /// table that takes the payload past the most one can be is gigabytes, so its arrays
+        /// are claimed by reflection on a small filter: 2,048 of one array of a mebibyte,
+        /// which is 2,147,491,874 bytes of payload, past the most by 8,301. The run's lengths
+        /// are counted from the arrays, as the writer writes them, so the count covers each.
+        /// </summary>
+        [TestMethod]
+        public void TestACountingFilterTooLargeToWriteIsRefusedNamingItsWholeSize()
+        {
+            var piece = new byte[1 << 20];
+            var claimed = Enumerable.Repeat(piece, 2048).ToArray();
+            var payload = 8 + 4 + 1 + 8 + 8 + 1 + 4 + claimed.Sum(array => 4L + array.Length);
+            Assert.AreEqual(2_147_491_874L, payload, "the payload is miscomputed");
+            Assert.IsGreaterThan(PersistenceFormat.MaxPayloadLength, payload, "the claim fits a payload");
+
+            var f = new CountingBloomFilter(10, 8, 0.5);
             f.Add(A_BYTES);
 
-            TestPayloadCount.AssertRefusedWhileClaiming(f, payload, (f, "m", m), (f.Buckets, "count", m));
+            TestPayloadCount.AssertRefusedWhileClaiming(f, payload, ((object)f.Buckets, "Data", (object)claimed));
         }
 
         /// <summary>

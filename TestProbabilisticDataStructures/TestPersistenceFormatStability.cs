@@ -179,12 +179,14 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestAnEarlierPayloadSavesAgainAsVersionEight()
         {
+            // The counting filter saves as version 14 now, which
+            // TestAnEarlierCountingPayloadSavesAgainAsVersionFourteen holds, so its row has no
+            // save: its version 8 fixture is still exactly the version 1 one with the byte.
             var earlier = new (string Earlier, string Current, ushort Version, int Placement, int Count, Func<byte[], byte[]> Resave)[]
             {
                 ("bloomfilter-v1.bin", "bloomfilter-v8-narrow.bin", 1, PlainPlacement, PlainPlacement + 1,
                     b => BloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray()),
-                ("countingbloomfilter-v1.bin", "countingbloomfilter-v8-narrow.bin", 1, PlainPlacement, PlainPlacement + 1,
-                    b => CountingBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray()),
+                ("countingbloomfilter-v1.bin", "countingbloomfilter-v8-narrow.bin", 1, PlainPlacement, PlainPlacement + 1, null),
                 ("deletablebloomfilter-v1.bin", "deletablebloomfilter-v8-narrow.bin", 1, PlainPlacement, PlainPlacement + 1,
                     b => DeletableBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray()),
                 ("partitionedbloomfilter-v1.bin", "partitionedbloomfilter-v8-narrow.bin", 1, PartitionedPlacement, PartitionedPlacement + 1,
@@ -198,7 +200,10 @@ namespace TestProbabilisticDataStructures
                 CollectionAssert.AreEqual(ReadFixture(old),
                     TestBitPlacement.Downgraded(ReadFixture(current), version, placement, count),
                     $"{current} without its placement byte, and with its count narrowed, is not {old}");
-                AssertBytes(current, resave(ReadFixture(old)));
+                if (resave is not null)
+                {
+                    AssertBytes(current, resave(ReadFixture(old)));
+                }
             }
         }
 
@@ -264,6 +269,15 @@ namespace TestProbabilisticDataStructures
             AssertBytes("countingbloomfilter-v14-narrow.bin", Resave(ReadFixture("countingbloomfilter-v1.bin")));
             AssertBytes("countingbloomfilter-v14-narrow.bin", Resave(ReadFixture("countingbloomfilter-v8-narrow.bin")));
             AssertBytes("countingbloomfilter-v14-wide.bin", Resave(ReadFixture("countingbloomfilter-v8-wide.bin")));
+
+            // And the version 14 fixtures narrowed back by FORMAT.md's two layouts, in C#
+            // here rather than the script that made them, are the version 8 ones.
+            foreach (var placed in new[] { "narrow", "wide" })
+            {
+                CollectionAssert.AreEqual(ReadFixture($"countingbloomfilter-v8-{placed}.bin"),
+                    TestBitPlacement.Narrowed(ReadFixture($"countingbloomfilter-v14-{placed}.bin"), "mubqt"),
+                    $"the version 14 {placed} fixture narrowed is not the version 8 one");
+            }
         }
 
         /// <summary>
@@ -598,10 +612,11 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestTheVersionAfterTheNewestIsRefused()
         {
-            // Eleven is one past the newest, version 10. It is written out rather than
+            // Fifteen is one past the newest, version 14. It is written out rather than
             // computed from the library's ceiling, which is the thing being checked.
             var newest = new (string Fixture, Func<Stream, object> Read)[]
             {
+                ("countingbloomfilter-v14-narrow.bin", s => CountingBloomFilter.ReadFrom(s)),
                 ("stablebloomfilter-v8-narrow.bin", s => StableBloomFilter.ReadFrom(s)),
                 ("cuckoobloomfilter-v6.bin", s => CuckooBloomFilter.ReadFrom(s)),
                 ("bloomfilter-v8-narrow.bin", s => BloomFilter.ReadFrom(s)),
@@ -616,9 +631,9 @@ namespace TestProbabilisticDataStructures
 
             foreach (var (fixture, read) in newest)
             {
-                var bytes = Relabeled(ReadFixture(fixture), 11);
+                var bytes = Relabeled(ReadFixture(fixture), 15);
                 var ex = Assert.ThrowsExactly<InvalidDataException>(() => read(new MemoryStream(bytes)), fixture);
-                StringAssert.Contains(ex.Message, "format version 11", fixture);
+                StringAssert.Contains(ex.Message, "format version 15", fixture);
                 StringAssert.Contains(ex.Message, "written by a later version", fixture);
             }
         }
@@ -2363,7 +2378,7 @@ namespace TestProbabilisticDataStructures
             return new MemoryStream(ReadFixture(name), writable: false);
         }
 
-        private static byte[] ReadFixture(string name)
+        internal static byte[] ReadFixture(string name)
         {
             using var resource = typeof(TestPersistenceFormatStability).Assembly
                 .GetManifestResourceStream($"TestProbabilisticDataStructures.fixtures.{name}")

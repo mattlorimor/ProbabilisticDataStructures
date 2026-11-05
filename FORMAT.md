@@ -125,6 +125,7 @@ structure whose layout changes bumps only its own.
 | 8 | the release after 6.2.0 | `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter`, `StableBloomFilter` | a placement byte, and the item count as a `u64`; written by every save |
 | 9 | the release after 6.2.0 | `InverseBloomFilter`, `CountMinSketch`, `HeavyKeeper`, `PrivateCountMinSketch`, `DpswSketch` | a placement byte, in each private sketch body for `DpswSketch`; written by every save |
 | 10 | the release after 6.2.0 | `SublimeCountMinSketch` | the packing tuning of each state, before its counters; written by every save |
+| 14 | the release after 6.2.0 | `CountingBloomFilter` | sizes as `u64`s, and the buckets as a `Buckets64`; written by every save |
 
 The version field's high bit, `0x8000`, is not part of a version: it marks
 [the large form](#the-large-form) of the envelope, and the version is the other fifteen
@@ -245,6 +246,20 @@ what the tuning is and how a reader holds it to the counters. Every save is vers
 a library older than version 10 reads none of them; a payload written before it still
 reads, and saves again as version 10.
 
+Version 14 is the change that widens `CountingBloomFilter` to 64-bit sizes. It
+writes, at version 14, its version 8 layout with each size that was a `u32` widened to a
+`u64` and its buckets written as a [`Buckets64`](#payload-primitives) rather than a
+`Buckets`; nothing else moves, and the packed bits are the same bytes. Every save is
+version 14, whatever its size, so a library older than version 14 reads none of them; a
+payload written before it still reads, and saves again as version 14. Its buckets, one
+array in a payload before version 14, are laid out as a `Buckets64`'s arrays when read.
+
+The placement byte means what version 8's does. One thing about it is new: a size can now
+pass 2^32, and the 32-bit scheme is reduced modulo a 32-bit count of positions, which every
+payload placed with it recorded, so a reader refuses a version 14 payload placed with
+32-bit values among more than 4,294,967,295 positions. No filter this library builds is
+placed so.
+
 A reader refuses a payload whose magic does not match, whose version is not one its
 structure has defined, whose structure id is not the type being read, or whose
 checksum does not match. The versions a structure has not defined include `0`, which is
@@ -347,6 +362,11 @@ u32     array count
 bytes   packed data, per array
 ```
 
+The buckets are packed as a `Buckets` packs them, and the arrays are its packed data cut
+into pieces of 2^30 bytes, the last holding what is left. There are as many arrays as the
+bucket count divided by 2^30, rounded down, plus one, so arrays past the data hold none: a
+reader refuses any other count of arrays or any other length.
+
 ### Nested structures
 
 A structure held by another is written as a `bytes` run holding its **own complete
@@ -405,14 +425,14 @@ address.
 | `SublimeCountMinSketch` | rows | 710 | `ceil(ln(1 / delta))` at the smallest delta whose reciprocal is a finite double |
 | `SublimeCountMinSketch` | counters in a row | 1,073,741,824 | a width is a power of two held in an `int`, and 2^30 is the largest of those; the sketch stops widening there |
 | `ScalableBloomFilter` | filter count | 2,147,483,591 | the filters are a list; a filter stops growing sooner, when its next filter would have no finite rate to be sized from, or would be built for more items or bits than a contained filter addresses, which is a limit on growing and not on reading |
-| `CountingBloomFilter` | bytes of counters, `m` × `b` bits, rounded up | 2,147,483,591 | the counters are one array; from four-bit counters up that is fewer counters than a `u32` counts |
+| `CountingBloomFilter` | counters, `m` | 2,305,842,948,010,409,983 | the counters are a `Buckets64`, arrays of 2^30 bytes held in one array, which holds at most 2,147,483,591 of them; memory runs out long before |
 | `StableBloomFilter` | bytes of cells, `m` × `d` bits, rounded up | 2,147,483,591 | the cells are one array, as the counters are |
 | `BloomFilter` | hash functions, `k` | 1,024 | `ceil(log2(1 / rate))` at the smallest false positive rate whose reciprocal is a finite double; the constructor refuses a smaller rate. A reader also refuses none, which sets no bit and tests none |
 | `BloomFilter64` | hash functions, `k` | 1,024 | as `BloomFilter` |
-| `CountingBloomFilter` | hash functions, `k` | 1,024 | as `BloomFilter`; a scratch buffer of four bytes per hash function is allocated for it |
-| `DeletableBloomFilter` | hash functions, `k` | 1,024 | as `CountingBloomFilter` |
+| `CountingBloomFilter` | hash functions, `k` | 1,024 | as `BloomFilter`; a scratch buffer of eight bytes per hash function is allocated for it |
+| `DeletableBloomFilter` | hash functions, `k` | 1,024 | as `BloomFilter`; a scratch buffer of four bytes per hash function is allocated for it |
 | `PartitionedBloomFilter` | hash functions, `k` | 1,024 | as `BloomFilter`; it is also the number of partitions, and the reader checks it first |
-| `StableBloomFilter` | hash functions, `k` | 1,024 | as `CountingBloomFilter`; the constructor halves the count, and the factory that builds a plain Bloom filter of cells does not, so the reader accepts the whole of it |
+| `StableBloomFilter` | hash functions, `k` | 1,024 | as `DeletableBloomFilter`; the constructor halves the count, and the factory that builds a plain Bloom filter of cells does not, so the reader accepts the whole of it |
 | `InfiniFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; a filter stops expanding there |
 | `MementoFilter` | quotient bits | 31 | as `InfiniFilter` |
 | `MementoFilter` | bits of a slot | 64 | a slot is held in a 64-bit word: three bits of metadata, and a field of the fingerprint, one bit for its age counter and the memento |
@@ -422,8 +442,11 @@ address.
 
 The other filters built on `Buckets` hold one-bit buckets, so the most they hold is what
 a `u32` counts, 4,294,967,295, which is 536,870,912 bytes, and their sizing refuses
-anything beyond it. The same arithmetic limits the counting and stable filters from four
-bits up: at 4 bits it is 4,294,967,182 buckets, and at 8 bits 2,147,483,591.
+anything beyond it. The same arithmetic limits the stable filter from four bits up: at 4
+bits it is 4,294,967,182 buckets, and at 8 bits 2,147,483,591. A counting filter's counters
+have been a `Buckets64` since version 14, which counts its buckets in a `u64` and holds
+them in arrays of 2^30 bytes: what limits it is the count of arrays, at most what one
+array holds, at every counter width.
 
 A `DeletableBloomFilter` keeps its data region and its collision regions out of one `m`
 that sizing holds to that same 4,294,967,295, so the two come to no more than that
@@ -529,7 +552,8 @@ gigabytes, and loads only with a budget raised to match. What each read is charg
 | Structure | Charged beyond the payload and the runs it copies |
 | --- | --- |
 | `BloomFilter`, `BloomFilter64`, `HyperLogLog`, `HyperLogLogPlus` (dense), `UltraLogLog`, `BinaryFuseFilter`, `BloomierFilter`, `SimHashSignature` | the structure's own copy of its registers or bits, where it keeps one |
-| `CountingBloomFilter`, `DeletableBloomFilter`, `StableBloomFilter` | a scratch buffer of four bytes per hash function |
+| `CountingBloomFilter` | a scratch buffer of eight bytes per hash function |
+| `DeletableBloomFilter`, `StableBloomFilter` | a scratch buffer of four bytes per hash function |
 | `PartitionedBloomFilter`, `ScalableBloomFilter` | a slot per partition or contained filter; a contained filter is charged as a read of its own |
 | `CuckooBloomFilter` | the whole table, `m` × `b` fingerprints of `f` bits, and a bit per entry, whatever the payload holds |
 | `QuotientFilter` | the whole table, 2^`q` slots of `r` + 3 bits |
@@ -595,19 +619,19 @@ Buckets64 the bit array
 
 ### `CountingBloomFilter` (id 3)
 
-At version 8:
+At version 14:
 
 ```
-u32     m
-u32     k
-u8      placement, 0 for 32-bit values and 1 for 64-bit ones
-u64     count, the number of items added and not removed
-Buckets the counter array, whose bucket width is the counter width
+u64       m
+u32       k
+u8        placement, 0 for 32-bit values and 1 for 64-bit ones
+u64       count, the number of items added and not removed
+Buckets64 the counter array, whose bucket width is the counter width
 ```
 
-At version 1 there is no placement byte, the counters were placed with 32-bit values,
-and the count is a `u32`. Which items a counter counts is described in
-[Bit placement](#bit-placement).
+At version 8, `m` is a `u32` and the counters a `Buckets`. At version 1 there is also no
+placement byte, the counters were placed with 32-bit values, and the count is a `u32`.
+Which items a counter counts is described in [Bit placement](#bit-placement).
 
 The count stops at zero as items are removed. A payload saved by a release before that
 fix, after more removals than adds, holds the wrapped value (2^64 - 1, or 2^32 - 1 before
