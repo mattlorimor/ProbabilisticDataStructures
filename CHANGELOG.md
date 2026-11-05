@@ -138,6 +138,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   64 KiB straight into that storage. A run read into one array is refused past one array as before, and a DDSketch
   store claiming more counts than one array holds is refused as that. (#228)
 
+- **A test on the edge of `SublimeCountMinSketch`'s crowding fraction.** A sketch lays its
+  counters out again at the add that puts more than three in a hundred of its chunks on tails
+  arrays. No test used a number of chunks of which three in a hundred is a whole number, so
+  the rule passed as well asking for at least the fraction as for more than it. A sketch of a
+  hundred rows of one chunk each is now held to it: three chunks on tails leave the rows as
+  they are, and four lay them out. The library is unchanged. (#275)
+
 ### Changed
 
 - **`ToByteArray`'s refusal of a payload past one array says which form its size is
