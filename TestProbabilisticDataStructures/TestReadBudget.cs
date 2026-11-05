@@ -289,7 +289,12 @@ namespace TestProbabilisticDataStructures
                 GC.Collect();
             });
 
-        private static long LeastAllocated(Func<object> read, int repeats, Action first)
+        /// <summary>
+        /// The least of <paramref name="repeats"/> measurements of what
+        /// <paramref name="read"/> allocates on this thread, each after
+        /// <paramref name="first"/>, which is not measured.
+        /// </summary>
+        internal static long LeastAllocated(Func<object> read, int repeats, Action first)
         {
             var least = long.MaxValue;
             for (var i = 0; i < repeats; i++)
