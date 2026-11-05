@@ -483,6 +483,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The suite's allocation checks no longer fail when a background collection runs beside
+  them.** Every allocation the suite holds the library to is now counted inside a no-GC
+  region, where no collection can run. The least of five measurements it took before was
+  not enough: on a loaded run one ran beside every repeat of a `DpswSketch` read, which
+  then failed the large-form allocation check by 7,455 bytes. `TESTING.md` says how to
+  measure. The library is unchanged. (#293)
+
 - **What a read allocates no longer depends on when the last collection ran.** Every read
   named its structure with `ToString` as its budget was made, and the runtime keeps an
   enum's names in a cache it holds only weakly, so a read after a collection had reclaimed
