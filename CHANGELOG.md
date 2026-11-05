@@ -432,6 +432,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the old one was still held, so a reset needed twice the estimator at once: 2 GiB at the
   2^30 registers of the largest.
 
+- **An `InfiniFilter`'s or a `MementoFilter`'s reset clears a table it holds of the size it
+  goes back to.** No answer and no stored byte changes. (#298)
+  <br><br>
+  `Reset` takes a filter back to the one table it was built with. It built that table while
+  the tables it had were still held, so resetting a filter that had not grown needed twice
+  the filter at once: 3 GiB more for an `InfiniFilter` of 2^31 slots of 8-bit fingerprints,
+  and 5 GiB for a `MementoFilter` of 2^31 slots at the default range and fingerprint. Where
+  a table the filter holds is already the size and fingerprint it goes back to, as the only
+  table of a filter that has not grown always is and a table in a grown filter's chain can
+  be, the reset clears that table where it is, drops the others, and allocates nothing.
+  Otherwise it builds the table before it drops anything, as it did, so a reset that cannot
+  get the memory leaves the filter as it was.
+
 - **A `BloomFilter64`'s reset allocates nothing.** No answer and no stored byte changes.
   (#297)
   <br><br>
