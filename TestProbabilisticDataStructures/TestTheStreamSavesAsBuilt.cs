@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -27,16 +28,25 @@ namespace TestProbabilisticDataStructures
     /// <para>
     /// Where a field sizes the payload, a small structure is made to claim its largest
     /// build by setting that field, as <see cref="TestPayloadCount"/> does, and
-    /// <c>WriteTo</c>'s own count of it is watched through
-    /// <see cref="PersistenceFormat.Counted"/> and stopped there, before anything is
-    /// written. The count has to refuse nothing and to be the length the layout gives, so
-    /// that a count wrapped in 32 bits, which the write would then disagree with, fails
-    /// here; and <c>ToByteArray</c> of the same claim has to be refused, so the claim is
-    /// one only the stream saves. Where what the structure holds sizes it -- an array, or
-    /// the items it keeps -- no field can be set to claim more without allocating it, and
-    /// the structure is written for real past a lowered threshold, with the longest run a
-    /// payload may hold lowered beneath its own: the bounds a payload past 2 GiB, with a
-    /// run past one array, meets at the real ones.
+    /// <c>WriteTo</c> of it is let run as far as the stream: past one array, until the
+    /// large form's header is written, which comes before any of the payload, and within
+    /// one, until its count, watched through <see cref="PersistenceFormat.Counted"/>, since
+    /// the ordinary envelope's buffer would be allocated next at the length claimed. Nothing
+    /// may refuse it on the way, and the count has to be the length the layout gives, the
+    /// large form's worked out from the ordinary bytes as FORMAT.md lays them out, so that
+    /// a count wrapped in 32 bits, which the write would then disagree with, fails here; and
+    /// <c>ToByteArray</c> of the same claim has to be refused, so the claim is one only the
+    /// stream saves. Where what the structure holds sizes it -- an array, or the items it
+    /// keeps -- no field can be set to claim more without allocating it, and the structure
+    /// is written for real past a lowered threshold, with the longest run a payload may
+    /// hold lowered beneath its own: the bounds a payload past 2 GiB, with a run past one
+    /// array, meets at the real ones.
+    /// </para>
+    /// <para>
+    /// That leaves one thing unreached for those: a product over the length of an array
+    /// they hold, narrowed to 32 bits, wraps only at a length the suite cannot allocate.
+    /// <c>MinHashSignature</c>'s count of its values cast to an <c>int</c> survives both
+    /// tests, and the rest of the suite.
     /// </para>
     /// <para>
     /// The corner claimed is the coarsest the constructor takes: each dimension at its
@@ -53,15 +63,41 @@ namespace TestProbabilisticDataStructures
         private const BindingFlags Members = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
 
         /// <summary>
-        /// The most a claimed write may allocate. Its count builds nothing, and stopping it
-        /// costs an exception: probed at 1,552 to 2,120 bytes for the claims here, so this is
-        /// thirty times the most. The payloads claimed are gigabytes.
+        /// The most a claimed write may allocate. Its count builds nothing, and as far as the
+        /// stream it allocates a header and an exception: probed at 3,128 to 5,112 bytes for
+        /// the claims here, so this is twelve times the most. The payloads claimed are
+        /// gigabytes, and the large form's streaming buffer alone is 64 KiB.
         /// </summary>
         private const long CountAllocates = 64 * 1024;
 
-        /// <summary>What a write is stopped with once its count is made: nothing has been written.</summary>
+        /// <summary>What a write is stopped with, at its count or at the stream.</summary>
         private sealed class Stopped : Exception
         {
+        }
+
+        /// <summary>
+        /// A stream that keeps the first write it is given and stops the writer there: the
+        /// large form's header, which goes to the stream before any of the payload does.
+        /// </summary>
+        private sealed class FirstWriteStops : MemoryStream
+        {
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                base.Write(buffer, offset, count);
+                throw new Stopped();
+            }
+
+            public override void Write(ReadOnlySpan<byte> buffer)
+            {
+                base.Write(buffer);
+                throw new Stopped();
+            }
+
+            public override void WriteByte(byte value)
+            {
+                base.WriteByte(value);
+                throw new Stopped();
+            }
         }
 
         /// <summary>A member of a structure, or of something it holds, and the value it is to claim.</summary>
@@ -299,7 +335,16 @@ namespace TestProbabilisticDataStructures
                         new Claim(sketch, "Depth", CountMinSketch.MaxDepth),
                     };
                 },
-                s => 8 * Big(Get(s, "Cms"), "Width") * Big(Get(s, "Cms"), "Depth"));
+                // The sketch is nested whole: its 33 bytes of fields and its cells, in the
+                // envelope its own payload calls for, the large form's past one array.
+                s =>
+                {
+                    var cells = 8 * Big(Get(s, "Cms"), "Width") * Big(Get(s, "Cms"), "Depth");
+                    var envelope = 33 + cells > PersistenceFormat.MaxPayloadLength
+                        ? PersistenceFormat.LargeEnvelopeLength
+                        : PersistenceFormat.EnvelopeLength;
+                    return cells + envelope;
+                });
 
             // Values of both signs, each store's window as long as an array.
             yield return new(StructureId.DDSketch, "a window of as many buckets as an array holds, for each sign", true,
@@ -391,6 +436,7 @@ namespace TestProbabilisticDataStructures
         public void TestEveryStructureIsCountedAtItsLargestBuildWithoutARefusal()
         {
             var builds = LargestBuilds().ToArray();
+            var readers = LargeForm.Readers();
             var past = 0;
             var fits = 0;
             var longRuns = 0;
@@ -401,9 +447,13 @@ namespace TestProbabilisticDataStructures
                 var structure = build.Make();
                 Assert.AreEqual(build.Id.ToString(), structure.GetType().Name, $"{name}: made another structure");
 
+                // The small structure's payload in each form, the large one worked out outside
+                // the writer: its ordinary payload with each run's length a u64, as FORMAT.md
+                // lays it out, any envelope nested in it kept in the ordinary form its size
+                // calls for.
                 var ordinary = WriteTo(structure);
                 long narrowSmall = ordinary.Length - PersistenceFormat.EnvelopeLength;
-                long wideSmall = LargeForm.WriteLarge(structure).Length - PersistenceFormat.LargeEnvelopeLength;
+                long wideSmall = LargeForm.Widened(ordinary, readers, nestedLarge: false, out _, out _).LongLength;
                 var sizedSmall = build.Sized(structure);
 
                 var claims = build.Claims(structure);
@@ -411,7 +461,7 @@ namespace TestProbabilisticDataStructures
                 long declared = -1;
                 Exception thrown = null;
                 long allocated;
-                long written;
+                byte[] written;
                 BigInteger sized;
                 PayloadWriter narrow;
                 Exception asArray = null;
@@ -423,13 +473,19 @@ namespace TestProbabilisticDataStructures
                     narrow = PayloadWriter.Counter();
                     ((IPayloadBody)structure).WritePayload(narrow);
 
-                    using var stream = new MemoryStream();
+                    // Past one array the write goes on to the large form's header, and is
+                    // stopped at the stream; within one, at the count, before the ordinary
+                    // envelope's buffer is allocated at the length claimed.
+                    using var stream = new FirstWriteStops();
                     PersistenceFormat.Counted = (body, length) =>
                     {
                         if (ReferenceEquals(body, structure))
                         {
                             declared = length;
-                            throw new Stopped();
+                            if (!build.PastOneArray)
+                            {
+                                throw new Stopped();
+                            }
                         }
                     };
 
@@ -449,7 +505,7 @@ namespace TestProbabilisticDataStructures
                     }
 
                     allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
-                    written = stream.Length;
+                    written = stream.ToArray();
 
                     if (build.PastOneArray)
                     {
@@ -470,9 +526,8 @@ namespace TestProbabilisticDataStructures
 
                 Assert.IsInstanceOfType<Stopped>(thrown,
                     $"{name}: the stream path refused it, or failed, before it was written: {thrown}");
-                Assert.AreEqual(0L, written, $"{name}: something was written before the count was made");
                 Assert.IsLessThan(CountAllocates, allocated,
-                    $"{name}: counting it allocated {allocated:N0} bytes, so something of the payload was built");
+                    $"{name}: writing it as far as the stream allocated {allocated:N0} bytes, so something of the payload was built");
 
                 var large = narrow.Length > PersistenceFormat.LargeFormThreshold;
                 Assert.AreEqual(build.PastOneArray, large,
@@ -480,10 +535,18 @@ namespace TestProbabilisticDataStructures
 
                 var expected = (large ? wideSmall : narrowSmall) + (sized - sizedSmall);
                 Assert.AreEqual(expected, (BigInteger)declared,
-                    $"{name}: WriteTo declared {declared:N0} bytes, and the layout gives {expected:N0}");
+                    $"{name}: WriteTo counted {declared:N0} bytes, and the layout gives {expected:N0}");
 
                 if (large)
                 {
+                    Assert.HasCount(PersistenceFormat.LargeHeaderLength, written,
+                        $"{name}: the stream was not given the large form's header first, whole");
+                    Assert.IsTrue(LargeForm.IsLarge(written), $"{name}: the header written does not flag the large form");
+                    Assert.AreEqual((ushort)build.Id, BinaryPrimitives.ReadUInt16LittleEndian(written.AsSpan(6)),
+                        $"{name}: the header written names another structure");
+                    Assert.AreEqual((ulong)declared, BinaryPrimitives.ReadUInt64LittleEndian(written.AsSpan(10)),
+                        $"{name}: the header written does not declare the count");
+
                     var refused = Assert.IsInstanceOfType<InvalidOperationException>(asArray,
                         $"{name}: ToByteArray of a payload past one array was not refused: {asArray}");
                     StringAssert.Contains(refused.Message, "WriteTo(Stream)", $"{name}: {refused.Message}");
@@ -491,6 +554,7 @@ namespace TestProbabilisticDataStructures
                 }
                 else
                 {
+                    Assert.IsEmpty(written, $"{name}: something was written before its count was made");
                     fits++;
                 }
 

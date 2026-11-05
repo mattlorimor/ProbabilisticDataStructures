@@ -488,10 +488,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   saving at all, and a sentence above the table now says what is: through
   `WriteTo(Stream)` every structure saves as built, limited only by memory. A test over
   every structure holds the sentence. Each whose payload a field sizes is made to claim its
-  largest build, and `WriteTo`'s count of it refuses nothing and is the length its layout
-  gives, up to 12,197,706,796,913 bytes for a count-min sketch of 2,147,483,591 counters by
-  710 rows; each sized by the arrays or items it holds is written for real, with the
-  threshold and the longest run lowered beneath its own. No structure needed a change.
+  largest build, and `WriteTo` of it refuses nothing as far as the large form's header,
+  which declares the length its layout gives, up to 12,197,706,796,913 bytes for a
+  count-min sketch of 2,147,483,591 counters by 710 rows; each sized by the arrays or items
+  it holds is written for real, with the threshold and the longest run lowered beneath its
+  own. No structure needed a change.
   (#279)
 
 ### Fixed
