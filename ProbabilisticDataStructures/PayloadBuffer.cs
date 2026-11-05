@@ -788,9 +788,27 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal int PriceBytes()
         {
+            var count = BeginRun();
+            this.Budget.Price(ReadBudget.ArrayOf((ulong)count, 1));
+            return count;
+        }
+
+        /// <summary>
+        /// Reads the length of the run that comes next, after the checks <see cref="ReadBytes"/>
+        /// makes of it, and leaves the reader at the start of the run, pricing and charging
+        /// nothing. Returns its length.
+        /// </summary>
+        /// <remarks>
+        /// For a run that its structure's shape says holds nothing, which a reader then takes
+        /// as the one empty array the runtime keeps and allocates nothing for, and refuses
+        /// unless its length is nought; its price walks the run the same way. Read whole by
+        /// <see cref="ReadBytes"/>, an empty run is charged as the array it is read into, which
+        /// from a held payload is that same empty array (#315).
+        /// </remarks>
+        internal int BeginRun()
+        {
             var count = ReadArrayRunLength();
             RequireAhead(count);
-            this.Budget.Price(ReadBudget.ArrayOf((ulong)count, 1));
             return count;
         }
 
