@@ -754,6 +754,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   added to that filter was then not found. The widths are added in 64 bits now, and every
   such payload is refused for its split, at both versions the reader reads.
 
+- **A reader no longer allocates for data its payload does not hold.** A read is priced
+  before it allocates, and a price that finds the payload ending early is set aside so that
+  the reader refuses it with its own explanation, at whatever had been priced by then.
+  Some readers allocated for what a size field claimed before checking the bytes were there,
+  so under `ReadOptions.Unlimited`, or any budget covering the claim, a payload of a few
+  dozen bytes made them allocate for all of it before it was refused: `InfiniFilter` and
+  `MementoFilter` a table's words; `VarOpt` a sampling reservoir's regions;
+  `HyperLogLogPlus` its sparse buffer; and every filter whose buckets are a `Buckets64`,
+  `BloomFilter64` included, the array of its arrays. The widest table an `InfiniFilter`
+  payload can name is 2,080,374,786 words, 16.6 GB, and a 58-byte payload naming it, read
+  with no budget in a process whose heap was held to 4 GiB, threw `OutOfMemoryException`
+  rather than being refused; it is now refused in milliseconds. Each of those readers, and
+  its price, now checks that the rest of the payload holds what a size claims before it
+  prices, charges or allocates for it. This changes what callers see for such a payload:
+  it is refused as malformed, an `InvalidDataException` naming what it lacks, under any
+  budget that holds the payload itself, where it used to be refused for its budget, with a
+  `ReadBudgetExceededException` as the inner exception, whenever its claim came to more than
+  the budget, and the total that refusal named did not load it. The count-min sketches
+  already refused such payloads that way. Nothing the library wrote is refused. A new sweep
+  cuts every structure's payload short at every length and holds what each cut's price comes
+  to, and what its read allocates before refusing it, to what the bytes it holds allow.
+
 - **A 64-bit table whose count, width and arrays disagree is refused for that before it is
   priced.** The price of a `Buckets64` walked its arrays without checking them against its
   count and width, which only its reader did, so such a payload over its budget was refused

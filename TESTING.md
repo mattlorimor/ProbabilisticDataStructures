@@ -920,6 +920,24 @@ rest of a message survives, as it should, and one that deletes the guard does no
   walk of a layout its reader already walks, so the checks that stop a reader allocating
   are shared code, called by both; the exact sum is what catches a walk that has drifted
   from its reader.
+- **A payload is refused for what it lacks, before anything is priced or allocated for it.**
+  A price that finds its payload ending early is set aside, so that the reader refuses the
+  payload with its own explanation, and the read is admitted at whatever the walk had priced
+  by then. A walk that priced a size before checking the bytes behind it was there turned a
+  short payload into a refusal for its budget, and a reader that allocated first was held to
+  nothing under a budget that admitted the claim, or under none: a 58-byte `InfiniFilter`
+  payload asked for 16.6 GB. So every reader's price refuses a payload that does not hold
+  what a size claims before it prices the claim, and so does its reader, before it charges or
+  allocates for it. `TestReadsAllocateOnlyWhatTheyHold` holds both to the bytes present: it
+  cuts every structure's payload short at every length and holds each cut's price, and what
+  its read allocates before refusing it, to a bound tied to the bytes the cut holds, under
+  every budget, where a refusal for the budget fails. A cut is a payload this library wrote,
+  so the claims are the writer's own and no field needs inventing. Where what a reader can
+  check is a lower bound, as with items of any length, the sample says what it may cost and
+  why, and some cut has to cost that, or the allowance is out of date. A
+  `SublimeCountMinSketch` price is allowed more than its read for that reason: it checks its
+  counters once, at its shape, against bytes its records share, and then prices each block
+  of them before skipping it.
 - **An exemption names the test that checks its reason.** The same sweep exempts the
   structures whose readers cap nothing their constructors can reach, and each exemption
   points at a test asserting why -- the cap is unreachable, or the reader caps nothing.

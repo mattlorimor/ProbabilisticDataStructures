@@ -897,6 +897,13 @@ namespace ProbabilisticDataStructures
             var lightWeight = reader.ReadDouble();
             CheckCounts(k, n, heavyCount, lightCount, lightWeight);
 
+            // Every item it claims is a run, of at least its length, read after the regions
+            // are allocated. A sampling reservoir holds k of them, so its regions are what the
+            // payload holds, and they are checked for before they are charged or allocated,
+            // as the price checks before it prices them, so that a payload without them is
+            // refused for that under any budget and k slots are never allocated for a few bytes.
+            reader.RequireHolds(heavyCount + (ulong)lightCount, sizeof(uint), "items");
+
             // Its five regions, k + 1 slots each, whatever the payload holds: the
             // sample's arithmetic assumes their size.
             budget.Charge(RegionsCost(k));
@@ -978,6 +985,7 @@ namespace ProbabilisticDataStructures
             var lightCount = reader.ReadUInt32();
             var lightWeight = reader.ReadDouble();
             CheckCounts(k, n, heavyCount, lightCount, lightWeight);
+            reader.RequireHolds(heavyCount + (ulong)lightCount, sizeof(uint), "items");
 
             reader.Budget.Price(RegionsCost(k));
             for (uint i = 0; i < heavyCount; i++)

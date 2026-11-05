@@ -1304,10 +1304,11 @@ namespace TestProbabilisticDataStructures
                 TestExpandingTableLimits.OnePayload(
                     StructureId.InfiniFilter, InfiniFilter.MaxQuotientBits + 1, 2, includeWords: false, version: 13),
                 $"between 2 and {InfiniFilter.MaxQuotientBits}");
-            var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<InfiniFilter>(
+            // At the limit, past every check of its size and refused for the words it lacks,
+            // which it was refused for the cost of until the price checked them.
+            AssertRefusedOnlyForMissingBytes<InfiniFilter>(
                 TestExpandingTableLimits.OnePayload(
-                    StructureId.InfiniFilter, InfiniFilter.MaxQuotientBits, 2, includeWords: false, version: 13)));
-            Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException);
+                    StructureId.InfiniFilter, InfiniFilter.MaxQuotientBits, 2, includeWords: false, version: 13));
 
             var filter = new InfiniFilter(1, fingerprintBits: 2);
             for (var i = 0; i < 1 << 16; i++) filter.Add(Key(i));
@@ -1334,10 +1335,11 @@ namespace TestProbabilisticDataStructures
                 TestExpandingTableLimits.OnePayload(
                     StructureId.MementoFilter, MementoFilter.MaxQuotientBits + 1, 4, includeWords: true),
                 "between 2 and 31");
-            var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<MementoFilter>(
+            // At the limit, past every check of its size and refused for the words it lacks,
+            // which it was refused for the cost of until the price checked them.
+            AssertRefusedOnlyForMissingBytes<MementoFilter>(
                 TestExpandingTableLimits.OnePayload(
-                    StructureId.MementoFilter, MementoFilter.MaxQuotientBits, 4, includeWords: false)));
-            Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException);
+                    StructureId.MementoFilter, MementoFilter.MaxQuotientBits, 4, includeWords: false));
 
             var filter = new MementoFilter(2, fingerprintBits: 2, initialCapacity: 1);
             for (var i = 0; i < 1 << 16; i++) filter.Add((ulong)i * 7919);

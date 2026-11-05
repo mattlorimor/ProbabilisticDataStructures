@@ -829,6 +829,12 @@ namespace ProbabilisticDataStructures
                 var words = reader.ReadUInt32();
                 var slotBits = CheckSegment(i, quotientBits, fingerprintBits, mementoBits, count, words);
 
+                // The payload has to hold the words before they are charged or allocated, as
+                // the price checks before it prices them, so that a payload without them is
+                // refused for that under any budget, and a table of any width is never
+                // allocated for a few bytes.
+                reader.RequireHolds(words, sizeof(ulong), "words");
+
                 // As the constructor sets it, from the slot width. Every table of a filter
                 // has the same width, and if a payload says otherwise the lowest limit holds.
                 filter.QuotientBitsLimit = Math.Min(filter.QuotientBitsLimit, QuotientBitsLimitFor(slotBits));
@@ -916,6 +922,7 @@ namespace ProbabilisticDataStructures
                 var count = reader.ReadUInt32();
                 var words = reader.ReadUInt32();
                 CheckSegment(i, quotientBits, fingerprintBits, mementoBits, count, words);
+                reader.RequireHolds(words, sizeof(ulong), "words");
 
                 reader.Budget.Price(SegmentCost(words));
                 reader.Skip((long)words * sizeof(ulong));

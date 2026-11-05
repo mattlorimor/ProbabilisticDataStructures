@@ -128,9 +128,11 @@ namespace TestProbabilisticDataStructures
         /// (#231), where it was 2^31 slots for every fingerprint: a slot count of 2^q needed
         /// q of at most 31 to be a <c>u32</c>. The oracle is
         /// <see cref="WidestInfiniTable"/>, at every fingerprint the constructor takes. A
-        /// payload claiming that table is read as far as what it costs, which is how a real
-        /// one of that size is refused under the default budget, and one claiming the table a
-        /// bit wider is refused for its shape, since no array holds it. The sweep has to see
+        /// payload claiming that table without its words is read past every check of its shape
+        /// and refused for the words it lacks, before they are priced, under the default budget
+        /// as under any (it was refused for their cost until the price checked them), and
+        /// one claiming the table a bit wider is refused for its shape, since no array holds it.
+        /// The sweep has to see
         /// more than one widest table, and one past 2^31 slots, or it could not tell the limit
         /// from a constant, nor from the old one.
         /// </summary>
@@ -145,15 +147,19 @@ namespace TestProbabilisticDataStructures
 
                 var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<InfiniFilter>(
                     OnePayload(StructureId.InfiniFilter, q, f, includeWords: false, version: 13)));
-                Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
-                    $"a table of 2^{q} slots of {f}-bit fingerprints should be refused for its cost: {atTheLimit.Message}");
+                Assert.IsNotInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
+                    $"a table of 2^{q} slots of {f}-bit fingerprints without its words was refused for its cost: {atTheLimit.Message}");
+                StringAssert.Contains(atTheLimit.Message, "words, beyond what it can hold",
+                    $"a table of 2^{q} slots of {f}-bit fingerprints should be refused for the words it lacks");
 
                 // Full, a count of 2^q entries, which past 2^32 only a u64 holds, is a count the
                 // table can have; one more is not.
                 var full = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<InfiniFilter>(
                     OnePayload(StructureId.InfiniFilter, q, f, includeWords: false, version: 13, entries: 1UL << q)));
-                Assert.IsInstanceOfType<ReadBudgetExceededException>(full.InnerException,
-                    $"a full table of 2^{q} slots of {f}-bit fingerprints should be refused for its cost: {full.Message}");
+                Assert.IsNotInstanceOfType<ReadBudgetExceededException>(full.InnerException,
+                    $"a full table of 2^{q} slots of {f}-bit fingerprints without its words was refused for its cost: {full.Message}");
+                StringAssert.Contains(full.Message, "words, beyond what it can hold",
+                    $"a full table of 2^{q} slots of {f}-bit fingerprints should be refused for the words it lacks");
                 var over = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<InfiniFilter>(
                     OnePayload(StructureId.InfiniFilter, q, f, includeWords: false, version: 13, entries: (1UL << q) + 1)));
                 StringAssert.Contains(over.Message, "entries in", $"2^{q} + 1 entries in 2^{q} slots of {f}-bit fingerprints");
@@ -332,12 +338,14 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The widest a table can be is read as far as the memory it costs: a table of 2^31
-        /// slots is gigabytes, which the default budget refuses for its cost and not its
-        /// size. The same payload one bit wider is refused for its size.
+        /// The widest a table can be is read past every check of its size: a payload claiming
+        /// a table of 2^31 slots without its words is refused under the default budget for the
+        /// words it lacks, not for its size, and before anything is priced for them. It was
+        /// refused for the gigabytes it would cost until the price checked the words were there
+        /// before pricing them. The same payload one bit wider is refused for its size.
         /// </summary>
         [TestMethod]
-        public void TestATableAtTheLimitIsRefusedForWhatItCostsNotForItsSize()
+        public void TestATableAtTheLimitIsRefusedForTheWordsItLacksNotForItsSize()
         {
             // An InfiniFilter's table at version 1, whose slot count was a u32; at version 13
             // its tables are read to their own limits, in
@@ -347,14 +355,18 @@ namespace TestProbabilisticDataStructures
             var infini = OnePayload(StructureId.InfiniFilter, limit, 4, includeWords: false);
             var ex = Assert.ThrowsExactly<InvalidDataException>(
                 () => Persistence.FromByteArray<InfiniFilter>(infini));
-            Assert.IsInstanceOfType<ReadBudgetExceededException>(ex.InnerException,
-                $"a table of 2^{limit} slots should be refused for its cost: {ex.Message}");
+            Assert.IsNotInstanceOfType<ReadBudgetExceededException>(ex.InnerException,
+                $"a table of 2^{limit} slots without its words was refused for its cost: {ex.Message}");
+            StringAssert.Contains(ex.Message, "words, beyond what it can hold",
+                $"a table of 2^{limit} slots should be refused for the words it lacks");
 
             var memento = OnePayload(StructureId.MementoFilter, MementoFilter.MaxQuotientBits, 4, includeWords: false);
             ex = Assert.ThrowsExactly<InvalidDataException>(
                 () => Persistence.FromByteArray<MementoFilter>(memento));
-            Assert.IsInstanceOfType<ReadBudgetExceededException>(ex.InnerException,
-                $"a table of 2^{limit} slots should be refused for its cost: {ex.Message}");
+            Assert.IsNotInstanceOfType<ReadBudgetExceededException>(ex.InnerException,
+                $"a table of 2^{MementoFilter.MaxQuotientBits} slots without its words was refused for its cost: {ex.Message}");
+            StringAssert.Contains(ex.Message, "words, beyond what it can hold",
+                $"a table of 2^{MementoFilter.MaxQuotientBits} slots should be refused for the words it lacks");
         }
 
         /// <summary>
@@ -585,13 +597,14 @@ namespace TestProbabilisticDataStructures
         /// A read is priced before it allocates, by a walk of the payload its reader's checks
         /// are shared with (TESTING.md, "A refusal's number is held to loading"), so the walk
         /// has to take every table the reader does. A version 13 payload claiming each
-        /// fingerprint's widest table, without its words, is walked as far as the words: the
-        /// table is priced at what its reader charges, and the walk stops only for the bytes
-        /// the payload lacks. A walk that stopped at the table's shape would price nothing, and
-        /// the read would go on to allocate unpriced.
+        /// fingerprint's widest table, without its words, is walked past every check of the
+        /// table's shape, and refused for the words the payload lacks, as its reader refuses
+        /// it, with nothing priced for them. A walk that stopped at the table's shape would
+        /// refuse a table its reader reads; one that priced the words before checking them was
+        /// refused for its budget, where the payload is short.
         /// </summary>
         [TestMethod]
-        public void TestAReadIsPricedAcrossATableAsWideAsItsFingerprintAllows()
+        public void TestAPriceTakesATableAsWideAsItsFingerprintAllowsAndPricesNoWordsItLacks()
         {
             for (var f = 2; f <= 32; f++)
             {
@@ -611,12 +624,15 @@ namespace TestProbabilisticDataStructures
                 }
 
                 Assert.IsNotNull(ex, $"2^{q} slots of {f}-bit fingerprints: the walk read words the payload does not have");
-                StringAssert.Contains(ex.Message, "Payload ended", $"2^{q} slots of {f}-bit fingerprints: {ex.Message}");
+                StringAssert.Contains(ex.Message, "words, beyond what it can hold", $"2^{q} slots of {f}-bit fingerprints: {ex.Message}");
 
-                // Read into one array and copied into the table: twice the table, and more.
-                var table = (long)((((BigInteger.One << q) * (f + 4)) >> 6) + 2) * sizeof(ulong);
-                Assert.IsGreaterThan(2 * table, budget.Charged,
-                    $"2^{q} slots of {f}-bit fingerprints: the walk did not price the table");
+                var read = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<InfiniFilter>(envelope));
+                Assert.AreEqual(ex.Message, read.Message, $"2^{q} slots of {f}-bit fingerprints: the read refuses it for another reason");
+
+                // The table is twice its words and more, read into one array and copied into the
+                // table; none of it is priced for a payload that does not hold the words.
+                Assert.AreEqual(0L, budget.Charged,
+                    $"2^{q} slots of {f}-bit fingerprints: the walk priced words the payload does not hold");
             }
         }
 

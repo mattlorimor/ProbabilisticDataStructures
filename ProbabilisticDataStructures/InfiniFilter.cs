@@ -680,6 +680,12 @@ namespace ProbabilisticDataStructures
                 var (count, words) = ReadCounts(ref reader, version);
                 CheckSegment(i, version, quotientBits, fingerprintBits, count, words);
 
+                // The payload has to hold the words before they are charged or allocated, as
+                // the price checks before it prices them, so that a payload without them is
+                // refused for that under any budget, and a table of any width is never
+                // allocated for a few bytes.
+                reader.RequireHolds(words, sizeof(ulong), "words");
+
                 // Read into one array, then copied into the table the segment builds. The
                 // shape's check holds the words to what one array holds.
                 budget.Charge(SegmentCost(words));
@@ -721,6 +727,7 @@ namespace ProbabilisticDataStructures
                 var fingerprintBits = (int)reader.ReadUInt32();
                 var (count, words) = ReadCounts(ref reader, version);
                 CheckSegment(i, version, quotientBits, fingerprintBits, count, words);
+                reader.RequireHolds(words, sizeof(ulong), "words");
 
                 reader.Budget.Price(SegmentCost(words));
                 reader.Skip((long)words * sizeof(ulong));

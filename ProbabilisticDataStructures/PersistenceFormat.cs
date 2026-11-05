@@ -1452,6 +1452,13 @@ namespace ProbabilisticDataStructures
             var bucketSize = reader.ReadByte();
             var arrayCount = ReadArrayCount(ref reader);
 
+            // The shape, and then a length for each array, before the array of them is charged
+            // or allocated, as the price checks both before it prices it, so that the two refuse
+            // a payload with the same message and a payload without its arrays is refused for
+            // that under any budget. Each array's length is checked as it is read.
+            Buckets64.CheckRestorable(count, bucketSize, arrayCount);
+            reader.RequireHolds(arrayCount, sizeof(uint), "arrays of buckets");
+
             reader.Budget.Charge(ArraysCost(arrayCount));
             var arrays = new byte[arrayCount][];
             for (uint i = 0; i < arrayCount; i++)
@@ -1474,6 +1481,7 @@ namespace ProbabilisticDataStructures
             var bucketSize = reader.ReadByte();
             var arrayCount = ReadArrayCount(ref reader);
             Buckets64.CheckRestorable(count, bucketSize, arrayCount);
+            reader.RequireHolds(arrayCount, sizeof(uint), "arrays of buckets");
 
             reader.Budget.Price(ArraysCost(arrayCount));
             for (uint i = 0; i < arrayCount; i++)
