@@ -332,6 +332,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   version 14. A reader refuses a growth factor of 0 at version 14 and below 2 at version 7,
   where a factor of 1 was never written. (#232)
 
+- **The filters on 64-bit tables add and test faster than the 32-bit filters they
+  replaced, at bucket widths that divide a byte.** A table of one array, which every
+  filter below 2^30 buckets has, reads and writes a bucket of 1, 2, 4 or 8 bits as a shift
+  and mask of one byte, and an increment works out where its bucket is once; a bucket of
+  another width crosses bytes and takes the general path. Nothing stored changes, and no
+  filter answers differently. Measured at a million items at 1%, against 006484a, the commit before the
+  widening, as the median nanoseconds of an add and of a test:
+  `CountingBloomFilter` at 4-bit counters 37.1 and 21.1 before, 27.1 and 18.9 now;
+  `DeletableBloomFilter` at `r` 10,000 55.8 and 20.0, now 48.1 and 18.0;
+  `StableBloomFilter` of ten million 8-bit cells 12,353 and 12.2, now 9,300 and 10.8;
+  `PartitionedBloomFilter` 27.6 and 19.1, now 22.6 and 18.5; `ScalableBloomFilter` at a
+  hint of 125,000 32.1 and 57.7, now 27.7 and 56.9; and `BloomFilter64`, whose table it
+  is, 50.1 and 27.5, now 41.7 and 22.7. (#232)
+
 - **`BloomFilter64` is faster, the structures placed with 64-bit values test faster, and
   every bit is where it was.** The 64-bit placement hashes the first value's eight little-endian
   bytes for the second value, and both places that do it wrote those bytes into a
