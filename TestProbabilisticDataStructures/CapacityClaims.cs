@@ -1298,6 +1298,20 @@ namespace TestProbabilisticDataStructures
 
             // ---- InfiniFilter and MementoFilter --------------------------------------------
             new Claim("`F + 4` bits", () => ChargeLine.Known.ContainsKey("InfiniFilter 8")),
+            // The lines are in bytes a word of the table: eight for the payload's copy of the
+            // word, and eight for the table it is read into, which it once was twice (#313).
+            new Claim("A read is charged twice the table: the payload, and the table its words are read straight into", () =>
+                Near(Slope("InfiniFilter 8"), 16, 0.01) && Near(Slope("InfiniFilter 16"), 16, 0.01)),
+            new Claim("So the default budget reads the table of 2^28 slots at 8 bits, and at 16, whose slots are 20 bits to 12, the table " +
+                "of 2^27", () =>
+            {
+                static int SlotBits(int f) => (int)typeof(InfiniSegment)
+                    .GetField("bitsPerSlot", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(new InfiniSegment(2, f))!;
+                static bool ReadsUpTo(int f, int q) =>
+                    ChargeLine.Known[$"InfiniFilter {f}"].Surely((ulong)InfiniSegment.Words(q, f))
+                    && !ChargeLine.Known[$"InfiniFilter {f}"].Possibly((ulong)InfiniSegment.Words(q + 1, f));
+                return SlotBits(16) == 20 && SlotBits(8) == 12 && ReadsUpTo(8, 28) && ReadsUpTo(16, 27);
+            }),
             new Claim("`F + 1 + m + 3` bits", () => ChargeLine.Known.ContainsKey("MementoFilter 256")),
 
             // ---- Inverse and the retaining sketches -----------------------------------------

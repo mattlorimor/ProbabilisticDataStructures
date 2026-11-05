@@ -731,6 +731,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `SublimeCountMinSketch` payload cut short inside its counters is refused for what it
+  lacks before any of them are priced or allocated.** Its price and its reader checked the
+  current rows' counters against the bytes after the sketch's shape, before its records of
+  earlier states were read, and the records share those bytes. So a payload cut inside the
+  current rows, or inside the last record of a sketch with narrow records, such as one whose
+  first record is a counter wide, passed the check: its price priced that state's counters,
+  plain and packed, before finding them missing, and its reader allocated them. Each now
+  checks that the rest of the payload holds a state's counters where the state begins,
+  before it prices, charges or allocates for them, as the readers that no longer allocate
+  for data their payload does not hold, below, do. Such a payload is refused as malformed
+  under any budget its price fits, one of exactly that price included, which a reader that
+  charged first would have overrun. Its price is now held to what the bytes it holds allow,
+  as every structure's is: the sweep's cut of 44,465 bytes priced 226,680 bytes, and prices
+  114,952. Nothing the library wrote is refused.
+
+- **A `MementoFilter` payload claiming a table no array holds is refused for that by name,
+  before anything is priced or allocated for it.** A table is one array of words, and 2^31
+  slots of 64 bits are 2^31 + 2 of them, more than an array holds. The reader and its price
+  checked that a payload held a table's words, which no payload in the ordinary envelope
+  can for this table, but never checked the words against what an array holds. So a
+  payload in the large form that held them, 17 GB, passed every check: under the default
+  budget it was refused for its cost, and under `ReadOptions.Unlimited` its reader went on
+  to allocate the table and threw `OverflowException`. Both now refuse the shape by name, as
+  an `InfiniFilter`'s already did, under no budget and under the default one alike, and the
+  widest table an array holds, 2^31 slots of 63 bits, is still taken and priced for its words.
+  No writer wrote such a table: the constructor and every doubling stop short of it.
+
+- **An `InfiniFilter` read holds each table once, and is charged for it once.** Its reader
+  read a table's words into an array of their own and then copied them into the table the
+  segment builds, so a read held, and was charged for, every table twice: a table of 2^32
+  slots of 8-bit fingerprints is 6.4 GB, and reading it took 6.4 GB more than the filter
+  keeps. The words are now read straight into the table, in pieces through a 16 KiB buffer
+  on the stack, as a count-min sketch's counters are, and the price and the charges are one
+  table each, so they still come to the same sum. Measured in a no-GC region, a filter of
+  2-bit fingerprints whose chain holds 56,320 bytes of tables allocated 169,704 bytes to
+  read and now allocates 113,384, and in the large form, where the payload is not held,
+  113,448 and now 57,128. So the default budget now reads a filter of 8-bit fingerprints
+  up to a table of 2^28 slots, 201,326,592 items, where it stopped at 2^27; at 16 bits it
+  still stops at 2^27. (#313)
+
 - **An `InfiniFilter` or `MementoFilter` payload claiming more expansions than its first
   table can have had is refused.** A first table starts with at least two bits of address
   and gains one with each expansion, and `Reset` builds the table the filter started with

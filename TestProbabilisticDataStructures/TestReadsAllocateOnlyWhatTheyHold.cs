@@ -556,12 +556,6 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         private static readonly Dictionary<StructureId, (long Allowance, string Why)> PriceAllowances = new()
         {
-            // Measured: 4.73 a byte, at the one cut that lands inside its current rows near
-            // their start; its read of the same cuts needs at most 2.17.
-            [StructureId.SublimeCountMinSketch] = (6,
-                "its shape check holds the current rows' counters to the bytes after the shape, which the records " +
-                "before them share, and each block of counters is priced plain and packed before it is skipped, so a cut " +
-                "inside the current rows is priced for counters the records' bytes stood in for"),
         };
 
         /// <summary>The structure's own price, the walk its read is priced by.</summary>
@@ -573,6 +567,148 @@ namespace TestProbabilisticDataStructures
                 [typeof(PayloadReader).MakeByRefType(), typeof(ushort)]);
             Assert.IsNotNull(method, $"{id} has no price to walk");
             return (PayloadPrice)Delegate.CreateDelegate(typeof(PayloadPrice), method);
+        }
+
+        /// <summary>
+        /// The structure's price walked over the first <paramref name="held"/> bytes of the
+        /// payload in <paramref name="envelope"/>: what it priced, the offset it stopped at, and
+        /// why it stopped, or null if it walked to its end.
+        /// </summary>
+        private static (long Priced, long StoppedAt, string Why) WalkPrice(StructureId id, byte[] envelope, int held)
+        {
+            var version = BinaryPrimitives.ReadUInt16LittleEndian(envelope.AsSpan(4));
+            var budget = new ReadBudget(long.MaxValue, id);
+            var reader = new PayloadReader(envelope.AsSpan(PayloadStart, held), budget);
+            try
+            {
+                PriceOf(id)(ref reader, version);
+                return (budget.Charged, held - reader.Remaining, null);
+            }
+            catch (InvalidDataException e)
+            {
+                return (budget.Charged, held - reader.Remaining, e.Message);
+            }
+        }
+
+        /// <summary>
+        /// A Sublime sketch's price and its reader hold each block of counters, a record's or
+        /// the current rows', to the bytes left where the block begins, before they price, charge
+        /// or allocate anything for it. Its shape check holds only the current rows to the bytes
+        /// after the shape, which the records before them share, so a cut that passes it can end
+        /// inside a block: inside the current rows of a sketch with records, and inside the last
+        /// record of one whose first record is a counter wide, the narrowest the constructor builds.
+        /// </summary>
+        /// <remarks>
+        /// Cut a byte short of such a block, the price walks to its counters and prices nothing for
+        /// them: it prices what a cut just before the block's tuning does, and a cut holding the
+        /// block whole prices more, so the check is neither missing nor stricter than the bytes.
+        /// The reader refuses the short cut for the counters it lacks, where it used to allocate the
+        /// block and then find it missing. It does so under a budget of exactly what the cut's price
+        /// came to as well, which a reader that charged for the block before checking it would
+        /// overrun, since a price that stops early is set aside and the read admitted at it. The
+        /// blocks are found by walking the payload as FORMAT.md lays it out, and the walk has to end
+        /// where the payload does.
+        /// </remarks>
+        [TestMethod]
+        public void TestASublimeBlockOfCountersCutShortIsRefusedBeforeItIsPricedOrAllocated()
+        {
+            const StructureId Id = StructureId.SublimeCountMinSketch;
+
+            // One row, one counter wide, at a growth exponent of 0.9, which doubles at 108, 234
+            // and 508 keys (TestOperationSequences): records of one, two and four counters, then
+            // rows of eight.
+            var bytes = Filled(new SublimeCountMinSketch(0.5, 0.9, ValeCounterArray.DefaultCountersPerChunk), (s, k) => s.Add(k), 600)
+                .ToByteArray();
+            Assert.AreEqual(PersistenceFormat.SublimeTuningVersion, BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(4)),
+                "premise: the payload stores each block's tuning, which the walk below steps over");
+
+            // Three f64, then the rows and the width, each a u32: the shape. Then the three u64
+            // totals and the u32 count of records; each record's u32 width, its tuning, two u8,
+            // and its counters, u64 each; and the current rows' tuning and counters.
+            const int Shape = 3 * sizeof(double) + 2 * sizeof(uint);
+            var payload = bytes.AsSpan(PayloadStart, bytes.Length - PayloadStart - ChecksumLength);
+            var depth = BinaryPrimitives.ReadUInt32LittleEndian(payload[(Shape - 8)..]);
+            var width = BinaryPrimitives.ReadUInt32LittleEndian(payload[(Shape - 4)..]);
+            var records = BinaryPrimitives.ReadUInt32LittleEndian(payload[(Shape + 3 * sizeof(ulong))..]);
+            var blocks = new List<(string Name, int Tuning, int End, long Counters)>();
+            var at = Shape + 3 * sizeof(ulong) + sizeof(uint);
+            for (var r = 0; r < records; r++)
+            {
+                var recordWidth = BinaryPrimitives.ReadUInt32LittleEndian(payload[at..]);
+                at += sizeof(uint);
+                blocks.Add(($"record {r}", at, at + 2 + (int)(depth * recordWidth * sizeof(ulong)), depth * recordWidth));
+                at = blocks[^1].End;
+            }
+
+            blocks.Add(("the current rows", at, at + 2 + (int)(depth * width * sizeof(ulong)), depth * width));
+            Assert.AreEqual(payload.Length, blocks[^1].End, "the walk of FORMAT.md's layout does not end where the payload does");
+
+            var reached = new List<string>();
+            var problems = new List<string>();
+            foreach (var block in blocks)
+            {
+                var shortOf = block.End - 1;
+                var (priced, stoppedAt, why) = WalkPrice(Id, bytes, shortOf);
+                if (stoppedAt == Shape)
+                {
+                    // The cut does not hold the current rows' counters after the shape, and the
+                    // shape check refuses it there; that check is tested with it.
+                    continue;
+                }
+
+                reached.Add(block.Name);
+                var before = WalkPrice(Id, bytes, block.Tuning);
+                Assert.AreEqual(block.Tuning, before.StoppedAt,
+                    $"premise: a cut just before {block.Name}'s tuning is past the shape check, and its price stops at the tuning: {before.Why}");
+                var whole = WalkPrice(Id, bytes, block.End);
+
+                if (priced != before.Priced)
+                {
+                    problems.Add($"{block.Name}: a cut a byte short of its {block.Counters} counters priced {priced - before.Priced:N0} bytes " +
+                        $"for them, and stopped: {why}");
+                }
+                else if (why is null || !why.Contains("counters, beyond what it can hold", StringComparison.Ordinal))
+                {
+                    problems.Add($"{block.Name}: a cut a byte short of its {block.Counters} counters stopped its price for another reason: {why}");
+                }
+
+                if (whole.Priced <= before.Priced)
+                {
+                    problems.Add($"{block.Name}: a cut holding its {block.Counters} counters priced none of them, and stopped: {whole.Why}");
+                }
+
+                var cut = Cut(bytes, shortOf);
+                (string Name, ReadOptions Options)[] budgets =
+                [
+                    ("no budget", ReadOptions.Unlimited),
+                    ("a budget of its own price", new ReadOptions(PersistenceFormat.EnvelopeCost((ulong)shortOf) + priced)),
+                ];
+                foreach (var (budget, options) in budgets)
+                {
+                    try
+                    {
+                        Persistence.FromByteArray<SublimeCountMinSketch>(cut, options);
+                        problems.Add($"{block.Name}: a cut a byte short of its counters was read, under {budget}");
+                    }
+                    catch (InvalidDataException refused) when (refused.InnerException is ReadBudgetExceededException)
+                    {
+                        problems.Add($"{block.Name}: a cut a byte short of its counters was refused for {budget}: {refused.Message}");
+                    }
+                    catch (InvalidDataException refused) when (!refused.Message.Contains("counters, beyond what it can hold", StringComparison.Ordinal))
+                    {
+                        problems.Add($"{block.Name}: a cut a byte short of its counters was read into, under {budget}, and refused " +
+                            $"where they ran out: {refused.Message}");
+                    }
+                    catch (InvalidDataException)
+                    {
+                    }
+                }
+            }
+
+            Assert.Contains("the current rows", reached, "no cut a byte short of the current rows got past the shape check");
+            Assert.IsTrue(reached.Any(name => name.StartsWith("record", StringComparison.Ordinal)),
+                $"no cut a byte short of a record got past the shape check, so no record's counters were checked: reached {string.Join(", ", reached)}");
+            Assert.IsEmpty(problems, $"at {problems.Count} checks; " + string.Join(" | ", problems));
         }
 
         /// <summary>

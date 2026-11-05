@@ -608,7 +608,8 @@ gigabytes, and loads only with a budget raised to match. What each read is charg
 | `CountMinSketch`, `CountSketch`, `PrivateCountMinSketch`, `SublimeCountMinSketch` | every row, before it is read; Sublime also its packed rows |
 | `TopK`, `HeavyKeeper` | a heap sized by the elements held, not by `k`; HeavyKeeper also its bucket arrays |
 | `ThetaSketch`, `TupleSketch`, `MinHashSignature`, `Grafite`, `SetSketch`, `InvertibleBloomLookupTable`, `DDSketch`, `HyperLogLogPlus` (sparse) | arrays sized by the values the payload carries |
-| `InfiniFilter`, `MementoFilter` | each table twice: as read, and as the segment built from it |
+| `InfiniFilter` | each table, its words read straight into the segment |
+| `MementoFilter` | each table twice: as read, and as the segment built from it |
 | `DpswSketch` | its checkpoints, rebuilt from the substream size, and a list of segments per substream; each segment's sketch as above |
 
 ## Payloads
@@ -1440,8 +1441,9 @@ read another", so a small count costs as much as one memento and a large one sti
 
 A reader rejects an impossible memento width, a chain of no tables or absurdly many, a
 table with more than 31 bits of address (as `InfiniFilter`'s did before version 13), a table whose slots are wider
-than 64 bits, a table with more entries than slots, and a word count disagreeing with the
-shape claimed. Before it prices or allocates a table, it checks that the rest of the payload
+than 64 bits, a table with more entries than slots, a word count disagreeing with the
+shape claimed, and a table of more words than one array holds, which 2^31 slots of 64 bits
+are. Before it prices or allocates a table, it checks that the rest of the payload
 holds the table's words. It then checks each table's metadata as `QuotientFilter`'s reader does, with
 the count of slots used held to the slots whose metadata has any bit set, and refuses the
 same tables, before any run is decoded, since decoding one walks the metadata. Then it
@@ -1528,9 +1530,11 @@ A reader also rejects a delta outside nought to one, a growth exponent outside t
 range, a size factor that is not positive, a row count of zero or past the deepest sketch
 the constructor builds (see [Sizes](#sizes)), a width that is not a power of two — the
 low bits of a hash pick the counter — current rows with more counters than the rest of
-the payload could hold, which it checks before allocating any, and more than thirty
-records, which would be more counters than a row may hold. Readers before this limit was
-shared refused more than sixty-four rows, which a delta of `1e-28` already needs.
+the payload could hold, which it checks before reading any record, a record or current
+rows with more counters than the bytes left where they begin, which it checks before
+pricing or allocating them, and more than thirty records, which would be more counters
+than a row may hold. Readers before this limit was shared refused more than sixty-four
+rows, which a delta of `1e-28` already needs.
 
 The total count and the count at which the arrays next double are held to the rest. The
 arrays double once the total reaches (width × size factor)^(1 / growth exponent), rounded

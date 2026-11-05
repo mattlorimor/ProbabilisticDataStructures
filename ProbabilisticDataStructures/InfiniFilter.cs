@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 
@@ -686,18 +687,16 @@ namespace ProbabilisticDataStructures
                 // allocated for a few bytes.
                 reader.RequireHolds(words, sizeof(ulong), "words");
 
-                // Read into one array, then copied into the table the segment builds. The
-                // shape's check holds the words to what one array holds.
+                // The segment's table is allocated, and the words, which have no length before
+                // them, are read straight into it. Read into an array of their own and copied
+                // into the table, every table was held, and charged, twice (#313). The shape's
+                // check holds the words to what one array holds.
                 budget.Charge(SegmentCost(words));
-                var data = new ulong[words];
-                for (var w = 0; w < data.Length; w++)
-                {
-                    data[w] = reader.ReadUInt64();
-                }
+                var segment = InfiniSegment.Restore(quotientBits, fingerprintBits, count);
+                ReadWords(ref reader, segment.Data);
 
                 // Every walk of a table rests on its metadata being consistent, and the
                 // expansion on its count being its entries.
-                var segment = InfiniSegment.Restore(quotientBits, fingerprintBits, count, data);
                 segment.CheckMetadata(i);
                 filter.Segments.Add(segment);
             }
@@ -710,9 +709,8 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Prices what <see cref="Read"/> allocates beyond the envelope: each table's
-        /// words, read into one array and copied into the table. See
-        /// <see cref="PayloadPrice"/>.
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: each table, which its
+        /// words are read straight into. See <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
@@ -743,10 +741,33 @@ namespace ProbabilisticDataStructures
                 ? (reader.ReadUInt64(), reader.ReadUInt64())
                 : (reader.ReadUInt32(), reader.ReadUInt32());
 
-        /// <summary>One table's words, read into one array and copied into the table.</summary>
+        /// <summary>One table, its words read straight into it, and the segment that holds it.</summary>
         private static long SegmentCost(ulong words) => ReadBudget.Sum(
-            ReadBudget.Times(2, ReadBudget.ArrayOf(words, sizeof(ulong))),
+            ReadBudget.ArrayOf(words, sizeof(ulong)),
             ReadBudget.SmallObject);
+
+        /// <summary>
+        /// Reads as many words as <paramref name="into"/> holds, which have no length before
+        /// them, straight into it, a piece at a time through a buffer on the stack (#289):
+        /// copied from a held payload, and read from the stream from one that is not. Nothing
+        /// is allocated for them, so a table is not held twice (#313).
+        /// </summary>
+        private static void ReadWords(ref PayloadReader reader, Span<ulong> into)
+        {
+            var left = (long)into.Length * sizeof(ulong);
+            Span<byte> piece = stackalloc byte[PayloadReader.BlockPieceFor(left)];
+            var at = 0;
+            while (left > 0)
+            {
+                var bytes = piece[..(int)Math.Min(left, piece.Length)];
+                reader.ReadBlock(bytes);
+                left -= bytes.Length;
+                for (var i = 0; i < bytes.Length; i += sizeof(ulong))
+                {
+                    into[at++] = BinaryPrimitives.ReadUInt64LittleEndian(bytes[i..]);
+                }
+            }
+        }
 
         private static void CheckChain(uint segmentCount)
         {

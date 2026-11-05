@@ -230,7 +230,7 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `ScalableBloomFilter` | items added, hint 1,000, growth 2, fp 1%, r 0.9 | memory | ≈ 123.41 million | ≈ 990.00 million |
 | `ScalableBloomFilter` | items added, hint 1,000, growth 1, fp 1%, r 0.8 | ≈ 3.16 million | ≈ 2.68 million | as built |
 | `ScalableBloomFilter` | items added, hint 1,000, growth 1, fp 1%, r 0.9 | ≈ 6.68 million | ≈ 3.89 million | as built |
-| `InfiniFilter` | items added, 8-bit fingerprints | 6,442,450,944 | 100,663,296 | 805,306,368 |
+| `InfiniFilter` | items added, 8-bit fingerprints | 6,442,450,944 | 201,326,592 | 805,306,368 |
 | `InfiniFilter` | items added, 16-bit fingerprints | 3,221,225,472 | 100,663,296 | 402,653,184 |
 | `MementoFilter` | items added, one per block, range 256, 8-bit fingerprints | 1,610,612,736 | 100,663,296 | 402,653,184 |
 | `MementoFilter` | items added, one per block, range 65,536, 8-bit fingerprints | 1,610,612,736 | 50,331,648 | 402,653,184 |
