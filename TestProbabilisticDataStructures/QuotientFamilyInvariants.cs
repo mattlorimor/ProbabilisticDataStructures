@@ -440,31 +440,43 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// A cuckoo filter's contents as the multiset the model predicts: each stored
         /// fingerprint with the unordered pair of buckets it may live in, derived from
-        /// the bucket it is in. Entries are unpacked independently of the filter.
+        /// the bucket it is in. Entries are unpacked independently of the filter, and an
+        /// entry the map marks empty has to hold nothing, nor the map anything past the last
+        /// entry: a payload is the whole table (#230), so what an empty entry held would be
+        /// written, and its reader refuses it.
         /// </summary>
-        internal static Dictionary<(ulong Fingerprint, uint Low, uint High), int> CheckCuckooFilter(
+        internal static Dictionary<(ulong Fingerprint, ulong Low, ulong High), int> CheckCuckooFilter(
             CuckooBloomFilter filter, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             var m = filter.M;
             var b = filter.B;
             var bits = (int)filter.FingerprintBits;
-            Assert.AreEqual(0u, m & (m - 1), "cuckoo: bucket count is not a power of two.");
+            Assert.AreEqual(0UL, m & (m - 1), "cuckoo: bucket count is not a power of two.");
 
-            var contents = new Dictionary<(ulong, uint, uint), int>();
-            var held = 0u;
-            for (var i = 0u; i < m; i++)
+            bool Marked(ulong e) => (filter.Occupied[e / 64] >> (int)(e % 64) & 1) != 0;
+
+            var contents = new Dictionary<(ulong, ulong, ulong), int>();
+            var held = 0UL;
+            for (var i = 0UL; i < m; i++)
             {
                 for (var j = 0u; j < b; j++)
                 {
-                    if (filter.Occupied.Get(i * b + j) == 0)
+                    var e = i * b + j;
+                    var f = Slot(filter.Fingerprints, bits, checked((uint)e));
+                    if (!Marked(e))
                     {
+                        Assert.AreEqual(0UL, f, $"cuckoo: entry {e} is empty and holds a fingerprint.");
                         continue;
                     }
                     held++;
-                    var f = Slot(filter.Fingerprints, bits, i * b + j);
                     var key = CuckooPlacement(f, i, m, bits, hash);
                     contents[key] = contents.GetValueOrDefault(key) + 1;
                 }
+            }
+
+            for (var e = m * b; e < (ulong)filter.Occupied.Length * 64; e++)
+            {
+                Assert.IsFalse(Marked(e), $"cuckoo: the map marks place {e}, past the last entry.");
             }
 
             Assert.AreEqual(filter.Count(), held,
@@ -474,29 +486,31 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// The unordered bucket pair of a fingerprint found in a given bucket: the
-        /// partner is the bucket XOR the hash of the fingerprint's bytes.
+        /// partner is the bucket XOR the hash of the fingerprint's bytes, reduced by the
+        /// bucket count, a power of two, in 64 bits.
         /// </summary>
-        internal static (ulong, uint, uint) CuckooPlacement(
-            ulong fingerprint, uint bucket, uint m, int bits, Func<ReadOnlySpan<byte>, ulong> hash)
+        internal static (ulong, ulong, ulong) CuckooPlacement(
+            ulong fingerprint, ulong bucket, ulong m, int bits, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             Span<byte> bytes = stackalloc byte[8];
             BinaryPrimitives.WriteUInt64LittleEndian(bytes, fingerprint);
-            var partner = (bucket ^ (uint)hash(bytes[..((bits + 7) / 8)])) & (m - 1);
+            var partner = (bucket ^ hash(bytes[..((bits + 7) / 8)])) & (m - 1);
             return (fingerprint, Math.Min(bucket, partner), Math.Max(bucket, partner));
         }
 
         /// <summary>
         /// What the model says a key contributes to a cuckoo filter, restated from the
-        /// paper's partial-key scheme as this library documents it.
+        /// paper's partial-key scheme as this library documents it: the first bucket is the
+        /// hash of the key's digest, all 64 bits of it, reduced by the bucket count.
         /// </summary>
-        internal static (ulong, uint, uint) CuckooKey(
-            ReadOnlySpan<byte> key, uint m, int bits, Func<ReadOnlySpan<byte>, ulong> hash)
+        internal static (ulong, ulong, ulong) CuckooKey(
+            ReadOnlySpan<byte> key, ulong m, int bits, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             Span<byte> digest = stackalloc byte[8];
             BinaryPrimitives.WriteUInt64LittleEndian(digest, hash(key));
             var mask = bits >= 64 ? ulong.MaxValue : (1UL << bits) - 1;
             var f = BinaryPrimitives.ReadUInt64LittleEndian(digest) & mask;
-            var i1 = (uint)hash(digest) & (m - 1);
+            var i1 = hash(digest) & (m - 1);
             return CuckooPlacement(f, i1, m, bits, hash);
         }
     }

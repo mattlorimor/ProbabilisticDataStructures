@@ -102,6 +102,74 @@ namespace TestProbabilisticDataStructures
                 BinaryPrimitives.ReadUInt64LittleEndian(payload[(tail + 8)..]));
         }
 
+        /// <summary>
+        /// The version 6 payload of the filter a version 11 one holds, by FORMAT.md's two
+        /// layouts: <c>u32</c> fields, then each entry the map marks, in order of bucket and
+        /// entry, as its bucket, its entry and its fingerprint in the fewest whole bytes, then
+        /// the two generator states. Every save is version 11, so this is how a test reaches
+        /// the version 6 reader's guards with a payload of its choosing.
+        /// </summary>
+        internal static byte[] AsVersionSix(byte[] frame)
+        {
+            var dense = Decode(frame);
+            Assert.IsLessThanOrEqualTo((ulong)uint.MaxValue, dense.M, "version 6 holds a bucket count of 32 bits");
+
+            var held = Enumerable.Range(0, (int)dense.Entries).Select(e => (ulong)e).Where(dense.Holds).ToArray();
+            var width = (int)((dense.F + 7) / 8);
+            var payload = new byte[24 + held.Length * (8 + width) + 16];
+            var span = payload.AsSpan();
+            BinaryPrimitives.WriteUInt32LittleEndian(span, (uint)dense.M);
+            BinaryPrimitives.WriteUInt32LittleEndian(span[4..], dense.B);
+            BinaryPrimitives.WriteUInt32LittleEndian(span[8..], dense.F);
+            BinaryPrimitives.WriteUInt32LittleEndian(span[12..], checked((uint)dense.Count));
+            BinaryPrimitives.WriteUInt32LittleEndian(span[16..], checked((uint)dense.N));
+            BinaryPrimitives.WriteUInt32LittleEndian(span[20..], (uint)held.Length);
+            var at = 24;
+            foreach (var e in held)
+            {
+                BinaryPrimitives.WriteUInt32LittleEndian(span[at..], (uint)(e / dense.B));
+                BinaryPrimitives.WriteUInt32LittleEndian(span[(at + 4)..], (uint)(e % dense.B));
+                var fingerprint = dense.FingerprintOf(e);
+                for (var i = 0; i < width; i++)
+                {
+                    payload[at + 8 + i] = (byte)(fingerprint >> (8 * i));
+                }
+
+                at += 8 + width;
+            }
+
+            BinaryPrimitives.WriteUInt64LittleEndian(span[at..], dense.State);
+            BinaryPrimitives.WriteUInt64LittleEndian(span[(at + 8)..], dense.Original);
+
+            var six = new byte[PersistenceFormat.EnvelopeLength + payload.Length];
+            frame.AsSpan(0, PayloadStart).CopyTo(six);
+            BinaryPrimitives.WriteUInt16LittleEndian(six.AsSpan(4), 6);
+            BinaryPrimitives.WriteUInt32LittleEndian(six.AsSpan(10), (uint)payload.Length);
+            payload.CopyTo(six, PayloadStart);
+            return Resealed(six);
+        }
+
+        /// <summary>
+        /// The two readers agree: every save, rewritten as the version 6 listing of the same
+        /// entries, reads as the filter it is, and saves again as the version 11 payload it
+        /// was rewritten from. Each shape, empty, light and full.
+        /// </summary>
+        [TestMethod]
+        public void TestEverySaveReadsAsItsVersionSixListing()
+        {
+            foreach (var (n, fp) in Tables)
+            {
+                foreach (var items in new[] { 0, 1, (int)n, 4 * (int)n + 64 })
+                {
+                    var bytes = Holding(new CuckooBloomFilter((uint)n, fp, seed: 3), items).ToByteArray();
+                    var six = AsVersionSix(bytes);
+                    Assert.AreEqual(6, BinaryPrimitives.ReadUInt16LittleEndian(six.AsSpan(4)));
+                    CollectionAssert.AreEqual(bytes, Read(six).ToByteArray(),
+                        $"n {n} at {fp}, {items} added: the version 6 listing reads as another filter");
+                }
+            }
+        }
+
         /// <summary>The frame with the checksum worked out again, as a writer would.</summary>
         private static byte[] Resealed(byte[] bytes)
         {
@@ -441,6 +509,49 @@ namespace TestProbabilisticDataStructures
                 Assert.AreEqual(5UL, (ulong)changed.Count(), $"{name}: a held entry's fingerprint was refused");
                 CollectionAssert.AreNotEqual(bytes, changed.ToByteArray(), $"{name}: the edit did not change the filter");
             }
+        }
+
+        /// <summary>
+        /// A word of the map with a single entry empty is checked like any other. The reader
+        /// passes over a word that marks all 64 of its entries held, so the corner is a word
+        /// one bit short of that: a table of 16 buckets, one word of map, is filled until its
+        /// first entry holds a fingerprint, and then each entry that holds one is in turn the
+        /// only one the word marks empty, entry 0 among them. Each is refused, named. The word
+        /// marked wholly held is refused only for its count, so the refusals are the empty
+        /// entry's and not the edit's.
+        /// </summary>
+        [TestMethod]
+        public void TestAMapWordWithOneEntryEmptyIsChecked()
+        {
+            var filter = new CuckooBloomFilter(60, 0.01, seed: 1);
+            Assert.AreEqual(16UL, filter.BucketCount(), "the table is not one word of map");
+
+            Dense dense = null;
+            for (var i = 0; i < 48; i++)
+            {
+                filter.Add(Key($"one-empty-{i}"));
+                dense = Decode(filter.ToByteArray());
+                if (dense.Holds(0) && dense.FingerprintOf(0) != 0)
+                {
+                    break;
+                }
+            }
+
+            Assert.IsTrue(dense.Holds(0) && dense.FingerprintOf(0) != 0, "the first entry never held a fingerprint");
+            var bytes = filter.ToByteArray();
+            var map = WordsAt + 8 * dense.Fingerprints.Length;
+            var edited = 0;
+            for (var k = 0; k < 64; k++)
+            {
+                if (dense.Holds((ulong)k) && dense.FingerprintOf((ulong)k) != 0)
+                {
+                    AssertRefused(PokeUInt64(bytes, map, ulong.MaxValue & ~(1UL << k)), $"entry {k}, which its map marks empty");
+                    edited++;
+                }
+            }
+
+            Assert.AreEqual(dense.Count, (ulong)edited, "an entry held its fingerprint as nought, and was not edited");
+            AssertRefused(PokeUInt64(bytes, map, ulong.MaxValue), "item count is");
         }
 
         /// <summary>

@@ -949,12 +949,19 @@ namespace TestProbabilisticDataStructures
                 $"a {typeof(T).Name} refused for its hash count had already allocated {allocated} bytes");
         }
 
-        /// <summary>A cuckoo filter's table is allocated whole, whatever it holds.</summary>
+        /// <summary>
+        /// A cuckoo filter's table is allocated whole, whatever it holds. A version 6 payload
+        /// lists only the entries held, so a small one can ask for a large table, and the
+        /// budget is what refuses it. From version 11 the table is in the payload, and a small
+        /// one asking for a large table is refused for the bytes it lacks
+        /// (<see cref="TestCuckooDenseLayout"/>).
+        /// </summary>
         [TestMethod]
         public void TestACuckooTableLargerThanTheBudgetIsRefused()
         {
             // u32 bucket count at 0: 2^22 buckets of four 10-bit fingerprints, 20 MiB.
-            var bytes = Filled(new CuckooBloomFilter(1000, 0.01, seed: 1), (f, k) => f.Add(k), 10).ToByteArray();
+            var bytes = TestCuckooDenseLayout.AsVersionSix(
+                Filled(new CuckooBloomFilter(1000, 0.01, seed: 1), (f, k) => f.Add(k), 10).ToByteArray());
             // 2^24 entries of ten bits.
             AssertRefusedBeforeAllocating<CuckooBloomFilter>(Poke(bytes, 0, 1u << 22), (4L << 22) * 10 / 8);
         }
@@ -1389,7 +1396,8 @@ namespace TestProbabilisticDataStructures
         {
             var bytes = Filled(new CuckooBloomFilter(1000, 0.01, seed: 1), (f, k) => f.Add(k), 10).ToByteArray();
 
-            // u32 m at 0, which is 512 unedited; 1,000 buckets is the larger table.
+            // The low half of the u64 m at 0, which is 512 unedited; 1,000 buckets is the
+            // larger table.
             AssertRefusedForItsShape<CuckooBloomFilter>(bytes, Poke(bytes, 0, 1000), "is not a power of two");
         }
 

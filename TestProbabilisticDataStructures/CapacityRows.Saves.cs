@@ -132,22 +132,16 @@ namespace TestProbabilisticDataStructures
             },
             StructureId.CuckooBloomFilter => () =>
             {
+                // The whole table is written, whatever the filter holds (#230): the payloads
+                // of the tables the read was fitted to, empty, are a line in their buckets,
+                // and the largest table under the ceiling gives the most items.
                 var fp = Fp(row.Counts);
-                if (!row.Counts.Contains("holding", StringComparison.Ordinal))
-                {
-                    // Only occupied entries are written.
-                    return AsBuiltIf(PayloadOf(new CuckooBloomFilter(1000, fp, seed: 1)) < 64, "an empty filter writes more than its header");
-                }
-
-                var some = new CuckooBloomFilter(15_000, fp, seed: 1);
-                var more = new CuckooBloomFilter(15_000, fp, seed: 1);
-                for (var i = 0; i < 2000; i++) some.Add(Key(i));
-                for (var i = 0; i < 10_000; i++) more.Add(Key(i));
-                var each = (PayloadOf(more) - PayloadOf(some)) / (double)(more.Count() - some.Count());
-                Assert.AreEqual(Math.Round(each), each, 0.001, "an entry is not a whole number of bytes");
-                var fixedBytes = PayloadOf(more) - (long)(each * more.Count());
-                var most = Largest(1, CuckooLargest(fp), n => fixedBytes + (long)each * (long)n <= MaxPayload);
-                return About(most, most, 2);
+                var label = AfterFp(row.Counts);
+                var payload = PayloadLine($"CuckooBloomFilter {label}", StructureId.CuckooBloomFilter);
+                var buckets = 1UL << Enumerable.Range(1, 40).Last(k => payload.Upper(1UL << k) <= MaxPayload);
+                Facts[$"cuckoo saves buckets {label}"] = buckets;
+                var most = Largest(1, CuckooLargest(fp), n => CuckooBuckets(n) <= buckets);
+                return most == CuckooLargest(fp) ? AsBuilt : Exact(most);
             },
             StructureId.QuotientFilter => () =>
             {

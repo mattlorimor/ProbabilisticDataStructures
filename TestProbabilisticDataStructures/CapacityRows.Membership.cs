@@ -31,9 +31,8 @@ namespace TestProbabilisticDataStructures
             yield return ScalableRow(1000, 0.01, "1%", 0.9, 2);
             yield return ScalableRow(1000, 0.01, "1%", 0.8, 1);
             yield return ScalableRow(1000, 0.01, "1%", 0.9, 1);
-            yield return CuckooRow(0.01, "1%", filled: false);
-            yield return CuckooRow(0.01, "1%", filled: true);
-            yield return CuckooRow(0.001, "0.1%", filled: false);
+            yield return CuckooRow(0.01, "1%");
+            yield return CuckooRow(0.001, "0.1%");
             yield return QuotientRow(0.01, "1%");
             yield return QuotientRow(0.001, "0.1%");
             yield return FuseRow(BinaryFuseWidth.Eight);
@@ -354,9 +353,6 @@ namespace TestProbabilisticDataStructures
 
         // ---- CuckooBloomFilter -------------------------------------------------------------
 
-        private static readonly MethodInfo CuckooPower2 =
-            typeof(CuckooBloomFilter).GetMethod("Power2", BindingFlags.NonPublic | BindingFlags.Static)!;
-
         private static readonly MethodInfo CuckooFingerprintBits =
             typeof(CuckooBloomFilter).GetMethod("CalculateFingerprintBits", BindingFlags.NonPublic | BindingFlags.Static)!;
 
@@ -364,24 +360,33 @@ namespace TestProbabilisticDataStructures
             .GetField("LoadFactor", BindingFlags.NonPublic | BindingFlags.Static)!.GetRawConstantValue()!;
 
         /// <summary>The buckets a filter sized for <paramref name="n"/> items gets: its own sizing.</summary>
-        private static ulong CuckooBuckets(ulong n) =>
-            (uint)CuckooPower2.Invoke(null, new object[] { (uint)Math.Ceiling(n / (4 * CuckooLoadFactor)) })!;
+        internal static ulong CuckooBuckets(ulong n) => CuckooBloomFilter.Size(n, 0.01).Buckets;
 
         internal static uint CuckooBits(double fp) =>
             (uint)CuckooFingerprintBits.Invoke(null, new object[] { 4u, fp })!;
 
+        /// <summary>
+        /// The most items a filter is built for at <paramref name="fp"/>: its sizing is in 64
+        /// bits (#231), so the search runs to half of what a <c>ulong</c> holds, whose buckets
+        /// no table reaches, and the limit is the one array its fingerprints are.
+        /// </summary>
         internal static ulong CuckooLargest(double fp)
         {
-            // Up to 2^31 items, past which the sizing wraps (see the note in the notes).
-            var most = Largest(1, 1UL << 31, n =>
+            var most = Largest(1, ulong.MaxValue / 2, n =>
                 CuckooBloomFilter.GeometryProblem(CuckooBuckets(n), 4, CuckooBits(fp)) is null);
-            Assert.Throws<ArgumentOutOfRangeException>(() => new CuckooBloomFilter((uint)most + 1, fp));
+            Assert.Throws<ArgumentOutOfRangeException>(() => new CuckooBloomFilter(most + 1, fp));
             return most;
         }
 
-        internal static CapacityRow CuckooRow(double fp, string label, bool filled) => Row(
+        /// <summary>
+        /// A filter sized for <c>n</c> at a rate. Its payload is its whole table whatever it
+        /// holds (#230), so what it holds moves neither its read nor its save, and one row
+        /// covers a filter empty and full: the tables are measured empty, and one of them
+        /// filled is held to the same charge.
+        /// </summary>
+        internal static CapacityRow CuckooRow(double fp, string label) => Row(
             StructureId.CuckooBloomFilter,
-            filled ? $"n, fp {label}, holding n items" : $"n, fp {label}, empty",
+            $"n, fp {label}",
             () => Exact(CuckooLargest(fp)),
             () =>
             {
@@ -393,50 +398,20 @@ namespace TestProbabilisticDataStructures
 
                 var line = ChargeLine.Fit($"CuckooBloomFilter {label}", 64,
                     tables.Select(n => ((long)CuckooBuckets(n),
-                        ChargeOf(StructureId.CuckooBloomFilter, new CuckooBloomFilter((uint)n, fp, seed: 1)))).ToArray());
+                        ChargeOf(StructureId.CuckooBloomFilter, new CuckooBloomFilter(n, fp, seed: 1)))).ToArray());
 
-                if (!filled)
-                {
-                    // The table doubles, so the number steps, and the step is far from the
-                    // budget on both sides: the slack cannot move it.
-                    var buckets = 1UL << Enumerable.Range(1, 31).Last(k => line.Surely(1UL << k));
-                    Assert.AreEqual(buckets, 1UL << Enumerable.Range(1, 31).Last(k => line.Possibly(1UL << k)));
-                    return Exact(Largest(1, CuckooLargest(fp), n => CuckooBuckets(n) <= buckets));
-                }
+                var full = new CuckooBloomFilter(tables[0], fp, seed: 1);
+                for (var i = 0; i < (int)tables[0]; i++) full.Add(Key(i));
+                Assert.IsGreaterThan(tables[0] / 2, full.Count(), "the filter filled is not full enough to tell");
+                Assert.AreEqual(line.Points[0].Charge, ChargeOf(StructureId.CuckooBloomFilter, full),
+                    "a full filter is charged other than an empty one of its shape");
 
-                // Every entry the filter holds is written, at the same price whatever
-                // the size of the table: found from two fills of one table.
-                var some = new CuckooBloomFilter((uint)tables[1], fp, seed: 1);
-                var more = new CuckooBloomFilter((uint)tables[1], fp, seed: 1);
-                for (var i = 0; i < 2000; i++) some.Add(Key(i));
-                for (var i = 0; i < 20000; i++) more.Add(Key(i));
-                Assert.AreEqual(20000u, more.Count(), "the fill did not all fit, so it is not a fill");
-                var each = (ChargeOf(StructureId.CuckooBloomFilter, more)
-                    - ChargeOf(StructureId.CuckooBloomFilter, some)) / (double)(more.Count() - some.Count());
-                Assert.AreEqual(Math.Round(each), each, 0.01, "an entry is not a whole number of bytes");
-                Facts[$"cuckoo entry bytes {label}"] = each;
-
-                // A filter sized for n and holding n: the largest n for which the table
-                // it gets and its n entries are charged within the budget. Not monotone in
-                // n, since the table doubles, so each table size is tried.
-                ulong Best(Func<double, double> charged)
-                {
-                    ulong best = 0;
-                    for (var k = 10; k <= 30; k++)
-                    {
-                        var top = Largest(1, CuckooLargest(fp), n => CuckooBuckets(n) <= 1UL << k);
-                        var fit = (ulong)Math.Max(0, (Budget - charged(1UL << k)) / each);
-                        var n = Math.Min(top, fit);
-                        if (n > 0 && CuckooBuckets(n) == 1UL << k && n > best)
-                        {
-                            best = n;
-                        }
-                    }
-
-                    return best;
-                }
-
-                return About(Best(line.Upper), Best(line.Lower));
+                // The table doubles, so the number steps, and the step is far from the
+                // budget on both sides: the slack cannot move it.
+                var buckets = 1UL << Enumerable.Range(1, 40).Last(k => line.Surely(1UL << k));
+                Assert.AreEqual(buckets, 1UL << Enumerable.Range(1, 40).Last(k => line.Possibly(1UL << k)));
+                Facts[$"cuckoo loads buckets {label}"] = buckets;
+                return Exact(Largest(1, CuckooLargest(fp), n => CuckooBuckets(n) <= buckets));
             });
 
         // ---- QuotientFilter ----------------------------------------------------------------
