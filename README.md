@@ -207,11 +207,10 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `CountingBloomFilter` | n, 8-bit counters, fp 1% | 224,044,915 | ≈ 56.01 million | 224,044,910 |
 | `DeletableBloomFilter` | n, r 1,000, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
 | `PartitionedBloomFilter` | n, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
-| `CuckooBloomFilter` | n, fp 1%, empty | 2,040,109,465 | 510,027,366 | as built |
-| `CuckooBloomFilter` | n, fp 1%, holding n items | 2,040,109,465 | ≈ 88.92 million | ≈ 214.75 million |
-| `CuckooBloomFilter` | n, fp 0.1%, empty | 2,040,109,465 | 510,027,366 | as built |
-| `QuotientFilter` | n, fp 1% | 1,610,612,736 | 201,326,592 | 805,306,368 |
-| `QuotientFilter` | n, fp 0.1% | 1,610,612,736 | 100,663,296 | 805,306,368 |
+| `CuckooBloomFilter` | n, fp 1% | 8,160,437,862 | 255,013,683 | 1,020,054,732 |
+| `CuckooBloomFilter` | n, fp 0.1% | 8,160,437,862 | 255,013,683 | 1,020,054,732 |
+| `QuotientFilter` | n, fp 1% | 6,442,450,944 | 201,326,592 | 805,306,368 |
+| `QuotientFilter` | n, fp 0.1% | 6,442,450,944 | 100,663,296 | 805,306,368 |
 | `BinaryFuseFilter` | keys, 8-bit fingerprints | 1,908,641,337 | ≈ 476.99 million | ≈ 1.91 billion |
 | `BinaryFuseFilter` | keys, 16-bit fingerprints | 954,204,160 | ≈ 238.38 million | ≈ 954.20 million |
 | `BloomierFilter` | keys, 8-bit values | 954,204,160 | ≈ 238.38 million | ≈ 954.20 million |
@@ -642,15 +641,17 @@ items in [the table](#how-much-each-one-holds), a few hundred million. Past that
 `BloomFilter64` for the most you expect.
 
 The ceiling of 4.29 billion bits is the 32-bit Bloom filters' own, and the other filters
-have limits of their own, nearer 2^31. `CuckooBloomFilter` numbers its entries with a
-`uint`, so a table holds at most 2^31 of them, and half that at a rate fine enough for
-64-bit fingerprints, where the fingerprints pass what one .NET array holds.
-`QuotientFilter` and `MementoFilter` count their slots with a `uint` and stop at 2^31.
+have limits of their own. `CuckooBloomFilter` numbers its entries in 64 bits
+and keeps its fingerprints in one array of 64-bit words, which at 1% holds 2^33 entries,
+and 2^30 at a rate fine enough for 64-bit fingerprints.
+`QuotientFilter` keeps its table in one array of 64-bit words, which stops it at 2^34
+slots at its coarsest rates and at 2^33 at 1%.
 An `InfiniFilter` table is as wide as one array holds its words: 2^34 slots for the
-narrowest fingerprints, down to 2^31 for the widest. `BinaryFuseFilter` keeps its
-fingerprints in one array, which holds 2,147,483,591 bytes: that is 1,908,641,337 keys at
-8-bit fingerprints and 954,204,160 at 16. How many items each of these is built for is in
-[the table](#how-much-each-one-holds).
+narrowest fingerprints, down to 2^31 for the widest.
+`MementoFilter` counts its slots with a `uint` and stops at 2^31.
+`BinaryFuseFilter` keeps its fingerprints in one array, which holds
+2,147,483,591 bytes: that is 1,908,641,337 keys at 8-bit fingerprints and 954,204,160 at
+16. How many items each of these is built for is in [the table](#how-much-each-one-holds).
 The sketches — `HyperLogLogPlus`, `ThetaSketch`, `CountMinSketch`, `TopK`, `DDSketch` —
 are a few hundred kilobytes at their largest sensible settings however much data passes
 through them. Their counters are already 64-bit.

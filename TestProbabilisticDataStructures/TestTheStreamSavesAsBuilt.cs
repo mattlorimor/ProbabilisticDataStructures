@@ -181,6 +181,18 @@ namespace TestProbabilisticDataStructures
         private static BigInteger TableBytes(BigInteger quotientBits, BigInteger slotBits) =>
             8 * (((BigInteger.One << (int)quotientBits) * slotBits >> 6) + 2);
 
+        /// <summary>
+        /// The widest remainder a quotient table of 2^q slots can have: a split of the hash,
+        /// in a slot of one word, whose table, as FORMAT.md lays it out, is one array of
+        /// <see cref="Array.MaxLength"/> words at most.
+        /// </summary>
+        private static int WidestRemainderInOneArray(int quotientBits)
+        {
+            var r = Math.Min(QuotientFilter.MaxRemainderBits, QuotientFilter.HashBits - quotientBits);
+            while (TableBytes(quotientBits, r + 3) / 8 > Array.MaxLength) r--;
+            return r;
+        }
+
         private static IEnumerable<object> Segments(object filter) => ((IEnumerable)Get(filter, "Segments")).Cast<object>();
 
         private static IEnumerable<object> DpswSketches(object window) =>
@@ -223,14 +235,38 @@ namespace TestProbabilisticDataStructures
                 },
                 s => ((Buckets[])Get(s, "Partitions")).Aggregate(BigInteger.Zero, (sum, p) => sum + BucketBytes(p)));
 
-            yield return new(StructureId.QuotientFilter, "2^31 slots, quotient and remainder all 64 bits of the hash", true,
+            // The table is one array of 64-bit words (#231): at its widest, 2^34 slots, that
+            // holds a remainder of four bits, and at 2^32 slots one of 28, the most words of
+            // any table. A slot count held in 32 bits makes either a table of a few slots.
+            yield return new(StructureId.QuotientFilter, "2^34 slots, at the widest remainder one array of words holds there", true,
                 () => Filled(new QuotientFilter(100, 0.01), (f, k) => f.Add(k)),
                 s => new[]
                 {
                     new Claim(s, "quotientBits", (uint)QuotientFilter.MaxQuotientBits),
-                    new Claim(s, "remainderBits", (uint)(QuotientFilter.HashBits - QuotientFilter.MaxQuotientBits)),
+                    new Claim(s, "remainderBits", (uint)WidestRemainderInOneArray(QuotientFilter.MaxQuotientBits)),
                 },
                 s => TableBytes(Big(s, "quotientBits"), Big(s, "remainderBits") + 3));
+
+            yield return new(StructureId.QuotientFilter, "2^32 slots, at the widest remainder one array of words holds there", true,
+                () => Filled(new QuotientFilter(100, 0.01), (f, k) => f.Add(k)),
+                s => new[]
+                {
+                    new Claim(s, "quotientBits", 32u),
+                    new Claim(s, "remainderBits", (uint)WidestRemainderInOneArray(32)),
+                },
+                s => TableBytes(Big(s, "quotientBits"), Big(s, "remainderBits") + 3));
+
+            // The whole table is the payload (#230), so the fields claim it. Its largest is
+            // 2^31 words, 16 GiB: at 7 bits 2^32 buckets, the most the constructor makes,
+            // whose fingerprints and map come to that, with a bucket count no u32 holds (#231).
+            yield return new(StructureId.CuckooBloomFilter, "2^32 buckets of four 7-bit fingerprints, the most words it writes", true,
+                () => Filled(new CuckooBloomFilter(100, 0.1, seed: 1), (f, k) => f.Add(k)),
+                s => new[] { new Claim(s, "M", 1UL << 32), new Claim(s, "FingerprintBits", 7u) },
+                s =>
+                {
+                    var entries = Big(s, "M") * Big(s, "B");
+                    return 8 * ((entries * Big(s, "FingerprintBits") + 63) / 64 + (entries + 63) / 64);
+                });
 
             yield return new(StructureId.InvertibleBloomLookupTable, "as many cells as an array holds, of one-byte keys", true,
                 () =>
@@ -425,7 +461,6 @@ namespace TestProbabilisticDataStructures
             new(StructureId.BloomierFilter, typeof(BloomierFilter), "cells"),
             new(StructureId.MinHashSignature, typeof(MinHashSignature), "values"),
             new(StructureId.InverseBloomFilter, typeof(InverseBloomFilter), "Array"),
-            new(StructureId.CuckooBloomFilter, typeof(CuckooBloomFilter), "Fingerprints"),
             new(StructureId.VarOpt, typeof(VarOpt), "HeavyItems", "LightItems"),
             new(StructureId.ScalableBloomFilter, typeof(ScalableBloomFilter), "Filters"),
         };

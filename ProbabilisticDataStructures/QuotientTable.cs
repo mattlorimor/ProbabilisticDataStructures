@@ -27,7 +27,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="data">The table's words.</param>
         /// <param name="bitsPerSlot">The width of a slot, metadata included.</param>
-        /// <param name="slots">The slot count, 64-bit since an InfiniFilter's table can pass 2^32 (#231).</param>
+        /// <param name="slots">The slot count.</param>
         /// <param name="count">The entries the payload says the table holds.</param>
         /// <param name="table">The table's place in its chain, or -1 for a filter's only table.</param>
         /// <remarks>
@@ -161,7 +161,7 @@ namespace ProbabilisticDataStructures
         /// </summary>
         private static ulong Metadata(ulong[] data, int bitsPerSlot, ulong slot)
         {
-            var bit = (ulong)slot * (ulong)bitsPerSlot;
+            var bit = slot * (ulong)bitsPerSlot;
             var word = (int)(bit >> 6);
             var offset = (int)(bit & 63);
             return ((data[word] >> offset) | ((data[word + 1] << 1) << (63 - offset))) & 7;

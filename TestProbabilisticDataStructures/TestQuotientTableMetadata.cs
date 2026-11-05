@@ -69,8 +69,10 @@ namespace TestProbabilisticDataStructures
             switch (kind)
             {
                 case "quotient":
+                    // The filter numbers its slots in 64 bits (#231); a table of 16 fits 32.
                     var filter = new QuotientFilter(10, 0.01);
-                    table = new Table(kind, filter.SlotCount, filter.WriteSlot, filter.FindRunStart, () => filter.SlotReads);
+                    table = new Table(kind, (uint)filter.SlotCount, (slot, value) => filter.WriteSlot(slot, value),
+                        quotient => (uint)filter.FindRunStart(quotient), () => filter.SlotReads);
                     break;
                 case "infini":
                     // An Infini table's slots are 64-bit (#231); these sixteen fit the record's.
@@ -609,9 +611,18 @@ namespace TestProbabilisticDataStructures
                 (1 << 4) | 1, (1 << 4) | 2, (3 << 4) | 1, (3 << 4) | 2, (3 << 4) | 3, (4 << 4) | 1, (6 << 4) | 1, (6 << 4) | 2);
 
         /// <summary>The one table of a quotient filter payload: its words follow four u32s.</summary>
-        private static StoredTable QuotientTableOf(byte[] payload) =>
-            new(PayloadStart + 16, PayloadStart + 8, 1u << (int)U32(payload, PayloadStart),
+        /// <summary>
+        /// A quotient filter's one table, as FORMAT.md lays it out: two widths, the count, a
+        /// u64 at version 12 whose low half is where a u32 count was at version 1, and the
+        /// table's run. The tables here are small, so the count's low half is all of it.
+        /// </summary>
+        private static StoredTable QuotientTableOf(byte[] payload)
+        {
+            var wide = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(4)) == 12;
+            Assert.IsTrue(!wide || U32(payload, PayloadStart + 12) == 0, "premise: a count that fits 32 bits.");
+            return new(PayloadStart + (wide ? 20 : 16), PayloadStart + 8, 1u << (int)U32(payload, PayloadStart),
                 (int)U32(payload, PayloadStart + 4) + 3, U32(payload, PayloadStart + 8));
+        }
 
         /// <summary>
         /// The quotient filter lays Figure 2's entries out exactly as the figure does: its
