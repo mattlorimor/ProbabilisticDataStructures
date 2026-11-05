@@ -126,12 +126,6 @@ namespace TestProbabilisticDataStructures
         /// Two a byte for the references, one for the payload and two for the arrays read back is
         /// five; measured, 4.67 for counters and 4.56 for cells, and they are allowed six.
         /// </summary>
-        private const string EmptyArraysPriced =
-            "its price charges each empty array as the empty array its run is read into, 24 bytes for the 4 its length " +
-            "takes, though the read hands back the one empty array the runtime keeps, and 8 for its place in the array " +
-            "of arrays, so a stretch of the empty arrays that are seven in eight of a lowered table of bits is priced at " +
-            "eight bytes a byte, every one of them for bytes the payload holds";
-
         private const string FullArraysCost =
             "its array of arrays is 8 bytes for each array, whose length takes 4 in the payload, so its reader can " +
             "know only that the payload holds half a byte per byte of it, and every array is full, so a cut just long " +
@@ -201,7 +195,7 @@ namespace TestProbabilisticDataStructures
             [StructureId.BloomFilter64] =
             [
                 ("its table is one array, and a table of many is read into an array of arrays sized by their count",
-                    () => ManyArrays("BloomFilter64 in many arrays", () => Filled(new BloomFilter64(150_000, 0.01), (f, k) => f.Add(k), 5000), priceAllowance: 8, pricedBecause: EmptyArraysPriced)),
+                    () => ManyArrays("BloomFilter64 in many arrays", () => Filled(new BloomFilter64(150_000, 0.01), (f, k) => f.Add(k), 5000))),
             ],
             [StructureId.CountingBloomFilter] =
             [
@@ -211,12 +205,12 @@ namespace TestProbabilisticDataStructures
             [StructureId.DeletableBloomFilter] =
             [
                 ("its tables are one array each, and a table of many is read into an array of arrays sized by their count",
-                    () => ManyArrays("DeletableBloomFilter in many arrays", () => Filled(new DeletableBloomFilter(150_000, 1000, 0.01), (f, k) => f.Add(k), 5000), priceAllowance: 8, pricedBecause: EmptyArraysPriced)),
+                    () => ManyArrays("DeletableBloomFilter in many arrays", () => Filled(new DeletableBloomFilter(150_000, 1000, 0.01), (f, k) => f.Add(k), 5000))),
             ],
             [StructureId.PartitionedBloomFilter] =
             [
                 ("its partitions are one array each, and a partition of many is read into an array of arrays sized by their count",
-                    () => ManyArrays("PartitionedBloomFilter in many arrays", () => Filled(new PartitionedBloomFilter(150_000, 0.01), (f, k) => f.Add(k), 5000), priceAllowance: 8, pricedBecause: EmptyArraysPriced)),
+                    () => ManyArrays("PartitionedBloomFilter in many arrays", () => Filled(new PartitionedBloomFilter(150_000, 0.01), (f, k) => f.Add(k), 5000))),
             ],
             [StructureId.StableBloomFilter] =
             [
