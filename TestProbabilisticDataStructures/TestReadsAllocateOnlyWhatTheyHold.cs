@@ -175,6 +175,12 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         private static readonly Dictionary<StructureId, (string Why, Func<Swept> Sample)[]> Further = new()
         {
+            [StructureId.VarOpt] =
+            [
+                ("the budget sample's reservoir is nearly all threshold items, and its regions are as many slots as both " +
+                    "kinds of item it claims together, of which these are mostly items at their own weights",
+                    () => Of("VarOpt, mostly exact items", Heavy())),
+            ],
             [StructureId.HyperLogLogPlus] =
             [
                 ("the budget sample is dense, and a sparse estimator's buffer is sized by the count of hashes it claims",
@@ -208,7 +214,7 @@ namespace TestProbabilisticDataStructures
         };
 
         /// <summary>
-        /// Structures whose budget sample costs more than <see cref="PerByte"/> a byte to refuse
+        /// Structures whose samples cost more than <see cref="PerByte"/> a byte to refuse
         /// when its reader checks all it can before allocating, with what it may cost and why.
         /// </summary>
         private static readonly Dictionary<StructureId, (long Allowance, string Why)> Allowances = new()
@@ -234,6 +240,20 @@ namespace TestProbabilisticDataStructures
                 () => Of("InverseBloomFilter of few slots", Filled(new InverseBloomFilter(512), (f, k) => f.Add(LongKey(k)), 2000)),
                 () => Of("InverseBloomFilter holding nothing", new InverseBloomFilter(20_000))),
         };
+
+        /// <summary>
+        /// A sampling reservoir of 5,000 holding 4,000 items at weights far above its threshold,
+        /// so that most of what its regions hold are items at their own weights.
+        /// </summary>
+        private static VarOpt Heavy()
+        {
+            var sample = new VarOpt(5000, 1);
+            for (var i = 0; i < 4000; i++) sample.Add(Key(i), 1e9);
+            for (var i = 4000; i < 24_000; i++) sample.Add(Key(i), 1.0);
+            Assert.IsGreaterThan(3 * sample.LightCount, sample.HeavyCount, "premise: the reservoir is mostly items at their own weights");
+            Assert.IsGreaterThan(0, sample.LightCount, "premise: the reservoir is sampling");
+            return sample;
+        }
 
         private static byte[] LongKey(byte[] key)
         {
@@ -266,7 +286,12 @@ namespace TestProbabilisticDataStructures
                 foreach (var (why, more) in further)
                 {
                     Assert.IsFalse(string.IsNullOrWhiteSpace(why), $"{id} has a further sample without a reason");
-                    yield return more();
+                    var swept = more();
+                    if (Allowances.TryGetValue(id, out var allowance))
+                    {
+                        swept = swept with { Allowance = allowance.Allowance, CostlyBecause = allowance.Why };
+                    }
+                    yield return swept;
                 }
             }
         }
