@@ -381,20 +381,25 @@ namespace TestProbabilisticDataStructures
         /// done, and copying it can.
         /// </summary>
         /// <remarks>
-        /// The table is 2^20 slots of ten bits, 163,842 words and 1,310,736 bytes. A thousand
-        /// entries list in 16,000, and a quarter of the slots in 4,194,304; a quarter, so that
-        /// the merge leaves the table half full, since each insert into a table near full
-        /// walks a cluster nearly as long as the table. Each self-merge is held to the cheaper
-        /// of the two and a slack, measured in a no-GC region on a filter read from a payload
-        /// each time so that every attempt merges the same table; the dearer is more than
-        /// twice that bound in each, so taking the wrong one fails, either way.
+        /// The table is 2^20 slots of ten bits, 163,842 words and 1,310,736 bytes, which is what
+        /// 81,921 entries list in. A thousand entries list in 16,000, and a quarter of the
+        /// slots in 4,194,304; a quarter, so that the merge leaves the table half full, since
+        /// each insert into a table near full walks a cluster nearly as long as the table.
+        /// Between them, 81,000 and 82,500 straddle where the two cost the same, each far
+        /// enough from it that the wrong way costs more than the slack: they are what tells
+        /// the sixteen bytes an entry the choice is made by from a figure a little off. Each
+        /// self-merge is held to the cheaper of the two and a slack, measured in a no-GC
+        /// region on a filter read from a payload each time so that every attempt merges the
+        /// same table; the dearer is past that bound in each, so taking the wrong one fails,
+        /// either way. Probed: 16,168 bytes for a thousand entries, and 1,310,984 for a
+        /// quarter of the slots, so the slack is some sixteen times what either way adds.
         /// </remarks>
         [TestMethod]
         public void TestAFilterMergedIntoItselfTakesTheCheaperOfItsEntriesAndItsTable()
         {
             const long Slack = 4096;
 
-            foreach (var held in new[] { 1_000, 1 << 18 })
+            foreach (var held in new[] { 1_000, 81_000, 82_500, 1 << 18 })
             {
                 var filter = new QuotientFilter(400_000, 0.01);
                 for (var i = 0; i < held; i++)
@@ -402,13 +407,13 @@ namespace TestProbabilisticDataStructures
                     filter.Add(Key($"item{i}"));
                 }
 
-                Assert.AreEqual(1UL << 20, (ulong)filter.SlotCount, "premise: 2^20 slots");
+                Assert.AreEqual(1UL << 20, filter.SlotCount, "premise: 2^20 slots");
                 Assert.AreEqual(10u, filter.BitsPerSlot(), "premise: slots of ten bits");
                 var tableBytes = 8L * ((((1L << 20) * 10) >> 6) + 2);
                 var listBytes = 16L * held;
                 var cheaper = Math.Min(tableBytes, listBytes);
-                Assert.IsGreaterThan(2 * (cheaper + Slack), Math.Max(tableBytes, listBytes),
-                    $"{held} entries: premise, the dearer way is far past the bound");
+                Assert.IsGreaterThan(cheaper + Slack, Math.Max(tableBytes, listBytes),
+                    $"{held} entries: premise, the dearer way is past the bound");
 
                 var payload = filter.ToByteArray();
                 QuotientFilter merged = null;
