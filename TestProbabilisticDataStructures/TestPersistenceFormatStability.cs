@@ -541,12 +541,12 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestTheVersionAfterTheNewestIsRefused()
         {
-            // Eleven is one past the newest, version 10. It is written out rather than
+            // Twelve is one past the newest, version 11. It is written out rather than
             // computed from the library's ceiling, which is the thing being checked.
             var newest = new (string Fixture, Func<Stream, object> Read)[]
             {
                 ("stablebloomfilter-v8-narrow.bin", s => StableBloomFilter.ReadFrom(s)),
-                ("cuckoobloomfilter-v6.bin", s => CuckooBloomFilter.ReadFrom(s)),
+                ("cuckoobloomfilter-v11.bin", s => CuckooBloomFilter.ReadFrom(s)),
                 ("bloomfilter-v8-narrow.bin", s => BloomFilter.ReadFrom(s)),
                 ("scalablebloomfilter-v7.bin", s => ScalableBloomFilter.ReadFrom(s)),
                 ("countminsketch-v9-narrow.bin", s => CountMinSketch.ReadFrom(s)),
@@ -559,9 +559,9 @@ namespace TestProbabilisticDataStructures
 
             foreach (var (fixture, read) in newest)
             {
-                var bytes = Relabeled(ReadFixture(fixture), 11);
+                var bytes = Relabeled(ReadFixture(fixture), 12);
                 var ex = Assert.ThrowsExactly<InvalidDataException>(() => read(new MemoryStream(bytes)), fixture);
-                StringAssert.Contains(ex.Message, "format version 11", fixture);
+                StringAssert.Contains(ex.Message, "format version 12", fixture);
                 StringAssert.Contains(ex.Message, "written by a later version", fixture);
             }
         }
@@ -626,6 +626,50 @@ namespace TestProbabilisticDataStructures
 
             // ...and a reset takes it back to the seed it was built with, which only the
             // stored original state can say.
+            f.Reset();
+            CollectionAssert.AreEqual(
+                new CuckooBloomFilter(100, 0.01, seed: 7).ToByteArray(), f.ToByteArray(),
+                "Reset did not return the restored filter to its stored original state");
+        }
+
+        /// <summary>
+        /// The version 11 layout, the whole table with its sizes in 64 bits (#230, #231).
+        /// Assembled outside the library from the version 6 fixture by a Python script
+        /// (struct and zlib only), by FORMAT.md's two layouts: each entry the version 6
+        /// payload lists put at its place in the packed words and its bit set in the map,
+        /// the fields widened, version 11, and a CRC-32 by zlib. So reading it holds the
+        /// reader to the layout and not to the writer, and the filter it reads is the
+        /// version 6 one: the same entries, the same generator, and the same filter after
+        /// another 300 adds and after a reset.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredCuckooBloomFilterAtVersionElevenReadsAsTheOneBeforeIt()
+        {
+            var f = CuckooBloomFilter.ReadFrom(Fixture("cuckoobloomfilter-v11.bin"));
+
+            Assert.AreEqual(100UL, f.Capacity());
+            Assert.AreEqual(110UL, f.Count());
+            Assert.AreEqual(32UL, f.BucketCount());
+            Assert.AreEqual(10u, f.FingerprintBits);
+            AssertAllPresent(f.Test);
+
+            // It saves as itself, and the version 6 filter saves as it: every save is the
+            // whole table, whatever version it was read from.
+            var stored = ReadFixture("cuckoobloomfilter-v11.bin");
+            CollectionAssert.AreEqual(stored, f.ToByteArray(), "the version 11 filter does not save as itself");
+            CollectionAssert.AreEqual(stored, CuckooBloomFilter.ReadFrom(Fixture("cuckoobloomfilter-v6.bin")).ToByteArray(),
+                "the version 6 filter does not save as the version 11 payload of the same filter");
+
+            var twin = StoredCuckooTwin();
+            for (var i = 0; i < 300; i++)
+            {
+                f.Add(Key($"more{i}"));
+                twin.Add(Key($"more{i}"));
+            }
+
+            CollectionAssert.AreEqual(twin.ToByteArray(), f.ToByteArray(),
+                "the restored filter did not carry on the sequence it was stored partway through");
+
             f.Reset();
             CollectionAssert.AreEqual(
                 new CuckooBloomFilter(100, 0.01, seed: 7).ToByteArray(), f.ToByteArray(),
@@ -2063,12 +2107,12 @@ namespace TestProbabilisticDataStructures
             // sitting at its start.
             var cuckoo = StoredCuckooTwin();
 
-            // v6, not v3: the payload also records where the generator began, which is
-            // what lets Reset return to it. The v2 and v3 fixtures stay for the
-            // read-side tests -- bytes 6.0.1 and 6.1.0 wrote must load forever -- and
-            // the v6 one was assembled from the v3 one by hand, so this holds the
-            // writer to the layout rather than to itself.
-            AssertBytes("cuckoobloomfilter-v6.bin", cuckoo.ToByteArray());
+            // v11: every save is the whole table, its sizes in 64 bits (#230, #231). The v2,
+            // v3 and v6 fixtures stay for the read-side tests -- bytes 6.0.1 and 6.1.0 wrote
+            // must load forever -- and the v11 one was assembled from the v6 one outside the
+            // library, as the v6 one was from the v3 one, so this holds the writer to the
+            // layout rather than to itself.
+            AssertBytes("cuckoobloomfilter-v11.bin", cuckoo.ToByteArray());
         }
 
         /// <summary>
@@ -2182,6 +2226,7 @@ namespace TestProbabilisticDataStructures
                 ("cuckoobloomfilter-v2.bin", 9, 2),
                 ("cuckoobloomfilter-v3.bin", 9, 3),
                 ("cuckoobloomfilter-v6.bin", 9, 6),
+                ("cuckoobloomfilter-v11.bin", 9, 11),
                 ("binaryfusefilter-v1.bin", 14, 1),
                 ("ddsketch-v1.bin", 15, 1),
                 ("hyperloglogplus-sparse-v1.bin", 16, 1),
@@ -2241,7 +2286,7 @@ namespace TestProbabilisticDataStructures
                 "a small BloomFilter is not writing the version its layout needs");
             Assert.AreEqual(8, new StableBloomFilter(100, 2, 0.01).ToByteArray()[4],
                 "the stable filter is not writing the version its layout needs");
-            Assert.AreEqual(6, new CuckooBloomFilter(100, 0.01).ToByteArray()[4],
+            Assert.AreEqual(11, new CuckooBloomFilter(100, 0.01).ToByteArray()[4],
                 "the cuckoo filter is not writing the version its layout needs");
 
             // The sketches that place by width record their placement from version 9, and

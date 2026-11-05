@@ -207,9 +207,8 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `CountingBloomFilter` | n, 8-bit counters, fp 1% | 224,044,915 | ≈ 56.01 million | 224,044,910 |
 | `DeletableBloomFilter` | n, r 1,000, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
 | `PartitionedBloomFilter` | n, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
-| `CuckooBloomFilter` | n, fp 1%, empty | 2,040,109,465 | 510,027,366 | as built |
-| `CuckooBloomFilter` | n, fp 1%, holding n items | 2,040,109,465 | ≈ 88.92 million | ≈ 214.75 million |
-| `CuckooBloomFilter` | n, fp 0.1%, empty | 2,040,109,465 | 510,027,366 | as built |
+| `CuckooBloomFilter` | n, fp 1% | 8,160,437,862 | 255,013,683 | 1,020,054,732 |
+| `CuckooBloomFilter` | n, fp 0.1% | 8,160,437,862 | 255,013,683 | 1,020,054,732 |
 | `QuotientFilter` | n, fp 1% | 1,610,612,736 | 201,326,592 | 805,306,368 |
 | `QuotientFilter` | n, fp 0.1% | 1,610,612,736 | 100,663,296 | 805,306,368 |
 | `BinaryFuseFilter` | keys, 8-bit fingerprints | 1,908,641,337 | ≈ 476.99 million | ≈ 1.91 billion |
@@ -642,9 +641,9 @@ items in [the table](#how-much-each-one-holds), a few hundred million. Past that
 `BloomFilter64` for the most you expect.
 
 The ceiling of 4.29 billion bits is the 32-bit Bloom filters' own, and the other filters
-have limits of their own, nearer 2^31. `CuckooBloomFilter` numbers its entries with a
-`uint`, so a table holds at most 2^31 of them, and half that at a rate fine enough for
-64-bit fingerprints, where the fingerprints pass what one .NET array holds.
+have limits of their own, nearer 2^31. `CuckooBloomFilter` numbers its entries in 64 bits
+and keeps its fingerprints in one array of 64-bit words, which at 1% holds 2^33 entries,
+and 2^30 at a rate fine enough for 64-bit fingerprints.
 `QuotientFilter`, `InfiniFilter` and `MementoFilter` count their slots with a `uint` and
 stop at 2^31. `BinaryFuseFilter` keeps its fingerprints in one array, which holds
 2,147,483,591 bytes: that is 1,908,641,337 keys at 8-bit fingerprints and 954,204,160 at

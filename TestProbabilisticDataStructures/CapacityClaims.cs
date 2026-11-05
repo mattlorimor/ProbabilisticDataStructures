@@ -960,27 +960,52 @@ namespace TestProbabilisticDataStructures
             new Claim("`n / 3.8` buckets", () => Near(4 * CapacityRows.CuckooLoadFactor, 3.8)),
             new Claim("10 at 1% and 13 at 0.1%", () =>
                 CapacityRows.CuckooBits(0.01) == 10 && CapacityRows.CuckooBits(0.001) == 13),
-            new Claim("A bucket therefore costs 5.5 bytes at 1%", () => Near(Slope("CuckooBloomFilter 1%"), 5.5, 0.01)),
-            new Claim("is written and read at 10 bytes", () => Near(Facts["cuckoo entry bytes 1%"], 10, 0.01)),
-            // A rate of 2^-60 is 63 bits exactly, log2(8 / 2^-60); just below it is 64.
-            new Claim("That holds up to fingerprints of 63 bits, whose 2^31 entries are 2,113,929,217 words, which one array holds", () =>
-                CapacityRows.CuckooBits(Math.ScaleB(1.0, -60)) == 63
-                && WordsFor(CuckooBloomFilter.MaxEntries, 63) == 2_113_929_217
-                && WordsFor(CuckooBloomFilter.MaxEntries, 63) <= (ulong)Array.MaxLength
-                && CuckooBloomFilter.GeometryProblem(CuckooBloomFilter.MaxEntries / 4, 4, 63) is null
-                && CapacityRows.CuckooLargest(Math.ScaleB(1.0, -60)) == CapacityRows.CuckooLargest(0.01)),
+            new Claim("A bucket therefore costs 5.5 bytes at 1%", () =>
+            {
+                var small = new CuckooBloomFilter((ulong)Math.Floor(3.8 * (1 << 14)), 0.01);
+                var large = new CuckooBloomFilter((ulong)Math.Floor(3.8 * (1 << 15)), 0.01);
+                return small.BucketCount() == 1UL << 14 && large.BucketCount() == 1UL << 15
+                    && Near((large.SizeInBytes() - small.SizeInBytes()) / (double)(1 << 14), 5.5);
+            }),
+            new Claim("at 1% and at 0.1% it holds 2^31 buckets, 2^33 entries", () =>
+                CapacityRows.CuckooBuckets(CapacityRows.CuckooLargest(0.01)) == 1UL << 31
+                && CapacityRows.CuckooBuckets(CapacityRows.CuckooLargest(0.001)) == 1UL << 31),
+            new Claim("2^32 buckets at 10 bits are 2,684,354,561 words, more than one array holds", () =>
+                WordsFor(1UL << 34, 10) == 2_684_354_561
+                && WordsFor(1UL << 34, 10) > (ulong)Array.MaxLength
+                && CuckooBloomFilter.GeometryProblem(1UL << 32, 4, 10) is not null),
+            // The coarsest rate the constructor takes is just under one, log2(8 / that) is
+            // just over 3, so no fingerprint is narrower than 4 bits.
+            new Claim("At 50% the fingerprints are 4 bits and the table holds 2^32 buckets, the most the constructor makes", () =>
+                CapacityRows.CuckooBits(0.5) == 4
+                && CapacityRows.CuckooBits(Math.BitDecrement(1.0)) == 4
+                && CapacityRows.CuckooBuckets(CapacityRows.CuckooLargest(0.5)) == 1UL << 32
+                && CuckooBloomFilter.GeometryProblem(1UL << 33, 4, 4) is not null),
             new Claim("A rate below about 8.7e-19 has fingerprints of 64 bits, all the hash supplies", () =>
                 CapacityRows.CuckooBits(Math.ScaleB(1.0, -60) * (1 - 1e-9)) == 64
                 && CapacityRows.CuckooBits(1e-300) == 64
                 && Rounds(Math.ScaleB(1.0, -60) * 1e19, 8.7, 1)),
-            new Claim("and then 2^31 entries are 2,147,483,649 words, more than one array holds, so the table stops at 2^30 entries " +
-                "and `n` at 1,020,054,732, half the table's figure", () =>
-                WordsFor(CuckooBloomFilter.MaxEntries, 64) == 2_147_483_649
-                && WordsFor(CuckooBloomFilter.MaxEntries, 64) > (ulong)Array.MaxLength
-                && CuckooBloomFilter.GeometryProblem(CuckooBloomFilter.MaxEntries / 4, 4, 64) is not null
-                && CuckooBloomFilter.GeometryProblem(CuckooBloomFilter.MaxEntries / 8, 4, 64) is null
-                && CapacityRows.CuckooLargest(1e-19) == 1_020_054_732
-                && CapacityRows.CuckooLargest(0.01) / 2 == 1_020_054_732),
+            new Claim("and then the table stops at 2^30 entries and `n` at 1,020,054,732", () =>
+                CapacityRows.CuckooLargest(1e-19) == 1_020_054_732
+                && CapacityRows.CuckooBuckets(1_020_054_732) == 1UL << 28
+                && CuckooBloomFilter.GeometryProblem(1UL << 29, 4, 64) is not null),
+            new Claim("an empty filter saves as large as a full one, 5.5 bytes a bucket at 1%", () =>
+            {
+                var empty = new CuckooBloomFilter(1000, 0.01, seed: 1);
+                var full = new CuckooBloomFilter(1000, 0.01, seed: 1);
+                for (var i = 0; i < 4000; i++) full.Add(Key(i));
+                return full.Count() > 1900
+                    && empty.ToByteArray().Length == full.ToByteArray().Length
+                    && Near(Slope("payload of CuckooBloomFilter 1%"), 5.5);
+            }),
+            new Claim("so it is charged 11 bytes a bucket at 1%", () => Near(Slope("CuckooBloomFilter 1%"), 11)),
+            new Claim("the default budget reads the table at 2^26 buckets", () =>
+                Facts["cuckoo loads buckets 1%"] == 1UL << 26 && Facts["cuckoo loads buckets 0.1%"] == 1UL << 26),
+            new Claim("The largest that saves as a byte array is 2^28 buckets", () =>
+                Facts["cuckoo saves buckets 1%"] == 1UL << 28 && Facts["cuckoo saves buckets 0.1%"] == 1UL << 28),
+            new Claim("an empty filter of 2^29 buckets at 1% has a payload of 2,952,790,064 bytes", () =>
+                ChargeLine.Known["payload of CuckooBloomFilter 1%"].At(1UL << 29) == 2_952_790_064
+                && 2_952_790_064 > MaxPayload),
 
             // ---- QuotientFilter -----------------------------------------------------------
             new Claim("(7 at 1%, 10 at 0.1%)", () =>

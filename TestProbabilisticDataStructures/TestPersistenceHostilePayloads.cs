@@ -234,6 +234,11 @@ namespace TestProbabilisticDataStructures
         /// not one is refused for that before its size is looked at, and this test would
         /// pass on the wrong guard.
         /// </remarks>
+        /// <remarks>
+        /// At version 11, where the bucket count is a <c>u64</c>, 2^32 buckets of four ten-bit
+        /// entries; and at version 6, where it is a <c>u32</c> and 2^31 ten-bit buckets fit, at
+        /// 64 bits, whose 2^31 entries need more words than one array holds.
+        /// </remarks>
         [TestMethod]
         public void TestAbsurdCuckooBucketCountIsRefused()
         {
@@ -241,22 +246,33 @@ namespace TestProbabilisticDataStructures
 
             AssertRefused(
                 () => Persistence.FromByteArray<CuckooBloomFilter>(
-                    PokeUInt32(bytes, 0, 1u << 30)),
+                    PokeUInt64(bytes, 0, 1UL << 32)),
                 "beyond anything this library builds");
+
+            var six = TestCuckooDenseLayout.AsVersionSix(bytes);
+            AssertRefused(
+                () => Persistence.FromByteArray<CuckooBloomFilter>(
+                    PokeUInt32(PokeUInt32(six, 0, 1u << 29), 8, 64)),
+                "beyond anything this library builds");
+            Assert.AreEqual(16UL, Persistence.FromByteArray<CuckooBloomFilter>(
+                PokeUInt32(PokeUInt32(six, 0, 16), 8, 64)).BucketCount(),
+                "a small table of 64-bit fingerprints was refused too");
         }
 
         /// <summary>
-        /// Where a cuckoo payload's header fields and first entry begin, within the
-        /// payload: the bucket count, entries per bucket, fingerprint width, item count and
-        /// capacity, then the number of occupied entries, then the entries.
+        /// Where a version 6 cuckoo payload's header fields and first entry begin, within
+        /// the payload: the bucket count, entries per bucket, fingerprint width, item count
+        /// and capacity, then the number of occupied entries, then the entries.
         /// </summary>
         private const int CuckooItemCountOffset = 12;
         private const int CuckooOccupiedOffset = 20;
         private const int CuckooFirstEntryOffset = 24;
 
         /// <summary>
-        /// A cuckoo filter of five items in distinct places, written, with the layout
-        /// the tests below edit checked against it so that an edit lands where it says.
+        /// A cuckoo filter of five items in distinct places, written, as the version 6
+        /// listing of its entries, with the layout the tests below edit checked against it
+        /// so that an edit lands where it says. Every save is version 11 (#230), whose guards
+        /// are <see cref="TestCuckooDenseLayout"/>'s; these are the version 6 reader's.
         /// </summary>
         private static byte[] CuckooWithFiveItems()
         {
@@ -265,7 +281,7 @@ namespace TestProbabilisticDataStructures
             {
                 Assert.IsTrue(filter.Add(Key($"c{i}")));
             }
-            var bytes = filter.ToByteArray();
+            var bytes = TestCuckooDenseLayout.AsVersionSix(filter.ToByteArray());
 
             Assert.AreEqual(5u, BinaryPrimitives.ReadUInt32LittleEndian(
                 bytes.AsSpan(PayloadStart + CuckooItemCountOffset)), "the item count is not where this test expects it");
@@ -300,7 +316,10 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestACuckooBucketCountThatIsNotAPowerOfTwoIsRefused()
         {
-            var bytes = new CuckooBloomFilter(1000, 0.01).ToByteArray();
+            // The version 6 listing of an empty filter, whose bucket count can change with
+            // nothing else; at version 11 the table it sizes is in the payload, and
+            // TestCuckooDenseLayout holds that count to a power of two.
+            var bytes = TestCuckooDenseLayout.AsVersionSix(new CuckooBloomFilter(1000, 0.01).ToByteArray());
             Assert.AreEqual(512u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart)),
                 "the bucket count is not where this test expects it");
 
@@ -313,7 +332,7 @@ namespace TestProbabilisticDataStructures
 
             foreach (var buckets in new uint[] { 1, 2, 4, 256, 512, 1024 })
             {
-                Assert.AreEqual(buckets, Persistence.FromByteArray<CuckooBloomFilter>(
+                Assert.AreEqual((ulong)buckets, Persistence.FromByteArray<CuckooBloomFilter>(
                     PokeUInt32(bytes, 0, buckets)).BucketCount());
             }
         }
@@ -321,7 +340,7 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// A cuckoo filter holds one entry for each item, so the count a payload carries is
         /// the number of entries it lists. A count below it lets a removal take the count
-        /// under zero, where it wraps to 4,294,967,295; a count of zero over entries lets
+        /// under zero, where it would wrap to the most a <c>ulong</c> holds; a count of zero over entries lets
         /// the hash be replaced under them, which an occupied filter refuses. A count above
         /// it claims items the filter does not hold. The writer produces neither.
         /// </summary>

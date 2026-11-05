@@ -209,16 +209,20 @@ The table has 2^k buckets of 4 entries, the smallest power of two that holds `n`
 bits: 10 at 1% and 13 at 0.1%. A bucket therefore costs 5.5 bytes at 1% (four 10-bit
 fingerprints and a bit apiece to say which are in use).
 
-Entries are numbered in 32 bits, so a table has at most 2^31 entries, 2^29 buckets, and
-the table gives the `n` that fills it. That holds up to fingerprints of 63 bits, whose 2^31
-entries are 2,113,929,217 words, which one array holds. A rate below about 8.7e-19 has
-fingerprints of 64 bits, all the hash supplies, and then 2^31 entries are 2,147,483,649
-words, more than one array holds, so the table stops at 2^30 entries and `n` at
-1,020,054,732, half the table's figure. A read allocates the whole table whatever it
-holds, so the empty row is the table at 2^27 buckets, the largest that fits a gibibyte;
-and each entry the filter holds is written and read at 10 bytes at 1%, so a filter holding
-as many items as it was sized for loads up to a smaller `n`. That number does not rise
-smoothly with `n`, because the table doubles.
+Entries are numbered in 64 bits, and the fingerprints are one array of 64-bit words, which
+is what stops the table: at 1% and at 0.1% it holds 2^31 buckets, 2^33 entries, and the
+table gives the `n` that fills it, while 2^32 buckets at 10 bits are 2,684,354,561 words,
+more than one array holds. At 50% the fingerprints are 4 bits and the table holds 2^32
+buckets, the most the constructor makes. A rate below about 8.7e-19 has fingerprints of
+64 bits, all the hash supplies, and then the table stops at 2^30 entries and `n` at
+1,020,054,732.
+
+A payload is the whole table, written as it is held whatever the filter holds, so an empty
+filter saves as large as a full one, 5.5 bytes a bucket at 1%. A read holds the payload
+and builds the table from it, so it is charged 11 bytes a bucket at 1%, and the default
+budget reads the table at 2^26 buckets. The largest that saves as a byte array is 2^28
+buckets, and an empty filter of 2^29 buckets at 1% has a payload of 2,952,790,064 bytes,
+which only `WriteTo(Stream)` saves, in the large form.
 
 ### `QuotientFilter`
 

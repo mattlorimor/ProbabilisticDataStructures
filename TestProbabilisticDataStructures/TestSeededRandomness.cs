@@ -629,21 +629,31 @@ namespace TestProbabilisticDataStructures
         /// entries. Read from the frame rather than from the filter, as the stored
         /// bytes would be.
         /// </summary>
-        private static uint[] CuckooHeader(byte[] frame) =>
-            Enumerable.Range(0, 6)
-                .Select(i => BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(14 + 4 * i)))
-                .ToArray();
+        private static ulong[] CuckooHeader(byte[] frame) => new ulong[]
+        {
+            BinaryPrimitives.ReadUInt64LittleEndian(frame.AsSpan(14)),
+            BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(22)),
+            BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(26)),
+            BinaryPrimitives.ReadUInt64LittleEndian(frame.AsSpan(30)),
+            BinaryPrimitives.ReadUInt64LittleEndian(frame.AsSpan(38)),
+        };
 
         /// <summary>
         /// Everything about a cuckoo filter's shape is unchanged by a reset, and the
-        /// count and the occupied entries are gone.
+        /// count and the occupied entries are gone. Every save is version 11: u64 m, u32 b,
+        /// u32 f, u64 count and u64 n, then the table, whose every word is nought once the
+        /// filter holds nothing, then the two generator states.
         /// </summary>
         private static void AssertEmptiedKeepingShape(byte[] before, byte[] after, string fixture)
         {
+            Assert.AreEqual(11, after[4] | (after[5] << 8), $"{fixture}: the reset filter was not written at version 11");
             var was = CuckooHeader(before);
             CollectionAssert.AreEqual(
-                new[] { was[0], was[1], was[2], 0u, was[4], 0u }, CuckooHeader(after),
+                new[] { was[0], was[1], was[2], 0UL, was[4] }, CuckooHeader(after),
                 $"{fixture}: Reset must empty the filter and leave its shape alone");
+            Assert.HasCount(before.Length, after, $"{fixture}: Reset changed the table's size");
+            Assert.IsLessThan(0, after.AsSpan(14 + 32, after.Length - 14 - 32 - 16 - 4).IndexOfAnyExcept((byte)0),
+                $"{fixture}: Reset left something in the table");
         }
 
         /// <summary>
@@ -658,7 +668,7 @@ namespace TestProbabilisticDataStructures
         public void TestACuckooPayloadEndsWithWhereTheGeneratorIsAndWhereItBegan(int seed, ulong began)
         {
             var fresh = NewCuckoo(seed);
-            Assert.AreEqual(6, fresh[4] | (fresh[5] << 8), "a cuckoo filter should write version 6");
+            Assert.AreEqual(11, fresh[4] | (fresh[5] << 8), "a cuckoo filter should write version 11");
             Assert.AreEqual((began, began), GeneratorPositions(fresh));
 
             var used = FilledCuckoo(seed).ToByteArray();
