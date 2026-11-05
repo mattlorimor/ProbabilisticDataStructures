@@ -473,9 +473,9 @@ namespace TestProbabilisticDataStructures
                 var m = filter.M;
                 var bits = (int)filter.FingerprintBits;
                 var capacity = (int)(filter.M * filter.B);
-                (ulong, uint, uint) Of(string s) => QuotientFamilyInvariants.CuckooKey(K(s), m, bits, hash);
+                (ulong, ulong, ulong) Of(string s) => QuotientFamilyInvariants.CuckooKey(K(s), m, bits, hash);
 
-                var model = new Dictionary<(ulong, uint, uint), int>();
+                var model = new Dictionary<(ulong, ulong, ulong), int>();
                 var live = new List<string>();
                 var schedule = new Random(seed);
                 var next = 0;
@@ -489,7 +489,7 @@ namespace TestProbabilisticDataStructures
                     model[Of(s)] = model.GetValueOrDefault(Of(s)) + 1;
                     live.Add(s);
                 }
-                void ModelRemove((ulong, uint, uint) placement)
+                void ModelRemove((ulong, ulong, ulong) placement)
                 {
                     if (--model[placement] == 0)
                     {
@@ -538,7 +538,7 @@ namespace TestProbabilisticDataStructures
                             ? live[schedule.Next(live.Count)]
                             : Fresh();
                         var fingerprints = (ulong[])filter.Fingerprints.Clone();
-                        var occupancy = filter.Occupied.RawData.ToArray();
+                        var occupancy = (ulong[])filter.Occupied.Clone();
                         var kicksBefore = filter.KickSteps;
                         var member = false;
                         bool accepted;
@@ -559,7 +559,7 @@ namespace TestProbabilisticDataStructures
                         }
 
                         var unchanged = fingerprints.AsSpan().SequenceEqual(filter.Fingerprints)
-                            && occupancy.AsSpan().SequenceEqual(filter.Occupied.RawData);
+                            && occupancy.AsSpan().SequenceEqual(filter.Occupied);
                         if (member)
                         {
                             Assert.IsFalse(accepted, $"{what}: a member was added again.");
@@ -675,7 +675,7 @@ namespace TestProbabilisticDataStructures
                 if (op < alphabet)
                 {
                     var fingerprints = (ulong[])filter.Fingerprints.Clone();
-                    var occupancy = filter.Occupied.RawData.ToArray();
+                    var occupancy = (ulong[])filter.Occupied.Clone();
                     var kicksBefore = filter.KickSteps;
                     if (filter.Add(Id(op)))
                     {
@@ -688,7 +688,7 @@ namespace TestProbabilisticDataStructures
                     else
                     {
                         Assert.IsTrue(fingerprints.AsSpan().SequenceEqual(filter.Fingerprints)
-                            && occupancy.AsSpan().SequenceEqual(filter.Occupied.RawData),
+                            && occupancy.AsSpan().SequenceEqual(filter.Occupied),
                             $"{what}: a refused insert changed the table.");
                         refused++;
                     }
@@ -716,7 +716,7 @@ namespace TestProbabilisticDataStructures
                 }
 
                 var contents = QuotientFamilyInvariants.CheckCuckooFilter(filter, hash);
-                var expected = new Dictionary<(ulong, uint, uint), int>();
+                var expected = new Dictionary<(ulong, ulong, ulong), int>();
                 for (var id = 0; id < alphabet; id++)
                 {
                     if (model[id] > 0)

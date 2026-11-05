@@ -531,7 +531,7 @@ namespace TestProbabilisticDataStructures
 
             // Same dimensions, so the same fixed storage, however much is in it.
             Assert.AreEqual(empty.Fingerprints.Length, loaded.Fingerprints.Length);
-            Assert.AreEqual(empty.Occupied.count, loaded.Occupied.count);
+            Assert.AreEqual(empty.Occupied.Length, loaded.Occupied.Length);
 
             // And adding allocates nothing that the filter keeps. Counted in a no-GC region,
             // with keys of their own made for each attempt at the measurement, since one can

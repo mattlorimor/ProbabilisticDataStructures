@@ -298,6 +298,14 @@ namespace ProbabilisticDataStructures
         internal const ushort SublimeTuningVersion = 10;
 
         /// <summary>
+        /// The version at which <see cref="CuckooBloomFilter"/> writes its whole table, word by
+        /// word, rather than a list of its occupied entries (#230), and its bucket count, item
+        /// count and capacity as <c>u64</c>s (#231). Every save is written at it, whatever the
+        /// filter holds, so a table that holds little costs the whole of it.
+        /// </summary>
+        internal const ushort CuckooDenseVersion = 11;
+
+        /// <summary>
         /// The version at which <see cref="QuotientFilter"/> counts its entries in a
         /// <c>u64</c>, and its quotient bits name a table of 2^q slots up to 34, where they
         /// stopped at 31 when the slot count was a <c>u32</c> (#231). The layout is version
@@ -340,7 +348,7 @@ namespace ProbabilisticDataStructures
             [StructureId.InverseBloomFilter] = [DefaultVersion, ColumnPlacementVersion],
             [StructureId.CuckooBloomFilter] =
                 [DefaultVersion, RandomStateVersion, CuckooPackedVersion,
-                 CuckooOriginalStateVersion],
+                 CuckooOriginalStateVersion, CuckooDenseVersion],
             [StructureId.CountMinSketch] = [DefaultVersion, ColumnPlacementVersion],
             [StructureId.HyperLogLog] = [DefaultVersion],
             [StructureId.TopK] = [DefaultVersion],

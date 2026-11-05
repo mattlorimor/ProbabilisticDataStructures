@@ -108,6 +108,17 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Empties the table where it is, leaving it as a new one of its shape would be: no
+        /// entries, every word nought, and no slot read counted. It allocates nothing.
+        /// </summary>
+        internal void Clear()
+        {
+            Array.Clear(this.Data);
+            this.Count = 0;
+            this.SlotReads = 0;
+        }
+
+        /// <summary>
         /// How full the segment is, between zero and one.
         /// </summary>
         internal double Load => (double)this.Count / this.Slots;

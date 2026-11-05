@@ -1,6 +1,7 @@
 ﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Text;
 
@@ -10,9 +11,9 @@ namespace TestProbabilisticDataStructures
     public class TestCuckooBloomFilter
     {
         /// <summary>
-        /// States whose payload <see cref="TestPayloadCount"/> holds the count to. Only the
-        /// occupied entries are written, each as wide as the fingerprint needs, so empty and
-        /// filled, at a narrow fingerprint and a wide one.
+        /// States whose payload <see cref="TestPayloadCount"/> holds the count to. The whole
+        /// table is written whatever it holds (#230), so its length is the fingerprint's
+        /// width that moves: empty and filled, at a narrow fingerprint and a wide one.
         /// </summary>
         internal static IEnumerable<PayloadState> PayloadStates()
         {
@@ -20,12 +21,12 @@ namespace TestProbabilisticDataStructures
             {
                 yield return PayloadState.Of(
                     $"at {rate}, empty", new CuckooBloomFilter(100, rate, null, 7),
-                    PersistenceFormat.CuckooOriginalStateVersion);
+                    PersistenceFormat.CuckooDenseVersion);
 
                 var filled = new CuckooBloomFilter(100, rate, null, 7);
                 for (var i = 0; i < 60; i++) filled.Add(Encoding.ASCII.GetBytes($"w{i}"));
                 yield return PayloadState.Of(
-                    $"at {rate}, filled", filled, PersistenceFormat.CuckooOriginalStateVersion);
+                    $"at {rate}, filled", filled, PersistenceFormat.CuckooDenseVersion);
             }
         }
 
@@ -204,20 +205,13 @@ namespace TestProbabilisticDataStructures
             var resetFilter = f.Reset();
             Assert.AreSame(f, resetFilter);
 
-            // Occupancy is what says an entry holds something; the fingerprint bytes
-            // behind a cleared entry are unreachable and are not cleared.
-            for (uint i = 0; i < f.BucketCount(); i++)
-            {
-                for (uint j = 0; j < f.B; j++)
-                {
-                    if (f.Occupied.Get(i * f.B + j) != 0)
-                    {
-                        Assert.Fail($"Expected all entries to be cleared; bucket {i} entry {j} is not");
-                    }
-                }
-            }
+            // Occupancy is what says an entry holds something, and the fingerprints behind
+            // the cleared entries are cleared too: a payload is the whole table (#230), and a
+            // reset filter writes what a new one does.
+            Assert.IsTrue(f.Occupied.All(word => word == 0), "Expected every entry to be marked empty");
+            Assert.IsTrue(f.Fingerprints.All(word => word == 0), "Expected every fingerprint to be cleared");
 
-            Assert.AreEqual(0u, f.Count());
+            Assert.AreEqual(0UL, f.Count());
         }
 
         [TestMethod]

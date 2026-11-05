@@ -336,44 +336,53 @@ namespace TestProbabilisticDataStructures
         private const string PastTheLimit = "beyond anything this library builds";
 
         /// <summary>
-        /// Structural for the table itself: the largest the filter allows is 2^31
-        /// entries, gigabytes of fingerprints, and a filter read back allocates its
-        /// table whole whether or not anything is in it -- the payload holds only the
-        /// occupied entries, so there is nothing to size by. The constructor and the
-        /// reader both ask <see cref="CuckooBloomFilter.GeometryProblem"/>, so the limit
-        /// is checked there at both of its edges, and each side is shown refusing one
-        /// table past it.
+        /// Structural for the table itself: the largest the filter allows is gigabytes of
+        /// fingerprints, more than the suite can build. The constructor and the reader both
+        /// ask <see cref="CuckooBloomFilter.GeometryProblem"/>, so the limit is checked there
+        /// at both of its edges, and each side is shown refusing one table past it. The
+        /// limit is the one array the fingerprints are, with a spare word; entries are
+        /// numbered in 64 bits (#231), and were in 32, which stopped a table at 2^31 of them.
         /// </summary>
         [TestMethod]
         public void TestCuckooFilterLimitIsShared()
         {
-            // The largest power of two a uint numbers, since the constructor's tables
-            // are power-of-two bucket counts of four entries each.
-            Assert.IsTrue(BitOperations.IsPow2(CuckooBloomFilter.MaxEntries));
-            Assert.IsLessThanOrEqualTo((ulong)uint.MaxValue, CuckooBloomFilter.MaxEntries);
-            Assert.IsGreaterThan((ulong)uint.MaxValue, 2 * CuckooBloomFilter.MaxEntries);
+            // The limit's two edges, at one bit an entry, the most entries any width packs:
+            // (Array.MaxLength - 1) * 64 entries fill the words the array holds less the
+            // spare, and one more needs another.
+            var most = ((ulong)Array.MaxLength - 1) * 64;
+            Assert.IsNull(CuckooBloomFilter.GeometryProblem(most, 1, 1));
+            Assert.IsNotNull(CuckooBloomFilter.GeometryProblem(most + 1, 1, 1));
 
-            // Both of the limit's edges. In entries: 2^29 buckets of four is exactly
-            // the limit, and 2^30 is past it. In words: 2^31 entries at 63 bits fit one
-            // array of 64-bit words, and at 64 bits they need one more than it holds.
-            Assert.IsNull(CuckooBloomFilter.GeometryProblem(1UL << 29, 4, 63));
-            Assert.IsNotNull(CuckooBloomFilter.GeometryProblem(1UL << 30, 4, 1));
-            Assert.IsNull(CuckooBloomFilter.GeometryProblem(CuckooBloomFilter.MaxEntries, 1, 1));
-            Assert.IsNotNull(CuckooBloomFilter.GeometryProblem(CuckooBloomFilter.MaxEntries + 1, 1, 1));
+            // In the constructor's tables, a power of two buckets of four entries: at ten
+            // bits 2^31 buckets fit, past the 2^29 entries numbered with a uint stopped at,
+            // and 2^32 do not; at 64 bits 2^28 do, and 2^29 do not.
+            Assert.IsNull(CuckooBloomFilter.GeometryProblem(1UL << 31, 4, 10));
+            Assert.IsNotNull(CuckooBloomFilter.GeometryProblem(1UL << 32, 4, 10));
+            Assert.IsNull(CuckooBloomFilter.GeometryProblem(1UL << 28, 4, 64));
             Assert.IsNotNull(CuckooBloomFilter.GeometryProblem(1UL << 29, 4, 64));
 
-            // The constructor, past each. 2^29 * 3.8 items is the most whose buckets
-            // round up to 2^29; one more rounds to 2^30, which master built with an
-            // occupancy map of no entries at all that failed on its first add. And at
-            // 1e-19 the fingerprints are 64 bits, too many words at 2^29 buckets.
-            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
-                () => new CuckooBloomFilter(2_040_109_466, 0.5));
-            Assert.ThrowsExactly<ArgumentOutOfRangeException>(
-                () => new CuckooBloomFilter(2_000_000_000, 1e-19));
+            // Where 64-bit arithmetic wraps: 2^62 buckets of four are 2^64 entries, which a
+            // ulong holds as none, and the largest fields there are multiply past it.
+            Assert.IsNotNull(CuckooBloomFilter.GeometryProblem(1UL << 62, 4, 1));
+            Assert.IsNotNull(CuckooBloomFilter.GeometryProblem(ulong.MaxValue, uint.MaxValue, 64));
 
-            // The reader, one table past the limit: u32 bucket count at 0, four entries.
+            // The constructor, past each, sized without building anything: the most items
+            // whose buckets round up to the largest table at the rate, and one more, whose
+            // buckets round up to twice that and are refused before anything is allocated.
+            // At 50% the fingerprints are four bits and 2^32 buckets fit, the constructor's
+            // largest; at 1% ten bits and 2^31; at 1e-19 64 bits and 2^28.
+            foreach (var (fp, buckets) in new[] { (0.5, 1UL << 32), (0.01, 1UL << 31), (1e-19, 1UL << 28) })
+            {
+                var largest = CapacityRows.CuckooLargest(fp);
+                Assert.AreEqual(buckets, CuckooBloomFilter.Size(largest, fp).Buckets, $"{fp}");
+                Assert.AreEqual(2 * buckets, CuckooBloomFilter.Size(largest + 1, fp).Buckets, $"{fp}");
+                Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new CuckooBloomFilter(largest + 1, fp), $"{fp}");
+            }
+
+            // The reader, one table past the limit: the u64 bucket count at 0, its low half
+            // and its high half, at 2^32 buckets of four ten-bit entries.
             var bytes = new CuckooBloomFilter(1000, 0.01).ToByteArray();
-            AssertRefused<CuckooBloomFilter>(PokeUInt32(bytes, 0, 1u << 30), PastTheLimit);
+            AssertRefused<CuckooBloomFilter>(PokeUInt32(PokeUInt32(bytes, 0, 0), 4, 1), PastTheLimit);
         }
 
         /// <summary>
@@ -1694,7 +1703,8 @@ namespace TestProbabilisticDataStructures
         {
             var expected = new Dictionary<(string Structure, string Size), ulong>
             {
-                [("CuckooBloomFilter", "entries, `m` × `b`")] = CuckooBloomFilter.MaxEntries,
+                [("CuckooBloomFilter", "words of fingerprints, `m` × `b` × `f` bits, rounded up, and one")] =
+                    (ulong)Array.MaxLength,
                 [("CountingBloomFilter", "bytes of counters, `m` × `b` bits, rounded up")] =
                     (ulong)Buckets.MaxDataBytes,
                 [("StableBloomFilter", "bytes of cells, `m` × `d` bits, rounded up")] =

@@ -433,16 +433,61 @@ namespace ProbabilisticDataStructures
         /// </summary>
         public InfiniFilter Reset()
         {
+            // The filter goes back to the one table it was built with: the first table's
+            // fingerprint, and its address less a bit for each doubling.
             var first = this.Segments[0];
-            var quotientBits = first.QuotientBits - (int)this.Expansions;
-            this.Segments = new List<InfiniSegment>
+            var quotientBits = Math.Max(2, first.QuotientBits - (int)this.Expansions);
+            var fingerprintBits = first.FingerprintBits;
+
+            // A table already that shape is cleared where it is and the others dropped, so the
+            // reset needs no memory and cannot fail for want of it. A filter that has not grown
+            // always holds one, its only table, and one that has grown can, in its chain (#298).
+            // Otherwise the table is built before anything is cleared or dropped, so that a reset
+            // that cannot get the memory leaves the filter as it was (#242), at the cost of
+            // holding it beside the tables it replaces.
+            var kept = TableShaped(quotientBits, fingerprintBits);
+            if (kept == null)
             {
-                new InfiniSegment(Math.Max(2, quotientBits), first.FingerprintBits),
-            };
+                this.BeforeAllocating?.Invoke();
+                kept = new InfiniSegment(quotientBits, fingerprintBits);
+            }
+            else
+            {
+                kept.Clear();
+            }
+
+            this.Segments[0] = kept;
+            this.Segments.RemoveRange(1, this.Segments.Count - 1);
             this.Added = 0;
             this.Expansions = 0;
             return this;
         }
+
+        /// <summary>
+        /// The first table in the chain of this shape, or null if none is.
+        /// </summary>
+        private InfiniSegment? TableShaped(int quotientBits, int fingerprintBits)
+        {
+            foreach (var table in this.Segments)
+            {
+                // Both widths are compared because a payload's tables are each checked on
+                // their own, so a filter read back can hold tables of other fingerprints.
+                if (table.QuotientBits == quotientBits && table.FingerprintBits == fingerprintBits)
+                {
+                    return table;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Called before the table a reset builds when it holds none of the shape it returns
+        /// to, which is all a reset allocates. It is null; a test sets it to throw
+        /// an <see cref="OutOfMemoryException"/> there, to reach a reset that cannot get its
+        /// memory without a heap limit. Nothing else the filter allocates passes through it.
+        /// </summary>
+        internal Action? BeforeAllocating { get; set; }
 
         /// <summary>
         /// Sets the hash function, which is refused once anything has been added.
