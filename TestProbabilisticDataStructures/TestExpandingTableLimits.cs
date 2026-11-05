@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -367,6 +368,177 @@ namespace TestProbabilisticDataStructures
                 $"a table of 2^{MementoFilter.MaxQuotientBits} slots without its words was refused for its cost: {ex.Message}");
             StringAssert.Contains(ex.Message, "words, beyond what it can hold",
                 $"a table of 2^{MementoFilter.MaxQuotientBits} slots should be refused for the words it lacks");
+        }
+
+        /// <summary>
+        /// A large-form header, and the fields of a <see cref="MementoFilter"/> payload of one
+        /// table, whose length claims the table's words after the fields. The words are not given:
+        /// a stream of <c>Length</c> bytes that holds <c>Head</c> reads as the whole payload, its
+        /// words zeros that are never held.
+        /// </summary>
+        private static (byte[] Head, long Length, int Fields, long Words) MementoClaimedInTheLargeForm(
+            int quotientBits, int fingerprintBits, int mementoBits)
+        {
+            var ordinary = OnePayload(StructureId.MementoFilter, quotientBits, fingerprintBits, includeWords: false, mementoBits: mementoBits);
+            var fields = ordinary[PayloadStart..^4];
+            long words = BinaryPrimitives.ReadUInt32LittleEndian(fields.AsSpan(fields.Length - sizeof(uint)));
+            var claimed = fields.Length + words * sizeof(ulong);
+            var envelope = LargeForm.Enveloped(ordinary, fields);
+            BinaryPrimitives.WriteUInt64LittleEndian(envelope.AsSpan(10), (ulong)claimed);
+            return (LargeForm.Reseal(envelope)[..^4], PersistenceFormat.LargeEnvelopeLength + claimed, fields.Length, words);
+        }
+
+        /// <summary>
+        /// A <see cref="MementoFilter"/>'s table is one array of words, so a table whose words no
+        /// array holds is refused for that by name, by its read and its price alike, before
+        /// anything is priced or allocated for it. One shape has such a table: 2^31 slots of 64
+        /// bits, 2^31 + 2 words. No payload in the ordinary envelope holds that many, and the check
+        /// that a payload holds a table's words refused one for them; but a payload in the large
+        /// form of 17 GB holds them, nothing refused it, and its reader went on to allocate them.
+        /// </summary>
+        /// <remarks>
+        /// Each claim is a large-form header naming the whole payload, on a stream that claims
+        /// every byte of it and holds only the fields, so no word is built (#226's
+        /// <see cref="TestLargeEnvelopeReading.Sparse"/>). It is read under no budget and under the
+        /// default one, and its price walked alone. And the other direction, where the limit
+        /// falls: the widest table an array does hold, 2^31 slots of 63 bits, is taken by its price
+        /// whole and priced for its words, and is refused under the default budget for its cost,
+        /// not for its shape. It is not read under no budget, which would allocate its 17 GB. The
+        /// claim too wide is refused by name in the ordinary envelope as well, before its missing
+        /// words are counted.
+        /// </remarks>
+        [TestMethod]
+        public void TestAMementoTableNoArrayHoldsIsRefusedByNameBeforeAnythingIsPricedOrAllocated()
+        {
+            // A fingerprint of 28 bits and a memento of 32 make slots of 64 bits; one of 27, 63.
+            const int Widest = 31;
+            Assert.AreEqual(Widest, MementoFilter.MaxQuotientBits, "premise: a table has at most 2^31 slots");
+            Assert.AreEqual(64, MementoSegment.SlotBits(28, 32), "premise: the claim too wide has slots of 64 bits");
+            Assert.AreEqual(63, MementoSegment.SlotBits(27, 32), "premise: the widest claim that fits has slots of 63 bits");
+
+            var tooWide = MementoClaimedInTheLargeForm(Widest, 28, 32);
+            var fits = MementoClaimedInTheLargeForm(Widest, 27, 32);
+            Assert.IsGreaterThan((long)Array.MaxLength, tooWide.Words, "premise: 2^31 slots of 64 bits are more words than an array holds");
+            Assert.IsLessThanOrEqualTo((long)Array.MaxLength, fits.Words, "premise: 2^31 slots of 63 bits are words an array holds");
+
+            (Exception Thrown, long Allocated, long Furthest) Read(
+                (byte[] Head, long Length, int Fields, long Words) claim, ReadOptions options)
+            {
+                TestLargeEnvelopeReading.Sparse stream = null;
+                Exception thrown = null;
+                var allocated = NoGCRegion.Allocated(() =>
+                {
+                    stream = new TestLargeEnvelopeReading.Sparse(claim.Head, claim.Length);
+                    try
+                    {
+                        MementoFilter.ReadFrom(stream, options);
+                        thrown = null;
+                    }
+                    catch (Exception e)
+                    {
+                        thrown = e;
+                    }
+
+                    return null;
+                });
+                return (thrown, allocated, stream.Furthest);
+            }
+
+            (InvalidDataException Stopped, long Priced) Walk((byte[] Head, long Length, int Fields, long Words) claim)
+            {
+                var payload = claim.Length - PersistenceFormat.LargeEnvelopeLength;
+                var budget = ReadBudget.For(ReadOptions.Unlimited, StructureId.MementoFilter);
+                var walk = new PayloadReader(
+                    new PayloadSource(new TestLargeEnvelopeReading.Sparse(claim.Head[PersistenceFormat.LargeHeaderLength..], payload)),
+                    payload, budget, wide: true, streamed: true);
+                try
+                {
+                    MementoFilter.Price(ref walk, PersistenceFormat.DefaultVersion);
+                    return (null, budget.Charged);
+                }
+                catch (InvalidDataException e)
+                {
+                    return (e, budget.Charged);
+                }
+            }
+
+            var problems = new List<string>();
+
+            // The claim too wide, priced alone and then read: refused by name, nothing priced
+            // or allocated for the words, and none of them read.
+            var price = Walk(tooWide);
+            if (price.Stopped is null || !price.Stopped.Message.Contains("one array", StringComparison.Ordinal))
+            {
+                problems.Add($"2^31 slots of 64 bits: the price was not refused for its shape, and stopped: {price.Stopped?.Message ?? "at its end"}");
+            }
+            if (price.Priced != 0)
+            {
+                problems.Add($"2^31 slots of 64 bits: the price priced {price.Priced:N0} bytes for a table no array holds");
+            }
+
+            foreach (var (name, options) in new[] { ("no budget", ReadOptions.Unlimited), ("the default budget", ReadOptions.Default) })
+            {
+                var (thrown, allocated, furthest) = Read(tooWide, options);
+                if (thrown is not InvalidDataException refused)
+                {
+                    problems.Add($"2^31 slots of 64 bits, under {name}: {(thrown is null ? "read" : $"threw {thrown.GetType().Name}: {thrown.Message}")}");
+                    continue;
+                }
+
+                if (refused.InnerException is ReadBudgetExceededException)
+                {
+                    problems.Add($"2^31 slots of 64 bits, under {name}: refused for its cost: {refused.Message}");
+                }
+                else if (!refused.Message.Contains("one array", StringComparison.Ordinal))
+                {
+                    problems.Add($"2^31 slots of 64 bits, under {name}: refused for another reason than its shape: {refused.Message}");
+                }
+                else if (price.Stopped is not null && !refused.Message.StartsWith(price.Stopped.Message, StringComparison.Ordinal))
+                {
+                    problems.Add($"2^31 slots of 64 bits, under {name}: the read refuses it otherwise than its price: {refused.Message}");
+                }
+
+                if (allocated > 64L << 10)
+                {
+                    problems.Add($"2^31 slots of 64 bits, under {name}: the read allocated {allocated:N0} bytes before it was refused");
+                }
+                if (furthest > PersistenceFormat.LargeHeaderLength + tooWide.Fields)
+                {
+                    problems.Add($"2^31 slots of 64 bits, under {name}: the read went to byte {furthest:N0}, past the fields");
+                }
+            }
+
+            // The same claim in the ordinary envelope, which cannot hold its words.
+            var ordinary = OnePayload(StructureId.MementoFilter, Widest, 28, includeWords: false, mementoBits: 32);
+            var held = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<MementoFilter>(ordinary));
+            if (!held.Message.Contains("one array", StringComparison.Ordinal))
+            {
+                problems.Add($"2^31 slots of 64 bits, in the ordinary envelope: refused for another reason than its shape: {held.Message}");
+            }
+
+            // The widest that fits: priced whole, and refused for that under the default budget.
+            var fitting = Walk(fits);
+            if (fitting.Stopped is not null)
+            {
+                problems.Add($"2^31 slots of 63 bits: the price did not walk the table an array holds: {fitting.Stopped.Message}");
+            }
+            else if (fitting.Priced < 2 * fits.Words * sizeof(ulong))
+            {
+                problems.Add($"2^31 slots of 63 bits: the price came to {fitting.Priced:N0} bytes, less than the table's words twice over");
+            }
+
+            var (fitsThrown, fitsAllocated, _) = Read(fits, ReadOptions.Default);
+            if (fitsThrown is not InvalidDataException { InnerException: ReadBudgetExceededException })
+            {
+                problems.Add($"2^31 slots of 63 bits, under the default budget: not refused for its cost, but " +
+                    $"{(fitsThrown is null ? "read" : $"{fitsThrown.GetType().Name}: {fitsThrown.Message}")}");
+            }
+            else if (fitsAllocated > 64L << 10)
+            {
+                problems.Add($"2^31 slots of 63 bits, under the default budget: the read allocated {fitsAllocated:N0} bytes before it was refused");
+            }
+
+            Assert.IsEmpty(problems, $"at {problems.Count} checks: " + string.Join(" | ", problems));
         }
 
         /// <summary>
