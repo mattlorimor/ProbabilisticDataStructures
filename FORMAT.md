@@ -125,6 +125,7 @@ structure whose layout changes bumps only its own.
 | 8 | the release after 6.2.0 | `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter`, `StableBloomFilter` | a placement byte, and the item count as a `u64`; written by every save |
 | 9 | the release after 6.2.0 | `InverseBloomFilter`, `CountMinSketch`, `HeavyKeeper`, `PrivateCountMinSketch`, `DpswSketch` | a placement byte, in each private sketch body for `DpswSketch`; written by every save |
 | 10 | the release after 6.2.0 | `SublimeCountMinSketch` | the packing tuning of each state, before its counters; written by every save |
+| 11 | the release after 6.2.0 | `CuckooBloomFilter` | the whole table, word by word, in place of the list of occupied entries, and the sizes as `u64`s; written by every save |
 
 The version field's high bit, `0x8000`, is not part of a version: it marks
 [the large form](#the-large-form) of the envelope, and the version is the other fifteen
@@ -244,6 +245,19 @@ the fields without reading the counters; [its section](#sublimecountminsketch-id
 what the tuning is and how a reader holds it to the counters. Every save is version 10, so
 a library older than version 10 reads none of them; a payload written before it still
 reads, and saves again as version 10.
+
+Version 11 is `CuckooBloomFilter`'s. It writes the filter's whole table as it is held, the
+packed fingerprints and then the map of which entries hold one, each a run of `u64` words
+with no length before it, in place of the list of occupied entries the versions before it
+wrote; and its bucket count, item count and capacity as `u64`s, since a table can now
+have more entries than a `u32` numbers. [Its section](#cuckoobloomfilter-id-9) lays it out.
+Every save is version 11, whatever the filter holds, so a library older than version 11
+reads none of them, 6.2.0 included; a payload written before it still reads, and saves
+again as version 11. The table is written whole however little the filter holds, about
+(`f` + 1) / 8 bytes an entry: an empty filter of 2^29 buckets at ten-bit fingerprints is a
+payload of 2,952,790,064 bytes, more than the ordinary envelope holds, and is written only
+in [the large form](#the-large-form), by `WriteTo`; `ToByteArray` refuses it. Before
+version 11 the same filter was a payload of 40 bytes.
 
 A reader refuses a payload whose magic does not match, whose version is not one its
 structure has defined, whose structure id is not the type being read, or whose
@@ -378,7 +392,7 @@ address.
 
 | Structure | Size | Largest | Why |
 | --- | --- | --- | --- |
-| `CuckooBloomFilter` | entries, `m` × `b` | 2,147,483,648 | entries are numbered with a `u32`, and the constructor's tables are a power of two; their fingerprints must also fit one array of 64-bit words |
+| `CuckooBloomFilter` | words of fingerprints, `m` × `b` × `f` bits, rounded up, and one | 2,147,483,591 | the fingerprints are one array of 64-bit words, with a spare; the map of the entries held is a bit an entry and never longer. Entries are numbered in 64 bits, so at ten-bit fingerprints this is 2^31 buckets; until the release after 6.2.0 they were numbered with a `u32`, which stopped a table at 2^31 entries |
 | `ThetaSketch` | `k` | 1,073,741,795 | the sketch holds up to `2k` values in one array before it trims |
 | `TupleSketch` | `k` | 1,073,741,795 | the same, for its keys |
 | `MinHashSignature` | `k` | 2,147,483,591 | the values are one array |
@@ -455,11 +469,13 @@ allocates for a count, it first checks that the bytes left could hold that many,
 it allocates follows what the payload actually holds rather than what it claims. A sketch
 claiming a large `k` and holding a few values costs a few values.
 
-Some cannot size by the payload, and allocate what a size says: a cuckoo filter writes
-only its occupied entries but must hold its whole table, a `VarOpt` sample holds its
-regions whole because its arithmetic assumes their size, and a quotient filter's header
-names its table outright. A payload can ask those for as large a structure as the
-constructor would build. What stops a small one asking is the read budget, below.
+Some cannot size by the payload, and allocate what a size says: a cuckoo filter's payload
+before version 11 lists only its occupied entries but must be held as its whole table, a
+`VarOpt` sample holds its regions whole because its arithmetic assumes their size, and a
+quotient filter's header names its table outright. A payload can ask those for as large a
+structure as the constructor would build. What stops a small one asking is the read
+budget, below. From version 11 a cuckoo filter's payload is its whole table, and a reader
+sizes by it.
 
 The envelope bounds everything else. A payload in the ordinary envelope is written as one
 array together with the envelope's eighteen bytes, so it is at most 2,147,483,573 bytes:
@@ -722,6 +738,38 @@ there is no placement byte, and the slots were chosen with 32-bit values.
 
 ### `CuckooBloomFilter` (id 9)
 
+From version 11, every save, the whole table as it is held:
+
+```
+u64     m, the number of buckets
+u32     b, entries per bucket
+u32     f, the fingerprint width, in bits
+u64     count, the number of items held
+u64     n, the capacity in items
+u64     the fingerprints, m × b × f bits rounded up to whole words: ⌈m × b × f / 64⌉ words
+u64     the map of the entries held, a bit an entry: ⌈m × b / 64⌉ words
+u64     the random generator's state
+u64     the state it began in
+```
+
+Entry `j` of bucket `i` is entry number `e = i × b + j`. Its fingerprint is bits `e × f`
+to `e × f + f − 1` of the fingerprint words read as one number, least significant first:
+bit `k` of it is bit `k mod 64` of word `k / 64`, so a fingerprint can begin in one word and
+end in the next. The entry holds a fingerprint when bit `e mod 64` of word `e / 64` of the
+map is set. The words are `u64`s one after another, with no length before either run,
+since the fields give both, and the table is the same size whatever the filter holds:
+about (`f` + 1) / 8 bytes an entry, 5.5 bytes a bucket at ten-bit fingerprints.
+
+Nothing past the last entry is set, in the last word of either run, and an entry the map
+does not mark holds a fingerprint of nought: a removal clears the fingerprint it empties,
+and a reset clears the table. A reader refuses a payload with a bit set in either place,
+since the writer cannot have produced it, and one whose `count` is not the number of
+entries the map marks. It checks that the payload holds the whole table and the two states
+after it before it allocates anything, so what a read allocates follows what the payload
+holds, and a payload claiming a table it does not hold is refused for the bytes it lacks.
+
+Before version 11, the entries held, each with its place:
+
 ```
 u32     m, the number of buckets
 u32     b, entries per bucket
@@ -737,27 +785,29 @@ u64     the random generator's state    (version 2 onwards)
 u64     the state it began in           (version 6 onwards)
 ```
 
-Occupied entries only, for the same reason as above: a filter sized for a load it has
-not reached is mostly empty slots. The writer lists them in ascending order of bucket and
-then entry, and a reader places each by the two indexes it carries rather than by its
-position in the list. Which entries are occupied is the list itself, with no bitmap
-beside it. A bucket index at or beyond `m` or an entry index at or beyond `b` is
-refused, as is a payload claiming more occupied entries than `m` buckets of `b` hold. A
-reader still allocates the whole table, so it cannot size by what the payload holds; it
-refuses a table past the constructor's limit instead (see [Sizes](#sizes)).
+Occupied entries only, since a filter sized for a load it has not reached is mostly
+empty slots. The writer listed them in ascending order of bucket and then entry, and a
+reader places each by the two indexes it carries rather than by its position in the list.
+Which entries are occupied is the list itself, with no bitmap beside it. A bucket index at
+or beyond `m` or an entry index at or beyond `b` is refused, as is a payload claiming more
+occupied entries than `m` buckets of `b` hold. A reader still allocates the whole table,
+so it cannot size by what the payload holds; it refuses a table past the constructor's
+limit instead (see [Sizes](#sizes)), and the read budget refuses a smaller one that costs
+more than it allows. A bucket and entry listed twice is refused, so the count is compared
+with the places filled and not with the length of the list.
 
-`m` must be a power of two, as the constructor always makes it: an item's other bucket
-is found by reducing a hash by `m`, and finds the first again from the other end only
-for a power of two. `count` must equal the number of entries the table holds, since
-each item is one entry, and a bucket and entry listed twice is refused, so the count is
-compared with the places filled and not with the length of the list.
+In either layout, `m` must be a power of two, as the constructor always makes it: an
+item's other bucket is found by combining its first with a hash of its fingerprint and
+reducing by `m`, and finds the first again from the other end only for a power of two.
+`count` must equal the number of entries the table holds, since each item is one entry.
 
 How a fingerprint is written, and what `f` counts, depends on the version:
 
 | Version | `f` counts | One fingerprint |
 | --- | --- | --- |
 | 1, 2 | bytes, from 1 to 8 | `bytes`: a `u32` length that must equal `f`, then that many bytes, least significant first |
-| 3 onwards | bits, from 1 to 64 | the fewest whole bytes that hold `f` bits, which is `f` divided by 8 and rounded up, least significant first, with **no length prefix** |
+| 3, 6 | bits, from 1 to 64 | the fewest whole bytes that hold `f` bits, which is `f` divided by 8 and rounded up, least significant first, with **no length prefix** |
+| 11 | bits, from 1 to 64 | `f` bits of the fingerprint words, at the entry's place, as above |
 
 A fingerprint read from a version 1 or 2 payload is widened to `8 * f` bits, and the
 filter that comes back is the one that was written: the value is the same low bits of
@@ -769,9 +819,9 @@ whose width, in bits, is not between 1 and 64 is refused, as is one with no buck
 entries per bucket, a bucket count that is not a power of two, or a bucket count beyond
 what the reader will allocate for.
 
-The generator's state follows the entries, and version 1 payloads simply end before it.
-The state it began in is the last field, and payloads before version 6 simply end before
-it. What a reader does for a field the payload lacks is described in
+The generator's state follows the entries, or the table, and version 1 payloads simply
+end before it. The state it began in is the last field, and payloads before version 6
+simply end before it. What a reader does for a field the payload lacks is described in
 [The random generator's state](#the-random-generators-state).
 
 ### `HyperLogLog` (id 11)
