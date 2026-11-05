@@ -475,7 +475,13 @@ namespace ProbabilisticDataStructures
             ref PayloadReader reader, ushort version, HashId hashId,
             Func<ReadOnlySpan<byte>, ulong>? hash)
         {
-            return ReadBody(ref reader, PersistenceFormat.ResolveOrThrow(hashId, hash), version);
+            var sketch = ReadBody(ref reader, PersistenceFormat.ResolveOrThrow(hashId, hash), version);
+
+            // The payload is the body and nothing after it. That is checked here rather than in
+            // ReadBody, since a DpswSketch reads its sketches' bodies one after another from
+            // its own payload and checks that payload's end itself.
+            reader.ExpectEnd();
+            return sketch;
         }
 
         /// <summary>
