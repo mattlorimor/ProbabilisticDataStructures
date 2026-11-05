@@ -636,9 +636,10 @@ namespace TestProbabilisticDataStructures
         /// <remarks>
         /// The envelope checks that the payload was read to its end, for every structure,
         /// after the structure's reader returns and before the checksum: a structure is
-        /// returned only from a payload it read exactly. Most readers check it themselves
-        /// too; one whose reader does not is held to it by the envelope alone, and this
-        /// sweep is what shows the envelope does.
+        /// returned only from a payload it read exactly. Every structure's reader checks it
+        /// itself as well, as the ordinary envelope's sweep below holds, so this sweep no
+        /// longer shows the envelope's check; a reader that reads nothing does
+        /// (<see cref="TestTheLargeFormItselfRefusesAPayloadItsReaderLeftBytesOf"/>).
         /// </remarks>
         [TestMethod]
         public void TestAPayloadLongerThanItsStructureReadsIsRefusedInTheLargeForm()
@@ -690,6 +691,34 @@ namespace TestProbabilisticDataStructures
             }
 
             StructureRoster.AssertCoversEveryStructure("ordinary leftover", samples.Select(s => s.Id));
+        }
+
+        /// <summary>
+        /// The large form's own check that its payload was read to its end refuses a payload
+        /// whose structure's reader left bytes of it, before the checksum: a filter's payload
+        /// in the large form, handed to the envelope's read with a reader that reads none of
+        /// it, is refused for the bytes left over.
+        /// </summary>
+        /// <remarks>
+        /// Every structure's reader checks its own end too, so no structure's payload shows
+        /// the envelope's check. <c>PrivateCountMinSketch</c>'s showed it, in the sweep above,
+        /// until its reader made the check itself; this reader stands in for one that stops.
+        /// </remarks>
+        [TestMethod]
+        public void TestTheLargeFormItselfRefusesAPayloadItsReaderLeftBytesOf()
+        {
+            var large = LargeForm.WriteLarge(new BloomFilter(100, 0.01));
+            Assert.IsTrue(LargeForm.IsLarge(large), "the filter was not written in the large form");
+
+            var ex = Assert.ThrowsExactly<InvalidDataException>(() => PersistenceFormat.Read<object>(
+                    new MemoryStream(large, writable: false), StructureId.BloomFilter,
+                    new ReadBudget(long.MaxValue, StructureId.BloomFilter),
+                    (ref PayloadReader reader, ushort version) => { },
+                    null, PersistenceFormat.CheckResolvable,
+                    (ref PayloadReader reader, ushort version, HashId hash, Func<ReadOnlySpan<byte>, ulong> supplied) => new object()),
+                "a payload in the large form whose reader read none of it was read");
+            StringAssert.Contains(ex.Message, "left over", ex.Message);
+            StringAssert.Contains(ex.Message, NotReached, ex.Message);
         }
 
         /// <summary>

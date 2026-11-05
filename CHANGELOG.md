@@ -483,6 +483,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `PrivateCountMinSketch` payload with bytes left over after its counters is refused.**
+  Its reader stopped at the last counter without checking that the payload ended there, so
+  in the ordinary envelope a payload with a byte appended, its length and checksum repaired,
+  was read as if the byte were not there, as it had been since the sketch was added in
+  6.2.0. It is now refused naming the bytes left over, as every other structure's is, and as
+  the same payload in the large form already was. A `DpswSketch`, which holds its sketches'
+  bodies one after another, checks the end of its own payload and is unchanged.
+
 - **What a read allocates no longer depends on when the last collection ran.** Every read
   named its structure with `ToString` as its budget was made, and the runtime keeps an
   enum's names in a cache it holds only weakly, so a read after a collection had reclaimed
