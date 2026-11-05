@@ -88,8 +88,16 @@ namespace TestProbabilisticDataStructures
             },
             StructureId.DeletableBloomFilter => () =>
             {
-                TryOptimalM(LargestSound(0.01, 1, 1000), 0.01, out var m);
-                return AsBuiltByCharge("DeletableBloomFilter", TrueBytes(m - 1000, 1));
+                // As the counting filter's, with its data region for the table that grows:
+                // the collision regions are r bits, one array, and among the fields (#232).
+                var small = new DeletableBloomFilter(100_000, 1000, 0.01);
+                var fixedBytes = PayloadOf(small) - (long)TrueBytes(small.Capacity(), 1) - 4;
+                var most = Largest(1_000, 1UL << 40, n =>
+                {
+                    var m = Utils.OptimalM64(n, 0.01) - 1000;
+                    return fixedBytes + (long)TrueBytes(m, 1) + 4 * (long)(m / Buckets64.maxArraySize + 1) <= MaxPayload;
+                });
+                return About(most, most, 2);
             },
             StructureId.PartitionedBloomFilter => () =>
             {

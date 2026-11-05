@@ -122,10 +122,10 @@ structure whose layout changes bumps only its own.
 | 5 | the release after 6.2.0 | `StableBloomFilter` | the state the random generator began in |
 | 6 | the release after 6.2.0 | `CuckooBloomFilter` | the state the random generator began in |
 | 7 | the release after 6.2.0 | `ScalableBloomFilter` | the growth factor, written only by a filter that grows |
-| 8 | the release after 6.2.0 | `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter`, `StableBloomFilter` | a placement byte, and the item count as a `u64`; written by every save |
+| 8 | the release after 6.2.0 | `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter`, `PartitionedBloomFilter`, `StableBloomFilter` | a placement byte, and the item count as a `u64`; written by every save of those not written at 14 |
 | 9 | the release after 6.2.0 | `InverseBloomFilter`, `CountMinSketch`, `HeavyKeeper`, `PrivateCountMinSketch`, `DpswSketch` | a placement byte, in each private sketch body for `DpswSketch`; written by every save |
 | 10 | the release after 6.2.0 | `SublimeCountMinSketch` | the packing tuning of each state, before its counters; written by every save |
-| 14 | the release after 6.2.0 | `CountingBloomFilter` | sizes as `u64`s, and the buckets as a `Buckets64`; written by every save |
+| 14 | the release after 6.2.0 | `CountingBloomFilter`, `DeletableBloomFilter` | sizes as `u64`s, and the buckets as a `Buckets64`; written by every save |
 
 The version field's high bit, `0x8000`, is not part of a version: it marks
 [the large form](#the-large-form) of the envelope, and the version is the other fifteen
@@ -246,13 +246,14 @@ what the tuning is and how a reader holds it to the counters. Every save is vers
 a library older than version 10 reads none of them; a payload written before it still
 reads, and saves again as version 10.
 
-Version 14 is the change that widens `CountingBloomFilter` to 64-bit sizes. It
-writes, at version 14, its version 8 layout with each size that was a `u32` widened to a
-`u64` and its buckets written as a [`Buckets64`](#payload-primitives) rather than a
-`Buckets`; nothing else moves, and the packed bits are the same bytes. Every save is
-version 14, whatever its size, so a library older than version 14 reads none of them; a
-payload written before it still reads, and saves again as version 14. Its buckets, one
-array in a payload before version 14, are laid out as a `Buckets64`'s arrays when read.
+Version 14 is the change that widens `CountingBloomFilter` and `DeletableBloomFilter` to
+64-bit sizes. Each writes, at version 14, its version 8 layout with each size that was a
+`u32` widened to a `u64` and each of its tables of buckets written as a
+[`Buckets64`](#payload-primitives) rather than a `Buckets`; nothing else moves, and the
+packed bits are the same bytes. Every save is version 14, whatever its size, so a library
+older than version 14 reads none of them; a payload written before it still reads, and
+saves again as version 14. A table of buckets, one array in a payload before version 14,
+is laid out as a `Buckets64`'s arrays when read.
 
 The placement byte means what version 8's does. One thing about it is new: a size can now
 pass 2^32, and the 32-bit scheme is reduced modulo a 32-bit count of positions, which every
@@ -430,9 +431,9 @@ address.
 | `BloomFilter` | hash functions, `k` | 1,024 | `ceil(log2(1 / rate))` at the smallest false positive rate whose reciprocal is a finite double; the constructor refuses a smaller rate. A reader also refuses none, which sets no bit and tests none |
 | `BloomFilter64` | hash functions, `k` | 1,024 | as `BloomFilter` |
 | `CountingBloomFilter` | hash functions, `k` | 1,024 | as `BloomFilter`; a scratch buffer of eight bytes per hash function is allocated for it |
-| `DeletableBloomFilter` | hash functions, `k` | 1,024 | as `BloomFilter`; a scratch buffer of four bytes per hash function is allocated for it |
+| `DeletableBloomFilter` | hash functions, `k` | 1,024 | as `CountingBloomFilter` |
 | `PartitionedBloomFilter` | hash functions, `k` | 1,024 | as `BloomFilter`; it is also the number of partitions, and the reader checks it first |
-| `StableBloomFilter` | hash functions, `k` | 1,024 | as `DeletableBloomFilter`; the constructor halves the count, and the factory that builds a plain Bloom filter of cells does not, so the reader accepts the whole of it |
+| `StableBloomFilter` | hash functions, `k` | 1,024 | as `BloomFilter`; a scratch buffer of four bytes per hash function is allocated for it. The constructor halves the count, and the factory that builds a plain Bloom filter of cells does not, so the reader accepts the whole of it |
 | `InfiniFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; a filter stops expanding there |
 | `MementoFilter` | quotient bits | 31 | as `InfiniFilter` |
 | `MementoFilter` | bits of a slot | 64 | a slot is held in a 64-bit word: three bits of metadata, and a field of the fingerprint, one bit for its age counter and the memento |
@@ -443,16 +444,18 @@ address.
 The other filters built on `Buckets` hold one-bit buckets, so the most they hold is what
 a `u32` counts, 4,294,967,295, which is 536,870,912 bytes, and their sizing refuses
 anything beyond it. The same arithmetic limits the stable filter from four bits up: at 4
-bits it is 4,294,967,182 buckets, and at 8 bits 2,147,483,591. A counting filter's counters
-have been a `Buckets64` since version 14, which counts its buckets in a `u64` and holds
-them in arrays of 2^30 bytes: what limits it is the count of arrays, at most what one
-array holds, at every counter width.
+bits it is 4,294,967,182 buckets, and at 8 bits 2,147,483,591. A counting filter's counters,
+and a deletable filter's two regions, have been a `Buckets64` since version 14, which
+counts its buckets in a `u64` and holds them in arrays of 2^30 bytes: what limits them is
+the count of arrays, at most what one array holds, at every bucket width.
 
 A `DeletableBloomFilter` keeps its data region and its collision regions out of one `m`
-that sizing holds to that same 4,294,967,295, so the two come to no more than that
-between them, and a reader refuses a payload whose regions do. Without the refusal the
-region size, worked out in 32 bits, wraps to zero past 2^32, and the first add that finds
-a bit already set divides by it.
+that sizing holds to what a `Buckets64` holds, 2,305,842,948,010,409,983, so the two come
+to no more than that between them, and a reader refuses a payload whose regions do. The
+region size is worked out in 64 bits, which a sum held to that cannot wrap. Before version
+14 it was worked out in 32 bits and the limit was 4,294,967,295: without the refusal the
+size wrapped to zero past 2^32, and the first add that found a bit already set divided by
+it.
 
 A bucket array of 2^32 bits or more, 512 MiB, was written by 6.2.0 and every release before
 it with a byte count that had wrapped in 32 bits: a Bloom filter of 4,294,967,294 buckets
@@ -552,8 +555,8 @@ gigabytes, and loads only with a budget raised to match. What each read is charg
 | Structure | Charged beyond the payload and the runs it copies |
 | --- | --- |
 | `BloomFilter`, `BloomFilter64`, `HyperLogLog`, `HyperLogLogPlus` (dense), `UltraLogLog`, `BinaryFuseFilter`, `BloomierFilter`, `SimHashSignature` | the structure's own copy of its registers or bits, where it keeps one |
-| `CountingBloomFilter` | a scratch buffer of eight bytes per hash function |
-| `DeletableBloomFilter`, `StableBloomFilter` | a scratch buffer of four bytes per hash function |
+| `CountingBloomFilter`, `DeletableBloomFilter` | a scratch buffer of eight bytes per hash function |
+| `StableBloomFilter` | a scratch buffer of four bytes per hash function |
 | `PartitionedBloomFilter`, `ScalableBloomFilter` | a slot per partition or contained filter; a contained filter is charged as a read of its own |
 | `CuckooBloomFilter` | the whole table, `m` × `b` fingerprints of `f` bits, and a bit per entry, whatever the payload holds |
 | `QuotientFilter` | the whole table, 2^`q` slots of `r` + 3 bits |
@@ -639,19 +642,20 @@ version 8), and it is read as it was stored: a huge count cannot be told from a 
 
 ### `DeletableBloomFilter` (id 4)
 
-At version 8:
+At version 14:
 
 ```
-u32     m, the data region in bits
-u32     k
-u8      placement, 0 for 32-bit values and 1 for 64-bit ones
-u64     count, the number of items added and not removed
-Buckets the data region
-Buckets the collision regions, one bucket per region
+u64       m, the data region in bits
+u32       k
+u8        placement, 0 for 32-bit values and 1 for 64-bit ones
+u64       count, the number of items added and not removed
+Buckets64 the data region
+Buckets64 the collision regions, one bucket per region
 ```
 
-At version 1 there is no placement byte, the bits were placed with 32-bit values, and
-the count is a `u32`. The region size is **not** stored. See
+At version 8, `m` is a `u32` and each region a `Buckets`. At version 1 there is also no
+placement byte, the bits were placed with 32-bit values, and the count is a `u32`. The
+region size is **not** stored. See
 [What is not stored](#what-is-not-stored). Which item a bit of the data region stands for
 is described in [Bit placement](#bit-placement), with `m` the data region.
 

@@ -996,7 +996,7 @@ namespace TestProbabilisticDataStructures
         public void TestADeletableFilterHashCountLargerThanTheBudgetIsRefused()
         {
             var bytes = new DeletableBloomFilter(1000, 100, 0.01).ToByteArray();
-            AssertRefusedForItsHashCountBeforeAllocating<DeletableBloomFilter>(Poke(bytes, 4, 1u << 24));
+            AssertRefusedForItsHashCountBeforeAllocating<DeletableBloomFilter>(Poke(bytes, 8, 1u << 24));
         }
 
         /// <summary>The stable filter's scratch buffer, likewise.</summary>

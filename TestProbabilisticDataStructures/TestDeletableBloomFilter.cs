@@ -18,17 +18,17 @@ namespace TestProbabilisticDataStructures
         {
             yield return PayloadState.Of(
                 "10 at 50%, 2 regions, empty", new DeletableBloomFilter(10, 2, 0.5),
-                PersistenceFormat.PlacementVersion);
+                PersistenceFormat.Bloom64Version);
 
             var filled = new DeletableBloomFilter(200, 10, 0.01);
             for (var i = 0; i < 150; i++) filled.Add(Encoding.ASCII.GetBytes($"w{i}"));
             yield return PayloadState.Of(
-                "200 at 1%, 10 regions, collided", filled, PersistenceFormat.PlacementVersion);
+                "200 at 1%, 10 regions, collided", filled, PersistenceFormat.Bloom64Version);
 
             var regions = new DeletableBloomFilter(200, 77, 0.01);
             regions.Add(Encoding.ASCII.GetBytes("a"));
             yield return PayloadState.Of(
-                "200 at 1%, 77 regions", regions, PersistenceFormat.PlacementVersion);
+                "200 at 1%, 77 regions", regions, PersistenceFormat.Bloom64Version);
         }
 
         private static byte[] A_BYTES = Encoding.ASCII.GetBytes("a");

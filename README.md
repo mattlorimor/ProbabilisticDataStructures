@@ -205,7 +205,7 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `BloomFilter64` | n, fp 0.1% | memory | ≈ 298.73 million | ≈ 1.19 billion |
 | `CountingBloomFilter` | n, 4-bit counters, fp 1% | memory | ≈ 112.02 million | ≈ 448.09 million |
 | `CountingBloomFilter` | n, 8-bit counters, fp 1% | memory | ≈ 56.01 million | ≈ 224.04 million |
-| `DeletableBloomFilter` | n, r 1,000, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
+| `DeletableBloomFilter` | n, r 1,000, fp 1% | memory | ≈ 448.09 million | ≈ 1.79 billion |
 | `PartitionedBloomFilter` | n, fp 1% | 448,089,842 | ≈ 448.09 million | as built |
 | `CuckooBloomFilter` | n, fp 1%, empty | 2,040,109,465 | 510,027,366 | as built |
 | `CuckooBloomFilter` | n, fp 1%, holding n items | 2,040,109,465 | ≈ 88.92 million | ≈ 214.75 million |
@@ -625,11 +625,12 @@ placement it was written with, whose rate rises at large sizes: sized for 1%, it
 placements differ, and what was measured, are in
 [CAPACITY.md](CAPACITY.md#how-the-32-bit-filters-place-their-bits).
 
-`DeletableBloomFilter` sizes in 32 bits too, and **this structure is not a replacement for
-it**: it cannot delete. For a set that large that has to shrink, `CuckooBloomFilter` and
-`QuotientFilter` hold well over a billion items, and `CountingBloomFilter` sizes in 64 bits
-as this one does, its counters held as arrays of 2^30 bytes, so what stops it is memory:
-`b` times this one's, at `b`-bit counters.
+**This structure cannot delete.** For a set that large that has to shrink,
+`CuckooBloomFilter` and `QuotientFilter` hold well over a billion items, and
+`CountingBloomFilter` and `DeletableBloomFilter` size in 64 bits as this one does, their
+tables held as arrays of 2^30 bytes, so what stops them is memory: `b` times this one's
+for the counting filter at `b`-bit counters, and this one's for the deletable one, whose
+two regions share its `m`.
 
 **Look elsewhere otherwise.** Below 4.29 billion bits it is the same filter with wider
 arithmetic, so `BloomFilter` is the plainer choice. And if you do not know the size
@@ -709,6 +710,11 @@ and can tolerate that a particular deletion may be refused.
 
 Described by Rothenberg, Macapuna, Verdi and Magalhaes in
 [The Deletable Bloom filter](https://arxiv.org/pdf/1005.0352.pdf).
+
+It is sized in 64 bits, as `BloomFilter64` is: `n`, `r` and `Capacity()` are `ulong`s and
+both regions are held as arrays of 2^30 bytes, so it is limited by memory rather than by
+one array, and a payload too large for one array is saved to a stream. Until the release
+after 6.2.0 it was sized in 32 bits, and held 448,089,842 items at `r` 1,000 and 1%.
 
 ### `CuckooBloomFilter`
 

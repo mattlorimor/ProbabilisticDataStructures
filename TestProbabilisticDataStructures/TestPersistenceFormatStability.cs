@@ -179,16 +179,15 @@ namespace TestProbabilisticDataStructures
         [TestMethod]
         public void TestAnEarlierPayloadSavesAgainAsVersionEight()
         {
-            // The counting filter saves as version 14 now, which
-            // TestAnEarlierCountingPayloadSavesAgainAsVersionFourteen holds, so its row has no
-            // save: its version 8 fixture is still exactly the version 1 one with the byte.
+            // The counting and deletable filters save as version 14 now, which their
+            // TestAnEarlier...PayloadSavesAgainAsVersionFourteen tests hold, so their rows have
+            // no save: each version 8 fixture is still exactly the version 1 one with the byte.
             var earlier = new (string Earlier, string Current, ushort Version, int Placement, int Count, Func<byte[], byte[]> Resave)[]
             {
                 ("bloomfilter-v1.bin", "bloomfilter-v8-narrow.bin", 1, PlainPlacement, PlainPlacement + 1,
                     b => BloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray()),
                 ("countingbloomfilter-v1.bin", "countingbloomfilter-v8-narrow.bin", 1, PlainPlacement, PlainPlacement + 1, null),
-                ("deletablebloomfilter-v1.bin", "deletablebloomfilter-v8-narrow.bin", 1, PlainPlacement, PlainPlacement + 1,
-                    b => DeletableBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray()),
+                ("deletablebloomfilter-v1.bin", "deletablebloomfilter-v8-narrow.bin", 1, PlainPlacement, PlainPlacement + 1, null),
                 ("partitionedbloomfilter-v1.bin", "partitionedbloomfilter-v8-narrow.bin", 1, PartitionedPlacement, PartitionedPlacement + 1,
                     b => PartitionedBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray()),
                 ("stablebloomfilter-v5.bin", "stablebloomfilter-v8-narrow.bin", 5, StablePlacement, -1,

@@ -163,15 +163,25 @@ namespace TestProbabilisticDataStructures
 
         internal static CapacityRow DeletableBloomFilter(uint r, double fp, string label) => Row(
             StructureId.DeletableBloomFilter, $"n, r {r:N0}, fp {label}",
-            () => Exact(LargestSound(fp, 1, r)),
+            () =>
+            {
+                // Sized in 64 bits since #232, both regions on 64-bit tables, as the counting
+                // filter's counters are.
+                Assert.IsGreaterThan(0UL, Utils.OptimalM64(1UL << 50, fp));
+                Assert.IsGreaterThan(1UL << 60, Buckets64.MaxCount);
+                return Memory;
+            },
             () =>
             {
                 var line = ChargeLine.Fit("DeletableBloomFilter", 64,
-                    new[] { 100_000u, 200_000u, 400_000u, 800_000u }
-                        .Select(n => ((long)TrueBytes(Utils.OptimalM(n, fp) - r, 1),
+                    new[] { 100_000UL, 200_000UL, 400_000UL, 800_000UL }
+                        .Select(n => ((long)TrueBytes(Utils.OptimalM64(n, fp) - r, 1),
                             ChargeOf(StructureId.DeletableBloomFilter, new DeletableBloomFilter(n, r, fp))))
-                        .ToArray());
-                return LoadsAbout(line, LargestSound(fp, 1, r), n => BitsOf(n, fp, 1, r));
+                        .ToArray())
+                    // Past 2^33 bits the data region is in more than one array, and each array
+                    // is charged a few more bytes; none can be built here to measure them.
+                    .Widen(5 * 48);
+                return LoadsAbout(line, 1UL << 40, n => Utils.OptimalM64(n, fp) is var m && m > r ? TrueBytes(m - r, 1) : 0);
             });
 
         internal static CapacityRow PartitionedBloomFilter(double fp, string label) => Row(

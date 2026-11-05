@@ -200,7 +200,6 @@ namespace TestProbabilisticDataStructures
             {
                 ("BloomFilter", () => new BloomFilter(1_000_000_000, 0.01)),
                 ("PartitionedBloomFilter", () => new PartitionedBloomFilter(1_000_000_000, 0.01)),
-                ("DeletableBloomFilter", () => new DeletableBloomFilter(1_000_000_000, 10, 0.01)),
                 // The scalable filter refuses a hint too large for its first filter too,
                 // but naming the hint, and pointing to a smaller hint rather than to
                 // itself: TestScalableBloomFilter's

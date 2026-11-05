@@ -112,10 +112,10 @@ more — 16 MiB of bits, about 14 million items at 1%, and for the partitioned f
 partition — places them with 64-bit values, exactly as `BloomFilter64` does. At m = 0.75 ·
 2^32 sized for 1% it measured 1.004%, as `BloomFilter64` did. A smaller filter is placed
 as before. Below 2^27 the excess is at most about 0.07% of the rate at 1%, too small to
-measure. Every save of `BloomFilter`, `DeletableBloomFilter`, `StableBloomFilter` and
-`PartitionedBloomFilter`, whatever its size, is written at format version 8, which records
-the placement in a byte of its own and the item count in 64 bits, and which 6.2.0 and
-earlier refuse. Every save of `CountingBloomFilter` is written at format version 14, which
+measure. Every save of `BloomFilter`, `StableBloomFilter` and `PartitionedBloomFilter`,
+whatever its size, is written at format version 8, which records the placement in a byte
+of its own and the item count in 64 bits, and which 6.2.0 and earlier refuse. Every save
+of `CountingBloomFilter` and `DeletableBloomFilter` is written at format version 14, which
 records the same and its sizes in 64 bits as well. A filter read from a payload written
 before the release after 6.2.0 keeps the 32-bit placement, and the rate that goes with it, whatever its size, and
 records it when saved again. It does not merge with a new filter of the same size; to have
@@ -196,9 +196,13 @@ maximum stays there rather than wrapping.
 
 ### `DeletableBloomFilter`
 
-The sizing of `BloomFilter` with `r` of its bits set aside as the collision regions that
+The sizing of `BloomFilter64` with `r` of its bits set aside as the collision regions that
 make deletes possible. `r` has to be at least 1 and less than the filter's bits, and what
 it takes comes out of the data region, so a larger `r` leaves fewer bits for the items.
+`n`, `r` and `Capacity()` are `ulong`s and both regions are held as arrays of 2^30 bytes,
+so what stops the constructor is memory. Until the release after 6.2.0 its sizes were
+`uint`s and each region one array, and it stopped at 448,089,842 items at `r` 1,000 and
+1%. A payload past the ordinary envelope is written to a stream, in the large form.
 
 ### `PartitionedBloomFilter`
 

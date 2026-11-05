@@ -199,16 +199,6 @@ namespace TestProbabilisticDataStructures
                 s => new[] { new Claim(Get(s, "cells"), "count", Buckets.MaxCount(8)) },
                 s => BucketBytes(Get(s, "cells")));
 
-            // A 32-bit count of bits, which fits one array: the ordinary envelope saves it.
-            yield return new(StructureId.DeletableBloomFilter, "2^32 - 1 bits in all", false,
-                () => Filled(new DeletableBloomFilter(200, 10, 0.01), (f, k) => f.Add(k)),
-                s => new[]
-                {
-                    new Claim(Get(s, "Buckets"), "count",
-                        uint.MaxValue - (uint)Big(Get(s, "Collisions"), "count")),
-                },
-                s => BucketBytes(Get(s, "Buckets")) + BucketBytes(Get(s, "Collisions")));
-
             yield return new(StructureId.PartitionedBloomFilter, "2^32 - 1 bits across its partitions", false,
                 () => Filled(new PartitionedBloomFilter(200, 0.01), (f, k) => f.Add(k)),
                 s =>
@@ -403,6 +393,7 @@ namespace TestProbabilisticDataStructures
             new(StructureId.BloomFilter, typeof(Buckets), "Data"),
             new(StructureId.BloomFilter64, typeof(Buckets64), "Data"),
             new(StructureId.CountingBloomFilter, typeof(Buckets64), "Data"),
+            new(StructureId.DeletableBloomFilter, typeof(Buckets64), "Data"),
             new(StructureId.HyperLogLog, typeof(HyperLogLog), "Registers"),
             new(StructureId.UltraLogLog, typeof(UltraLogLog), "Registers"),
             new(StructureId.HyperLogLogPlus, typeof(HyperLogLogPlus), "registers", "sparse"),

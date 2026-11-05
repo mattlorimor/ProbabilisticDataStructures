@@ -76,7 +76,7 @@ namespace TestProbabilisticDataStructures
                 () => new CountingBloomFilter(1000, 4, 0.01), new[] { 8 },
                 rate => new CountingBloomFilter(1, 4, rate), f => f.K()),
             [typeof(DeletableBloomFilter)] = Of(
-                () => new DeletableBloomFilter(1000, 10, 0.01), new[] { 4 },
+                () => new DeletableBloomFilter(1000, 10, 0.01), new[] { 8 },
                 rate => new DeletableBloomFilter(1, 10, rate), f => f.K()),
             [typeof(PartitionedBloomFilter)] = Of(
                 () => new PartitionedBloomFilter(1000, 0.01), new[] { 4, 21 },

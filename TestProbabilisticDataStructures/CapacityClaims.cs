@@ -605,25 +605,31 @@ namespace TestProbabilisticDataStructures
             new Claim("Below 2^27 the excess is at most about 0.07% of the rate at 1%", () =>
                 Rounds(LargestFoldBelowWide() * 100, 0.07, 2)),
             // Small and large alike: a small filter of each of the five, placed either way.
-            new Claim("Every save of `BloomFilter`, `DeletableBloomFilter`, `StableBloomFilter` and `PartitionedBloomFilter`, whatever its size, is written at format version 8", () =>
+            new Claim("Every save of `BloomFilter`, `StableBloomFilter` and `PartitionedBloomFilter`, whatever its size, is written at format version 8", () =>
                 new[] { Placement.Narrow, Placement.Wide }.All(p =>
                     new BloomFilter(100, 0.01, null, p).ToByteArray()[4] == 8
-                    && new DeletableBloomFilter(100, 10, 0.01, null, p).ToByteArray()[4] == 8
                     && new PartitionedBloomFilter(100, 0.01, null, p).ToByteArray()[4] == 8
                     && new StableBloomFilter(100, 2, 0.01, null, 1, p).ToByteArray()[4] == 8)),
-            // Its layout: u64 m, u32 k, the placement byte, the u64 count, then its table,
-            // whose u64 count follows.
-            new Claim("Every save of `CountingBloomFilter` is written at format version 14, which records the same and its sizes in 64 bits as well", () =>
+            // Their layout: u64 m, u32 k, the placement byte, the u64 count, then the first
+            // table, whose u64 count follows: the counters, or the data region.
+            new Claim("Every save of `CountingBloomFilter` and `DeletableBloomFilter` is written at format version 14, which records the same and its sizes in 64 bits as well", () =>
                 new[] { (Placement.Narrow, 0), (Placement.Wide, 1) }.All(p =>
                 {
-                    var filter = new CountingBloomFilter(100, 4, 0.01, null, p.Item1);
-                    for (var i = 0; i < 10; i++) filter.Add(Key(i));
-                    var bytes = filter.ToByteArray();
-                    return bytes[4] == PersistenceFormat.Bloom64Version && PersistenceFormat.Bloom64Version == 14
-                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(14)) == filter.Capacity()
-                        && bytes[14 + 12] == p.Item2
-                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(14 + 13)) == 10
-                        && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(14 + 21)) == filter.Capacity();
+                    var counting = new CountingBloomFilter(100, 4, 0.01, null, p.Item1);
+                    var deletable = new DeletableBloomFilter(100, 10, 0.01, null, p.Item1);
+                    for (var i = 0; i < 10; i++)
+                    {
+                        counting.Add(Key(i));
+                        deletable.Add(Key(i));
+                    }
+
+                    return PersistenceFormat.Bloom64Version == 14
+                        && new[] { (counting.ToByteArray(), counting.Capacity()), (deletable.ToByteArray(), deletable.Capacity()) }.All(f =>
+                            f.Item1[4] == PersistenceFormat.Bloom64Version
+                            && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(f.Item1.AsSpan(14)) == f.Item2
+                            && f.Item1[14 + 12] == p.Item2
+                            && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(f.Item1.AsSpan(14 + 13)) == 10
+                            && System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(f.Item1.AsSpan(14 + 21)) == f.Item2);
                 })),
             // The plain filter's layout: u32 m, u32 k, the placement byte, the u64 count,
             // then the bucket array, whose count follows.
@@ -806,6 +812,15 @@ namespace TestProbabilisticDataStructures
                 && typeof(CountingBloomFilter).GetMethod(nameof(CountingBloomFilter.Capacity))!.ReturnType == typeof(ulong)
                 && Buckets64.maxArraySize == 1u << 30
                 && Buckets64.MaxCount > 1UL << 60),
+            // The deletable filter's section, likewise for its two regions.
+            new Claim("`n`, `r` and `Capacity()` are `ulong`s and both regions are held as arrays of 2^30 bytes, so what stops the constructor is memory", () =>
+                typeof(DeletableBloomFilter).GetConstructor(new[] { typeof(ulong), typeof(ulong), typeof(double), typeof(Func<ReadOnlySpan<byte>, ulong>) }) is not null
+                && typeof(DeletableBloomFilter).GetMethod(nameof(DeletableBloomFilter.Capacity))!.ReturnType == typeof(ulong)
+                && new[] { "Buckets", "Collisions" }.All(name =>
+                    typeof(DeletableBloomFilter).GetProperty(name, BindingFlags.NonPublic | BindingFlags.Instance)!.PropertyType == typeof(Buckets64))
+                && Buckets64.maxArraySize == 1u << 30),
+            new Claim("it stopped at 448,089,842 items at `r` 1,000 and 1%", () =>
+                CapacityRows.LargestSound(0.01, 1, 1000) == 448_089_842),
             new Claim("the `Add` that would double it past that throws, with the filter as it was", () =>
             {
                 var filter = new InfiniFilter(initialCapacity: 3, fingerprintBits: 8) { QuotientBitsLimit = 2 };

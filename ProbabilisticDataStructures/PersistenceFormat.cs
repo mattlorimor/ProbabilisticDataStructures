@@ -335,7 +335,7 @@ namespace ProbabilisticDataStructures
             [StructureId.BloomFilter] = [DefaultVersion, PlacementVersion],
             [StructureId.BloomFilter64] = [DefaultVersion],
             [StructureId.CountingBloomFilter] = [DefaultVersion, PlacementVersion, Bloom64Version],
-            [StructureId.DeletableBloomFilter] = [DefaultVersion, PlacementVersion],
+            [StructureId.DeletableBloomFilter] = [DefaultVersion, PlacementVersion, Bloom64Version],
             [StructureId.PartitionedBloomFilter] = [DefaultVersion, PlacementVersion],
             [StructureId.ScalableBloomFilter] = [DefaultVersion, ScalableGrowthVersion],
             [StructureId.StableBloomFilter] =

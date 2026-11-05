@@ -840,7 +840,7 @@ namespace TestProbabilisticDataStructures
                     Reset = f => f.Reset(),
                     Count = f => f.Count(),
                     NeverForgets = true,
-                    Model = (f, tally) => new DeletableModel(f.Capacity(), r, f.K(), tally),
+                    Model = (f, tally) => new DeletableModel(checked((uint)f.Capacity()), r, f.K(), tally),
                 };
                 var config = $"n={n},r={r},p={p}";
                 var tally = RunAll(spec, config);

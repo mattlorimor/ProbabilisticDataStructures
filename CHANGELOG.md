@@ -264,6 +264,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   payload placed with 32-bit values among more than 4,294,967,295 counters is refused, since
   that scheme is reduced modulo a 32-bit count. (#232)
 
+- **`DeletableBloomFilter` is sized in 64 bits, and saves at format version 14, and that is
+  a breaking change.** Its `n`, `r` and `Capacity()` are `ulong`s where they were `uint`s:
+  a caller passing `uint`s compiles as it did, one keeping `Capacity()` in a `uint` needs a
+  cast or a wider variable, and code compiled against an earlier release has to be rebuilt.
+  Its data region and its collision regions are each held as arrays of 2^30 bytes, so it
+  is limited by memory rather than by one array, which stopped it at 448,089,842 items at
+  `r` 1,000 and 1%. A region's size is worked out in 64 bits, and a reader refuses a payload
+  whose two regions together pass what a 64-bit table holds.
+  <br><br>
+  Every save is [format version 14](FORMAT.md#format-versions): version 8's layout with `m`
+  a `u64` and both regions a `Buckets64`. **No earlier release reads it.** Stored filters
+  still load, from every earlier version, and save again as version 14; a version 14
+  payload placed with 32-bit values past 4,294,967,295 bits is refused, as the counting
+  filter's is. (#232)
+
 - **`BloomFilter64` is faster, the structures placed with 64-bit values test faster, and
   every bit is where it was.** The 64-bit placement hashes the first value's eight little-endian
   bytes for the second value, and both places that do it wrote those bytes into a
