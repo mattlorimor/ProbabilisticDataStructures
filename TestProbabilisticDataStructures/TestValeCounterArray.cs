@@ -697,9 +697,10 @@ namespace TestProbabilisticDataStructures
         /// and moving, a counter of the second chunk is read, which leaves that chunk's pool in
         /// the scratch buffer the move decants from; the move has to read its own. The twin
         /// takes the increment alone, which allocates its tails array, and the two are held to
-        /// each other counter by counter. What each allocates is the least of five tries, as a
-        /// collection running beside one can add to it, and the twin's has to be more than
-        /// nought, so the measurement can see the allocation it says is gone.
+        /// each other counter by counter. What each allocates is the least of five tries, each
+        /// counted in a no-GC region, as a collection running beside one can add to it
+        /// (<see cref="NoGCRegion"/>), and the twin's has to be more than nought, so the
+        /// measurement can see the allocation it says is gone.
         /// </remarks>
         [TestMethod]
         [DataRow(0, DisplayName = "the first chunk on tails")]
@@ -725,19 +726,29 @@ namespace TestProbabilisticDataStructures
             var aloneBytes = long.MaxValue;
             for (var trial = 0; trial < 5; trial++)
             {
-                var twin = Make();
-                var before = GC.GetAllocatedBytesForCurrentThread();
-                twin.Increment(0);
-                aloneBytes = Math.Min(aloneBytes, GC.GetAllocatedBytesForCurrentThread() - before);
+                // Each array is made afresh before each attempt at its measurement, in a
+                // no-GC region (#293), since what is measured changes it and an attempt can
+                // be repeated.
+                ValeCounterArray twin = null;
+                aloneBytes = Math.Min(aloneBytes, NoGCRegion.Allocated(
+                    () => { twin.Increment(0); },
+                    first: () => twin = Make()));
 
-                var array = Make();
-                var tails = array.ReserveTails();
-                Assert.AreEqual(onTails, array.ChunksWithTails, "reserving moved a chunk");
-                Assert.AreEqual(1_000UL, array.Get(C + 3));
-                before = GC.GetAllocatedBytesForCurrentThread();
-                array.MoveChunkToTails(0, tails);
-                array.Increment(0);
-                reservedBytes = Math.Min(reservedBytes, GC.GetAllocatedBytesForCurrentThread() - before);
+                ValeCounterArray array = null;
+                ulong[] tails = null;
+                reservedBytes = Math.Min(reservedBytes, NoGCRegion.Allocated(
+                    () =>
+                    {
+                        array.MoveChunkToTails(0, tails);
+                        array.Increment(0);
+                    },
+                    first: () =>
+                    {
+                        array = Make();
+                        tails = array.ReserveTails();
+                        Assert.AreEqual(onTails, array.ChunksWithTails, "reserving moved a chunk");
+                        Assert.AreEqual(1_000UL, array.Get(C + 3));
+                    }));
 
                 AssertAlike(twin, array, $"trial {trial}");
                 Assert.AreEqual(onTails + 1, array.ChunksWithTails, $"trial {trial}: chunks on tails");
