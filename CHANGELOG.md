@@ -2089,12 +2089,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now stands for a doubling no total reaches: the add that took such a sketch's total to
   `ulong.MaxValue` doubled its rows, and so did every add after a removal there, and
   neither does now. The total stops at `ulong.MaxValue` rather than wrapping, as a counter
-  does. Every payload 6.2.0 wrote reads as before: a sweep of growth exponents and size
-  factors through long runs of adds, removals, resets and round trips, written by 6.2.0
-  and by this release, found every total below its doubling count and every doubling
-  count the one its width gives, and this release's reader read every payload of the
-  sweep's that 6.2.0 wrote. No sketch a stream can build behaves differently short of
-  2^64 - 1 adds, and the format is unchanged. (#202)
+  does. A sweep of growth exponents and size factors through long runs of adds, removals,
+  resets and round trips, written by 6.2.0 and by this release, found every total below
+  its doubling count and every doubling count the one its width gives, and this release's
+  reader read every payload of the sweep's that 6.2.0 wrote. A payload 6.2.0 wrote after
+  a doubling ran out of memory, or after a reset did once the rows had doubled twice or
+  more, breaks one of the checks, and 6.2.0 refused nearly all of those itself, for their
+  records or their length. The exception is a doubling that ran out of memory growing the
+  sketch's list of records, before it had added a record or changed the width: 6.2.0 read
+  that payload back, with its total at its doubling count, and this release refuses it.
+  FORMAT.md says which payloads these are (#307). No sketch a stream can build behaves
+  differently short of 2^64 - 1 adds, and the format is unchanged. (#202)
 
 - **A `SublimeCountMinSketch` that ran out of memory doubling or folding back its rows was
   left half-changed.** The `Add` that doubles the rows counted its key, appended the record

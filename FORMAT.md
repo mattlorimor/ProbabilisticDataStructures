@@ -1459,7 +1459,18 @@ is not the same in its last bit on every platform, and a payload written on one 
 on another; twice the width doubles at about twice the count or more, which no such
 difference reaches. A doubling count of 2^64 or more is written as the largest `u64` and
 stands for one no total reaches, so any total fits beneath it, the largest included.
-Every payload 6.2.0 wrote meets both. The count at which the arrays fold back is held to
+By its code, every payload 6.2.0 wrote meets both but one written after a doubling ran out
+of memory, or after a reset did once the arrays had doubled twice or more. 6.2.0 took the
+record of a doubling, or set the new width, before it allocated the arrays to go with it,
+and kept what it had done when the allocation failed. Such a doubling left the total at the
+doubling count, and such a reset left the doubling count of the wider arrays beside the
+starting width. 6.2.0's reader refused nearly all of these, because each carries a record
+the doublings after it do not require, or arrays half the width the payload claims. The
+exception is a doubling that ran out of memory at its first step, growing the list the
+records are kept in, before it had added a record or changed the width: the total is at
+the doubling count, and the records and width are as they were. 6.2.0 read that payload
+back, and its next add doubled the arrays. This reader refuses it, for its total.
+The count at which the arrays fold back is held to
 the records: the arrays fold back by the last record, and a sketch has a count to fold at
 only while it holds one, so a payload with no records and a folding count other than nought
 is refused. 6.2.0 wrote such a payload when a removal ran out of memory folding the arrays
