@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Hashing;
 using System.Linq;
+using System.Reflection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 
@@ -106,7 +107,7 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         internal sealed record Swept(
             string Name, byte[] Bytes, Func<byte[], ReadOptions, object> Read,
-            string SmallBecause = null, long Allowance = PerByte, string CostlyBecause = null);
+            string SmallBecause = null, long Allowance = PerByte, string CostlyBecause = null, int? ArrayBits = null);
 
         private static Swept Of<T>(string name, T structure) where T : IBinaryPersistable<T> =>
             new(name, structure.ToByteArray(), (bytes, options) => Persistence.FromByteArray<T>(bytes, options));
@@ -155,7 +156,8 @@ namespace TestProbabilisticDataStructures
                     }
                 },
                 Allowance: allowance,
-                CostlyBecause: costlyBecause);
+                CostlyBecause: costlyBecause,
+                ArrayBits: LoweredArrayBits);
             }
             finally
             {
@@ -330,9 +332,23 @@ namespace TestProbabilisticDataStructures
         private static long BoundFor(long held, long perByte = PerByte) => perByte * held + Fixed;
 
         /// <summary>
+        /// The budgets every cut is read under: none, the default, and twice the bound for the
+        /// bytes the cut holds, which covers its envelope and everything those bytes allow a
+        /// read to cost, so that a cut refused under it for its budget was priced for bytes it
+        /// does not hold.
+        /// </summary>
+        private static (string Name, Func<long, ReadOptions> For)[] BudgetsFor(Swept sample) =>
+        [
+            ("no budget", _ => ReadOptions.Unlimited),
+            ("the default budget", _ => ReadOptions.Default),
+            ("a budget of twice its bound", held => new ReadOptions(2 * BoundFor(held, sample.Allowance))),
+        ];
+
+        /// <summary>
         /// Every structure's reader, given a payload of its own cut short at each length, refuses
-        /// it having allocated no more than the bound for the bytes it holds, under no budget and
-        /// under the default one.
+        /// it for what it lacks, never for its budget, having allocated no more than the bound for
+        /// the bytes it holds: under no budget, under the default one, and under one that covers
+        /// no more than those bytes allow.
         /// </summary>
         [TestMethod]
         [DynamicData(nameof(Structures))]
@@ -342,9 +358,9 @@ namespace TestProbabilisticDataStructures
             foreach (var sample in SweptFor(id))
             {
                 AssertTheWholeLoads(sample);
-                foreach (var options in new[] { ReadOptions.Unlimited, ReadOptions.Default })
+                foreach (var (name, options) in BudgetsFor(sample))
                 {
-                    AssertEveryCutIsRefusedWithinTheBound(sample, options);
+                    AssertEveryCutIsRefusedWithinTheBound(sample, name, options);
                 }
             }
         }
@@ -372,11 +388,12 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Every cut of the sample is refused, and allocated no more than its bound before it
-        /// was; and where the sample is allowed more than <see cref="PerByte"/> a byte, some cut
-        /// under no budget allocated more than that, so that the allowance is not out of date.
+        /// Every cut of the sample is refused for what it lacks, not for its budget, and allocated
+        /// no more than its bound before it was; and where the sample is allowed more than
+        /// <see cref="PerByte"/> a byte, some cut under no budget allocated more than that, so that
+        /// the allowance is not out of date.
         /// </summary>
-        private static void AssertEveryCutIsRefusedWithinTheBound(Swept sample, ReadOptions options)
+        private static void AssertEveryCutIsRefusedWithinTheBound(Swept sample, string budget, Func<long, ReadOptions> optionsFor)
         {
             Assert.IsGreaterThanOrEqualTo(PerByte, sample.Allowance, $"{sample.Name} is allowed less than every structure");
             Assert.AreEqual(sample.Allowance == PerByte, sample.CostlyBecause is null,
@@ -394,6 +411,7 @@ namespace TestProbabilisticDataStructures
                 {
                     var at = i;
                     var payload = Cut(sample.Bytes, cuts[i]);
+                    var options = optionsFor(payload.Length);
                     works.Add(() =>
                     {
                         try
@@ -412,7 +430,6 @@ namespace TestProbabilisticDataStructures
                 NoGCRegion.AllocatedEach(works).CopyTo(allocated, start);
             }
 
-            var budget = options.IsUnlimited ? "no budget" : "the default budget";
             var problems = new List<string>();
             var costliest = 0L;
             for (var i = 0; i < cuts.Length; i++)
@@ -424,9 +441,9 @@ namespace TestProbabilisticDataStructures
                 {
                     problems.Add($"cut to {cuts[i]:N0} bytes, it was {(refusals[i] is null ? "read" : "refused with " + refusals[i].GetType().Name + ": " + refusals[i].Message)}");
                 }
-                else if (options.IsUnlimited && refusal.InnerException is ReadBudgetExceededException)
+                else if (refusal.InnerException is ReadBudgetExceededException)
                 {
-                    problems.Add($"cut to {cuts[i]:N0} bytes, it was refused for a budget it was not given: {refusal.Message}");
+                    problems.Add($"cut to {cuts[i]:N0} bytes, it was refused for its budget rather than for the bytes it lacks: {refusal.Message}");
                 }
                 else if (allocated[i] > bound)
                 {
@@ -439,12 +456,110 @@ namespace TestProbabilisticDataStructures
                 $"{sample.Name}, of {length:N0} bytes, under {budget}, at {problems.Count} of {cuts.Length} cuts; the first: " +
                 string.Join(" | ", problems.Take(3)));
 
-            if (sample.CostlyBecause is not null && options.IsUnlimited)
+            if (sample.CostlyBecause is not null && budget == "no budget")
             {
                 Assert.IsGreaterThan(0, costliest,
                     $"{sample.Name} is allowed {sample.Allowance} bytes a byte because {sample.CostlyBecause}, and no cut " +
                     $"of it allocated more than the {PerByte} every structure is allowed, so the allowance is out of date");
             }
+        }
+
+        /// <summary>
+        /// Every structure's price, walked over a payload of its own cut short at each length,
+        /// prices no more than the bound for the bytes the cut holds. A price checks that the
+        /// payload holds what a size claims before it prices the claim, as its reader checks
+        /// before it allocates (TESTING.md), so that a short payload is refused for what it lacks
+        /// under any budget that holds it, and is never refused for a budget it was priced past
+        /// on bytes it does not have.
+        /// </summary>
+        [TestMethod]
+        [DynamicData(nameof(Structures))]
+        public void TestEveryPriceRefusesWhatItsPayloadDoesNotHoldBeforePricingIt(string structure)
+        {
+            var id = Enum.Parse<StructureId>(structure);
+            var price = PriceOf(id);
+            PriceAllowances.TryGetValue(id, out var priced);
+            Assert.IsTrue(priced.Why is null || !string.IsNullOrWhiteSpace(priced.Why), $"{id}'s price is allowed more without a reason");
+            var first = true;
+            foreach (var sample in SweptFor(id))
+            {
+                var allowance = Math.Max(sample.Allowance, priced.Allowance);
+                var version = BinaryPrimitives.ReadUInt16LittleEndian(sample.Bytes.AsSpan(4));
+                var length = sample.Bytes.Length - PayloadStart - ChecksumLength;
+                var problems = new List<string>();
+                var walked = 0;
+                var costliest = long.MinValue;
+                Buckets64.LoweredArrayBits = sample.ArrayBits;
+                try
+                {
+                    foreach (var cut in Cuts(length))
+                    {
+                        var budget = new ReadBudget(long.MaxValue, id);
+                        var reader = new PayloadReader(sample.Bytes.AsSpan(PayloadStart, cut), budget);
+                        var stopped = "it walked to its end";
+                        try
+                        {
+                            price(ref reader, version);
+                        }
+                        catch (InvalidDataException e)
+                        {
+                            stopped = e.Message;
+                        }
+
+                        walked++;
+                        var held = PayloadStart + cut + ChecksumLength;
+                        var bound = BoundFor(held, allowance);
+                        costliest = Math.Max(costliest, budget.Charged - BoundFor(held, sample.Allowance));
+                        if (budget.Charged > bound)
+                        {
+                            problems.Add($"cut to {cut:N0} bytes, it priced {budget.Charged:N0}, past the {bound:N0} the bytes " +
+                                $"it holds allow, and then stopped: {stopped}");
+                        }
+                    }
+                }
+                finally
+                {
+                    Buckets64.LoweredArrayBits = null;
+                }
+
+                Assert.IsEmpty(problems,
+                    $"{sample.Name}'s price, at {problems.Count} of {walked} cuts; the first: " + string.Join(" | ", problems.Take(3)));
+                if (priced.Why is not null && first)
+                {
+                    Assert.IsGreaterThan(0, costliest,
+                        $"{id}'s price is allowed {priced.Allowance} bytes a byte because {priced.Why}, and no cut of " +
+                        $"{sample.Name} was priced past what its read is allowed, so the allowance is out of date");
+                }
+
+                first = false;
+            }
+        }
+
+        /// <summary>
+        /// Structures whose price, of a cut of their budget sample, may come to more than what
+        /// their read of it is allowed, with what it may come to and why. A price of a claim is
+        /// what reading it costs whole, so where a check made before pricing is a necessary
+        /// condition rather than the bytes themselves, the claim it lets through is priced whole.
+        /// </summary>
+        private static readonly Dictionary<StructureId, (long Allowance, string Why)> PriceAllowances = new()
+        {
+            // Measured: 4.73 a byte, at the one cut that lands inside its current rows near
+            // their start; its read of the same cuts needs at most 2.17.
+            [StructureId.SublimeCountMinSketch] = (6,
+                "its shape check holds the current rows' counters to the bytes after the shape, which the records " +
+                "before them share, and each block of counters is priced plain and packed before it is skipped, so a cut " +
+                "inside the current rows is priced for counters the records' bytes stood in for"),
+        };
+
+        /// <summary>The structure's own price, the walk its read is priced by.</summary>
+        private static PayloadPrice PriceOf(StructureId id)
+        {
+            var type = typeof(BloomFilter).Assembly.GetType("ProbabilisticDataStructures." + id);
+            Assert.IsNotNull(type, $"{id} names no type");
+            var method = type.GetMethod("Price", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+                [typeof(PayloadReader).MakeByRefType(), typeof(ushort)]);
+            Assert.IsNotNull(method, $"{id} has no price to walk");
+            return (PayloadPrice)Delegate.CreateDelegate(typeof(PayloadPrice), method);
         }
 
         /// <summary>
