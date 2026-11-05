@@ -430,10 +430,13 @@ namespace TestProbabilisticDataStructures
         /// The roster is the library's types with a non-public constructor taking a placement
         /// that hold a <see cref="Buckets64"/>, whose positions are counted in 64 bits; the
         /// others that take a placement count theirs in 32, which no size of theirs passes.
-        /// Each is asked for one-bit buckets at a rate of one half, one hash function, so that
-        /// the partitioned filter's one partition is its filter. Refused, each allocates
-        /// nothing; built, each is half a gigabyte of buckets. That they still build with
-        /// 32-bit placement where it holds their positions is
+        /// Each is asked for one-bit buckets, at a rate of one half, one hash function, except
+        /// the partitioned filter, asked at a quarter, two, so that what it is held to is a
+        /// partition and not its whole, as the deletable filter is held to its data region and
+        /// not its whole by its collision region. Each refusal is counted in a no-GC region and
+        /// held to 16 KiB, its exception and message; a table built first is half a gigabyte or
+        /// more, past the region's room. That they still build with 32-bit placement where it
+        /// holds their positions is
         /// <see cref="TestAnOldPayloadOfAnySizeKeepsTheThirtyTwoBitScheme"/>'s, at 2^27.
         /// </remarks>
         [TestMethod]
@@ -441,18 +444,25 @@ namespace TestProbabilisticDataStructures
         {
             const ulong Past = (ulong)uint.MaxValue + 1;
             const double Rate = 0.5;
+            const double TwoPartitions = 0.25;
+            const long Refusal = 16 * 1024;
             Assert.AreEqual(1u, Utils.OptimalK(Rate), "premise: a rate of one half is not one hash function");
+            Assert.AreEqual(2u, Utils.OptimalK(TwoPartitions), "premise: a rate of a quarter is not two hash functions");
             var n = SmallestCountReaching64(Past, Rate);
             var m = Utils.OptimalM64(n, Rate);
             var deletable = SmallestCountReaching64(Past + 1, Rate);
+            var partitioned = SmallestCountReaching64(2 * Past - 1, TwoPartitions);
             var builds = new Dictionary<Type, (ulong Positions, Func<object> Build)>
             {
                 [typeof(CountingBloomFilter)] = (m, () => new CountingBloomFilter(n, 1, Rate, null, Placement.Narrow)),
-                // One collision region, so that the data region, which it places among, is past the edge.
+                // One collision region, so that the data region, which it places among, is past
+                // the edge, a position short of the whole.
                 [typeof(DeletableBloomFilter)] = (Utils.OptimalM64(deletable, Rate) - 1,
                     () => new DeletableBloomFilter(deletable, 1, Rate, null, Placement.Narrow)),
-                [typeof(PartitionedBloomFilter)] = (PartitionedBloomFilter.PartitionSize(m, 1),
-                    () => new PartitionedBloomFilter(n, Rate, null, Placement.Narrow)),
+                // Two partitions, so that a partition, which it places among, is past the edge,
+                // half the whole.
+                [typeof(PartitionedBloomFilter)] = (PartitionedBloomFilter.PartitionSize(Utils.OptimalM64(partitioned, TwoPartitions), 2),
+                    () => new PartitionedBloomFilter(partitioned, TwoPartitions, null, Placement.Narrow)),
                 [typeof(StableBloomFilter)] = (Past, () => new StableBloomFilter(Past, 1, Rate, null, 1, Placement.Narrow)),
             };
 
@@ -470,17 +480,39 @@ namespace TestProbabilisticDataStructures
             {
                 Assert.IsGreaterThan((ulong)uint.MaxValue, positions, $"premise: {type.Name} places among no more than a uint counts");
                 Assert.IsLessThan(Past + 4, positions, $"premise: {type.Name} is asked far past the edge");
-                try
+
+                // Counted in a no-GC region, whose room a table of the filter would pass, so
+                // that a refusal made once the table is allocated fails here.
+                ArgumentOutOfRangeException refused = null;
+                var allocated = NoGCRegion.Allocated(() =>
                 {
-                    GC.KeepAlive(build());
-                    wrong.Add($"{type.Name} was built placing {positions:N0} positions with 32-bit values");
-                }
-                catch (ArgumentOutOfRangeException e) when (e.ParamName == "placement")
-                {
-                    if (!e.Message.Contains($"{positions:N0}", StringComparison.Ordinal))
+                    refused = null;
+                    try
                     {
-                        wrong.Add($"{type.Name}'s refusal does not name its {positions:N0} positions: {e.Message}");
+                        return build();
                     }
+                    catch (ArgumentOutOfRangeException e) when (e.ParamName == "placement")
+                    {
+                        refused = e;
+                        return null;
+                    }
+                });
+
+                if (refused is null)
+                {
+                    wrong.Add($"{type.Name} was built placing {positions:N0} positions with 32-bit values");
+                    continue;
+                }
+
+                if (!refused.Message.Contains($"{positions:N0}", StringComparison.Ordinal))
+                {
+                    wrong.Add($"{type.Name}'s refusal does not name its {positions:N0} positions: {refused.Message}");
+                }
+
+                Console.WriteLine($"[PLACEMENT] {type.Name}: refused among {positions:N0} positions, having allocated {allocated:N0} bytes");
+                if (allocated > Refusal)
+                {
+                    wrong.Add($"{type.Name} allocated {allocated:N0} bytes before it refused, more than a refusal needs");
                 }
             }
 
