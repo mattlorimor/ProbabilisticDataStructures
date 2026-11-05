@@ -304,14 +304,72 @@ namespace ProbabilisticDataStructures
     }
 
     /// <summary>
-    /// The positions of one item among a 64-bit count of them. Not written yet: the next
-    /// commit writes it (#232).
+    /// The positions of one item in a filter, or a partition of one, of <c>m</c> positions
+    /// where <c>m</c> is a 64-bit count, under one placement: <see cref="Positions"/> for
+    /// the filters whose buckets are a <see cref="Buckets64"/>.
     /// </summary>
+    /// <remarks>
+    /// Where both can hold <c>m</c>, a position is the one <see cref="Positions"/> gives,
+    /// under either scheme, so a filter that places through this places as it did through
+    /// that, and as its stored payloads were placed. The 64-bit scheme is the one
+    /// <see cref="BloomFilter64"/> places with, its position never narrowed: past 2^32
+    /// positions a <c>uint</c> would reach only the first 2^32.
+    /// <para>
+    /// The 32-bit scheme is reduced modulo a 32-bit <c>m</c>, as every payload placed with
+    /// it records one: its sum, and every filter it has placed, are below 2^32. A
+    /// <see cref="Positions64"/> under it is for an <c>m</c> of at most
+    /// <see cref="uint.MaxValue"/>, which a filter's reader holds a payload to, and which no
+    /// constructor's choice can pass: <see cref="BitPlacement.For"/> chooses it only below
+    /// 2^27. The reduction is in 32 bits, as <see cref="Positions"/>' is, so that the
+    /// filters below 2^27, which are most of them, divide as they did.
+    /// </para>
+    /// </remarks>
     internal readonly struct Positions64
     {
-        internal static Positions64 Of(
-            ReadOnlySpan<byte> data, Func<ReadOnlySpan<byte>, ulong> hash, Placement placement, ulong m) => default;
+        private readonly ulong first;
+        private readonly ulong step;
+        private readonly ulong m;
+        private readonly bool wide;
 
-        internal ulong this[uint i] => throw new NotImplementedException("#232");
+        private Positions64(ulong first, ulong step, ulong m, bool wide)
+        {
+            this.first = first;
+            this.step = step;
+            this.m = m;
+            this.wide = wide;
+        }
+
+        /// <summary>
+        /// The positions <paramref name="data"/> takes under
+        /// <paramref name="placement"/>, among <paramref name="m"/>.
+        /// </summary>
+        internal static Positions64 Of(
+            ReadOnlySpan<byte> data, Func<ReadOnlySpan<byte>, ulong> hash, Placement placement, ulong m) =>
+            OfHash(hash(data), hash, placement, m);
+
+        /// <summary>
+        /// The positions of an item whose hash, under <paramref name="function"/>, is
+        /// <paramref name="hash"/>. The two values are the ones
+        /// <see cref="Positions.OfHash"/> takes, held as it holds them.
+        /// </summary>
+        internal static Positions64 OfHash(
+            ulong hash, Func<ReadOnlySpan<byte>, ulong> function, Placement placement, ulong m)
+        {
+            if (placement == Placement.Wide)
+            {
+                EightBytes bytes = default;
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes, hash);
+                return new Positions64(hash, function(bytes), m, wide: true);
+            }
+
+            return new Positions64((uint)hash, (uint)(hash >> 32), m, wide: false);
+        }
+
+        /// <summary>
+        /// The <paramref name="i"/>th position, below <c>m</c>.
+        /// </summary>
+        internal ulong this[uint i] => this.wide
+            ? (this.first + this.step * i) % this.m
+            : ((uint)this.first + (uint)this.step * i) % (uint)this.m;
     }
 }

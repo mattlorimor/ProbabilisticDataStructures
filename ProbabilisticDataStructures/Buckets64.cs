@@ -389,10 +389,32 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Adds each of <paramref name="other"/>'s counters to its counterpart. Not written
-        /// yet: the next commit writes it (#232).
+        /// Adds each of <paramref name="other"/>'s counters to its counterpart, holding at
+        /// the maximum a bucket can carry. See <see cref="Buckets.Add"/>, whose rule this is.
         /// </summary>
-        internal Buckets64 Add(Buckets64 other) => throw new NotImplementedException("#232");
+        /// <remarks>
+        /// A bucket at a time, through each table's own layout, so two tables split into
+        /// arrays at different sizes add as two of one array do. The sum is held at the
+        /// maximum before it is narrowed: at eight bits a sum can pass 255, and cast to a
+        /// byte first it would wrap to a small count, under what the two counters stood for.
+        /// </remarks>
+        internal Buckets64 Add(Buckets64 other)
+        {
+            if (this.count != other.count || this.bucketSize != other.bucketSize)
+            {
+                throw new ArgumentException(
+                    $"Cannot add {this.count} buckets of {this.bucketSize} bits to " +
+                    $"{other.count} of {other.bucketSize}.", nameof(other));
+            }
+
+            for (ulong i = 0; i < this.count; i++)
+            {
+                var sum = this.Get(i) + other.Get(i);
+                this.Set(i, sum > this._max ? this._max : (byte)sum);
+            }
+
+            return this;
+        }
 
         /// <summary>
         /// Restores the Buckets64 to the original state. Returns itself to allow for
