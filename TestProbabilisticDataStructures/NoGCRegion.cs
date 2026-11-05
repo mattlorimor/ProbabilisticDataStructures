@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime;
 using System.Threading;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -149,6 +150,72 @@ namespace TestProbabilisticDataStructures
                 work();
                 return null;
             }, first, room);
+
+        /// <summary>
+        /// What each of <paramref name="works"/> allocates on this thread, counted one after
+        /// another inside one no-GC region, each as
+        /// <see cref="Allocated(Func{object}, Action, long)"/> counts one, so that a sweep of
+        /// many small measurements pays for entering a region once rather than once each.
+        /// </summary>
+        /// <remarks>
+        /// Entering a region collects first, which is most of what a small measurement costs.
+        /// The works share the region's room, and a collection that ends it before the last is
+        /// counted loses them all: they are measured again in a new one, as one work is.
+        /// </remarks>
+        internal static long[] AllocatedEach(IReadOnlyList<Func<object>> works, long room = Room)
+        {
+            var counts = new long[works.Count];
+            var results = new object[works.Count];
+            lock (Turn)
+            {
+                for (var attempt = 1; attempt <= Attempts; attempt++)
+                {
+                    Enter(room);
+
+                    var collections = GC.CollectionCount(0);
+                    var intact = false;
+                    long total = 0;
+                    try
+                    {
+                        for (var i = 0; i < works.Count; i++)
+                        {
+                            var before = GC.GetAllocatedBytesForCurrentThread();
+                            results[i] = works[i]();
+                            counts[i] = GC.GetAllocatedBytesForCurrentThread() - before;
+                            total += counts[i];
+                        }
+                    }
+                    finally
+                    {
+                        intact = Leave(collections);
+                    }
+
+                    GC.KeepAlive(results);
+                    Array.Clear(results);
+                    if (intact)
+                    {
+                        return counts;
+                    }
+
+                    if (total > room)
+                    {
+                        Assert.Fail(
+                            $"the works allocated {total:N0} bytes, more than the {room:N0} of the no-GC region " +
+                            "they were measured in, so a collection ran while they were counted. Measure fewer at once.");
+                    }
+
+                    Console.WriteLine(
+                        $"[NO-GC-REGION] attempt {attempt}: a collection ended the region before {works.Count} works " +
+                        "were done; measuring them again in a new one");
+                    Thread.Sleep(Math.Min(attempt * 10, 500));
+                }
+
+                Assert.Fail(
+                    $"a collection ended the no-GC region before {works.Count} works were done at every one of " +
+                    $"{Attempts} attempts, so nothing was measured without one running.");
+                return counts;
+            }
+        }
 
         private static void Enter(long room)
         {
