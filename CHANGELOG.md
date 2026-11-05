@@ -515,6 +515,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for real, with the threshold and the longest run lowered beneath its own. No structure
   needed a change. (#279)
 
+- **A `CountMinSketch`, and the one a `TopK` holds, read their counters in pieces, and load
+  from the large form seven to nine times as fast.** The counters have no length before
+  them, and were read a counter at a time: from the large form, which is read from its stream,
+  each was a call to the stream and an append to every checksum carried. They are now read
+  16 KiB at a time, from the stream or from the held payload, through a buffer on the stack,
+  and so at close to a `CountSketch`'s speed, whose cells have been read in pieces since
+  #228. The buffer is kept that small because it is on the caller's stack: 16 KiB is the
+  shortest piece, in powers of two from 1 KiB to 64 KiB, that read a large sketch from a
+  file within a tenth of the time 64 KiB pieces took. The bytes written are unchanged, and so
+  is what a read is charged, since nothing is allocated for the pieces. Measured for a sketch
+  of 5 rows of 10,000,000 counters, 400 MB, the median of three runs, each the best of three
+  reads: from the large form in memory 0.678 s became 0.090 s, and from a file 0.771 s became
+  0.102 s; a `TopK` holding such a sketch, 0.860 s became 0.107 s, and 1.040 s became
+  0.117 s. The ordinary envelope, already read from memory, went from 0.166 s to 0.125 s.
+  (#289)
+
 ### Fixed
 
 - **FORMAT.md gives 3.2.0 as the release that first wrote format version 1.** Its version
