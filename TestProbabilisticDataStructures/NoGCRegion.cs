@@ -146,18 +146,20 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Ends the region <see cref="Enter"/> entered, if a collection has not ended it
-        /// already, and says whether it held: no collection ran since
-        /// <paramref name="collections"/> were counted.
+        /// Ends the region <see cref="Enter"/> entered, whatever became of it, and says whether
+        /// it held: still in force, no collection since <paramref name="collections"/> were
+        /// counted, and ended as one in which none ran.
         /// </summary>
+        /// <remarks>
+        /// Ended even when the latency mode says a collection already ended it. In a full run of
+        /// the suite a region lost that way was still recorded as started, and the next attempt
+        /// was refused as one already in progress, three tests' worth; ending a region clears
+        /// that record whatever its state (gc.cpp <c>gc_heap::end_no_gc_region</c>, which also
+        /// reports, as an exception here, a collection that ran while it was recorded).
+        /// </remarks>
         private static bool Leave(int collections)
         {
-            if (GCSettings.LatencyMode != GCLatencyMode.NoGCRegion)
-            {
-                return false;
-            }
-
-            var held = GC.CollectionCount(0) == collections;
+            var held = GCSettings.LatencyMode == GCLatencyMode.NoGCRegion && GC.CollectionCount(0) == collections;
             try
             {
                 GC.EndNoGCRegion();
