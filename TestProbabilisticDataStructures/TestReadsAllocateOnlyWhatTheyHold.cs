@@ -39,10 +39,12 @@ namespace TestProbabilisticDataStructures
     /// sample (<see cref="TestReadBudget.Samples"/>, held to the same roster), which loads and
     /// allocates well past the bound, so that what a claim costs could not hide in it. Where
     /// that sample does not reach a reader's claim, a further sample does, and says which
-    /// (<see cref="Further"/>). Where a valid payload costs more than the bound, the structure
-    /// states what it costs instead (<see cref="Expansions"/>), and where the sample's read is
+    /// (<see cref="Further"/>). Where what a reader can check before it allocates leaves a
+    /// refusal costing more than the bound, the sample states what it may cost instead and why
+    /// (<see cref="Allowances"/>, and the arrays of <see cref="ManyArrays"/>), and some cut has
+    /// to cost more than the bound, or the allowance is out of date. Where the sample's read is
     /// sized by a parameter rather than by data, the payload is replaced
-    /// (<see cref="Instead"/>); each of those is a claim, and is checked.
+    /// (<see cref="Instead"/>), and a witness has to show the parameter's cost.
     /// </para>
     /// <para>
     /// What a size can claim before anything is read is bounded by the size checks every reader
@@ -65,13 +67,16 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// What a refused read may allocate for each byte it was given: the payload it holds, and
         /// as much again twice over for what it built from what it read before it was refused.
+        /// The most any sample held to it needed, every cut measured with <see cref="Fixed"/>
+        /// taken off, was 3.79, a 64-bit Bloom filter stored in many arrays.
         /// </summary>
         private const long PerByte = 4;
 
         /// <summary>
         /// What a refused read may allocate whatever it was given: its stream, its envelope's
-        /// buffers and checksum, the exception and its message. The most measured was 5,688
-        /// bytes, a <c>MinHashSignature</c> refused at its first byte.
+        /// buffers and checksum, the exception and its message. The most any cut of a sample
+        /// held to <see cref="PerByte"/> needed besides was 7,860 bytes, an inverse filter's 4 KiB
+        /// of slots, which its capacity names; most need under 4,800.
         /// </summary>
         private const long Fixed = 16L << 10;
 
@@ -94,27 +99,52 @@ namespace TestProbabilisticDataStructures
             return key;
         }
 
-        /// <summary>A payload to cut, and how to read it.</summary>
-        internal sealed record Swept(string Name, byte[] Bytes, Func<byte[], ReadOptions, object> Read, string SmallBecause = null);
+        /// <summary>
+        /// A payload to cut, how to read it, and what a refusal of a cut of it may allocate for
+        /// each byte the cut holds: <see cref="PerByte"/>, unless <paramref name="CostlyBecause"/>
+        /// says why it costs more, which the sweep then checks some cut does.
+        /// </summary>
+        internal sealed record Swept(
+            string Name, byte[] Bytes, Func<byte[], ReadOptions, object> Read,
+            string SmallBecause = null, long Allowance = PerByte, string CostlyBecause = null);
 
         private static Swept Of<T>(string name, T structure) where T : IBinaryPersistable<T> =>
             new(name, structure.ToByteArray(), (bytes, options) => Persistence.FromByteArray<T>(bytes, options));
 
         /// <summary>
-        /// A sample built and read with its 64-bit bucket table's arrays lowered to
-        /// <paramref name="arrayBits"/> bits, so that a table of a few hundred kilobytes is stored
-        /// as thousands of arrays, and the array of arrays its reader allocates first is larger
-        /// than <see cref="Fixed"/>.
+        /// The bits <see cref="ManyArrays"/> lowers a table's arrays to: 16 bytes each, so that a
+        /// table of a few hundred kilobytes is stored as tens of thousands of arrays.
         /// </summary>
-        private static Swept ManyArrays<T>(string name, int arrayBits, Func<T> build) where T : IBinaryPersistable<T>
+        private const int LoweredArrayBits = 4;
+
+        /// <summary>
+        /// Why a table of counters or cells in arrays of 16 bytes costs more to refuse than
+        /// <see cref="PerByte"/> a byte. A table of bits has as many arrays for as many bytes, but
+        /// seven in eight of them are empty, stored as their lengths and read back as nothing.
+        /// Two a byte for the references, one for the payload and two for the arrays read back is
+        /// five; measured, 4.67 for counters and 4.56 for cells, and they are allowed six.
+        /// </summary>
+        private const string FullArraysCost =
+            "its array of arrays is 8 bytes for each array, whose length takes 4 in the payload, so its reader can " +
+            "know only that the payload holds half a byte per byte of it, and every array is full, so a cut just long " +
+            "enough for every length reads arrays of 16 bytes back at 40 each besides";
+
+        /// <summary>
+        /// A sample built and read with its 64-bit bucket tables' arrays lowered to
+        /// <see cref="LoweredArrayBits"/>, so that the array of arrays its reader allocates
+        /// before reading any of them is far larger than <see cref="Fixed"/>, allowed
+        /// <paramref name="allowance"/> a byte because <paramref name="costlyBecause"/>.
+        /// </summary>
+        private static Swept ManyArrays<T>(string name, Func<T> build, long allowance = PerByte, string costlyBecause = null)
+            where T : IBinaryPersistable<T>
         {
-            Buckets64.LoweredArrayBits = arrayBits;
+            Buckets64.LoweredArrayBits = LoweredArrayBits;
             try
             {
                 var bytes = build().ToByteArray();
                 return new(name, bytes, (b, options) =>
                 {
-                    Buckets64.LoweredArrayBits = arrayBits;
+                    Buckets64.LoweredArrayBits = LoweredArrayBits;
                     try
                     {
                         return Persistence.FromByteArray<T>(b, options);
@@ -123,7 +153,9 @@ namespace TestProbabilisticDataStructures
                     {
                         Buckets64.LoweredArrayBits = null;
                     }
-                });
+                },
+                Allowance: allowance,
+                CostlyBecause: costlyBecause);
             }
             finally
             {
@@ -151,42 +183,42 @@ namespace TestProbabilisticDataStructures
             [StructureId.BloomFilter64] =
             [
                 ("its table is one array, and a table of many is read into an array of arrays sized by their count",
-                    () => ManyArrays("BloomFilter64 in many arrays", 7, () => Filled(new BloomFilter64(150_000, 0.01), (f, k) => f.Add(k), 5000))),
+                    () => ManyArrays("BloomFilter64 in many arrays", () => Filled(new BloomFilter64(150_000, 0.01), (f, k) => f.Add(k), 5000))),
             ],
             [StructureId.CountingBloomFilter] =
             [
                 ("its table is one array, and a table of many is read into an array of arrays sized by their count",
-                    () => ManyArrays("CountingBloomFilter in many arrays", 5, () => Filled(new CountingBloomFilter(50_000, 4, 0.01), (f, k) => f.Add(k), 5000))),
+                    () => ManyArrays("CountingBloomFilter in many arrays", () => Filled(new CountingBloomFilter(50_000, 4, 0.01), (f, k) => f.Add(k), 5000), 6, FullArraysCost)),
             ],
             [StructureId.DeletableBloomFilter] =
             [
                 ("its tables are one array each, and a table of many is read into an array of arrays sized by their count",
-                    () => ManyArrays("DeletableBloomFilter in many arrays", 7, () => Filled(new DeletableBloomFilter(150_000, 1000, 0.01), (f, k) => f.Add(k), 5000))),
+                    () => ManyArrays("DeletableBloomFilter in many arrays", () => Filled(new DeletableBloomFilter(150_000, 1000, 0.01), (f, k) => f.Add(k), 5000))),
             ],
             [StructureId.PartitionedBloomFilter] =
             [
                 ("its partitions are one array each, and a partition of many is read into an array of arrays sized by their count",
-                    () => ManyArrays("PartitionedBloomFilter in many arrays", 4, () => Filled(new PartitionedBloomFilter(150_000, 0.01), (f, k) => f.Add(k), 5000))),
+                    () => ManyArrays("PartitionedBloomFilter in many arrays", () => Filled(new PartitionedBloomFilter(150_000, 0.01), (f, k) => f.Add(k), 5000))),
             ],
             [StructureId.StableBloomFilter] =
             [
                 ("its cells are one array, and cells in many are read into an array of arrays sized by their count",
-                    () => ManyArrays("StableBloomFilter in many arrays", 4, () => Filled(new StableBloomFilter(200_000, 8, 0.01, seed: 1), (f, k) => f.Add(k), 5000))),
+                    () => ManyArrays("StableBloomFilter in many arrays", () => Filled(new StableBloomFilter(200_000, 8, 0.01, seed: 1), (f, k) => f.Add(k), 5000), 6, FullArraysCost)),
             ],
         };
 
         /// <summary>
-        /// Structures a valid payload of which costs more to read than <see cref="PerByte"/> times
-        /// its bytes, with what it costs at most, why, and a valid payload costing more than the
-        /// default, which is what shows the exception is still needed.
+        /// Structures whose budget sample costs more than <see cref="PerByte"/> a byte to refuse
+        /// when its reader checks all it can before allocating, with what it may cost and why.
         /// </summary>
-        private static readonly Dictionary<StructureId, (long PerByte, string Why, Func<Swept> Costly)> Expansions = new()
+        private static readonly Dictionary<StructureId, (long Allowance, string Why)> Allowances = new()
         {
-            [StructureId.VarOpt] = (20,
-                "a sampling reservoir's five regions take 40 bytes a slot, every slot holds an item, and an item takes " +
-                "as little as its 4-byte length in the payload, so a reader can know only that the payload holds a " +
-                "quarter of a byte per byte of regions, and an item of one byte is 32 more read back",
-                () => Of("VarOpt of one-byte items", Filled(new VarOpt(5000, 1), (v, k) => v.Add(k.AsSpan(0, 1).ToArray()), 20_000))),
+            // Ten a byte for the regions, one for the payload and 32 for each 12-byte item read
+            // back is 13.7; measured, 11.91.
+            [StructureId.VarOpt] = (16,
+                "a sampling reservoir's five regions take 40 bytes a slot and every slot holds an item, which takes as " +
+                "little as its 4-byte length in the payload, so its reader can know only that the payload holds a tenth " +
+                "of a byte per byte of regions, and an item of 8 bytes is read back at 32"),
         };
 
         /// <summary>
@@ -220,7 +252,13 @@ namespace TestProbabilisticDataStructures
             {
                 Assert.IsTrue(TestReadBudget.Samples.Value.TryGetValue(id, out var sample),
                     $"{id} has no read-budget sample to cut short. Add one there.");
-                yield return new(sample.Name, sample.Bytes, sample.Read, sample.SmallBecause);
+                var swept = new Swept(sample.Name, sample.Bytes, sample.Read, sample.SmallBecause);
+                if (Allowances.TryGetValue(id, out var allowance))
+                {
+                    Assert.IsFalse(string.IsNullOrWhiteSpace(allowance.Why), $"{id} is allowed {allowance.Allowance} bytes a byte without a reason");
+                    swept = swept with { Allowance = allowance.Allowance, CostlyBecause = allowance.Why };
+                }
+                yield return swept;
             }
 
             if (Further.TryGetValue(id, out var further))
@@ -264,8 +302,7 @@ namespace TestProbabilisticDataStructures
             }
         }
 
-        private static long BoundFor(StructureId id, long held) =>
-            (Expansions.TryGetValue(id, out var expansion) ? expansion.PerByte : PerByte) * held + Fixed;
+        private static long BoundFor(long held, long perByte = PerByte) => perByte * held + Fixed;
 
         /// <summary>
         /// Every structure's reader, given a payload of its own cut short at each length, refuses
@@ -282,7 +319,7 @@ namespace TestProbabilisticDataStructures
                 AssertTheWholeLoads(sample);
                 foreach (var options in new[] { ReadOptions.Unlimited, ReadOptions.Default })
                 {
-                    AssertEveryCutIsRefusedWithinTheBound(id, sample, options);
+                    AssertEveryCutIsRefusedWithinTheBound(sample, options);
                 }
             }
         }
@@ -309,8 +346,17 @@ namespace TestProbabilisticDataStructures
             }
         }
 
-        private static void AssertEveryCutIsRefusedWithinTheBound(StructureId id, Swept sample, ReadOptions options)
+        /// <summary>
+        /// Every cut of the sample is refused, and allocated no more than its bound before it
+        /// was; and where the sample is allowed more than <see cref="PerByte"/> a byte, some cut
+        /// under no budget allocated more than that, so that the allowance is not out of date.
+        /// </summary>
+        private static void AssertEveryCutIsRefusedWithinTheBound(Swept sample, ReadOptions options)
         {
+            Assert.IsGreaterThanOrEqualTo(PerByte, sample.Allowance, $"{sample.Name} is allowed less than every structure");
+            Assert.AreEqual(sample.Allowance == PerByte, sample.CostlyBecause is null,
+                $"{sample.Name} is allowed {sample.Allowance} bytes a byte, and a reason only for more than {PerByte}");
+
             var length = sample.Bytes.Length - PayloadStart - ChecksumLength;
             var cuts = Cuts(length).ToArray();
             var refusals = new Exception[cuts.Length];
@@ -318,12 +364,11 @@ namespace TestProbabilisticDataStructures
             for (var start = 0; start < cuts.Length; start += PerRegion)
             {
                 var end = Math.Min(cuts.Length, start + PerRegion);
-                var payloads = new byte[end - start][];
                 var works = new List<Func<object>>();
                 for (var i = start; i < end; i++)
                 {
                     var at = i;
-                    var payload = payloads[i - start] = Cut(sample.Bytes, cuts[i]);
+                    var payload = Cut(sample.Bytes, cuts[i]);
                     works.Add(() =>
                     {
                         try
@@ -344,9 +389,12 @@ namespace TestProbabilisticDataStructures
 
             var budget = options.IsUnlimited ? "no budget" : "the default budget";
             var problems = new List<string>();
+            var costliest = 0L;
             for (var i = 0; i < cuts.Length; i++)
             {
-                var bound = BoundFor(id, PayloadStart + cuts[i] + ChecksumLength);
+                var held = PayloadStart + cuts[i] + ChecksumLength;
+                var bound = BoundFor(held, sample.Allowance);
+                costliest = Math.Max(costliest, allocated[i] - BoundFor(held));
                 if (refusals[i] is not InvalidDataException refusal)
                 {
                     problems.Add($"cut to {cuts[i]:N0} bytes, it was {(refusals[i] is null ? "read" : "refused with " + refusals[i].GetType().Name + ": " + refusals[i].Message)}");
@@ -365,36 +413,29 @@ namespace TestProbabilisticDataStructures
             Assert.IsEmpty(problems,
                 $"{sample.Name}, of {length:N0} bytes, under {budget}, at {problems.Count} of {cuts.Length} cuts; the first: " +
                 string.Join(" | ", problems.Take(3)));
+
+            if (sample.CostlyBecause is not null && options.IsUnlimited)
+            {
+                Assert.IsGreaterThan(0, costliest,
+                    $"{sample.Name} is allowed {sample.Allowance} bytes a byte because {sample.CostlyBecause}, and no cut " +
+                    $"of it allocated more than the {PerByte} every structure is allowed, so the allowance is out of date");
+            }
         }
 
         /// <summary>
-        /// Each structure allowed more than the bound has a valid payload costing more than the
-        /// bound to read, so the allowance is needed, and no more than the allowance, so it is
-        /// enough; each structure swept with another payload has a witness that its budget
-        /// sample's cost is a parameter's, a valid payload holding nothing and allocating past
-        /// the bound; and every further sample makes a claim the budget sample's bound would hide.
+        /// Each structure swept with another payload has a witness that its budget sample's cost
+        /// is a parameter's: a valid payload holding nothing, which allocates past the bound.
         /// </summary>
         [TestMethod]
-        public void TestEveryExceptionTheSweepMakesIsStillNeeded()
+        public void TestEveryPayloadSweptInsteadIsSizedByAParameter()
         {
-            foreach (var (id, (perByte, why, costly)) in Expansions)
-            {
-                Assert.IsFalse(string.IsNullOrWhiteSpace(why), $"{id} is allowed {perByte} bytes a byte without a reason");
-                var sample = costly();
-                var whole = NoGCRegion.Allocated(() => sample.Read(sample.Bytes, ReadOptions.Unlimited));
-                Assert.IsGreaterThan(PerByte * sample.Bytes.Length + Fixed, whole,
-                    $"{sample.Name} reads within the bound every other structure is held to, so {id}'s allowance of " +
-                    $"{perByte} bytes a byte is out of date");
-                Assert.IsLessThanOrEqualTo(perByte * sample.Bytes.Length + Fixed, whole,
-                    $"{sample.Name} costs more to read than {id}'s allowance of {perByte} bytes a byte");
-            }
-
             foreach (var (id, (why, _, witness)) in Instead)
             {
                 Assert.IsFalse(string.IsNullOrWhiteSpace(why), $"{id} is swept as another payload without a reason");
+                Assert.IsFalse(Allowances.ContainsKey(id), $"{id} is both swept as another payload and allowed more for its own");
                 var sample = witness();
                 var whole = NoGCRegion.Allocated(() => sample.Read(sample.Bytes, ReadOptions.Unlimited));
-                Assert.IsGreaterThan(BoundFor(id, sample.Bytes.Length), whole,
+                Assert.IsGreaterThan(BoundFor(sample.Bytes.Length), whole,
                     $"{sample.Name}, a payload of {sample.Bytes.Length:N0} bytes, reads within the bound, so {id}'s " +
                     "budget sample is not sized by a parameter and should be swept as it is");
             }
