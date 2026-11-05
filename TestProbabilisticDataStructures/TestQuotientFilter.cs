@@ -304,7 +304,9 @@ namespace TestProbabilisticDataStructures
         {
             var slots = new QuotientFilter(2000, 0.01).SlotCount;
 
-            foreach (var held in new[] { 600u, slots / 2 })
+            // A hundred entries are listed and the rest copy the table, which is the
+            // cheaper of the two for them (TestAFilterMergedIntoItselfTakesTheCheaperOfItsEntriesAndItsTable).
+            foreach (var held in new[] { 100, 600, (int)(slots / 2) })
             {
                 var filter = new QuotientFilter(2000, 0.01);
                 var twin = new QuotientFilter(2000, 0.01);
@@ -319,7 +321,7 @@ namespace TestProbabilisticDataStructures
                 var returned = filter.Merge(filter);
 
                 Assert.AreSame(filter, returned, "the merge did not return the filter it was called on");
-                Assert.AreEqual(2 * held, filter.Count(), $"{held} entries merged into themselves");
+                Assert.AreEqual((ulong)(2 * held), filter.Count(), $"{held} entries merged into themselves");
                 CollectionAssert.AreEqual(twin.ToByteArray(), filter.ToByteArray(),
                     $"{held} entries merged into themselves did not leave what adding each twice does");
 
@@ -360,6 +362,58 @@ namespace TestProbabilisticDataStructures
             var before = small.ToByteArray();
             Assert.ThrowsExactly<InvalidOperationException>(() => small.Merge(small));
             CollectionAssert.AreEqual(before, small.ToByteArray(), "a refused self-merge changed the filter");
+        }
+
+        /// <summary>
+        /// A filter merged into itself reads the table it writes, so it takes what it reads
+        /// first, and it takes the cheaper of two ways to: its entries listed, sixteen bytes
+        /// each, or a copy of its table. It used to list them whatever they cost, and past
+        /// 2^31 slots (#231) a filter can hold more entries than one list does, at sixteen
+        /// bytes each where a slot costs at most eight: listing a table that full cannot be
+        /// done, and copying it can.
+        /// </summary>
+        /// <remarks>
+        /// The table is 2^20 slots of ten bits, 163,842 words and 1,310,736 bytes. A thousand
+        /// entries list in 16,000, and a quarter of the slots in 4,194,304; a quarter, so that
+        /// the merge leaves the table half full, since each insert into a table near full
+        /// walks a cluster nearly as long as the table. Each self-merge is held to the cheaper
+        /// of the two and a slack, measured in a no-GC region on a filter read from a payload
+        /// each time so that every attempt merges the same table; the dearer is more than
+        /// twice that bound in each, so taking the wrong one fails, either way.
+        /// </remarks>
+        [TestMethod]
+        public void TestAFilterMergedIntoItselfTakesTheCheaperOfItsEntriesAndItsTable()
+        {
+            const long Slack = 4096;
+
+            foreach (var held in new[] { 1_000, 1 << 18 })
+            {
+                var filter = new QuotientFilter(400_000, 0.01);
+                for (var i = 0; i < held; i++)
+                {
+                    filter.Add(Key($"item{i}"));
+                }
+
+                Assert.AreEqual(1UL << 20, (ulong)filter.SlotCount, "premise: 2^20 slots");
+                Assert.AreEqual(10u, filter.BitsPerSlot(), "premise: slots of ten bits");
+                var tableBytes = 8L * ((((1L << 20) * 10) >> 6) + 2);
+                var listBytes = 16L * held;
+                var cheaper = Math.Min(tableBytes, listBytes);
+                Assert.IsGreaterThan(2 * (cheaper + Slack), Math.Max(tableBytes, listBytes),
+                    $"{held} entries: premise, the dearer way is far past the bound");
+
+                var payload = filter.ToByteArray();
+                QuotientFilter merged = null;
+                var allocated = NoGCRegion.Allocated(
+                    () => merged.Merge(merged),
+                    first: () => merged = Persistence.FromByteArray<QuotientFilter>(payload));
+
+                Assert.AreEqual((ulong)(2 * held), merged.Count(), $"{held} entries: the merge did not double them");
+                Assert.IsTrue(merged.Test(Key("item0")) && merged.Test(Key($"item{held - 1}")));
+                Assert.IsLessThan(cheaper + Slack, allocated,
+                    $"{held} entries merged into themselves allocated {allocated:N0} bytes, where listing them " +
+                    $"costs {listBytes:N0} and copying the table {tableBytes:N0}");
+            }
         }
 
         /// <summary>

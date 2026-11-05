@@ -885,7 +885,7 @@ namespace TestProbabilisticDataStructures
                 var table = new InvertibleBloomLookupTable(4, 4);
                 TestPayloadCount.AssertStreamedWhileClaiming(table, 6_000_000_020, 6_000_000_032, (table, "cells", 300_000_000u));
                 var quotient = new QuotientFilter(100, 0.01);
-                TestPayloadCount.AssertStreamedWhileClaiming(quotient, 2_147_483_680, 2_147_483_684,
+                TestPayloadCount.AssertStreamedWhileClaiming(quotient, 2_147_483_684, 2_147_483_688,
                     (quotient, "quotientBits", 31u), (quotient, "remainderBits", 5u));
 
                 return NestedRunWritten(268_435_443, 1) == 2_147_483_603

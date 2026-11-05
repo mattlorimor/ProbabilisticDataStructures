@@ -1018,22 +1018,46 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// The constructor's sizing is reachable on its own through
         /// <see cref="QuotientFilter.Split"/>, so its edges are checked without
-        /// allocating the tables they describe -- the largest is gigabytes. Every split it
+        /// allocating the tables they describe -- the largest are gigabytes. Every split it
         /// returns is inside what the reader accepts, and one past the reader's own
-        /// limits is refused. The reader takes a 32-bit quotient as well, one more than
-        /// the constructor builds, because earlier constructors wrote a wrapped one-slot
-        /// table that way; that payload is pinned by its own fixture.
+        /// limits is refused.
+        /// <para>
+        /// The table is one array of 64-bit words (#231), so the limits past 2^31 slots are
+        /// that array's, restated here from FORMAT.md as <c>floor(2^q (r + 3) / 64) + 2</c>
+        /// words against <see cref="Array.MaxLength"/>: the widest table is the one whose
+        /// narrowest slot, a remainder of one bit and three of bookkeeping, still fits, and
+        /// at each width past 31 bits the widest remainder is the widest that fits. The
+        /// reader of version 1 takes a 32-bit quotient as well, which earlier constructors
+        /// wrote as a wrapped one-slot table; that payload is pinned by its own fixture.
+        /// </para>
         /// </summary>
         [TestMethod]
         public void TestQuotientFilterLimitIsShared()
         {
-            // The largest table: q = 31, and one item more is refused.
+            // The largest table: the narrowest slot fits one array there and not at the
+            // next width, and one item more than it is sized for is refused.
+            Assert.IsLessThanOrEqualTo((long)Array.MaxLength, QuotientWords(QuotientFilter.MaxQuotientBits, 1),
+                "the narrowest slots of the widest table have to fit one array");
+            Assert.IsGreaterThan((long)Array.MaxLength, QuotientWords(QuotientFilter.MaxQuotientBits + 1, 1),
+                "the next width up is one whose narrowest table no array holds, which is why it is the limit");
             Assert.AreEqual((uint)QuotientFilter.MaxQuotientBits,
                 QuotientFilter.Split(QuotientFilter.MaxItems, 0.5).QuotientBits);
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(
                 () => QuotientFilter.Split(QuotientFilter.MaxItems + 1, 0.5));
-            Assert.IsLessThanOrEqualTo((ulong)uint.MaxValue, 1UL << QuotientFilter.MaxQuotientBits);
-            Assert.IsGreaterThan((ulong)uint.MaxValue, 1UL << (QuotientFilter.MaxQuotientBits + 1));
+
+            // Past 31 bits, the widest remainder at each width is what one array holds:
+            // the item count that fills 2^q slots to three quarters, at that remainder's
+            // rate, is sized, and a rate one bit finer is refused.
+            for (var width = 32; width <= QuotientFilter.MaxQuotientBits; width++)
+            {
+                var n = QuotientFilter.MaxItems >> (QuotientFilter.MaxQuotientBits - width);
+                var widest = WidestQuotientRemainderInOneArray(width);
+                Assert.AreEqual(((uint)width, (uint)widest), QuotientFilter.Split(n, Math.ScaleB(1.0, -widest)),
+                    $"2^{width} slots: the widest remainder one array holds is not sized");
+                Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                    () => QuotientFilter.Split(n, Math.ScaleB(1.0, -widest - 1)),
+                    $"2^{width} slots: a remainder wider than one array holds was sized");
+            }
 
             // The widest split: all of the hash at a million items, and one bit more is
             // refused.
@@ -1049,16 +1073,94 @@ namespace TestProbabilisticDataStructures
                 () => QuotientFilter.Split(1, Math.ScaleB(1.0, -QuotientFilter.MaxRemainderBits - 1)));
 
             // The reader, one past each of its limits: u32 quotient bits at 0, u32
-            // remainder bits at 4.
+            // remainder bits at 4. A save is version 12, where the quotient runs to the
+            // widest table and no further.
             var bytes = new QuotientFilter(100, 0.01).ToByteArray();
             AssertRefused<QuotientFilter>(
-                PokeUInt32(bytes, 0, (uint)QuotientFilter.MaxQuotientBits + 2), "quotient bits");
+                PokeUInt32(bytes, 0, (uint)QuotientFilter.MaxQuotientBits + 1), "quotient bits");
 
             // One bit past the hash, exactly: the remainder that, with this filter's
             // quotient, makes sixty-five.
             var quotientBits = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(PayloadStart));
             AssertRefused<QuotientFilter>(
                 PokeUInt32(bytes, 4, (uint)QuotientFilter.HashBits - quotientBits + 1), "not a split of a");
+
+            // And one bit past one array, at each width past 31 bits: the widths are a
+            // split of the hash, and their table is more words than an array holds.
+            for (var width = 32; width <= QuotientFilter.MaxQuotientBits; width++)
+            {
+                var poked = PokeUInt32(PokeUInt32(bytes, 0, (uint)width), 4,
+                    (uint)WidestQuotientRemainderInOneArray(width) + 1);
+                AssertRefused<QuotientFilter>(poked, "one array");
+            }
+
+            // Version 1 reads a 32-bit quotient as the wrapped table, and no wider one.
+            AssertRefused<QuotientFilter>(PokeUInt32(StoredFixture("quotientfilter-v1.bin"), 0, 33), "quotient bits");
+        }
+
+        /// <summary>
+        /// A table of 2^32 slots or more is gigabytes, too large to build in the suite, so it
+        /// is read structurally (TESTING.md, "Round-trip at the sizes the constructor
+        /// allows"): a small payload's widths are raised to a table past 2^31 slots that the
+        /// constructor builds, at the narrowest remainder and at the widest one array holds,
+        /// and the reader, with nothing limiting its budget, must refuse it only for the bytes
+        /// it lacks. The refusal names the slots and the bytes that table has, worked out here
+        /// from FORMAT.md, so a slot count or a length narrowed to 32 bits is caught; and it
+        /// comes before the table is allocated, which is what makes the check cheap. That is
+        /// the check a real payload of that size passes.
+        /// </summary>
+        [TestMethod]
+        public void TestAQuotientTablePastTwoToTheThirtyOneSlotsIsRefusedOnlyForTheBytesItLacks()
+        {
+            var filter = new QuotientFilter(100, 0.01);
+            for (var i = 0; i < 10; i++) filter.Add(Key(i));
+            var bytes = filter.ToByteArray();
+
+            foreach (var (q, r) in new[] { (32, 1), (32, 28), (33, 1), (33, 12), (34, 1), (34, 4) })
+            {
+                var poked = PokeUInt32(PokeUInt32(bytes, 0, (uint)q), 4, (uint)r);
+
+                InvalidDataException refused = null;
+                var allocated = NoGCRegion.Allocated(() =>
+                {
+                    refused = Assert.ThrowsExactly<InvalidDataException>(
+                        () => Persistence.FromByteArray<QuotientFilter>(poked, ReadOptions.Unlimited),
+                        $"2^{q} slots of {r + 3} bits, in a payload that holds none of them, were read");
+                });
+
+                StringAssert.Contains(refused.Message, $"has {1UL << q} slots of {r + 3} bits",
+                    $"2^{q} slots of {r + 3} bits were refused for something else: {refused.Message}");
+                StringAssert.Contains(refused.Message, $"needing {8 * QuotientWords(q, r)} bytes",
+                    $"2^{q} slots of {r + 3} bits: {refused.Message}");
+                Assert.IsLessThan(1L << 20, allocated,
+                    $"2^{q} slots of {r + 3} bits: the read allocated {allocated:N0} bytes before refusing");
+            }
+        }
+
+        /// <summary>
+        /// FORMAT.md's words of a quotient table: 2^q slots of r + 3 bits, and two spare.
+        /// </summary>
+        private static long QuotientWords(int quotientBits, int remainderBits) =>
+            (((1L << quotientBits) * (remainderBits + 3)) >> 6) + 2;
+
+        /// <summary>
+        /// The widest remainder a table of 2^q slots can have, restated: a split of the hash,
+        /// in a slot of one word, whose table is one array.
+        /// </summary>
+        private static int WidestQuotientRemainderInOneArray(int quotientBits)
+        {
+            var r = Math.Min(QuotientFilter.MaxRemainderBits, QuotientFilter.HashBits - quotientBits);
+            while (QuotientWords(quotientBits, r) > Array.MaxLength) r--;
+            return r;
+        }
+
+        private static byte[] StoredFixture(string name)
+        {
+            using var stream = typeof(TestLoadWhatItBuilds).Assembly
+                .GetManifestResourceStream($"TestProbabilisticDataStructures.fixtures.{name}")!;
+            using var copy = new MemoryStream();
+            stream.CopyTo(copy);
+            return copy.ToArray();
         }
 
         // ---- Exemptions, and the tests that check their reasons --------------------
@@ -1572,7 +1674,11 @@ namespace TestProbabilisticDataStructures
                     new[] { nameof(TestStableBloomFilterReadsPastTheOldCeiling) },
                     nameof(TestStableFilterLimitIsShared)),
                 (StructureId.QuotientFilter,
-                    new[] { nameof(TestQuotientFilterAtItsWidestSplitRoundTrips) },
+                    new[]
+                    {
+                        nameof(TestQuotientFilterAtItsWidestSplitRoundTrips),
+                        nameof(TestAQuotientTablePastTwoToTheThirtyOneSlotsIsRefusedOnlyForTheBytesItLacks),
+                    },
                     nameof(TestQuotientFilterLimitIsShared)),
             };
 
