@@ -685,6 +685,69 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// An increment that moves its chunk to a tails array reserved for it beforehand leaves
+        /// the array as the increment alone leaves it, and allocates nothing: the reservation
+        /// holds the array and the room to put it in place. That is what lets an add reserve one
+        /// for every chunk its increments move and then take them all without running out of
+        /// memory partway (#274).
+        /// </summary>
+        /// <remarks>
+        /// The first chunk is one add from spilling, the second holds an extension, and
+        /// <paramref name="onTails"/> chunks after them are on tails already. Between reserving
+        /// and moving, a counter of the second chunk is read, which leaves that chunk's pool in
+        /// the scratch buffer the move decants from; the move has to read its own. The twin
+        /// takes the increment alone, which allocates its tails array, and the two are held to
+        /// each other counter by counter. What each allocates is the least of five tries, as a
+        /// collection running beside one can add to it, and the twin's has to be more than
+        /// nought, so the measurement can see the allocation it says is gone.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(0, DisplayName = "the first chunk on tails")]
+        [DataRow(3, DisplayName = "three chunks on tails already")]
+        public void TestAReservedMoveToTailsIsTheIncrementsOwnAndAllocatesNothing(int onTails)
+        {
+            ValeCounterArray Make()
+            {
+                var array = new ValeCounterArray((2 + onTails) * C, C, S);
+                for (var chunk = 2; chunk < 2 + onTails; chunk++)
+                {
+                    array.Set(chunk * C, ulong.MaxValue);
+                    array.Set(chunk * C + 1, ulong.MaxValue);
+                }
+                array.Set(C + 3, 1_000);
+                OneAddFromSpilling(array, 0);
+                Assert.AreEqual(onTails, array.ChunksWithTails, "the chunks set to be on tails");
+                Assert.IsTrue(array.IncrementMovesToTails(0), "the first chunk is not one add from spilling");
+                return array;
+            }
+
+            var reservedBytes = long.MaxValue;
+            var aloneBytes = long.MaxValue;
+            for (var trial = 0; trial < 5; trial++)
+            {
+                var twin = Make();
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                twin.Increment(0);
+                aloneBytes = Math.Min(aloneBytes, GC.GetAllocatedBytesForCurrentThread() - before);
+
+                var array = Make();
+                var tails = array.ReserveTails();
+                Assert.AreEqual(onTails, array.ChunksWithTails, "reserving moved a chunk");
+                Assert.AreEqual(1_000UL, array.Get(C + 3));
+                before = GC.GetAllocatedBytesForCurrentThread();
+                array.MoveChunkToTails(0, tails);
+                array.Increment(0);
+                reservedBytes = Math.Min(reservedBytes, GC.GetAllocatedBytesForCurrentThread() - before);
+
+                AssertAlike(twin, array, $"trial {trial}");
+                Assert.AreEqual(onTails + 1, array.ChunksWithTails, $"trial {trial}: chunks on tails");
+            }
+
+            Assert.IsTrue(aloneBytes > 0, "the increment alone allocated nothing, so the measurement sees nothing");
+            Assert.AreEqual(0L, reservedBytes, $"the reserved move allocated, where the increment alone took {aloneBytes}");
+        }
+
+        /// <summary>
         /// Fills the pool of the chunk starting at <paramref name="first"/> with as many of the
         /// shortest extensions as it holds, and leaves its first counter one count short of
         /// needing one more.

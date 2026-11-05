@@ -391,7 +391,9 @@ namespace ProbabilisticDataStructures
         /// the sketch as it was before the add: the key is not counted, so adding it again
         /// counts it once. So does an add that crowds the rows, by putting more than three in
         /// a hundred of their chunks on tails arrays, into being laid out again: it builds them
-        /// laid out, the key counted, before it changes anything.
+        /// laid out, the key counted, before it changes anything. And so does an add that puts
+        /// chunks on tails arrays without crowding the rows: it allocates the arrays before it
+        /// takes any of its increments.
         /// </para>
         /// </remarks>
         /// <param name="data">The data to add.</param>
@@ -440,12 +442,13 @@ namespace ProbabilisticDataStructures
                 return this;
             }
 
-            // So does the add that crowds the rows into being laid out again, by moving their
-            // chunks to tails arrays. Most of an add's increments stop at a stub with room,
-            // which can neither allocate nor move a chunk, so those are taken at once, and
-            // only a row whose stub is full is asked whether its increment would move its
-            // chunk. An add that would crowd the rows takes the others back, exactly, before
-            // it builds anything, so that the rows are built from the sketch as it was.
+            // So does an add whose increments move chunks to tails arrays, which allocates them,
+            // or crowds the rows into being laid out again. Most of an add's increments stop at
+            // a stub with room, which can neither allocate nor move a chunk, so those are taken
+            // at once, and only a row whose stub is full is asked whether its increment would
+            // move its chunk. An add that would move one takes the others back, exactly, before
+            // it allocates anything, so that the rows are built, or the tails arrays allocated,
+            // from the sketch as it was.
             for (var i = 0; i < this.rows.Length; i++)
             {
                 if (!this.rows[i].IncrementInStub(ColumnOf(kernel, i)))
@@ -469,9 +472,11 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Takes the rest of an add whose increment in row <paramref name="first"/> found its
         /// stub full, the rows before it having taken theirs in their stubs: the remaining rows'
-        /// increments, or, if the increments past a full stub would crowd the rows, none of
-        /// them, taking back those already taken in their stubs and laying the rows out again
-        /// with the key counted. Returns whether it laid them out, which counts the key;
+        /// increments, or, if the increments past a full stub would move chunks to tails
+        /// arrays, none of them until it has what that needs. Then it takes back those already
+        /// taken in their stubs, and either lays the rows out again with the key counted, if
+        /// the moves would crowd them, or allocates the tails arrays and only then takes every
+        /// row's increment. Returns whether it laid the rows out, which counts the key;
         /// otherwise the add counts it.
         /// </summary>
         /// <remarks>
@@ -496,29 +501,76 @@ namespace ProbabilisticDataStructures
                 }
             }
 
-            if (moving > 0 && Crowded(ChunksOnTails() + moving))
+            // An increment past a full stub that moves no chunk allocates nothing, so those
+            // are taken where they lie, as the stubs' were.
+            if (moving == 0)
             {
                 for (var i = 0; i < this.rows.Length; i++)
                 {
-                    if (!full[i])
+                    if (full[i])
                     {
-                        this.rows[i].TakeBackFromStub(ColumnOf(kernel, i));
+                        this.rows[i].Increment(ColumnOf(kernel, i));
                     }
                 }
 
+                return false;
+            }
+
+            // The rest allocate, laying the rows out or moving the chunks, and either can run out
+            // of memory, so the sketch is put back as it was before the add before either does.
+            for (var i = 0; i < this.rows.Length; i++)
+            {
+                if (!full[i])
+                {
+                    this.rows[i].TakeBackFromStub(ColumnOf(kernel, i));
+                }
+            }
+
+            if (Crowded(ChunksOnTails() + moving))
+            {
                 Repack(kernel);
                 return true;
             }
 
+            TakeMovingIncrements(kernel);
+            return false;
+        }
+
+        /// <summary>
+        /// Takes an add none of whose increments has been taken and some of which move a chunk
+        /// to a tails array, without crowding the rows: it allocates each of those arrays
+        /// first, and only then takes every row's increment, which then allocates nothing.
+        /// </summary>
+        /// <remarks>
+        /// So an add that runs out of memory here leaves the sketch as it was, and the add
+        /// tried again counts the key once. It used to take each row's increment in turn, and
+        /// the increment that moved a chunk allocated its tails array after writing the
+        /// counter's stub, so a failure there left that counter at its stub carried and its
+        /// high bits not, nought for a counter of 31, and the estimate with it, below what was
+        /// added; the rows before it had counted the key (#274).
+        /// </remarks>
+        private void TakeMovingIncrements(in HashKernelReturnValue kernel)
+        {
+            var tails = new ulong[]?[this.rows.Length];
             for (var i = 0; i < this.rows.Length; i++)
             {
-                if (full[i])
+                if (this.rows[i].IncrementMovesToTails(ColumnOf(kernel, i)))
                 {
-                    this.rows[i].Increment(ColumnOf(kernel, i));
+                    tails[i] = this.rows[i].ReserveTails();
                 }
             }
 
-            return false;
+            // Allocated; from here the increments are taken, and nothing allocates.
+            for (var i = 0; i < this.rows.Length; i++)
+            {
+                var column = ColumnOf(kernel, i);
+                if (tails[i] is { } reserved)
+                {
+                    this.rows[i].MoveChunkToTails(column, reserved);
+                }
+
+                this.rows[i].Increment(column);
+            }
         }
 
         /// <summary>

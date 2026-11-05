@@ -116,9 +116,10 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Called before the array allocates a tails array for a chunk that has outgrown its
-        /// pool, the one allocation a write to a counter can make. It is null;
-        /// <see cref="SublimeCountMinSketch.BeforeAllocating"/> hands a test's hook to the
-        /// rows of a sketch, to fail that allocation.
+        /// pool, the one allocation a write to a counter can make, and before
+        /// <see cref="ReserveTails"/> allocates one ahead of the increment that needs it. It
+        /// is null; <see cref="SublimeCountMinSketch.BeforeAllocating"/> hands a test's hook to
+        /// the rows of a sketch, to fail that allocation.
         /// </summary>
         internal Action? BeforeAllocatingTails { get; set; }
 
@@ -517,18 +518,59 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Empties a chunk's pool into a tails array and flags the chunk as using one.
+        /// Allocates what an increment that <see cref="IncrementMovesToTails"/> says will move
+        /// its chunk needs, past <see cref="BeforeAllocatingTails"/>: the tails array, and room
+        /// for it among the chunks on tails. It changes no counter; the array is for
+        /// <see cref="MoveChunkToTails"/>.
+        /// </summary>
+        /// <remarks>
+        /// So that an add can get the memory for every chunk its increments move before it
+        /// takes any of them. The increment allocated the array itself, after writing the
+        /// counter's stub, and one that ran out of memory there left the stub carried and the
+        /// high bits not (#274). The room is made here as well, so that putting the array in
+        /// place cannot grow the dictionary of them; an increment moves one chunk at most.
+        /// </remarks>
+        internal ulong[] ReserveTails()
+        {
+            BeforeAllocatingTails?.Invoke();
+            var tails = new ulong[_countersPerChunk];
+            _tails.EnsureCapacity(_tails.Count + 1);
+            return tails;
+        }
+
+        /// <summary>
+        /// Moves the chunk of counter <paramref name="index"/> onto <paramref name="tails"/>, an
+        /// array <see cref="ReserveTails"/> allocated, for the increment that
+        /// <see cref="IncrementMovesToTails"/> says will move it. No counter changes, and nothing
+        /// is allocated: the increment taken after it writes the counter's high bits there.
+        /// </summary>
+        internal void MoveChunkToTails(int index, ulong[] tails)
+        {
+            var chunk = ChunkOf(index, out _);
+            ReadPool(chunk);
+            MoveToTails(chunk, TotalPoolBits(), tails);
+        }
+
+        /// <summary>
+        /// Empties a chunk's pool into a new tails array and flags the chunk as using one.
+        /// </summary>
+        private ulong[] MoveToTails(int chunk, int used)
+        {
+            BeforeAllocatingTails?.Invoke();
+            return MoveToTails(chunk, used, new ulong[_countersPerChunk]);
+        }
+
+        /// <summary>
+        /// Empties a chunk's pool, read into the scratch buffer, into a tails array of nothing
+        /// but noughts, and flags the chunk as using it.
         /// </summary>
         /// <remarks>
         /// The extensions are in counter order but say nothing about which counters
         /// they belong to; that is recovered by walking the overflows bitmap alongside
         /// them, the r-th extension belonging to the r-th counter whose bit is set.
         /// </remarks>
-        private ulong[] MoveToTails(int chunk, int used)
+        private ulong[] MoveToTails(int chunk, int used, ulong[] tails)
         {
-            BeforeAllocatingTails?.Invoke();
-            var tails = new ulong[_countersPerChunk];
-
             var at = 0;
             var rank = 0;
             while (at < used)
