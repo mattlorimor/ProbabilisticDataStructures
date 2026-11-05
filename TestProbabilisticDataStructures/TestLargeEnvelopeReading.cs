@@ -954,7 +954,15 @@ namespace TestProbabilisticDataStructures
         /// The array reads the second pass makes of a sample's payload in the large form, with
         /// the piece at <paramref name="piece"/>, or as it ships; the sample has to read back.
         /// </summary>
-        private static List<Asked> ArrayReads(TestReadBudget.Sample sample, byte[] large, int? piece)
+        private static List<Asked> ArrayReads(TestReadBudget.Sample sample, byte[] large, int? piece) =>
+            SecondPass(sample, large, piece).Where(a => !a.IsMove && a.Array && a.From < large.Length - 4).ToList();
+
+        /// <summary>
+        /// Everything the second pass asks of the stream a sample's payload in the large form is
+        /// read from, with the piece at <paramref name="piece"/>, or as it ships; the sample has
+        /// to read back.
+        /// </summary>
+        private static List<Asked> SecondPass(TestReadBudget.Sample sample, byte[] large, int? piece)
         {
             var stream = new Recording(large);
             var restored = WithPieces(piece, () => sample.ReadStream(stream, ReadOptions.Unlimited));
@@ -963,7 +971,7 @@ namespace TestProbabilisticDataStructures
             var log = stream.Log;
             var back = log.FindIndex(a => a.IsMove && a.To == PersistenceFormat.LargeHeaderLength);
             Assert.IsGreaterThanOrEqualTo(0, back, $"{sample.Name} was not read in two passes");
-            return log.Skip(back + 1).Where(a => !a.IsMove && a.Array && a.From < large.Length - 4).ToList();
+            return log.Skip(back + 1).ToList();
         }
 
         /// <summary>
@@ -1095,6 +1103,168 @@ namespace TestProbabilisticDataStructures
             return Assert.ThrowsExactly<InvalidDataException>(
                 () => sample.Read(LargeForm.Reseal(claimed), ReadOptions.Unlimited),
                 $"{sample.Name} with a run claiming a byte past one array was read");
+        }
+
+        /// <summary>
+        /// A count-min sketch's counters, which have no length before them, are read from the
+        /// large form in pieces straight into its rows (#289), alone and as the sketch a top-k
+        /// holds: through the stream's span overload, every piece as long as a piece but the
+        /// last, one after another from the first counter's first byte to the last counter's
+        /// last, and nothing else read among them. Shown with the piece as it ships and lowered
+        /// to eight words.
+        /// </summary>
+        /// <remarks>
+        /// Read a counter at a time, as they were, the counters asked the stream for eight bytes
+        /// each and appended each eight to every checksum carried, the outer one and a nested
+        /// one: in #288's round trip past 2 GiB, a top-k holding 2.44 GB of counters took 5.9 s
+        /// to load, where a count sketch of 3.0 GB, whose cells #228 reads in pieces, took
+        /// 0.9 s. The counters are found as the
+        /// bytes the sketch writes after its total count, which nothing else in either payload
+        /// repeats, and each sample's are longer than a piece as it ships, so they are read in
+        /// more than one at either length.
+        /// </remarks>
+        [TestMethod]
+        public void TestACountMinSketchsCountersAreReadFromTheLargeFormInPiecesStraightIntoItsRows()
+        {
+            var samples = TestReadBudget.Samples.Value;
+            foreach (var id in new[] { StructureId.CountMinSketch, StructureId.TopK })
+            {
+                var sample = samples[id];
+                var large = TestReadBudget.InTheLargeForm(sample).Bytes;
+                var restored = sample.Read(sample.Bytes, ReadOptions.Unlimited);
+                var sketch = restored as CountMinSketch ?? ((TopK)restored).Sketch;
+
+                // The counters as the sketch writes them: the last of its own payload.
+                var written = sketch.ToByteArray();
+                var counters = written.AsSpan(
+                    written.Length - 4 - (int)((long)sketch.Width * sketch.Depth * sizeof(ulong)),
+                    (int)((long)sketch.Width * sketch.Depth * sizeof(ulong))).ToArray();
+                long at = large.AsSpan().IndexOf(counters);
+                Assert.IsGreaterThanOrEqualTo(0L, at, $"{id}'s counters are not in its payload in the large form");
+                Assert.AreEqual(at, (long)large.AsSpan().LastIndexOf(counters), $"{id}'s counters appear in its payload twice");
+                Assert.IsGreaterThan((long)PayloadSource.PieceLength, (long)counters.Length,
+                    $"{id}'s {counters.Length:N0} bytes of counters are no longer than a piece as it ships");
+                var end = at + counters.Length;
+
+                foreach (var piece in new int?[] { null, Piece })
+                {
+                    var length = (long)(piece ?? PayloadSource.PieceLength);
+                    var reads = SecondPass(sample, large, piece).Where(a => a.From < end && at < a.To).ToList();
+                    var expected = new List<Asked>();
+                    for (var from = at; from < end; from += length)
+                    {
+                        expected.Add(new Asked(false, from, Math.Min(from + length, end), false));
+                    }
+
+                    Console.WriteLine(
+                        $"[COUNTERS] {id}: {counters.Length:N0} bytes at {at:N0}, piece {length:N0}: " +
+                        $"{reads.Count:N0} reads, the first {reads[0].Count:N0} bytes");
+                    CollectionAssert.AreEqual(expected, reads,
+                        $"{id}'s {counters.Length:N0} bytes of counters at {at:N0}, with the piece at {length:N0}, were read in " +
+                        $"{reads.Count:N0} reads, the first of {reads[0].Count:N0} bytes through the " +
+                        $"{(reads[0].Array ? "array" : "span")} overload, and not in {expected.Count:N0} pieces through the span overload");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Reading a count-min sketch's counters in pieces (#289) charges what reading them a
+        /// counter at a time did, and reads back the sketch that writes the same bytes: in the
+        /// ordinary envelope and in the large form, with the piece as it ships and lowered to
+        /// eight words, the reader charges exactly its price, and a count-min sketch's price is
+        /// its envelope and its rows. Shown at the coarsest sketch, whose counters are shorter
+        /// than either piece; at one whose counters are not a whole number of lowered pieces; at
+        /// the budget samples, whose counters are longer than a piece as it ships; at a top-k,
+        /// whose sketch is nested; and at the stored fixtures of the version the sketch writes,
+        /// which must write back as stored.
+        /// </summary>
+        /// <remarks>
+        /// The counters were read straight from the payload when it was held and through the
+        /// source's buffer for a field when it was not, so nothing was charged for them but the
+        /// rows. A buffer for the pieces on the heap would be an allocation, and a charge, that
+        /// the read did not make before; with the piece lowered there are many more pieces, so a
+        /// charge for each would show there if not at the piece as it ships.
+        /// </remarks>
+        [TestMethod]
+        public void TestReadingACountMinSketchInPiecesChargesWhatItDidAndWritesTheSameBytes()
+        {
+            var samples = TestReadBudget.Samples.Value;
+            var sketches = new List<(string Name, byte[] Bytes)>
+            {
+                ("the coarsest sketch", Filled(new CountMinSketch(0.5, 0.5), 10).ToByteArray()),
+                ("a sketch of 273 counters", Filled(new CountMinSketch(0.03, 0.1), 300).ToByteArray()),
+                ("the budget sample", samples[StructureId.CountMinSketch].Bytes),
+                ("the narrow version 9 fixture", TestLargeEnvelope.ReadFixture("countminsketch-v9-narrow.bin")),
+                ("the wide version 9 fixture", TestLargeEnvelope.ReadFixture("countminsketch-v9-wide.bin")),
+            };
+
+            var spans = new List<long>();
+            foreach (var (name, bytes) in sketches)
+            {
+                var sketch = CountMinSketch.ReadFrom(new MemoryStream(bytes), ReadOptions.Unlimited);
+                var rows = ReadBudget.Sum(
+                    ReadBudget.ArrayOf(sketch.Depth, sizeof(long)),
+                    ReadBudget.Times(sketch.Depth, ReadBudget.ArrayOf(sketch.Width, sizeof(ulong))));
+
+                var ordinary = bytes;
+                var large = LargeForm.WriteLarge(sketch);
+                spans.Add((long)sketch.Width * sketch.Depth * sizeof(ulong));
+
+                foreach (var (form, payload, envelope) in new[]
+                {
+                    ("the ordinary envelope", ordinary,
+                        PersistenceFormat.EnvelopeCost((ulong)(ordinary.Length - PersistenceFormat.EnvelopeLength))),
+                    ("the large form", large, PersistenceFormat.LargeEnvelopeCost),
+                })
+                {
+                    foreach (var piece in new int?[] { null, Piece })
+                    {
+                        var budget = new ReadBudget(long.MaxValue, StructureId.CountMinSketch);
+                        var read = WithPieces(piece, () => CountMinSketch.ReadFrom(new MemoryStream(payload), new ReadOptions(budget)));
+                        var where = $"{name} in {form}, with the piece at {piece ?? PayloadSource.PieceLength}";
+
+                        Assert.AreEqual(envelope + rows, budget.Charged, $"{where} was priced at {budget.Charged}, not its envelope and rows");
+                        Assert.AreEqual(budget.Charged, budget.Spent, $"{where} was priced at {budget.Charged} and its reader charged {budget.Spent}");
+                        CollectionAssert.AreEqual(payload,
+                            form == "the large form" ? LargeForm.WriteLarge(read) : read.ToByteArray(),
+                            $"{where} does not write the bytes it was read from");
+                    }
+                }
+            }
+
+            // A top-k's charges are its own as well as its sketch's, so they are held to its price
+            // and to themselves at either piece.
+            var topK = samples[StructureId.TopK];
+            foreach (var bytes in new[] { topK.Bytes, TestReadBudget.InTheLargeForm(topK).Bytes })
+            {
+                var spent = new List<long>();
+                foreach (var piece in new int?[] { null, Piece })
+                {
+                    var budget = new ReadBudget(long.MaxValue, StructureId.TopK);
+                    var read = WithPieces(piece, () => topK.Read(bytes, new ReadOptions(budget)));
+                    Assert.AreEqual(budget.Charged, budget.Spent, $"the top-k, with the piece at {piece}, was priced at {budget.Charged} and charged {budget.Spent}");
+                    CollectionAssert.AreEqual(bytes, LargeForm.IsLarge(bytes) ? LargeForm.WriteLarge(read) : topK.Write(read),
+                        $"the top-k, with the piece at {piece}, does not write the bytes it was read from");
+                    spent.Add(budget.Spent);
+                }
+
+                Assert.AreEqual(spent[0], spent[1], $"the top-k was charged {spent[0]} with the piece as it ships and {spent[1]} lowered");
+            }
+
+            // The counters straddled every piece boundary the claims are about.
+            Assert.IsTrue(spans.Any(s => s < Piece), "no sketch's counters were shorter than a lowered piece");
+            Assert.IsTrue(spans.Any(s => s % Piece != 0 && s > Piece), "no sketch's counters ended part of the way through a lowered piece");
+            Assert.IsTrue(spans.Any(s => s > PayloadSource.PieceLength), "no sketch's counters were longer than a piece as it ships");
+        }
+
+        private static CountMinSketch Filled(CountMinSketch sketch, int count)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                sketch.Add(Key($"cms-{i}"));
+            }
+
+            return sketch;
         }
 
         /// <summary>
