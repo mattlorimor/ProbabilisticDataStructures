@@ -209,7 +209,8 @@ namespace TestProbabilisticDataStructures
         /// and in the list; at the end every bucket does, and the bytes of the one array are
         /// the bytes of the several laid end to end, so no write strayed into a neighbour's
         /// bits. Widths 3, 5, 6 and 7 cross bytes, so even in one array they take the
-        /// general path, and are held to the same.
+        /// general path, and are held to the same. Which path each table takes is checked
+        /// first, so that the test cannot pass by holding the general path to itself.
         /// </summary>
         [TestMethod]
         public void TestATableOfOneArrayAnswersAsOneOfSeveralDoes()
@@ -222,6 +223,15 @@ namespace TestProbabilisticDataStructures
                 Assert.HasCount(1, one.RawData, $"premise: the {width}-bit table is one array");
                 Assert.IsGreaterThan(1, several.RawData.Count(array => array.Length > 0),
                     $"premise: the lowered {width}-bit table holds its bytes in several arrays");
+
+                // Which path each takes, or the two could both be the general one and this
+                // would hold nothing: the one array where no bucket crosses a byte.
+                var single = typeof(Buckets64).GetField("single",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+                var divides = 8 % width == 0;
+                Assert.AreEqual(divides, single.GetValue(one) is not null,
+                    $"premise: the {width}-bit table of one array {(divides ? "does not take" : "takes")} the one-byte path");
+                Assert.IsNull(single.GetValue(several), $"premise: the {width}-bit table of several arrays takes the one-byte path");
 
                 var max = (1 << width) - 1;
                 var model = new int[Count];
