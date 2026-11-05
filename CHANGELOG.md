@@ -1726,7 +1726,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   array of bytes, which holds 2,147,483,591: from one byte too many the build failed with
   an `OverflowException` (from 2^31) or an `OutOfMemoryException`, after hashing the whole
   set. That is 1,908,641,337 distinct keys at 8-bit fingerprints and 954,204,160 at 16;
-  954,204,160, 636,136,107 and 318,068,053 for values of up to 8, 16 and 40 bits. A set with
+  954,204,160 for values of 1 to 8 bits, 636,136,107 for 9 to 16, 476,985,572 for 17 to
+  24, 381,681,664 for 25 to 32 and 318,068,053 for 33 to 40. A set with
   more is now an `ArgumentOutOfRangeException` naming `items` or `pairs`, which says how
   many keys it would have held, before any array of the build is allocated. The README's
   and CAPACITY.md's "builds up to" are those numbers, where they said memory. No size that

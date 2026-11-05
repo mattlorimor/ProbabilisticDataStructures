@@ -253,9 +253,9 @@ with an `OutOfMemoryException`, however few of them are distinct.
 Built once from the whole set of keys and their values, at about the same cells per key. A
 cell holds an 8-bit fingerprint and a value of `v` bits, rounded up to whole bytes: 2
 bytes at `v = 8`, and 6 at `v = 40`, the widest. The cells are one array, so the most
-distinct keys are 954,204,160 at `v` up to 8, 636,136,107 up to 16 and 318,068,053 up to
-40; a set with more is refused, naming `pairs`, before the cells are allocated. A read is
-charged twice the table.
+distinct keys are 954,204,160 for `v` from 1 to 8, 636,136,107 from 9 to 16, 476,985,572
+from 17 to 24, 381,681,664 from 25 to 32 and 318,068,053 from 33 to 40; a set with more is
+refused, naming `pairs`, before the cells are allocated. A read is charged twice the table.
 
 A key is known to the map by its 64-bit hash alone, and the keys are not kept, so two
 different keys with one hash are one key to it. With the same value that costs nothing; with
