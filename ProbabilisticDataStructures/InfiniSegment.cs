@@ -52,11 +52,19 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal int FingerprintBits { get; private set; }
 
-        internal uint Slots { get; private set; }
-        internal uint Count { get; set; }
+        /// <summary>
+        /// The slots, 2^<see cref="QuotientBits"/>, and the entries held in them. Both are
+        /// 64-bit, since a table can have 2^32 slots or more (#231): it is as wide as one array
+        /// holds its words, which <see cref="InfiniFilter.QuotientBitsLimitFor(int)"/> works out.
+        /// </summary>
+        internal ulong Slots { get; private set; }
+
+        /// <inheritdoc cref="Slots"/>
+        internal ulong Count { get; set; }
+
         internal ulong[] Data { get; set; } = null!;
 
-        private uint slotMaskIndex;
+        private ulong slotMaskIndex;
         private int bitsPerSlot;
         private ulong slotMask;
         private int fieldBits;
@@ -64,10 +72,65 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// The words a table of 2^<paramref name="quotientBits"/> slots is held in: the
         /// slots end to end, each the fingerprint's field and the metadata, and two words
-        /// more for the reads and writes that straddle the end.
+        /// more for the reads and writes that straddle the end. In 64 bits, for every width
+        /// the reader lets through.
         /// </summary>
         internal static long Words(int quotientBits, int fingerprintBits) =>
-            (((long)(1u << quotientBits) * (fingerprintBits + 1 + MetadataBits)) >> 6) + 2;
+            (((1L << quotientBits) * (fingerprintBits + 1 + MetadataBits)) >> 6) + 2;
+
+        /// <summary>
+        /// The most words a table may have, since a table is one array of them:
+        /// <see cref="Array.MaxLength"/>, or less on a thread whose
+        /// <see cref="LoweredLongestTable"/> is set.
+        /// </summary>
+        internal static long LongestTable => LoweredLongestTable ?? Array.MaxLength;
+
+        /// <summary>
+        /// A lower bound for <see cref="LongestTable"/> on the calling thread, so that the suite
+        /// can show a table stop where its array is full at sizes it can build; null otherwise,
+        /// as it is in every thread but a test's.
+        /// </summary>
+        [ThreadStatic]
+        internal static long? LoweredLongestTable;
+
+        /// <summary>
+        /// Where a slot's bits begin in a table of slots this wide: the word, and the bit
+        /// within it. Every read and write of a slot is placed by this, which is static so that
+        /// a test can ask it of a slot in a table too large to build.
+        /// </summary>
+        internal static (int Word, int Offset) Locate(ulong slot, int bitsPerSlot)
+        {
+            var bit = slot * (ulong)bitsPerSlot;
+            return ((int)(bit >> 6), (int)(bit & 63));
+        }
+
+        /// <summary>
+        /// The slot after <paramref name="slot"/> in a table whose slot indices are masked by
+        /// <paramref name="mask"/>, wrapping from the last to the first. Static, as
+        /// <see cref="Locate"/> is.
+        /// </summary>
+        internal static ulong Next(ulong slot, ulong mask) => (slot + 1) & mask;
+
+        /// <summary>The slot before, as <see cref="Next(ulong, ulong)"/>.</summary>
+        internal static ulong Prev(ulong slot, ulong mask) => (slot - 1) & mask;
+
+        /// <summary>
+        /// The quotient an entry has once its table of 2^<paramref name="quotientBits"/> slots
+        /// doubles: its own, with the fingerprint's low bit, which it gives up, as the new top
+        /// bit of its address. Static, as <see cref="Locate"/> is; the doubling places every
+        /// entry it moves by it.
+        /// </summary>
+        internal static ulong Doubled(ulong quotient, ulong fingerprint, int quotientBits) =>
+            quotient + ((fingerprint & 1) == 1 ? 1UL << quotientBits : 0UL);
+
+        /// <summary>
+        /// Where an entry that has gone void lands in the table down the chain of
+        /// 2^<paramref name="quotientBits"/> slots: the low bits of the address it had, and
+        /// what is left of that address above them, which it carries as its fingerprint.
+        /// Static, as <see cref="Locate"/> is; every void entry is moved by it.
+        /// </summary>
+        internal static (ulong Quotient, ulong Carried) Shed(ulong address, int quotientBits) =>
+            (address & ((1UL << quotientBits) - 1), address >> quotientBits);
 
         /// <summary>The words of this segment's table, from its two widths.</summary>
         internal long TableWords => Words(this.QuotientBits, this.FingerprintBits);
@@ -81,7 +144,7 @@ namespace ProbabilisticDataStructures
         {
             this.QuotientBits = quotientBits;
             this.FingerprintBits = fingerprintBits;
-            this.Slots = 1u << quotientBits;
+            this.Slots = 1UL << quotientBits;
             this.slotMaskIndex = this.Slots - 1;
 
             // The age counter and the fingerprint share one field of F + 1 bits: a
@@ -90,14 +153,25 @@ namespace ProbabilisticDataStructures
             this.fieldBits = fingerprintBits + 1;
             this.bitsPerSlot = this.fieldBits + MetadataBits;
             this.slotMask = (1UL << this.bitsPerSlot) - 1;
-            this.Data = new ulong[Words(quotientBits, fingerprintBits)];
+
+            // The filter stops its tables short of this (InfiniFilter.QuotientBitsLimitFor), and
+            // its reader refuses a table past it, so this names the limit to a caller that
+            // passed it rather than failing in the allocation.
+            var words = Words(quotientBits, fingerprintBits);
+            if (words > LongestTable)
+            {
+                throw new ArgumentOutOfRangeException(nameof(quotientBits), quotientBits,
+                    $"A table of {this.Slots:N0} slots of {this.bitsPerSlot} bits is {words:N0} " +
+                    $"words, and a table is one array, which holds at most {LongestTable:N0}.");
+            }
+            this.Data = new ulong[words];
         }
 
         /// <summary>
         /// Restores a segment from stored fields without rebuilding its table.
         /// </summary>
         internal static InfiniSegment Restore(
-            int quotientBits, int fingerprintBits, uint count, ulong[] data)
+            int quotientBits, int fingerprintBits, ulong count, ulong[] data)
         {
             var segment = new InfiniSegment(quotientBits, fingerprintBits)
             {
@@ -105,6 +179,17 @@ namespace ProbabilisticDataStructures
             };
             data.CopyTo(segment.Data, 0);
             return segment;
+        }
+
+        /// <summary>
+        /// Empties the table where it is, leaving it as a new one of its shape would be: no
+        /// entries, every word nought, and no slot read counted. It allocates nothing.
+        /// </summary>
+        internal void Clear()
+        {
+            Array.Clear(this.Data);
+            this.Count = 0;
+            this.SlotReads = 0;
         }
 
         /// <summary>
@@ -175,13 +260,15 @@ namespace ProbabilisticDataStructures
         /// fingerprint is what makes an entry's address a growing prefix of its hash
         /// rather than something that has to be recomputed from the key.
         /// </remarks>
-        internal (uint Quotient, ulong Fingerprint) Split(ulong hash)
-        {
-            var quotient = (uint)(hash & this.slotMaskIndex);
-            var fingerprint = (hash >> this.QuotientBits) &
-                ((1UL << this.FingerprintBits) - 1);
-            return (quotient, fingerprint);
-        }
+        internal (ulong Quotient, ulong Fingerprint) Split(ulong hash) =>
+            Split(hash, this.QuotientBits, this.FingerprintBits);
+
+        /// <summary>
+        /// The quotient and fingerprint a hash yields in a table of these widths, which
+        /// <see cref="Split(ulong)"/> is. Static, as <see cref="Locate"/> is.
+        /// </summary>
+        internal static (ulong Quotient, ulong Fingerprint) Split(ulong hash, int quotientBits, int fingerprintBits) =>
+            (hash & ((1UL << quotientBits) - 1), (hash >> quotientBits) & ((1UL << fingerprintBits) - 1));
 
         /// <summary>
         /// Whether the segment holds anything matching the hash.
@@ -231,7 +318,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Inserts an entry with the given age and fingerprint at a quotient.
         /// </summary>
-        internal void Insert(uint quotient, int age, ulong fingerprint)
+        internal void Insert(ulong quotient, int age, ulong fingerprint)
         {
             InsertField(quotient, EncodeField(age, fingerprint));
             this.Count++;
@@ -241,7 +328,7 @@ namespace ProbabilisticDataStructures
         /// Places a field at a quotient without touching the count, so that a cluster
         /// can be taken apart and put back together without the count drifting.
         /// </summary>
-        internal void InsertField(uint quotient, ulong field)
+        internal void InsertField(ulong quotient, ulong field)
         {
             if (IsSlotEmpty(quotient))
             {
@@ -285,7 +372,7 @@ namespace ProbabilisticDataStructures
             var displacingRunStart = hadRun && at == runStart;
             var slot = at;
             var firstStep = true;
-            var steps = 0u;
+            var steps = 0UL;
 
             while (true)
             {
@@ -344,7 +431,7 @@ namespace ProbabilisticDataStructures
             var runStart = FindRunStart(quotient);
             var slot = runStart;
             var found = false;
-            var bestSlot = 0u;
+            var bestSlot = 0UL;
             var bestAge = int.MaxValue;
 
             do
@@ -384,7 +471,7 @@ namespace ProbabilisticDataStructures
         /// Reinserting the survivors lets the insert path work that out, which is code
         /// that is exercised on every addition rather than only on deletes.
         /// </remarks>
-        private void RebuildClusterWithout(uint quotient, ulong field)
+        private void RebuildClusterWithout(ulong quotient, ulong field)
         {
             var start = quotient;
             while (IsShifted(start))
@@ -392,7 +479,7 @@ namespace ProbabilisticDataStructures
                 start = Prev(start);
             }
 
-            var length = 1u;
+            var length = 1UL;
             var slot = start;
             while (true)
             {
@@ -406,12 +493,16 @@ namespace ProbabilisticDataStructures
             }
 
             // Pair each entry in the cluster with the quotient that owns it, which is
-            // possible only because runs appear in the order their quotients do.
-            var entries = new List<(uint Quotient, ulong Field)>((int)length);
+            // possible only because runs appear in the order their quotients do. A list holds
+            // no more than an array does, and a cluster of more is refused here by name rather
+            // than wrapping the list's capacity negative; a table of 2^31 slots could not hold
+            // one, at three quarters full, and only a hash that sends most keys to one place
+            // gives a wider table one.
+            var entries = new List<(ulong Quotient, ulong Field)>(checked((int)length));
             var owner = start;
             var cursor = start;
 
-            for (var seen = 0u; seen < length;)
+            for (var seen = 0UL; seen < length;)
             {
                 while (!IsOccupied(owner))
                 {
@@ -433,7 +524,7 @@ namespace ProbabilisticDataStructures
             }
 
             var wipe = start;
-            for (var i = 0u; i < length; i++)
+            for (var i = 0UL; i < length; i++)
             {
                 WriteSlot(wipe, 0);
                 wipe = Next(wipe);
@@ -467,11 +558,12 @@ namespace ProbabilisticDataStructures
         /// Nothing may change the segment while the walk is under way, since it reads the
         /// slots in place. The filter's doubling is the walk that matters, and it reads
         /// the old table and writes only the new one. It used to list the entries first,
-        /// 16 bytes each beside both tables: 12.9 GB at the doubling into 2^31 slots.
+        /// 16 bytes each beside both tables: 12.9 GB at the doubling into 2^31 slots, and 103 GB
+        /// at the doubling into 2^34, as wide as a table can now be (#231).
         /// </remarks>
-        internal IEnumerable<(uint Quotient, ulong Field)> Entries()
+        internal IEnumerable<(ulong Quotient, ulong Field)> Entries()
         {
-            for (var quotient = 0u; quotient < this.Slots; quotient++)
+            for (var quotient = 0UL; quotient < this.Slots; quotient++)
             {
                 if (!IsOccupied(quotient))
                 {
@@ -495,22 +587,22 @@ namespace ProbabilisticDataStructures
             }
         }
 
-        private uint Next(uint slot) => (slot + 1) & this.slotMaskIndex;
+        private ulong Next(ulong slot) => Next(slot, this.slotMaskIndex);
 
-        private uint Prev(uint slot) => (slot - 1) & this.slotMaskIndex;
+        private ulong Prev(ulong slot) => Prev(slot, this.slotMaskIndex);
 
-        internal bool IsOccupied(uint slot) => (ReadSlot(slot) & OccupiedBit) != 0;
+        internal bool IsOccupied(ulong slot) => (ReadSlot(slot) & OccupiedBit) != 0;
 
-        private bool IsContinuation(uint slot) => (ReadSlot(slot) & ContinuationBit) != 0;
+        private bool IsContinuation(ulong slot) => (ReadSlot(slot) & ContinuationBit) != 0;
 
-        private bool IsShifted(uint slot) => (ReadSlot(slot) & ShiftedBit) != 0;
+        private bool IsShifted(ulong slot) => (ReadSlot(slot) & ShiftedBit) != 0;
 
-        internal ulong ReadField(uint slot) => ReadSlot(slot) >> MetadataBits;
+        internal ulong ReadField(ulong slot) => ReadSlot(slot) >> MetadataBits;
 
-        private bool IsSlotEmpty(uint slot) =>
+        private bool IsSlotEmpty(ulong slot) =>
             (ReadSlot(slot) & (OccupiedBit | ContinuationBit | ShiftedBit)) == 0;
 
-        private void SetOccupied(uint slot) =>
+        private void SetOccupied(ulong slot) =>
             WriteSlot(slot, ReadSlot(slot) | OccupiedBit);
 
         /// <summary>
@@ -524,7 +616,7 @@ namespace ProbabilisticDataStructures
         /// and ask it for a quotient no run belongs to.
         /// </para>
         /// </remarks>
-        internal uint FindRunStart(uint quotient)
+        internal ulong FindRunStart(ulong quotient)
         {
             var slot = quotient;
             while (IsShifted(slot))
@@ -564,13 +656,11 @@ namespace ProbabilisticDataStructures
             return slot;
         }
 
-        private ulong ReadSlot(uint index)
+        private ulong ReadSlot(ulong index)
         {
             this.SlotReads++;
 
-            var bit = (ulong)index * (ulong)this.bitsPerSlot;
-            var word = (int)(bit >> 6);
-            var offset = (int)(bit & 63);
+            var (word, offset) = Locate(index, this.bitsPerSlot);
 
             var value = this.Data[word] >> offset;
             var taken = 64 - offset;
@@ -587,13 +677,11 @@ namespace ProbabilisticDataStructures
         /// Writes one slot, metadata in the low three bits. Internal so that a test can
         /// break a table on purpose, which nothing else does.
         /// </summary>
-        internal void WriteSlot(uint index, ulong value)
+        internal void WriteSlot(ulong index, ulong value)
         {
             value &= this.slotMask;
 
-            var bit = (ulong)index * (ulong)this.bitsPerSlot;
-            var word = (int)(bit >> 6);
-            var offset = (int)(bit & 63);
+            var (word, offset) = Locate(index, this.bitsPerSlot);
 
             this.Data[word] = (this.Data[word] & ~(this.slotMask << offset)) | (value << offset);
 

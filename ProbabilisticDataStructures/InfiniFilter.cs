@@ -98,7 +98,7 @@ namespace ProbabilisticDataStructures
         /// The hash function to use, or null for the default.
         /// </param>
         public InfiniFilter(
-            uint initialCapacity = 1024,
+            ulong initialCapacity = 1024,
             int fingerprintBits = 8,
             Func<ReadOnlySpan<byte>, ulong>? hash = null)
         {
@@ -113,37 +113,73 @@ namespace ProbabilisticDataStructures
                     "once the address has taken its share.");
             }
 
-            var quotientBits = InitialQuotientBits(initialCapacity);
+            var quotientBits = InitialQuotientBits(initialCapacity, fingerprintBits);
 
             this.Segments.Add(new InfiniSegment(quotientBits, fingerprintBits));
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
         }
 
         /// <summary>
-        /// The most address bits a table has: its slot count is a uint holding 2^q, and
-        /// 2^32 is not one.
+        /// The most address bits any table has: the most a table of the narrowest fingerprint
+        /// the constructor takes can have, <see cref="QuotientBitsLimitFor(int)"/> two bits.
         /// </summary>
-        internal static int MaxQuotientBits => 31;
+        internal static int MaxQuotientBits { get; } = QuotientBitsLimitFor(2, Array.MaxLength);
 
         /// <summary>
-        /// The most address bits this filter lets a table grow to. It is
-        /// <see cref="MaxQuotientBits"/>; a test lowers it to reach the refusal at the
-        /// limit without building a table of gigabytes.
+        /// The most address bits this filter lets a table grow to, beside
+        /// <see cref="QuotientBitsLimitFor(int)"/> that table's fingerprint. It is
+        /// <see cref="MaxQuotientBits"/>, which no table reaches before its own limit; a test
+        /// lowers it to reach the refusal at the limit without building a table of gigabytes.
         /// </summary>
         internal int QuotientBitsLimit { get; set; } = MaxQuotientBits;
 
         /// <summary>
+        /// The most address bits a table of fingerprints this wide can have: the widest whose
+        /// words fit in the one array a table is (#231). That is 2^34 slots for the narrowest
+        /// fingerprints and 2^31 for the widest, where every table stopped at 2^31 while its
+        /// slot count was a <c>u32</c>. The constructor starts the first table no wider, and an
+        /// expansion stops there.
+        /// </summary>
+        /// <remarks>
+        /// The hash never binds first: an entry needs the address and the fingerprint from one
+        /// 64-bit hash, and the widest table has bits to spare for any fingerprint it allows.
+        /// It bounds the scan all the same, so that the scan ends whatever the words come to:
+        /// with the slot count worked out in 32 bits, which wraps, the words never pass an
+        /// array, and the scan spun in the type's static initializer, which every filter waits
+        /// on (#231).
+        /// </remarks>
+        internal static int QuotientBitsLimitFor(int fingerprintBits) =>
+            QuotientBitsLimitFor(fingerprintBits, InfiniSegment.LongestTable);
+
+        /// <summary>
+        /// As <see cref="QuotientBitsLimitFor(int)"/>, for an array of at most
+        /// <paramref name="longest"/> words: the real one's, for
+        /// <see cref="MaxQuotientBits"/>, whatever a test has lowered on the thread that
+        /// first asks for it.
+        /// </summary>
+        private static int QuotientBitsLimitFor(int fingerprintBits, long longest)
+        {
+            var quotientBits = 2;
+            while (quotientBits + 1 + fingerprintBits <= 64
+                && InfiniSegment.Words(quotientBits + 1, fingerprintBits) <= longest)
+            {
+                quotientBits++;
+            }
+            return quotientBits;
+        }
+
+        /// <summary>
         /// The address bits the first table gets for an initial capacity: enough slots
         /// that the capacity fills no more than the expansion threshold of them, a
-        /// power of two, and at least four.
+        /// power of two, at least four, and no more than a table of the fingerprint can have.
         /// </summary>
-        internal static int InitialQuotientBits(uint initialCapacity)
+        internal static int InitialQuotientBits(ulong initialCapacity, int fingerprintBits)
         {
-            // Clamped at the widest table rather than left to a uint that saturates: the
+            // Clamped at the widest table rather than left to an integer that saturates: the
             // capacity is where the filter starts and not a limit on it, so one that asks
             // for more than the widest table starts at the widest.
             var wanted = Math.Ceiling(Math.Log2(initialCapacity / ExpansionThreshold));
-            return (int)Math.Clamp(wanted, 2, MaxQuotientBits);
+            return (int)Math.Clamp(wanted, 2, QuotientBitsLimitFor(fingerprintBits));
         }
 
         private InfiniFilter(bool empty)
@@ -256,25 +292,30 @@ namespace ProbabilisticDataStructures
         private void Expand()
         {
             // Refused before anything is built or moved, so that the filter is exactly
-            // what it was. The widest table in the chain decides, which is the first one
-            // -- the tables behind it are narrower by more than the fingerprint they were
-            // made from -- but the check does not rest on that.
-            var widest = 0;
+            // what it was. Each table is held to the limit of its own fingerprint, since a
+            // payload's tables are each checked on their own and a filter read back can hold
+            // tables of other fingerprints. The first table is the one that reaches its limit,
+            // the tables behind it being narrower by more than the fingerprint they were made
+            // from, but the check does not rest on that: a doubling can double any of them.
             foreach (var table in this.Segments)
             {
-                widest = Math.Max(widest, table.QuotientBits);
-            }
-
-            if (widest + 1 > this.QuotientBitsLimit)
-            {
-                throw new InvalidOperationException(
-                    $"The filter's widest table has {1UL << widest:N0} slots and is at its " +
-                    "expansion threshold, and doubling it would pass the " +
-                    $"{1UL << this.QuotientBitsLimit:N0} a table can have: a table's slot " +
-                    "count is a 32-bit number holding 2^q, and 2^32 is not one. Nothing was " +
-                    "added and the filter is unchanged; it can still be queried and " +
-                    "written, and removing keys makes room for more. To hold more keys, " +
-                    "split them over several filters.");
+                var own = QuotientBitsLimitFor(table.FingerprintBits);
+                var limit = Math.Min(this.QuotientBitsLimit, own);
+                if (table.QuotientBits + 1 > limit)
+                {
+                    var why = limit < own
+                        ? "the limit this filter was given"
+                        : $"a table is one array of words, and {1UL << (limit + 1):N0} slots of " +
+                          $"{table.FingerprintBits + 4} bits are more words than an array holds";
+                    throw new InvalidOperationException(
+                        $"The filter's table of {1UL << table.QuotientBits:N0} slots is as wide " +
+                        $"as a table of {table.FingerprintBits}-bit fingerprints can be, and " +
+                        "doubling the filter would take it past the " +
+                        $"{1UL << limit:N0} slots it can have: {why}. Nothing was added and the " +
+                        "filter is unchanged; it can still be queried and written, and removing " +
+                        "keys makes room for more. To hold more keys, split them over several " +
+                        "filters, or use a narrower fingerprint, whose table can be wider.");
+                }
             }
 
             ExpandTable(0);
@@ -301,7 +342,7 @@ namespace ProbabilisticDataStructures
         /// </para>
         /// </remarks>
         private void ShedInto(
-            int index, uint address, int addressBits, int fingerprintBits)
+            int index, ulong address, int addressBits, int fingerprintBits)
         {
             if (this.Segments.Count == index)
             {
@@ -317,8 +358,7 @@ namespace ProbabilisticDataStructures
             }
 
             var target = this.Segments[index];
-            var quotient = (uint)(address & (target.Slots - 1));
-            var carried = (ulong)address >> target.QuotientBits;
+            var (quotient, carried) = InfiniSegment.Shed(address, target.QuotientBits);
 
             // What is left of the address after the target's own addressing is the
             // fingerprint. A shorter one would mean the entry arrives already aged
@@ -376,8 +416,7 @@ namespace ProbabilisticDataStructures
                 }
 
                 var fingerprint = old.FingerprintOf(field, age);
-                var moved = quotient + ((fingerprint & 1) == 1 ? old.Slots : 0u);
-                grown.Insert(moved, age + 1, fingerprint >> 1);
+                grown.Insert(InfiniSegment.Doubled(quotient, fingerprint, old.QuotientBits), age + 1, fingerprint >> 1);
             }
 
             this.Segments[index] = grown;
@@ -433,16 +472,61 @@ namespace ProbabilisticDataStructures
         /// </summary>
         public InfiniFilter Reset()
         {
+            // The filter goes back to the one table it was built with: the first table's
+            // fingerprint, and its address less a bit for each doubling.
             var first = this.Segments[0];
-            var quotientBits = first.QuotientBits - (int)this.Expansions;
-            this.Segments = new List<InfiniSegment>
+            var quotientBits = Math.Max(2, first.QuotientBits - (int)this.Expansions);
+            var fingerprintBits = first.FingerprintBits;
+
+            // A table already that shape is cleared where it is and the others dropped, so the
+            // reset needs no memory and cannot fail for want of it. A filter that has not grown
+            // always holds one, its only table, and one that has grown can, in its chain (#298).
+            // Otherwise the table is built before anything is cleared or dropped, so that a reset
+            // that cannot get the memory leaves the filter as it was (#242), at the cost of
+            // holding it beside the tables it replaces.
+            var kept = TableShaped(quotientBits, fingerprintBits);
+            if (kept == null)
             {
-                new InfiniSegment(Math.Max(2, quotientBits), first.FingerprintBits),
-            };
+                this.BeforeAllocating?.Invoke();
+                kept = new InfiniSegment(quotientBits, fingerprintBits);
+            }
+            else
+            {
+                kept.Clear();
+            }
+
+            this.Segments[0] = kept;
+            this.Segments.RemoveRange(1, this.Segments.Count - 1);
             this.Added = 0;
             this.Expansions = 0;
             return this;
         }
+
+        /// <summary>
+        /// The first table in the chain of this shape, or null if none is.
+        /// </summary>
+        private InfiniSegment? TableShaped(int quotientBits, int fingerprintBits)
+        {
+            foreach (var table in this.Segments)
+            {
+                // Both widths are compared because a payload's tables are each checked on
+                // their own, so a filter read back can hold tables of other fingerprints.
+                if (table.QuotientBits == quotientBits && table.FingerprintBits == fingerprintBits)
+                {
+                    return table;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Called before the table a reset builds when it holds none of the shape it returns
+        /// to, which is all a reset allocates. It is null; a test sets it to throw
+        /// an <see cref="OutOfMemoryException"/> there, to reach a reset that cannot get its
+        /// memory without a heap limit. Nothing else the filter allocates passes through it.
+        /// </summary>
+        internal Action? BeforeAllocating { get; set; }
 
         /// <summary>
         /// Sets the hash function, which is refused once anything has been added.
@@ -467,15 +551,17 @@ namespace ProbabilisticDataStructures
             payload.WriteUInt32(this.Expansions);
             payload.WriteUInt32((uint)this.Segments.Count);
 
+            // Every save is version 13, whose counts of entries and words are 64-bit, so a
+            // table of any width is written in one layout (#231).
             foreach (var segment in this.Segments)
             {
                 payload.WriteUInt32((uint)segment.QuotientBits);
                 payload.WriteUInt32((uint)segment.FingerprintBits);
-                payload.WriteUInt32(segment.Count);
+                payload.WriteUInt64(segment.Count);
 
                 // The table's words, counted from the segment's two widths.
                 var words = segment.TableWords;
-                payload.WriteUInt32((uint)words);
+                payload.WriteUInt64((ulong)words);
                 if (payload.BeginBlock(words * sizeof(ulong)))
                 {
                     foreach (var word in segment.Data)
@@ -485,7 +571,8 @@ namespace ProbabilisticDataStructures
                 }
             }
 
-            return new(StructureId.InfiniFilter, PersistenceFormat.Identify(this.Hash));
+            return new(StructureId.InfiniFilter, PersistenceFormat.Identify(this.Hash),
+                PersistenceFormat.InfiniWideVersion);
         }
 
         /// <summary>
@@ -590,14 +677,14 @@ namespace ProbabilisticDataStructures
             {
                 var quotientBits = (int)reader.ReadUInt32();
                 var fingerprintBits = (int)reader.ReadUInt32();
-                var count = reader.ReadUInt32();
-                var words = reader.ReadUInt32();
-                CheckSegment(i, quotientBits, fingerprintBits, count, words);
+                var (count, words) = ReadCounts(ref reader, version);
+                CheckSegment(i, version, quotientBits, fingerprintBits, count, words);
 
-                // Read into one array, then copied into the table the segment builds.
+                // Read into one array, then copied into the table the segment builds. The
+                // shape's check holds the words to what one array holds.
                 budget.Charge(SegmentCost(words));
                 var data = new ulong[words];
-                for (var w = 0; w < words; w++)
+                for (var w = 0; w < data.Length; w++)
                 {
                     data[w] = reader.ReadUInt64();
                 }
@@ -631,17 +718,25 @@ namespace ProbabilisticDataStructures
             {
                 var quotientBits = (int)reader.ReadUInt32();
                 var fingerprintBits = (int)reader.ReadUInt32();
-                var count = reader.ReadUInt32();
-                var words = reader.ReadUInt32();
-                CheckSegment(i, quotientBits, fingerprintBits, count, words);
+                var (count, words) = ReadCounts(ref reader, version);
+                CheckSegment(i, version, quotientBits, fingerprintBits, count, words);
 
                 reader.Budget.Price(SegmentCost(words));
                 reader.Skip((long)words * sizeof(ulong));
             }
         }
 
+        /// <summary>
+        /// A table's count of entries and of words: <c>u32</c>s at version 1, <c>u64</c>s from
+        /// version 13, where a table can have more slots than a <c>u32</c> counts.
+        /// </summary>
+        private static (ulong Count, ulong Words) ReadCounts(ref PayloadReader reader, ushort version) =>
+            version >= PersistenceFormat.InfiniWideVersion
+                ? (reader.ReadUInt64(), reader.ReadUInt64())
+                : (reader.ReadUInt32(), reader.ReadUInt32());
+
         /// <summary>One table's words, read into one array and copied into the table.</summary>
-        private static long SegmentCost(uint words) => ReadBudget.Sum(
+        private static long SegmentCost(ulong words) => ReadBudget.Sum(
             ReadBudget.Times(2, ReadBudget.ArrayOf(words, sizeof(ulong))),
             ReadBudget.SmallObject);
 
@@ -666,14 +761,31 @@ namespace ProbabilisticDataStructures
         /// Checks the shape a table claims, as both the read and its price do before its
         /// words are allocated.
         /// </summary>
-        private static void CheckSegment(int i, int quotientBits, int fingerprintBits, uint count, uint words)
+        private static void CheckSegment(
+            int i, ushort version, int quotientBits, int fingerprintBits, ulong count, ulong words)
         {
-            if (quotientBits < 2 || quotientBits > MaxQuotientBits)
+            // A table at version 1 counted its slots with a u32, so it had at most 31 bits of
+            // address, and no writer wrote a wider one. From version 13 a table is as wide as
+            // one array holds its words, and the widest of any fingerprint bounds the address
+            // before the words are worked out from it.
+            if (version < PersistenceFormat.InfiniWideVersion)
+            {
+                if (quotientBits < 2 || quotientBits > NarrowQuotientBits)
+                {
+                    throw new InvalidDataException(
+                        $"Table {i} claims {quotientBits} bits of address, and a table at version " +
+                        $"{version} has between 2 and {NarrowQuotientBits}: its slot count was a " +
+                        "32-bit number holding 2^q, and 2^32 is not one. A wider table is written " +
+                        $"at version {PersistenceFormat.InfiniWideVersion}.");
+                }
+            }
+            else if (quotientBits < 2 || quotientBits > MaxQuotientBits)
             {
                 throw new InvalidDataException(
-                    $"Table {i} claims {quotientBits} bits of address, and this " +
-                    $"library builds tables between 2 and {MaxQuotientBits}: a table's " +
-                    "slot count is a 32-bit number holding 2^q, and 2^32 is not one.");
+                    $"Table {i} claims {quotientBits} bits of address, and this library builds " +
+                    $"tables between 2 and {MaxQuotientBits}: a table is one array of words, and " +
+                    $"{1UL << (MaxQuotientBits + 1):N0} slots of the narrowest fingerprint are more " +
+                    "words than an array holds.");
             }
             if (fingerprintBits < 2 || fingerprintBits > 32)
             {
@@ -689,7 +801,7 @@ namespace ProbabilisticDataStructures
                     "sixty-four.");
             }
 
-            var slots = 1u << quotientBits;
+            var slots = 1UL << quotientBits;
             if (count > slots)
             {
                 throw new InvalidDataException(
@@ -697,14 +809,28 @@ namespace ProbabilisticDataStructures
                     "quotient filter stores one entry per slot.");
             }
 
-            var expectedWords =
-                ((((long)slots * (fingerprintBits + 1 + 3)) >> 6) + 2);
-            if (words != expectedWords)
+            var expectedWords = InfiniSegment.Words(quotientBits, fingerprintBits);
+            if (words != (ulong)expectedWords)
             {
                 throw new InvalidDataException(
                     $"Table {i} carries {words} words where its shape needs " +
                     $"{expectedWords}.");
             }
+
+            if (expectedWords > InfiniSegment.LongestTable)
+            {
+                throw new InvalidDataException(
+                    $"Table {i} claims {slots:N0} slots of {fingerprintBits + 4} bits, which are " +
+                    $"{expectedWords:N0} words, and a table is one array, which holds at most " +
+                    $"{InfiniSegment.LongestTable:N0}. No table of {fingerprintBits}-bit fingerprints " +
+                    $"is wider than 2^{QuotientBitsLimitFor(fingerprintBits)} slots.");
+            }
         }
+
+        /// <summary>
+        /// The most address bits a table had at version 1, where its slot count was a
+        /// <c>u32</c> holding 2^q.
+        /// </summary>
+        internal const int NarrowQuotientBits = 31;
     }
 }

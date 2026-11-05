@@ -228,6 +228,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error too large for the smallest estimator still builds the smallest. 6.2.0 is
   affected. (#220)
 
+- **`CuckooBloomFilter` sizes in 64 bits and builds past 2^31 entries, and every save is its
+  whole table, at format version 11. Both are breaking changes.** The constructor takes a
+  `ulong n`, and `BucketCount()`, `Capacity()` and `Count()` return a `ulong` where they
+  returned a `uint`, as `ScalableBloomFilter.Capacity()` and the Bloom filters' `Count()`
+  already do: a caller keeping one in a `uint` needs a cast or a wider variable, and code
+  compiled against 6.2.0 has to be rebuilt. Entries are numbered in 64 bits, and a table
+  stops where its fingerprints fill one array of 64-bit words: 2^31 buckets at 1% and at
+  0.1%, so a filter is built for up to 8,160,437,862 items, where it stopped at
+  2,040,109,465. (#231)
+  <br><br>
+  A save is the table as it is held, the packed fingerprints and the map of which entries
+  hold one, written word by word and read straight into the table, in place of the list of
+  occupied entries each with its place: about (f + 1) / 8 bytes an entry, 1.375 at 1%,
+  where a held entry cost 10. **Releases up to 6.2.0 refuse every such payload** as written
+  by a later version, small filters included. Payloads written before it still read, in
+  every version the cuckoo filter has written, and save again as version 11; no stored
+  entry moves, since a table of up to 2^32 buckets chooses an item's buckets as it did. The
+  table is written whole whatever the filter holds, so a lightly loaded filter saves as
+  large as a full one: an empty filter of 2^29 buckets at 1% was a payload of 40 bytes and
+  is now 2,952,790,064, past what a byte array holds, and is saved only by `WriteTo(Stream)`,
+  in the large form of the envelope; `ToByteArray` refuses it. As a byte array a full
+  filter saves at up to 1,020,054,732 items, where it saved at about 214.75 million, and an
+  empty one no larger, where any empty one saved. A read holds the payload and the table,
+  so the default budget reads a filter of up to 255,013,683 items, empty or full, where it
+  read an empty one of 510,027,366 and a full one of about 88.92 million. (#230)
+  <br><br>
+  A removal now clears the fingerprint it empties, and `Reset` clears the fingerprints as
+  well as the map, in place, so that a filter emptied either way writes the bytes of a new
+  one. A version 11 payload with a bit set past its last entry, or a fingerprint in an
+  entry its map marks empty, is refused, since the writer cannot have produced it.
+
 - **The 32-bit Bloom filters count in 64 bits, and save at format version 8.**
   `Count()` on `BloomFilter`, `CountingBloomFilter`, `DeletableBloomFilter` and
   `PartitionedBloomFilter` returns a `ulong` where it returned a `uint`. This is a
@@ -345,6 +376,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PartitionedBloomFilter` 27.6 and 19.1, now 22.6 and 18.5; `ScalableBloomFilter` at a
   hint of 125,000 32.1 and 57.7, now 27.7 and 56.9; and `BloomFilter64`, whose table it
   is, 50.1 and 27.5, now 41.7 and 22.7. (#232)
+
+- **`QuotientFilter` builds past 2^31 slots, its sizes are `ulong`, and it saves at format
+  version 12.** The constructor takes a `ulong` `n`, and `Count()` and `Capacity()` return
+  a `ulong`, where each was a `uint`. This is a breaking change, as the Bloom filters'
+  `Count()` above is: a caller passing a `uint` still compiles, and one assigning the count
+  or the capacity to a `uint` needs a cast or a wider variable. The slot count was a `uint`,
+  so the table stopped at 2^31 slots and `n` at 1,610,612,736. The table is one array of
+  64-bit words now, which holds up to 2^34 slots: `n` reaches 12,884,901,888 at a rate of
+  6.25% or coarser, and 6,442,450,944, a table of 2^33 slots, at 1% and at 0.1%. Past 2^31
+  slots that array bounds the remainder too, to 28 bits at 2^32 slots, 12 at 2^33 and 4 at
+  2^34, and the constructor refuses a finer rate naming the finest it can build. No stored
+  entry moves: a table of the same widths places every entry where it did. A filter merged
+  into itself takes the cheaper of listing its entries and copying its table, where it
+  always listed them, sixteen bytes each, which past 2^31 entries one list cannot hold.
+  <br><br>
+  Every save is [format version 12](FORMAT.md#format-versions): version 1's layout with the
+  number of entries as a `u64`. **Releases up to 6.2.0 refuse every such payload** as
+  written by a later version, small filters included. Payloads that earlier releases wrote
+  still read, and save again as version 12, but one: a table that a 6.2.0 constructor
+  wrapped to one slot at 32 quotient bits, which saves as it was read, at version 1, since
+  at version 12 those bits name 2^32 slots, and which `Merge` refuses to combine with a
+  table of 2^32 slots. A table past one array's worth of bytes is written through
+  `WriteTo(Stream)` in the large form of the envelope, as one of 2^31 slots already was.
+  (#231)
 
 - **`BloomFilter64` is faster, the structures placed with 64-bit values test faster, and
   every bit is where it was.** The 64-bit placement hashes the first value's eight little-endian
@@ -531,6 +586,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the old one was still held, so a reset needed twice the estimator at once: 2 GiB at the
   2^30 registers of the largest.
 
+- **An `InfiniFilter`'s or a `MementoFilter`'s reset clears a table it holds of the size it
+  goes back to.** No answer and no stored byte changes. (#298)
+  <br><br>
+  `Reset` takes a filter back to the one table it was built with. It built that table while
+  the tables it had were still held, so resetting a filter that had not grown needed twice
+  the filter at once: 3 GiB more for an `InfiniFilter` of 2^31 slots of 8-bit fingerprints,
+  and 5 GiB for a `MementoFilter` of 2^31 slots at the default range and fingerprint. Where
+  a table the filter holds is already the size and fingerprint it goes back to, as the only
+  table of a filter that has not grown always is and a table in a grown filter's chain can
+  be, the reset clears that table where it is, drops the others, and allocates nothing.
+  Otherwise it builds the table before it drops anything, as it did, so a reset that cannot
+  get the memory leaves the filter as it was.
+
 - **A `BloomFilter64`'s reset allocates nothing.** No answer and no stored byte changes.
   (#297)
   <br><br>
@@ -637,6 +705,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.102 s; a `TopK` holding such a sketch, 0.860 s became 0.107 s, and 1.040 s became
   0.117 s. The ordinary envelope, already read from memory, went from 0.166 s to 0.125 s.
   (#289)
+
+- **An `InfiniFilter`'s table can pass 2^31 slots, it takes a `ulong` initial capacity, and it
+  saves at format version 13; the capacity's type is a breaking change.** A table counted its
+  slots with a `uint`, so every table stopped at 2^31 slots, and a filter at about 1.6 billion
+  items whatever its fingerprint. Its slots, its entries and every index into its tables are
+  now 64-bit, and a table is as wide as one array holds its words: 2^34 slots for the
+  narrowest fingerprints, down to 2^31 for the widest. At the default 8 bits that is 2^33
+  slots, about 6.4 billion items, and at 16 bits 2^32, about 3.2 billion. The `Add` that would
+  double a table past its limit throws, with the filter as it was, as it did at 2^31. A
+  doubling walks the old table in place rather than listing its entries (#238), which at the
+  widest it has to: the list for the doubling into 2^34 slots would be 103 GB.
+  <br><br>
+  `InfiniFilter(ulong initialCapacity, ...)` takes a `ulong` where it took a `uint`, so a
+  capacity past 4,294,967,295 starts the table as wide as it needs and the fingerprint
+  allows. Code compiled against 6.2.0 has to be rebuilt. A constant or a `uint` compiles
+  unchanged, and an `int` or `long` variable needs a cast. `Count()` and `Capacity()` were
+  already `ulong`.
+  <br><br>
+  Every save, whatever the size of its tables, is now format version 13, which stores each
+  table's count of entries and of words as a `u64`, so no new save is readable by 6.2.0.
+  Stored filters still load: a version 1 payload reads as it did, its entries where they
+  were, and saves again as version 13. A filter whose payload passes 2 GiB is written in the
+  large form of the envelope by `WriteTo(Stream)`, and refused by `ToByteArray`. (#231)
 
 ### Fixed
 
@@ -1204,15 +1295,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   structure itself stops working — mostly the largest .NET array — rather than a round
   number, and [FORMAT.md](FORMAT.md#sizes) lists them. Readers also check a count against
   the bytes actually present before allocating for it, so a payload claiming a large size
-  costs what it holds rather than what it claims. A cuckoo filter's table and a `VarOpt`
-  sample's regions have to be allocated whole, so for those a payload can ask for as
-  large a structure as the constructor would build, and no larger.
+  costs what it holds rather than what it claims. A cuckoo filter's table, read from a
+  payload written before format version 11, and a `VarOpt` sample's regions have to be
+  allocated whole, so for those a payload can ask for as large a structure as the
+  constructor would build, and no larger.
   <br><br>
   **Some constructors now refuse sizes they used to accept, each one a size that did not
   work**, and now say why with an `ArgumentOutOfRangeException`:
-  `CuckooBloomFilter` past 2,040,109,465 items, which built a filter with no room to mark
-  an entry occupied that failed on its first add, or at a rate tight enough that its
-  fingerprints outgrow one array; `ThetaSketch` and `TupleSketch` retaining more than
+  `CuckooBloomFilter` at a size or rate whose fingerprints outgrow one array, past
+  8,160,437,862 items at 1% (6.2.0 built every filter past 2,040,109,465 items with no
+  room to mark an entry occupied, which failed on its first add; up to that limit those
+  now build and work, below); `ThetaSketch` and `TupleSketch` retaining more than
   1,073,741,795, which from 2^30 threw an `OverflowException` and from 2^31 failed on the
   first add; `VarOpt` keeping more than 2,147,483,590, which at `uint.MaxValue` built a
   sample with no room in it; `SublimeCountMinSketch` at a delta whose reciprocal is
@@ -1379,16 +1472,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   disagreed with its own claim; no writer produced such a payload. Every release since
   `InfiniFilter` and `MementoFilter` shipped in 6.2.0 is affected.
   <br><br>
-  A table now has at most 31 bits of address, the same limit and the same reason as
-  `QuotientFilter`'s: the slot count is a 32-bit number holding 2^q. The add that would
-  expand past it throws an `InvalidOperationException` first, naming the table's size and
-  the limit, and changes nothing; the filter can still be queried and written, and removing
-  keys makes room. The readers refuse more than 31 bits of address and say what the limit
-  is. A bigger table is not a matter of wider arithmetic: it could not be written (at the
-  narrowest fingerprint it is three gibibytes of payload, in an envelope that holds two) and
-  the expansion into it lists every entry it moves, 1.6 billion at sixteen bytes. An initial
-  capacity past three quarters of 2^31 starts the first table at the widest, as it did,
-  now by a rule and not by a saturating conversion. No size that worked is refused.
+  A `MementoFilter` table now has at most 31 bits of address, the limit `QuotientFilter` had
+  in 6.2.0 and for its reason: the slot count is a 32-bit number holding 2^q. The add that
+  would expand past it throws an `InvalidOperationException` first, naming the table's size
+  and the limit, and changes nothing; the filter can still be queried and written, and
+  removing keys makes room. The reader refuses more than 31 bits of address and says what the
+  limit is. An initial capacity past three quarters of 2^31 starts the first table at the
+  widest, as it did, now by a rule and not by a saturating conversion. No size that worked is
+  refused. An `InfiniFilter` table was given the same limit, and has since been widened past
+  it, to as wide as one array holds its words, with the same refusal at that limit (#231,
+  under Changed).
 
 - **A `MementoFilter` whose slots came to 64 bits stored no key at all, and one past 64 lost
   almost every key.** A slot is three bits of metadata and a field of the fingerprint, a bit
@@ -2125,12 +2218,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now stands for a doubling no total reaches: the add that took such a sketch's total to
   `ulong.MaxValue` doubled its rows, and so did every add after a removal there, and
   neither does now. The total stops at `ulong.MaxValue` rather than wrapping, as a counter
-  does. Every payload 6.2.0 wrote reads as before: a sweep of growth exponents and size
-  factors through long runs of adds, removals, resets and round trips, written by 6.2.0
-  and by this release, found every total below its doubling count and every doubling
-  count the one its width gives, and this release's reader read every payload of the
-  sweep's that 6.2.0 wrote. No sketch a stream can build behaves differently short of
-  2^64 - 1 adds, and the format is unchanged. (#202)
+  does. A sweep of growth exponents and size factors through long runs of adds, removals,
+  resets and round trips, written by 6.2.0 and by this release, found every total below
+  its doubling count and every doubling count the one its width gives, and this release's
+  reader read every payload of the sweep's that 6.2.0 wrote. A payload 6.2.0 wrote after
+  a doubling ran out of memory, or after a reset did once the rows had doubled twice or
+  more, breaks one of the checks, and 6.2.0 refused nearly all of those itself, for their
+  records or their length. The exception is a doubling that ran out of memory growing the
+  sketch's list of records, before it had added a record or changed the width: 6.2.0 read
+  that payload back, with its total at its doubling count, and this release refuses it.
+  FORMAT.md says which payloads these are (#307). No sketch a stream can build behaves
+  differently short of 2^64 - 1 adds, and the format is unchanged. (#202)
 
 - **A `SublimeCountMinSketch` that ran out of memory doubling or folding back its rows was
   left half-changed.** The `Add` that doubles the rows counted its key, appended the record

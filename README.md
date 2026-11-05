@@ -207,11 +207,10 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `CountingBloomFilter` | n, 8-bit counters, fp 1% | memory | ≈ 56.01 million | ≈ 224.04 million |
 | `DeletableBloomFilter` | n, r 1,000, fp 1% | memory | ≈ 448.09 million | ≈ 1.79 billion |
 | `PartitionedBloomFilter` | n, fp 1% | memory | ≈ 448.09 million | ≈ 1.79 billion |
-| `CuckooBloomFilter` | n, fp 1%, empty | 2,040,109,465 | 510,027,366 | as built |
-| `CuckooBloomFilter` | n, fp 1%, holding n items | 2,040,109,465 | ≈ 88.92 million | ≈ 214.75 million |
-| `CuckooBloomFilter` | n, fp 0.1%, empty | 2,040,109,465 | 510,027,366 | as built |
-| `QuotientFilter` | n, fp 1% | 1,610,612,736 | 201,326,592 | 805,306,368 |
-| `QuotientFilter` | n, fp 0.1% | 1,610,612,736 | 100,663,296 | 805,306,368 |
+| `CuckooBloomFilter` | n, fp 1% | 8,160,437,862 | 255,013,683 | 1,020,054,732 |
+| `CuckooBloomFilter` | n, fp 0.1% | 8,160,437,862 | 255,013,683 | 1,020,054,732 |
+| `QuotientFilter` | n, fp 1% | 6,442,450,944 | 201,326,592 | 805,306,368 |
+| `QuotientFilter` | n, fp 0.1% | 6,442,450,944 | 100,663,296 | 805,306,368 |
 | `BinaryFuseFilter` | keys, 8-bit fingerprints | 1,908,641,337 | ≈ 476.99 million | ≈ 1.91 billion |
 | `BinaryFuseFilter` | keys, 16-bit fingerprints | 954,204,160 | ≈ 238.38 million | ≈ 954.20 million |
 | `BloomierFilter` | keys, 8-bit values | 954,204,160 | ≈ 238.38 million | ≈ 954.20 million |
@@ -231,8 +230,8 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `ScalableBloomFilter` | items added, hint 1,000, growth 2, fp 1%, r 0.9 | memory | ≈ 123.41 million | ≈ 990.00 million |
 | `ScalableBloomFilter` | items added, hint 1,000, growth 1, fp 1%, r 0.8 | ≈ 3.16 million | ≈ 2.68 million | as built |
 | `ScalableBloomFilter` | items added, hint 1,000, growth 1, fp 1%, r 0.9 | ≈ 6.68 million | ≈ 3.89 million | as built |
-| `InfiniFilter` | items added, 8-bit fingerprints | 1,610,612,736 | 100,663,296 | 805,306,368 |
-| `InfiniFilter` | items added, 16-bit fingerprints | 1,610,612,736 | 100,663,296 | 402,653,184 |
+| `InfiniFilter` | items added, 8-bit fingerprints | 6,442,450,944 | 100,663,296 | 805,306,368 |
+| `InfiniFilter` | items added, 16-bit fingerprints | 3,221,225,472 | 100,663,296 | 402,653,184 |
 | `MementoFilter` | items added, one per block, range 256, 8-bit fingerprints | 1,610,612,736 | 100,663,296 | 402,653,184 |
 | `MementoFilter` | items added, one per block, range 65,536, 8-bit fingerprints | 1,610,612,736 | 50,331,648 | 402,653,184 |
 
@@ -640,11 +639,15 @@ array holds it only up to the items in [the table](#how-much-each-one-holds), an
 larger is written to a stream. `PartitionedBloomFilter` is sized in 64 bits too.
 
 The ceiling of 4.29 billion bits is `BloomFilter`'s own, and the other filters
-have limits of their own, nearer 2^31. `CuckooBloomFilter` numbers its entries with a
-`uint`, so a table holds at most 2^31 of them, and half that at a rate fine enough for
-64-bit fingerprints, where the fingerprints pass what one .NET array holds.
-`QuotientFilter`, `InfiniFilter` and `MementoFilter` count their slots with a `uint` and
-stop at 2^31. `BinaryFuseFilter` keeps its fingerprints in one array, which holds
+have limits of their own. `CuckooBloomFilter` numbers its entries in 64 bits
+and keeps its fingerprints in one array of 64-bit words, which at 1% holds 2^33 entries,
+and 2^30 at a rate fine enough for 64-bit fingerprints.
+`QuotientFilter` keeps its table in one array of 64-bit words, which stops it at 2^34
+slots at its coarsest rates and at 2^33 at 1%.
+An `InfiniFilter` table is as wide as one array holds its words: 2^34 slots for the
+narrowest fingerprints, down to 2^31 for the widest.
+`MementoFilter` counts its slots with a `uint` and stops at 2^31.
+`BinaryFuseFilter` keeps its fingerprints in one array, which holds
 2,147,483,591 bytes: that is 1,908,641,337 keys at 8-bit fingerprints and 954,204,160 at
 16. How many items each of these is built for is in [the table](#how-much-each-one-holds).
 The sketches — `HyperLogLogPlus`, `ThetaSketch`, `CountMinSketch`, `TopK`, `DDSketch` —
@@ -924,7 +927,7 @@ right after it grows, so memory arrives in steps rather than smoothly.
 
 ```C#
 var filter = new InfiniFilter(initialCapacity: 1024, fingerprintBits: 8);
-filter.Add(bytes);              // grows itself, to 2^31 slots (about 1.6 billion items)
+filter.Add(bytes);              // grows itself, to 2^33 slots (about 6.4 billion items)
 
 bool maybe = filter.Test(bytes);
 bool wasThere = filter.TestAndRemove(bytes);

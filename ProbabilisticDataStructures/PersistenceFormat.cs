@@ -298,6 +298,31 @@ namespace ProbabilisticDataStructures
         internal const ushort SublimeTuningVersion = 10;
 
         /// <summary>
+        /// The version at which <see cref="CuckooBloomFilter"/> writes its whole table, word by
+        /// word, rather than a list of its occupied entries (#230), and its bucket count, item
+        /// count and capacity as <c>u64</c>s (#231). Every save is written at it, whatever the
+        /// filter holds, so a table that holds little costs the whole of it.
+        /// </summary>
+        internal const ushort CuckooDenseVersion = 11;
+
+        /// <summary>
+        /// The version at which <see cref="QuotientFilter"/> counts its entries in a
+        /// <c>u64</c>, and its quotient bits name a table of 2^q slots up to 34, where they
+        /// stopped at 31 when the slot count was a <c>u32</c> (#231). The layout is version
+        /// 1's with the count widened; every save is written at it but one, a table of one
+        /// slot read from version 1 at 32 quotient bits, which is written back as it was.
+        /// </summary>
+        internal const ushort QuotientWideVersion = 12;
+
+        /// <summary>
+        /// The version at which <see cref="InfiniFilter"/> counts each table's entries and words
+        /// in 64 bits, so that a table can have more slots than a <c>u32</c> counts: one is as
+        /// wide as one array holds its words (#231). The layout is version 1's with those two
+        /// fields widened; every save is written at it, whatever the size of its tables.
+        /// </summary>
+        internal const ushort InfiniWideVersion = 13;
+
+        /// <summary>
         /// The version at which the Bloom filters widened to 64-bit sizes (#232) record their
         /// sizes as <c>u64</c>s and their buckets as a <see cref="Buckets64"/>: each writes, at
         /// this version, its version 8 layout with those two changes. Every save of them is
@@ -344,7 +369,7 @@ namespace ProbabilisticDataStructures
             [StructureId.InverseBloomFilter] = [DefaultVersion, ColumnPlacementVersion],
             [StructureId.CuckooBloomFilter] =
                 [DefaultVersion, RandomStateVersion, CuckooPackedVersion,
-                 CuckooOriginalStateVersion],
+                 CuckooOriginalStateVersion, CuckooDenseVersion],
             [StructureId.CountMinSketch] = [DefaultVersion, ColumnPlacementVersion],
             [StructureId.HyperLogLog] = [DefaultVersion],
             [StructureId.TopK] = [DefaultVersion],
@@ -352,7 +377,7 @@ namespace ProbabilisticDataStructures
             [StructureId.BinaryFuseFilter] = [DefaultVersion],
             [StructureId.DDSketch] = [DefaultVersion],
             [StructureId.HyperLogLogPlus] = [DefaultVersion],
-            [StructureId.QuotientFilter] = [DefaultVersion],
+            [StructureId.QuotientFilter] = [DefaultVersion, QuotientWideVersion],
             [StructureId.ThetaSketch] = [DefaultVersion],
             [StructureId.SimHashSignature] = [DefaultVersion],
             [StructureId.CountSketch] = [DefaultVersion],
@@ -362,7 +387,7 @@ namespace ProbabilisticDataStructures
             [StructureId.VarOpt] = [DefaultVersion],
             [StructureId.UltraLogLog] = [DefaultVersion],
             [StructureId.Grafite] = [DefaultVersion],
-            [StructureId.InfiniFilter] = [DefaultVersion],
+            [StructureId.InfiniFilter] = [DefaultVersion, InfiniWideVersion],
             [StructureId.MementoFilter] = [DefaultVersion],
             [StructureId.SublimeCountMinSketch] = [DefaultVersion, SublimeTuningVersion],
             [StructureId.SetSketch] = [DefaultVersion, SetSketchVariantVersion],

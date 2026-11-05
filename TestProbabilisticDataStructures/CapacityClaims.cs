@@ -818,22 +818,21 @@ namespace TestProbabilisticDataStructures
                 Near(Facts["inverse slot bytes"], 16, 0.01)),
 
             // ---- Where a limit refuses -----------------------------------------------------
-            new Claim("The filters still on it hold one-bit buckets, and for those that is more than a 32-bit count addresses, so the count is the limit", () =>
+            new Claim("The filter still on it, `BloomFilter`, holds one-bit buckets, and for those that is more than a 32-bit count addresses, so the count is the limit", () =>
             {
                 // Which filters are still on it is read from the types, so one moved onto it
-                // or off it is seen: the plain filter's bits and the cuckoo filter's mark of
-                // which entries are occupied.
+                // or off it is seen. The cuckoo filter's mark of which entries are occupied
+                // was one, until it became a map of 64-bit words.
                 const BindingFlags Instance = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
                 bool OnIt(Type t) => t == typeof(Buckets) || t == typeof(Buckets[]);
                 var on = typeof(BloomFilter).Assembly.GetExportedTypes()
                     .Where(t => t.GetProperties(Instance).Any(m => OnIt(m.PropertyType)) || t.GetFields(Instance).Any(f => OnIt(f.FieldType)))
                     .Select(t => t.Name).OrderBy(n => n, StringComparer.Ordinal);
                 return Buckets.MaxCount(1) == uint.MaxValue
-                    && on.SequenceEqual(new[] { nameof(BloomFilter), nameof(CuckooBloomFilter) })
-                    && new BloomFilter(100, 0.01).Buckets.BucketSize == 1
-                    && new CuckooBloomFilter(100, 0.01).Occupied.BucketSize == 1;
+                    && on.SequenceEqual(new[] { nameof(BloomFilter) })
+                    && new BloomFilter(100, 0.01).Buckets.BucketSize == 1;
             }),
-            new Claim("and their sizing refuses an `n` past it", () =>
+            new Claim("and its sizing refuses an `n` past it", () =>
                 Assert.Throws<ArgumentOutOfRangeException>(() => Utils.OptimalM(1_000_000_000, 0.01)) is not null),
             // The filters' own sections say what limits them now, and what did.
             new Claim("The buckets of the counting, deletable, stable and partitioned filters are a 64-bit table of arrays, as `BloomFilter64`'s bits are, and have no such limit", () =>
@@ -864,7 +863,7 @@ namespace TestProbabilisticDataStructures
                 && Buckets64.maxArraySize == 1u << 30),
             new Claim("it stopped at 448,089,842 items at `r` 1,000 and 1%", () =>
                 CapacityRows.LargestSound(0.01, 1, 1000) == 448_089_842),
-            new Claim("the `Add` that would double it past that throws, with the filter as it was", () =>
+            new Claim("the `Add` that would double it past its limit throws, with the filter as it was", () =>
             {
                 var filter = new InfiniFilter(initialCapacity: 3, fingerprintBits: 8) { QuotientBitsLimit = 2 };
                 for (var i = 0; i < 3; i++) filter.Add(Key(i));
@@ -872,12 +871,24 @@ namespace TestProbabilisticDataStructures
                 var memento = new MementoFilter(2, fingerprintBits: 8, initialCapacity: 3) { QuotientBitsLimit = 2 };
                 for (ulong i = 0; i < 3; i++) memento.Add(i * 1_000);
                 var mementoBefore = memento.ToByteArray();
-                return InfiniFilter.MaxQuotientBits == 31 && MementoFilter.MaxQuotientBits == 31
-                    && Assert.Throws<InvalidOperationException>(() => filter.Add(Key(3))) is not null
+                return Assert.Throws<InvalidOperationException>(() => filter.Add(Key(3))) is not null
                     && Assert.Throws<InvalidOperationException>(() => memento.Add(3_000)) is not null
                     && before.AsSpan().SequenceEqual(filter.ToByteArray())
                     && mementoBefore.AsSpan().SequenceEqual(memento.ToByteArray());
             }),
+            new Claim("2^34 slots for the narrowest fingerprints, down to 2^31 for the widest", () =>
+                InfiniFilter.QuotientBitsLimitFor(2) == 34 && InfiniFilter.QuotientBitsLimitFor(32) == 31
+                && InfiniFilter.MaxQuotientBits == 34
+                && Enumerable.Range(3, 30).All(f =>
+                    InfiniFilter.QuotientBitsLimitFor(f) <= InfiniFilter.QuotientBitsLimitFor(f - 1))),
+            new Claim("A `MementoFilter` table counts its slots with a `uint`, up to 2^31 slots", () =>
+                MementoFilter.MaxQuotientBits == 31
+                && typeof(MementoSegment).GetProperty(nameof(MementoSegment.Slots), BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .PropertyType == typeof(uint)),
+            new Claim("2^33 slots at 8 bits and 2^32 at 16", () =>
+                InfiniFilter.QuotientBitsLimitFor(8) == 33 && InfiniFilter.QuotientBitsLimitFor(16) == 32),
+            new Claim("Until the release after 6.2.0 every table stopped at 2^31 slots", () =>
+                InfiniFilter.NarrowQuotientBits == 31),
             new Claim("or 2^30 for a Memento slot of 64 bits", () =>
                 MementoFilter.QuotientBitsLimitFor(MementoSegment.MaxSlotBits) == 30
                 && new MementoFilter(1UL << 32, 28, initialCapacity: 4).QuotientBitsLimit == 30
@@ -963,7 +974,7 @@ namespace TestProbabilisticDataStructures
                 var table = new InvertibleBloomLookupTable(4, 4);
                 TestPayloadCount.AssertStreamedWhileClaiming(table, 6_000_000_020, 6_000_000_032, (table, "cells", 300_000_000u));
                 var quotient = new QuotientFilter(100, 0.01);
-                TestPayloadCount.AssertStreamedWhileClaiming(quotient, 2_147_483_680, 2_147_483_684,
+                TestPayloadCount.AssertStreamedWhileClaiming(quotient, 2_147_483_684, 2_147_483_688,
                     (quotient, "quotientBits", 31u), (quotient, "remainderBits", 5u));
 
                 return NestedRunWritten(268_435_443, 1) == 2_147_483_603
@@ -1050,35 +1061,76 @@ namespace TestProbabilisticDataStructures
             new Claim("`n / 3.8` buckets", () => Near(4 * CapacityRows.CuckooLoadFactor, 3.8)),
             new Claim("10 at 1% and 13 at 0.1%", () =>
                 CapacityRows.CuckooBits(0.01) == 10 && CapacityRows.CuckooBits(0.001) == 13),
-            new Claim("A bucket therefore costs 5.5 bytes at 1%", () => Near(Slope("CuckooBloomFilter 1%"), 5.5, 0.01)),
-            new Claim("is written and read at 10 bytes", () => Near(Facts["cuckoo entry bytes 1%"], 10, 0.01)),
-            // A rate of 2^-60 is 63 bits exactly, log2(8 / 2^-60); just below it is 64.
-            new Claim("That holds up to fingerprints of 63 bits, whose 2^31 entries are 2,113,929,217 words, which one array holds", () =>
-                CapacityRows.CuckooBits(Math.ScaleB(1.0, -60)) == 63
-                && WordsFor(CuckooBloomFilter.MaxEntries, 63) == 2_113_929_217
-                && WordsFor(CuckooBloomFilter.MaxEntries, 63) <= (ulong)Array.MaxLength
-                && CuckooBloomFilter.GeometryProblem(CuckooBloomFilter.MaxEntries / 4, 4, 63) is null
-                && CapacityRows.CuckooLargest(Math.ScaleB(1.0, -60)) == CapacityRows.CuckooLargest(0.01)),
+            new Claim("A bucket therefore costs 5.5 bytes at 1%", () =>
+            {
+                var small = new CuckooBloomFilter((ulong)Math.Floor(3.8 * (1 << 14)), 0.01);
+                var large = new CuckooBloomFilter((ulong)Math.Floor(3.8 * (1 << 15)), 0.01);
+                return small.BucketCount() == 1UL << 14 && large.BucketCount() == 1UL << 15
+                    && Near((large.SizeInBytes() - small.SizeInBytes()) / (double)(1 << 14), 5.5);
+            }),
+            new Claim("at 1% and at 0.1% it holds 2^31 buckets, 2^33 entries", () =>
+                CapacityRows.CuckooBuckets(CapacityRows.CuckooLargest(0.01)) == 1UL << 31
+                && CapacityRows.CuckooBuckets(CapacityRows.CuckooLargest(0.001)) == 1UL << 31),
+            new Claim("2^32 buckets at 10 bits are 2,684,354,561 words, more than one array holds", () =>
+                WordsFor(1UL << 34, 10) == 2_684_354_561
+                && WordsFor(1UL << 34, 10) > (ulong)Array.MaxLength
+                && CuckooBloomFilter.GeometryProblem(1UL << 32, 4, 10) is not null),
+            // The coarsest rate the constructor takes is just under one, log2(8 / that) is
+            // just over 3, so no fingerprint is narrower than 4 bits.
+            new Claim("At 50% the fingerprints are 4 bits and the table holds 2^32 buckets, the most the constructor makes", () =>
+                CapacityRows.CuckooBits(0.5) == 4
+                && CapacityRows.CuckooBits(Math.BitDecrement(1.0)) == 4
+                && CapacityRows.CuckooBuckets(CapacityRows.CuckooLargest(0.5)) == 1UL << 32
+                && CuckooBloomFilter.GeometryProblem(1UL << 33, 4, 4) is not null),
             new Claim("A rate below about 8.7e-19 has fingerprints of 64 bits, all the hash supplies", () =>
                 CapacityRows.CuckooBits(Math.ScaleB(1.0, -60) * (1 - 1e-9)) == 64
                 && CapacityRows.CuckooBits(1e-300) == 64
                 && Rounds(Math.ScaleB(1.0, -60) * 1e19, 8.7, 1)),
-            new Claim("and then 2^31 entries are 2,147,483,649 words, more than one array holds, so the table stops at 2^30 entries " +
-                "and `n` at 1,020,054,732, half the table's figure", () =>
-                WordsFor(CuckooBloomFilter.MaxEntries, 64) == 2_147_483_649
-                && WordsFor(CuckooBloomFilter.MaxEntries, 64) > (ulong)Array.MaxLength
-                && CuckooBloomFilter.GeometryProblem(CuckooBloomFilter.MaxEntries / 4, 4, 64) is not null
-                && CuckooBloomFilter.GeometryProblem(CuckooBloomFilter.MaxEntries / 8, 4, 64) is null
-                && CapacityRows.CuckooLargest(1e-19) == 1_020_054_732
-                && CapacityRows.CuckooLargest(0.01) / 2 == 1_020_054_732),
+            new Claim("and then the table stops at 2^30 entries and `n` at 1,020,054,732", () =>
+                CapacityRows.CuckooLargest(1e-19) == 1_020_054_732
+                && CapacityRows.CuckooBuckets(1_020_054_732) == 1UL << 28
+                && CuckooBloomFilter.GeometryProblem(1UL << 29, 4, 64) is not null),
+            new Claim("an empty filter saves as large as a full one, 5.5 bytes a bucket at 1%", () =>
+            {
+                var empty = new CuckooBloomFilter(1000, 0.01, seed: 1);
+                var full = new CuckooBloomFilter(1000, 0.01, seed: 1);
+                for (var i = 0; i < 4000; i++) full.Add(Key(i));
+                return full.Count() > 1900
+                    && empty.ToByteArray().Length == full.ToByteArray().Length
+                    && Near(Slope("payload of CuckooBloomFilter 1%"), 5.5);
+            }),
+            new Claim("so it is charged 11 bytes a bucket at 1%", () => Near(Slope("CuckooBloomFilter 1%"), 11)),
+            new Claim("the default budget reads the table at 2^26 buckets", () =>
+                Facts["cuckoo loads buckets 1%"] == 1UL << 26 && Facts["cuckoo loads buckets 0.1%"] == 1UL << 26),
+            new Claim("The largest that saves as a byte array is 2^28 buckets", () =>
+                Facts["cuckoo saves buckets 1%"] == 1UL << 28 && Facts["cuckoo saves buckets 0.1%"] == 1UL << 28),
+            new Claim("an empty filter of 2^29 buckets at 1% has a payload of 2,952,790,064 bytes", () =>
+                ChargeLine.Known["payload of CuckooBloomFilter 1%"].At(1UL << 29) == 2_952_790_064
+                && 2_952_790_064 > MaxPayload),
 
             // ---- QuotientFilter -----------------------------------------------------------
             new Claim("(7 at 1%, 10 at 0.1%)", () =>
                 QuotientFilter.Split(1000, 0.01).RemainderBits == 7 && QuotientFilter.Split(1000, 0.001).RemainderBits == 10),
-            new Claim("a rate no finer than 2^-33", () =>
-                QuotientFilter.Split(QuotientFilter.MaxItems, Math.ScaleB(1.0, -33)).RemainderBits == 33
+            new Claim("The table is one array of 64-bit words, which holds 2,147,483,591, so `q` is at most 34", () =>
+                QuotientFilter.MaxTableWords == 2_147_483_591 && QuotientFilter.MaxQuotientBits == 34
+                && QuotientFilter.FitsOneArray(1UL << 34, 1) && !QuotientFilter.FitsOneArray(1UL << 35, 1)
+                && QuotientFilter.Split(QuotientFilter.MaxItems, 0.5).QuotientBits == 34),
+            new Claim("up to 28 bits at 2^32 slots, 12 at 2^33 and 4 at 2^34", () =>
+                new[] { (32, 28), (33, 12), (34, 4) }.All(t =>
+                    QuotientFilter.Split(3UL << (t.Item1 - 2), Math.ScaleB(1.0, -t.Item2))
+                        == ((uint)t.Item1, (uint)t.Item2)
+                    && Assert.Throws<ArgumentOutOfRangeException>(
+                        () => QuotientFilter.Split(3UL << (t.Item1 - 2), Math.ScaleB(1.0, -t.Item2 - 1))) is not null)),
+            new Claim("three quarters of 2^33, and only a rate of 6.25% or coarser goes on to 12,884,901,888, three quarters of 2^34", () =>
+                CapacityRows.QuotientLargest(0.01) == 3UL << 31 && CapacityRows.QuotientLargest(0.001) == 3UL << 31
+                && QuotientFilter.MaxItems == 12_884_901_888 && QuotientFilter.MaxItems == 3UL << 32
+                && CapacityRows.QuotientLargest(0.0625) == QuotientFilter.MaxItems
+                && CapacityRows.QuotientLargest(0.0624) == 3UL << 31
+                && Rounds(100 * Math.ScaleB(1.0, -4), 6.25, 2)),
+            new Claim("a table of 2^31 slots takes a rate no finer than 2^-33", () =>
+                QuotientFilter.Split(3UL << 29, Math.ScaleB(1.0, -33)) == (31u, 33u)
                 && Assert.Throws<ArgumentOutOfRangeException>(
-                    () => QuotientFilter.Split(QuotientFilter.MaxItems, Math.ScaleB(1.0, -34))) is not null),
+                    () => QuotientFilter.Split(3UL << 29, Math.ScaleB(1.0, -34))) is not null),
             new Claim("A read is charged three times the table", () => Near(Slope("QuotientFilter 1%"), 24, 0.01)),
 
             // ---- BinaryFuseFilter and BloomierFilter ----------------------------------------

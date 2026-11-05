@@ -69,12 +69,16 @@ namespace TestProbabilisticDataStructures
             switch (kind)
             {
                 case "quotient":
+                    // The filter numbers its slots in 64 bits (#231); a table of 16 fits 32.
                     var filter = new QuotientFilter(10, 0.01);
-                    table = new Table(kind, filter.SlotCount, filter.WriteSlot, filter.FindRunStart, () => filter.SlotReads);
+                    table = new Table(kind, (uint)filter.SlotCount, (slot, value) => filter.WriteSlot(slot, value),
+                        quotient => (uint)filter.FindRunStart(quotient), () => filter.SlotReads);
                     break;
                 case "infini":
+                    // An Infini table's slots are 64-bit (#231); these sixteen fit the record's.
                     var infini = new InfiniSegment(4, 8);
-                    table = new Table(kind, infini.Slots, infini.WriteSlot, infini.FindRunStart, () => infini.SlotReads);
+                    table = new Table(kind, checked((uint)infini.Slots), (slot, value) => infini.WriteSlot(slot, value),
+                        quotient => checked((uint)infini.FindRunStart(quotient)), () => infini.SlotReads);
                     break;
                 case "memento":
                     var memento = new MementoSegment(4, 8, 6);
@@ -470,8 +474,11 @@ namespace TestProbabilisticDataStructures
             BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(bytes.Length - 4), crc.GetCurrentHashAsUInt32());
         }
 
-        /// <summary>One table of a payload: where its words start, its shape, and its count.</summary>
-        private sealed record StoredTable(int Words, int CountAt, uint Slots, int BitsPerSlot, uint Count);
+        /// <summary>
+        /// One table of a payload: where its words start, its shape, and its count, which is
+        /// <paramref name="CountBytes"/> wide.
+        /// </summary>
+        private sealed record StoredTable(int Words, int CountAt, uint Slots, int BitsPerSlot, uint Count, int CountBytes = 4);
 
         /// <summary>A slot of a stored table, read from the payload's bytes bit by bit.</summary>
         private static ulong StoredSlot(byte[] bytes, StoredTable table, uint index)
@@ -491,12 +498,16 @@ namespace TestProbabilisticDataStructures
 
         private static uint U32(byte[] bytes, int at) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at));
 
+        private static ulong U64(byte[] bytes, int at) => BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(at));
+
         /// <summary>
         /// The tables of an Infini or Memento payload, from the first table's fields on: for
-        /// each, address bits, fingerprint bits, count and word count, then the words. A
-        /// Memento slot also holds the memento, whose width is a field of the filter.
+        /// each, address bits, fingerprint bits, count and word count, then the words. The
+        /// counts are <paramref name="countBytes"/> wide: four in a Memento payload, and eight
+        /// in an Infini one from version 13 (#231), which every save of it is. A Memento slot
+        /// also holds the memento, whose width is a field of the filter.
         /// </summary>
-        private static List<StoredTable> ChainTables(byte[] bytes, int first, int mementoBits)
+        private static List<StoredTable> ChainTables(byte[] bytes, int first, int mementoBits, int countBytes = 4)
         {
             var tables = new List<StoredTable>();
             var count = U32(bytes, first - 4);
@@ -505,10 +516,12 @@ namespace TestProbabilisticDataStructures
             {
                 var quotientBits = (int)U32(bytes, at);
                 var fingerprintBits = (int)U32(bytes, at + 4);
-                var words = (int)U32(bytes, at + 12);
-                tables.Add(new StoredTable(at + 16, at + 8, 1u << quotientBits,
-                    fingerprintBits + 1 + mementoBits + 3, U32(bytes, at + 8)));
-                at += 16 + (words * 8);
+                var entries = countBytes == 8 ? checked((uint)U64(bytes, at + 8)) : U32(bytes, at + 8);
+                var words = countBytes == 8 ? checked((int)U64(bytes, at + 16)) : (int)U32(bytes, at + 12);
+                var fields = 8 + (2 * countBytes);
+                tables.Add(new StoredTable(at + fields, at + 8, 1u << quotientBits,
+                    fingerprintBits + 1 + mementoBits + 3, entries, countBytes));
+                at += fields + (words * 8);
             }
             Assert.AreEqual(bytes.Length - 4, at, "premise: the tables run to the checksum.");
             return tables;
@@ -556,7 +569,14 @@ namespace TestProbabilisticDataStructures
         private static void AssertCountRefused(string what, byte[] payload, StoredTable table, uint count, string name, Func<byte[], object> read)
         {
             var edited = (byte[])payload.Clone();
-            BinaryPrimitives.WriteUInt32LittleEndian(edited.AsSpan(table.CountAt), count);
+            if (table.CountBytes == 8)
+            {
+                BinaryPrimitives.WriteUInt64LittleEndian(edited.AsSpan(table.CountAt), count);
+            }
+            else
+            {
+                BinaryPrimitives.WriteUInt32LittleEndian(edited.AsSpan(table.CountAt), count);
+            }
             Reseal(edited);
             var ex = Assert.ThrowsExactly<InvalidDataException>(() => read(edited), $"{what}: count {count} not refused.");
             StringAssert.Contains(ex.Message, $"{name}'s metadata is inconsistent", what);
@@ -591,9 +611,18 @@ namespace TestProbabilisticDataStructures
                 (1 << 4) | 1, (1 << 4) | 2, (3 << 4) | 1, (3 << 4) | 2, (3 << 4) | 3, (4 << 4) | 1, (6 << 4) | 1, (6 << 4) | 2);
 
         /// <summary>The one table of a quotient filter payload: its words follow four u32s.</summary>
-        private static StoredTable QuotientTableOf(byte[] payload) =>
-            new(PayloadStart + 16, PayloadStart + 8, 1u << (int)U32(payload, PayloadStart),
+        /// <summary>
+        /// A quotient filter's one table, as FORMAT.md lays it out: two widths, the count, a
+        /// u64 at version 12 whose low half is where a u32 count was at version 1, and the
+        /// table's run. The tables here are small, so the count's low half is all of it.
+        /// </summary>
+        private static StoredTable QuotientTableOf(byte[] payload)
+        {
+            var wide = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(4)) == 12;
+            Assert.IsTrue(!wide || U32(payload, PayloadStart + 12) == 0, "premise: a count that fits 32 bits.");
+            return new(PayloadStart + (wide ? 20 : 16), PayloadStart + 8, 1u << (int)U32(payload, PayloadStart),
                 (int)U32(payload, PayloadStart + 4) + 3, U32(payload, PayloadStart + 8));
+        }
 
         /// <summary>
         /// The quotient filter lays Figure 2's entries out exactly as the figure does: its
@@ -690,7 +719,9 @@ namespace TestProbabilisticDataStructures
         public void TestEveryMetadataBitFlippedInAnInfiniFilterPayloadIsRefused()
         {
             var payload = InfiniChain();
-            var tables = ChainTables(payload, PayloadStart + 16, 0);
+            Assert.AreEqual(PersistenceFormat.InfiniWideVersion, BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(4)),
+                "premise: the payload is the version whose counts are u64s");
+            var tables = ChainTables(payload, PayloadStart + 16, 0, countBytes: 8);
             Assert.IsGreaterThanOrEqualTo(2, tables.Count, "premise: a chain of two tables or more.");
 
             for (var t = 0; t < tables.Count; t++)
@@ -708,7 +739,9 @@ namespace TestProbabilisticDataStructures
         public void TestAnInfiniFilterPayloadWhoseCountIsNotItsEntriesIsRefused()
         {
             var payload = InfiniChain();
-            var tables = ChainTables(payload, PayloadStart + 16, 0);
+            Assert.AreEqual(PersistenceFormat.InfiniWideVersion, BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(4)),
+                "premise: the payload is the version whose counts are u64s");
+            var tables = ChainTables(payload, PayloadStart + 16, 0, countBytes: 8);
             Func<byte[], object> read = bytes => Persistence.FromByteArray<InfiniFilter>(bytes);
             for (var t = 0; t < tables.Count; t++)
             {

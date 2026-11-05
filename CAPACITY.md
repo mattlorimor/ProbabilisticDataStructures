@@ -74,16 +74,19 @@ the structure with an exception that names the limit, before anything changes, a
 "Builds up to" figures are the sizes that refuse nothing.
 
 - **A bucket array is one .NET array.** `Buckets` sizes it in 64 bits, up to the
-  2,147,483,591 bytes an array holds. The filters still on it hold one-bit buckets, and
-  for those that is more than a 32-bit count addresses, so the count is the limit, and
-  their sizing refuses an `n` past it. The buckets of the counting, deletable, stable and
-  partitioned filters are a 64-bit table of arrays, as `BloomFilter64`'s bits are, and have
-  no such limit. Versions that sized the array in 32 bits built a filter whose bits passed
-  2^32 with an array too short for them, without an error, and it failed on `Add`; a
-  payload written then is refused when read, with that said.
-- **A table of 2^32 slots is not a table.** `InfiniFilter` and `MementoFilter` double their
-  table when three quarters full, up to 2^31 slots, or 2^30 for a Memento slot of 64 bits,
-  and the `Add` that would double it past that throws, with the filter as it was.
+  2,147,483,591 bytes an array holds. The filter still on it, `BloomFilter`, holds one-bit
+  buckets, and for those that is more than a 32-bit count addresses, so the count is the
+  limit, and its sizing refuses an `n` past it. The buckets of the counting, deletable,
+  stable and partitioned filters are a 64-bit table of arrays, as `BloomFilter64`'s bits
+  are, and have no such limit. Versions that sized the array in 32 bits built a filter whose
+  bits passed 2^32 with an array too short for them, without an error, and it failed on
+  `Add`; a payload written then is refused when read, with that said.
+- **A table that doubles is one array.** `InfiniFilter` and `MementoFilter` double their
+  table when three quarters full, and the `Add` that would double it past its limit throws,
+  with the filter as it was. An `InfiniFilter` table is as wide as one array holds its
+  words: 2^34 slots for the narrowest fingerprints, down to 2^31 for the widest. A
+  `MementoFilter` table counts its slots with a `uint`, up to 2^31 slots, or 2^30 for a
+  Memento slot of 64 bits.
 - **A Sublime row is at most 2^30 counters.** The `Add` that would double it past that
   throws, with the sketch as it was.
 - **A Memento slot is at most 64 bits.** The constructor refuses a fingerprint and a range
@@ -221,16 +224,20 @@ The table has 2^k buckets of 4 entries, the smallest power of two that holds `n`
 bits: 10 at 1% and 13 at 0.1%. A bucket therefore costs 5.5 bytes at 1% (four 10-bit
 fingerprints and a bit apiece to say which are in use).
 
-Entries are numbered in 32 bits, so a table has at most 2^31 entries, 2^29 buckets, and
-the table gives the `n` that fills it. That holds up to fingerprints of 63 bits, whose 2^31
-entries are 2,113,929,217 words, which one array holds. A rate below about 8.7e-19 has
-fingerprints of 64 bits, all the hash supplies, and then 2^31 entries are 2,147,483,649
-words, more than one array holds, so the table stops at 2^30 entries and `n` at
-1,020,054,732, half the table's figure. A read allocates the whole table whatever it
-holds, so the empty row is the table at 2^27 buckets, the largest that fits a gibibyte;
-and each entry the filter holds is written and read at 10 bytes at 1%, so a filter holding
-as many items as it was sized for loads up to a smaller `n`. That number does not rise
-smoothly with `n`, because the table doubles.
+Entries are numbered in 64 bits, and the fingerprints are one array of 64-bit words, which
+is what stops the table: at 1% and at 0.1% it holds 2^31 buckets, 2^33 entries, and the
+table gives the `n` that fills it, while 2^32 buckets at 10 bits are 2,684,354,561 words,
+more than one array holds. At 50% the fingerprints are 4 bits and the table holds 2^32
+buckets, the most the constructor makes. A rate below about 8.7e-19 has fingerprints of
+64 bits, all the hash supplies, and then the table stops at 2^30 entries and `n` at
+1,020,054,732.
+
+A payload is the whole table, written as it is held whatever the filter holds, so an empty
+filter saves as large as a full one, 5.5 bytes a bucket at 1%. A read holds the payload
+and builds the table from it, so it is charged 11 bytes a bucket at 1%, and the default
+budget reads the table at 2^26 buckets. The largest that saves as a byte array is 2^28
+buckets, and an empty filter of 2^29 buckets at 1% has a payload of 2,952,790,064 bytes,
+which only `WriteTo(Stream)` saves, in the large form.
 
 ### `QuotientFilter`
 
@@ -239,10 +246,13 @@ full, and each slot is a remainder of `r = ⌈log2(1/fp)⌉` bits (7 at 1%, 10 a
 bits of bookkeeping. The memory is `2^q · (r + 3)` bits and doubles each time `n` passes
 three quarters of a power of two.
 
-The slot count is a `uint`, so `q` is at most 31 and `n` at most the figure in the table,
-whatever the rate; the quotient and remainder together are cut from a 64-bit hash, so a
-table that size takes a rate no finer than 2^-33. A read is charged three times the table,
-so the default budget reads one of 2^28 slots at 1%.
+The table is one array of 64-bit words, which holds 2,147,483,591, so `q` is at most 34,
+and past 31 that array bounds the remainder as well: up to 28 bits at 2^32 slots, 12 at
+2^33 and 4 at 2^34. At 1% and at 0.1% `n` therefore stops at the figure in the table,
+three quarters of 2^33, and only a rate of 6.25% or coarser goes on to 12,884,901,888,
+three quarters of 2^34. The quotient and remainder together are cut from a 64-bit hash,
+so a table of 2^31 slots takes a rate no finer than 2^-33. A read is charged three times
+the table, so the default budget reads one of 2^28 slots at 1%.
 
 ### `BinaryFuseFilter`
 
@@ -378,9 +388,11 @@ load. A slot is the fingerprint, its age counter and 3 bits of bookkeeping: `F +
 Fingerprints that have aged out of the table move to smaller tables beneath it, which are
 a sliver of the main one.
 
-A table of 2^31 slots is the largest that works, which is the figure in the table; the
-`Add` that would double it throws, with the filter as it was. A read is charged three times
-the table, which at 8 or 16 bits is the table of 2^27 slots. The fingerprint width does
+A table is as wide as one array holds its words, so the largest that works depends on the
+fingerprint: 2^33 slots at 8 bits and 2^32 at 16, which are the figures in the table; the
+`Add` that would double it throws, with the filter as it was. Until the release after 6.2.0
+every table stopped at 2^31 slots, its slot count being a `uint`. A read is charged three
+times the table, which at 8 or 16 bits is the table of 2^27 slots. The fingerprint width does
 not move that number, because the table doubles at the same load whatever the width, and
 2^28 slots do not fit either way.
 
