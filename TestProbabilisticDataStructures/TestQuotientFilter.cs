@@ -860,6 +860,22 @@ namespace TestProbabilisticDataStructures
                     () => QuotientFilter.Split(n, finest / 2), $"2^{q} slots: a rate one bit finer was sized");
                 StringAssert.Contains(ex.Message, finest.ToString("R", CultureInfo.InvariantCulture),
                     $"2^{q} slots: the refusal does not name the finest rate that works");
+
+                // And it names the limit that binds, which is the hash at 2^31 slots and the
+                // array past it; each is held to the other's absence, so a refusal that always
+                // names one of them fails at the other's width.
+                var array = $"one array of 64-bit words, which holds at most {LargestArray} of them";
+                var hash = $"The {q} bits that pick a slot leave {r} of the hash's {HashBits} for the remainder";
+                if (r == HashBits - q)
+                {
+                    StringAssert.Contains(ex.Message, hash, $"2^{q} slots: the hash binds, and the refusal says otherwise");
+                    Assert.DoesNotContain("one array", ex.Message, $"2^{q} slots: the array does not bind here");
+                }
+                else
+                {
+                    StringAssert.Contains(ex.Message, array, $"2^{q} slots: the array binds, and the refusal says otherwise");
+                    Assert.DoesNotContain("bits that pick a slot leave", ex.Message, $"2^{q} slots: the hash leaves more than this");
+                }
             }
         }
 
