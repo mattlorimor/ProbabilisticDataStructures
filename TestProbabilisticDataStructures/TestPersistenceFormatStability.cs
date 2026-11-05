@@ -1159,6 +1159,72 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// Version 13 stores each table's count of entries and of words as a <c>u64</c>, so
+        /// that a table can have more slots than a <c>u32</c> counts (#231). Its fixture was
+        /// assembled outside the library, from FORMAT.md alone: the version 1 fixture's payload
+        /// with those two fields of each of its two tables widened, and nothing else moved. So
+        /// it reads as the filter the version 1 fixture holds, answering every key the same,
+        /// false positives included; with the two fields narrowed it is the version 1 fixture's
+        /// payload; and the version 1 fixture saves again as it, byte for byte.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredInfiniFilterAtVersionThirteenReadsAsTheOneBeforeIt()
+        {
+            var stored = ReadFixture("infinifilter-v13.bin");
+            var earlier = ReadFixture("infinifilter-v1.bin");
+            var filter = InfiniFilter.ReadFrom(new MemoryStream(stored));
+            var before = InfiniFilter.ReadFrom(new MemoryStream(earlier));
+
+            Assert.AreEqual(before.Count(), filter.Count());
+            Assert.AreEqual(before.ExpansionCount(), filter.ExpansionCount());
+            Assert.AreEqual(before.ChainLength(), filter.ChainLength());
+            Assert.AreEqual(before.Capacity(), filter.Capacity());
+
+            // Four-bit fingerprints answer yes to strangers often, so the strangers say whether
+            // the tables are the same and not only whether they hold the keys; and they must
+            // answer both ways, or they say neither.
+            var answers = new int[2];
+            for (var i = 0; i < 2000; i++)
+            {
+                Assert.IsTrue(filter.Test(Key($"item-{i}")), $"the stored filter no longer holds item-{i}");
+                var stranger = Key($"stranger-{i}");
+                var answer = filter.Test(stranger);
+                Assert.AreEqual(before.Test(stranger), answer, $"stranger-{i} is answered differently at version 13");
+                answers[answer ? 1 : 0]++;
+            }
+
+            Assert.IsGreaterThan(0, answers[0], "no stranger was answered no, so they compared nothing");
+            Assert.IsGreaterThan(0, answers[1], "no stranger was a false positive, so they compared nothing");
+
+            // Each table's entries and words back to u32s, walked by FORMAT.md's layout: the
+            // count, the expansions and the tables, then for each table its two widths, its
+            // entries and its words, and the words.
+            var payload = stored.AsSpan(14, stored.Length - 18);
+            var narrowed = new System.Collections.Generic.List<byte>(payload[..16].ToArray());
+            var tables = BinaryPrimitives.ReadUInt32LittleEndian(payload[12..]);
+            var at = 16;
+            for (var t = 0; t < tables; t++)
+            {
+                var entries = BinaryPrimitives.ReadUInt64LittleEndian(payload[(at + 8)..]);
+                var words = BinaryPrimitives.ReadUInt64LittleEndian(payload[(at + 16)..]);
+                var field = new byte[16];
+                payload.Slice(at, 8).CopyTo(field);
+                BinaryPrimitives.WriteUInt32LittleEndian(field.AsSpan(8), checked((uint)entries));
+                BinaryPrimitives.WriteUInt32LittleEndian(field.AsSpan(12), checked((uint)words));
+                narrowed.AddRange(field);
+                narrowed.AddRange(payload.Slice(at + 24, checked((int)words * 8)).ToArray());
+                at += 24 + (int)words * 8;
+            }
+
+            Assert.AreEqual(2u, tables, "premise: the fixture holds the version 1 fixture's two tables");
+            Assert.AreEqual(payload.Length, at, "the version 13 fixture holds more than its tables");
+            CollectionAssert.AreEqual(earlier[14..^4], narrowed.ToArray(),
+                "the version 13 fixture with its counts narrowed is not the version 1 fixture's payload");
+
+            AssertBytes("infinifilter-v13.bin", before.ToByteArray());
+        }
+
         [TestMethod]
         public void TestStoredTupleSketchStillReads()
         {
@@ -1974,7 +2040,9 @@ namespace TestProbabilisticDataStructures
                 infini.Add(Key($"item-{i}"));
             }
 
-            AssertBytes("infinifilter-v1.bin", infini.ToByteArray());
+            // Every save is version 13, which counts a table's entries and words in 64 bits
+            // (#231); the version 1 fixture is what earlier releases wrote, and still reads.
+            AssertBytes("infinifilter-v13.bin", infini.ToByteArray());
 
             var tuple = new TupleSketch(256);
             for (var i = 0; i < 20_000; i++)
@@ -2206,6 +2274,7 @@ namespace TestProbabilisticDataStructures
                 ("ultraloglog-v1.bin", 25, 1),
                 ("grafite-v1.bin", 26, 1),
                 ("infinifilter-v1.bin", 27, 1),
+                ("infinifilter-v13.bin", 27, 13),
                 ("mementofilter-v1.bin", 28, 1),
                 ("countminsketch-v9-narrow.bin", 10, 9),
                 ("countminsketch-v9-wide.bin", 10, 9),
@@ -2259,6 +2328,11 @@ namespace TestProbabilisticDataStructures
                 "a DpswSketch is not writing the version its layout needs");
             Assert.AreEqual(1, new TopK(0.1, 0.1, 3).ToByteArray()[4],
                 "a top-k, whose layout did not change, started writing a later format version");
+
+            // The InfiniFilter counts a table's entries and words in 64 bits from version 13,
+            // and every save of it is version 13, however small its tables.
+            Assert.AreEqual(13, new InfiniFilter(16, 4).ToByteArray()[4],
+                "a small InfiniFilter is not writing the version its layout needs");
 
             // The scalable filter writes version 7 only when it has a growth factor to
             // record, so one that adds every filter at its hint stays readable by

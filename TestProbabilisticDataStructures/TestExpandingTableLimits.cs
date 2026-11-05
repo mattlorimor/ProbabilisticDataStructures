@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Reflection;
 using System.Text;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -48,20 +49,22 @@ namespace TestProbabilisticDataStructures
         private static byte[] Key(int i) => Encoding.UTF8.GetBytes("k" + i);
 
         /// <summary>
-        /// A payload of one table at the given width of address, hand-written, with the
-        /// words that the old reader's arithmetic expected -- its slot count was
+        /// A payload of one table at the given width of address, hand-written. At version 1
+        /// it has the words that the old reader's arithmetic expected -- its slot count was
         /// <c>1u &lt;&lt; quotientBits</c>, which wraps -- so that the width is the only
-        /// thing wrong with it.
+        /// thing wrong with it. At version 13, an InfiniFilter's, it has the words of 2^q
+        /// slots, and its counts of entries and words are <c>u64</c>s, as FORMAT.md lays it
+        /// out.
         /// </summary>
         internal static byte[] OnePayload(
             StructureId id, int quotientBits, int fingerprintBits, bool includeWords,
-            int mementoBits = 3)
+            int mementoBits = 3, ushort version = 1)
         {
-            var slots = 1u << quotientBits;
+            var slots = version == 1 ? 1u << quotientBits : 1UL << quotientBits;
             var bitsPerSlot = id == StructureId.MementoFilter
                 ? fingerprintBits + 1 + mementoBits + 3
                 : fingerprintBits + 1 + 3;
-            var words = (uint)((((long)slots * bitsPerSlot) >> 6) + 2);
+            var words = ((slots * (ulong)bitsPerSlot) >> 6) + 2;
 
             var payload = new PayloadWriter();
             payload.WriteUInt64(0);                 // added
@@ -74,11 +77,20 @@ namespace TestProbabilisticDataStructures
             payload.WriteUInt32(1);                 // tables
             payload.WriteUInt32((uint)quotientBits);
             payload.WriteUInt32((uint)fingerprintBits);
-            payload.WriteUInt32(0);                 // entries
-            payload.WriteUInt32(words);
+            if (version == 1)
+            {
+                payload.WriteUInt32(0);             // entries
+                payload.WriteUInt32((uint)words);
+            }
+            else
+            {
+                payload.WriteUInt64(0);             // entries
+                payload.WriteUInt64(words);
+            }
+
             if (includeWords)
             {
-                for (var w = 0; w < words; w++)
+                for (var w = 0UL; w < words; w++)
                 {
                     payload.WriteUInt64(0);
                 }
@@ -88,8 +100,120 @@ namespace TestProbabilisticDataStructures
             PersistenceFormat.Write(
                 stream, id,
                 id == StructureId.MementoFilter ? HashId.None : HashId.XxHash3_64,
-                payload.WrittenSpan);
+                payload.WrittenSpan, version);
             return stream.ToArray();
+        }
+
+        /// <summary>
+        /// The widest table of <paramref name="fingerprintBits"/>-bit fingerprints whose words
+        /// fit one array, worked out in arbitrary precision from FORMAT.md's layout: its slots
+        /// end to end, the fingerprint, its age counter's bit and three of metadata each, and
+        /// two words more, at most <see cref="Array.MaxLength"/>.
+        /// </summary>
+        internal static int WidestInfiniTable(int fingerprintBits)
+        {
+            var quotientBits = 2;
+            while (((BigInteger.One << (quotientBits + 1)) * (fingerprintBits + 4) / 64) + 2 <= Array.MaxLength)
+            {
+                quotientBits++;
+            }
+            return quotientBits;
+        }
+
+        /// <summary>
+        /// From version 13 an InfiniFilter's table is as wide as one array holds its words
+        /// (#231), where it was 2^31 slots for every fingerprint: a slot count of 2^q needed
+        /// q of at most 31 to be a <c>u32</c>. The oracle is
+        /// <see cref="WidestInfiniTable"/>, at every fingerprint the constructor takes. A
+        /// payload claiming that table is read as far as what it costs, which is how a real
+        /// one of that size is refused under the default budget, and one claiming the table a
+        /// bit wider is refused for its shape, since no array holds it. The sweep has to see
+        /// more than one widest table, and one past 2^31 slots, or it could not tell the limit
+        /// from a constant, nor from the old one.
+        /// </summary>
+        [TestMethod]
+        public void TestAnInfiniFilterTableIsAsWideAsOneArrayHoldsItsWords()
+        {
+            var widest = new HashSet<int>();
+            for (var f = 2; f <= 32; f++)
+            {
+                var q = WidestInfiniTable(f);
+                widest.Add(q);
+
+                var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<InfiniFilter>(
+                    OnePayload(StructureId.InfiniFilter, q, f, includeWords: false, version: 13)));
+                Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException,
+                    $"a table of 2^{q} slots of {f}-bit fingerprints should be refused for its cost: {atTheLimit.Message}");
+
+                var wider = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<InfiniFilter>(
+                    OnePayload(StructureId.InfiniFilter, q + 1, f, includeWords: false, version: 13)));
+                StringAssert.Contains(wider.Message, "one array",
+                    $"a table of 2^{q + 1} slots of {f}-bit fingerprints should be refused for its shape");
+            }
+
+            Assert.IsGreaterThan(1, widest.Count, "every fingerprint had the same widest table, so the limit could be a constant");
+            Assert.IsGreaterThan(31, widest.Max(), "no table was wider than 2^31 slots, the old limit");
+        }
+
+        /// <summary>
+        /// The sizes an InfiniFilter is given and gives are 64-bit (#231): its initial
+        /// capacity, its count and its capacity. So are a table's slots and entries, and every
+        /// slot, quotient and address its tables and the filter take, and the run starts and
+        /// neighbours they return. The members are found by reflection, so one added later with
+        /// a 32-bit index fails here; there have to be some of each, or nothing was checked.
+        /// </summary>
+        [TestMethod]
+        public void TestAnInfiniFiltersSizesAndIndicesAreSixtyFourBit()
+        {
+            var capacities = typeof(InfiniFilter).GetConstructors()
+                .SelectMany(c => c.GetParameters())
+                .Where(p => p.Name == "initialCapacity")
+                .ToArray();
+            Assert.IsNotEmpty(capacities, "no public constructor takes an initial capacity");
+            foreach (var parameter in capacities)
+            {
+                Assert.AreEqual(typeof(ulong), parameter.ParameterType, $"{parameter.Member}: initialCapacity");
+            }
+
+            Assert.AreEqual(typeof(ulong), typeof(InfiniFilter).GetMethod(nameof(InfiniFilter.Count))!.ReturnType, "Count()");
+            Assert.AreEqual(typeof(ulong), typeof(InfiniFilter).GetMethod(nameof(InfiniFilter.Capacity))!.ReturnType, "Capacity()");
+
+            const BindingFlags declared = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public |
+                BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+            foreach (var name in new[] { nameof(InfiniSegment.Slots), nameof(InfiniSegment.Count) })
+            {
+                Assert.AreEqual(typeof(ulong), typeof(InfiniSegment).GetProperty(name, declared)!.PropertyType, $"InfiniSegment.{name}");
+            }
+
+            var indices = typeof(InfiniSegment).GetMethods(declared)
+                .Concat(typeof(InfiniFilter).GetMethods(declared))
+                .SelectMany(m => m.GetParameters())
+                .Where(p => p.Name is "slot" or "quotient" or "index" or "address")
+                .ToArray();
+            Assert.IsGreaterThan(5, indices.Length, "almost no index was found, so the sweep checked nothing");
+            foreach (var parameter in indices)
+            {
+                Assert.AreEqual(typeof(ulong), parameter.ParameterType,
+                    $"{parameter.Member.DeclaringType!.Name}.{parameter.Member.Name}({parameter.Name})");
+            }
+
+            foreach (var name in new[] { "FindRunStart", "Next", "Prev" })
+            {
+                var method = typeof(InfiniSegment).GetMethods(declared).Where(m => m.Name == name).ToArray();
+                Assert.IsNotEmpty(method, $"InfiniSegment has no {name}");
+                Assert.IsTrue(method.All(m => m.ReturnType == typeof(ulong)), $"InfiniSegment.{name} returns a {method[0].ReturnType.Name}");
+            }
+
+            foreach (var (name, type) in new[]
+            {
+                (nameof(InfiniSegment.Split), typeof((ulong, ulong))),
+                (nameof(InfiniSegment.Entries), typeof(IEnumerable<(ulong, ulong)>)),
+            })
+            {
+                var method = typeof(InfiniSegment).GetMethods(declared).Where(m => m.Name == name).ToArray();
+                Assert.IsNotEmpty(method, $"InfiniSegment has no {name}");
+                Assert.IsTrue(method.All(m => m.ReturnType == type), $"InfiniSegment.{name} returns a {method[0].ReturnType}");
+            }
         }
 
         /// <summary>
