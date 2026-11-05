@@ -749,6 +749,20 @@ namespace TestProbabilisticDataStructures
                 return Enumerable.Range(0, 200).All(i => widest.Test((ulong)i * 7919))
                     && Assert.Throws<ArgumentOutOfRangeException>(() => new MementoFilter(1UL << 32, 29)).ParamName == "fingerprintBits";
             }),
+            // The column the README's tables end with, which this paragraph explains.
+            new Claim("**As a byte array** is the largest that `ToByteArray` returns", () =>
+                TestCapacityDocumentation.TableHeader.EndsWith("| As a byte array |", StringComparison.Ordinal)),
+            // The sentence above the README's tables, said here too: the stream path refuses
+            // nothing a structure builds, at its largest build where a field sizes it, and
+            // past the bounds that ship, lowered, where what it holds sizes it (#279).
+            new Claim("Through `WriteTo(Stream)` every structure saves as built, limited only by memory.", () =>
+            {
+                var stream = new TestTheStreamSavesAsBuilt();
+                stream.TestEveryStructureIsCountedAtItsLargestBuildWithoutARefusal();
+                stream.TestEveryStructurePastTheThresholdIsWrittenWithItsLongestRunPastTheBound();
+                return TestCapacityDocumentation.ReadmeSays(
+                    "Through `WriteTo(Stream)` every structure saves as built, limited only by memory.");
+            }),
             // Past one array, WriteTo goes on to the large form at the threshold that ships: a
             // count sketch claiming a table seven bytes past it has its header written,
             // declaring that length, before its body runs (#225).
