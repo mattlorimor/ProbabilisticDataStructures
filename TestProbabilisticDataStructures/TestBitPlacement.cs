@@ -383,6 +383,77 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Every internal constructor of a filter whose table is a 64-bit one, asked to place
+        /// with 32-bit values among more positions than a <c>u32</c> counts, refuses it, naming
+        /// the placement and the positions, before it allocates anything (#315). The 32-bit
+        /// scheme reduces modulo a 32-bit count of positions, so a filter built that way among
+        /// 2^32 of them would reduce modulo nought, and among more modulo the few past 2^32,
+        /// and its reader refuses a payload that says so
+        /// (<c>TestAFilterPlacedWithThirtyTwoBitValuesPastTwoToTheThirtyTwoIsRefused</c>). Each
+        /// is asked at the first size its sizing reaches past the edge.
+        /// </summary>
+        /// <remarks>
+        /// The roster is the library's types with a non-public constructor taking a placement
+        /// that hold a <see cref="Buckets64"/>, whose positions are counted in 64 bits; the
+        /// others that take a placement count theirs in 32, which no size of theirs passes.
+        /// Each is asked for one-bit buckets at a rate of one half, one hash function, so that
+        /// the partitioned filter's one partition is its filter. Refused, each allocates
+        /// nothing; built, each is half a gigabyte of buckets. That they still build with
+        /// 32-bit placement where it holds their positions is
+        /// <see cref="TestAnOldPayloadOfAnySizeKeepsTheThirtyTwoBitScheme"/>'s, at 2^27.
+        /// </remarks>
+        [TestMethod]
+        public void TestEveryConstructorRefusesThirtyTwoBitPlacementAmongMorePositionsThanAUintCounts()
+        {
+            const ulong Past = (ulong)uint.MaxValue + 1;
+            const double Rate = 0.5;
+            Assert.AreEqual(1u, Utils.OptimalK(Rate), "premise: a rate of one half is not one hash function");
+            var n = SmallestCountReaching64(Past, Rate);
+            var m = Utils.OptimalM64(n, Rate);
+            var deletable = SmallestCountReaching64(Past + 1, Rate);
+            var builds = new Dictionary<Type, (ulong Positions, Func<object> Build)>
+            {
+                [typeof(CountingBloomFilter)] = (m, () => new CountingBloomFilter(n, 1, Rate, null, Placement.Narrow)),
+                // One collision region, so that the data region, which it places among, is past the edge.
+                [typeof(DeletableBloomFilter)] = (Utils.OptimalM64(deletable, Rate) - 1,
+                    () => new DeletableBloomFilter(deletable, 1, Rate, null, Placement.Narrow)),
+                [typeof(PartitionedBloomFilter)] = (PartitionedBloomFilter.PartitionSize(m, 1),
+                    () => new PartitionedBloomFilter(n, Rate, null, Placement.Narrow)),
+                [typeof(StableBloomFilter)] = (Past, () => new StableBloomFilter(Past, 1, Rate, null, 1, Placement.Narrow)),
+            };
+
+            var roster = typeof(BloomFilter).Assembly.GetTypes()
+                .Where(t => t.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Any(c => c.GetParameters().Any(p => p.ParameterType == typeof(Placement?))))
+                .Where(t => t.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+                    .Any(f => f.FieldType == typeof(Buckets64) || f.FieldType == typeof(Buckets64[])))
+                .Select(t => t.Name).Order().ToArray();
+            CollectionAssert.AreEqual(roster, builds.Keys.Select(t => t.Name).Order().ToArray(),
+                "the filters whose 64-bit tables a constructor can be asked to place with 32-bit values are not the ones asked here");
+
+            var wrong = new List<string>();
+            foreach (var (type, (positions, build)) in builds.OrderBy(b => b.Key.Name))
+            {
+                Assert.IsGreaterThan((ulong)uint.MaxValue, positions, $"premise: {type.Name} places among no more than a uint counts");
+                Assert.IsLessThan(Past + 4, positions, $"premise: {type.Name} is asked far past the edge");
+                try
+                {
+                    GC.KeepAlive(build());
+                    wrong.Add($"{type.Name} was built placing {positions:N0} positions with 32-bit values");
+                }
+                catch (ArgumentOutOfRangeException e) when (e.ParamName == "placement")
+                {
+                    if (!e.Message.Contains($"{positions:N0}", StringComparison.Ordinal))
+                    {
+                        wrong.Add($"{type.Name}'s refusal does not name its {positions:N0} positions: {e.Message}");
+                    }
+                }
+            }
+
+            Assert.IsEmpty(wrong, string.Join("\n", wrong));
+        }
+
+        /// <summary>
         /// The smallest item count whose filter, sized in 64 bits at this rate, has at least
         /// this many bits.
         /// </summary>
