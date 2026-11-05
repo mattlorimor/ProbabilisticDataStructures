@@ -389,6 +389,12 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Adds each of <paramref name="other"/>'s counters to its counterpart. Not written
+        /// yet: the next commit writes it (#232).
+        /// </summary>
+        internal Buckets64 Add(Buckets64 other) => throw new NotImplementedException("#232");
+
+        /// <summary>
         /// Restores the Buckets64 to the original state. Returns itself to allow for
         /// chaining.
         /// </summary>

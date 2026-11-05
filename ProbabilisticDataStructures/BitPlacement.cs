@@ -302,4 +302,16 @@ namespace ProbabilisticDataStructures
             ? (uint)((this.first + this.step * i) % this.m)
             : ((uint)this.first + (uint)this.step * i) % this.m;
     }
+
+    /// <summary>
+    /// The positions of one item among a 64-bit count of them. Not written yet: the next
+    /// commit writes it (#232).
+    /// </summary>
+    internal readonly struct Positions64
+    {
+        internal static Positions64 Of(
+            ReadOnlySpan<byte> data, Func<ReadOnlySpan<byte>, ulong> hash, Placement placement, ulong m) => default;
+
+        internal ulong this[uint i] => throw new NotImplementedException("#232");
+    }
 }

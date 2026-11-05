@@ -290,5 +290,154 @@ namespace TestProbabilisticDataStructures
                 Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<BloomFilter64>(bytes)));
             StringAssert.Contains(refused.Message, "arrays and");
         }
+
+        // ---- Adding one table of counters to another (#232) -------------------------------
+
+        /// <summary>
+        /// A pair of tables holding every pair of values the width can: bucket i of the first
+        /// holds i / (max + 1) and of the second i mod (max + 1), so there is no choice of
+        /// pairs to be unlucky in, and the sums run from nought to twice the maximum.
+        /// </summary>
+        private static (Buckets Mine, Buckets Theirs, Buckets64 Mine64, Buckets64 Theirs64) EveryPair(
+            byte bucketSize, Func<Func<Buckets64>, Buckets64> build)
+        {
+            var max = (1u << bucketSize) - 1;
+            var count = (max + 1) * (max + 1);
+            var mine = new Buckets(count, bucketSize);
+            var theirs = new Buckets(count, bucketSize);
+            var mine64 = build(() => new Buckets64(count, bucketSize));
+            var theirs64 = build(() => new Buckets64(count, bucketSize));
+            for (uint i = 0; i < count; i++)
+            {
+                mine.Set(i, (byte)(i / (max + 1)));
+                theirs.Set(i, (byte)(i % (max + 1)));
+                mine64.Set(i, (byte)(i / (max + 1)));
+                theirs64.Set(i, (byte)(i % (max + 1)));
+            }
+
+            return (mine, theirs, mine64, theirs64);
+        }
+
+        /// <summary>
+        /// Adding a 64-bit table of counters to another adds each counter to its counterpart
+        /// and holds the sum at the maximum a counter carries, exactly as
+        /// <see cref="Buckets.Add"/> does, which is the oracle: it is what a counting filter's
+        /// merge has always done, and what <c>CountingBloomFilter.Merge</c> does now that its
+        /// counters are 64-bit tables. The other table is left as it was.
+        /// </summary>
+        /// <remarks>
+        /// Every width, and every pair of values each holds, so that sums both under the
+        /// maximum and past it are added, which is checked both ways. Only eight-bit counters
+        /// tell the clamp in the sum from the one in <c>Set</c>: below eight bits twice the
+        /// maximum still fits a byte, and <c>Set</c> holds it at the maximum anyway, while at
+        /// eight a sum past 255 cast to a byte wraps, and is written as what it wrapped to.
+        /// The widths of three, five, six and seven bits straddle bytes.
+        /// </remarks>
+        [TestMethod]
+        [DataRow((byte)1)]
+        [DataRow((byte)2)]
+        [DataRow((byte)3)]
+        [DataRow((byte)4)]
+        [DataRow((byte)5)]
+        [DataRow((byte)6)]
+        [DataRow((byte)7)]
+        [DataRow((byte)8)]
+        public void TestAddingBuckets64AddsEachCounterAndHoldsItAtTheMaximum(byte bucketSize)
+        {
+            var (mine, theirs, mine64, theirs64) = EveryPair(bucketSize, make => make());
+            var max = mine.MaxBucketValue();
+
+            mine.Add(theirs);
+            Assert.AreSame(mine64, mine64.Add(theirs64), "Add does not return the table it added to");
+
+            var held = 0;
+            var under = 0;
+            for (uint i = 0; i < mine.count; i++)
+            {
+                var a = i / (max + 1u);
+                var b = i % (max + 1u);
+                Assert.AreEqual(mine.Get(i), mine64.Get(i), $"{bucketSize}-bit bucket {i}: {a} + {b}");
+                Assert.AreEqual(Math.Min(a + b, (uint)max), mine64.Get(i), $"{bucketSize}-bit bucket {i}: {a} + {b}, held at {max}");
+                Assert.AreEqual(b, theirs64.Get(i), $"{bucketSize}-bit bucket {i} of the table added was changed");
+                if (a + b > max) held++; else under++;
+            }
+
+            Assert.IsGreaterThan(0, held, "no sum passed the maximum, so the clamp was never needed");
+            Assert.IsGreaterThan(0, under, "every sum passed the maximum, so nothing was added");
+        }
+
+        /// <summary>
+        /// The add is a bucket at a time through each table's own layout, so tables split into
+        /// arrays at different sizes add as tables of one array do: lowered to arrays of 16
+        /// bytes on either side or both, three-bit counters straddle arrays as well as bytes
+        /// (bucket 42 holds bits 126 to 128, the last two of the first array and the first of
+        /// the second).
+        /// </summary>
+        [TestMethod]
+        [DataRow(true, false)]
+        [DataRow(false, true)]
+        [DataRow(true, true)]
+        public void TestAddingBuckets64OfSeveralArraysAddsAsOneArrayDoes(bool mineLowered, bool theirsLowered)
+        {
+            const byte BucketSize = 3;
+            var (mine, theirs, _, _) = EveryPair(BucketSize, make => make());
+            Buckets64 Build(bool lowered) =>
+                lowered ? WithArrayBits(4, () => new Buckets64(mine.count, BucketSize)) : new Buckets64(mine.count, BucketSize);
+            var mine64 = Build(mineLowered);
+            var theirs64 = Build(theirsLowered);
+            for (uint i = 0; i < mine.count; i++)
+            {
+                mine64.Set(i, (byte)mine.Get(i));
+                theirs64.Set(i, (byte)theirs.Get(i));
+            }
+
+            Assert.IsGreaterThan(1, (mineLowered ? mine64 : theirs64).RawData.Count(array => array.Length > 0),
+                "premise: a lowered table fills several arrays");
+
+            mine.Add(theirs);
+            mine64.Add(theirs64);
+            for (uint i = 0; i < mine.count; i++)
+            {
+                Assert.AreEqual(mine.Get(i), mine64.Get(i), $"bucket {i}");
+            }
+        }
+
+        /// <summary>
+        /// Two 64-bit tables that disagree about how many counters there are, or how wide
+        /// each is, are refused, and the receiver is left as it was, as
+        /// <see cref="TestBuckets.TestCombiningBucketsOfDifferentGeometryIsRefused"/> holds
+        /// <see cref="Buckets.Add"/> to: each field varied alone, the other table larger and
+        /// smaller. Reachable only from inside the library, since the counting filter's merge
+        /// checks its geometry first.
+        /// </summary>
+        [TestMethod]
+        [DataRow(8UL, (byte)4, 9UL, (byte)4, "count only, the other larger")]
+        [DataRow(9UL, (byte)4, 8UL, (byte)4, "count only, the other smaller")]
+        [DataRow(8UL, (byte)4, 8UL, (byte)3, "width only, the other narrower")]
+        [DataRow(8UL, (byte)3, 8UL, (byte)4, "width only, the other wider")]
+        public void TestAddingBuckets64OfDifferentGeometryIsRefused(
+            ulong thisCount, byte thisSize, ulong otherCount, byte otherSize, string what)
+        {
+            var before = new Buckets64(thisCount, thisSize);
+            for (ulong i = 0; i < thisCount; i++)
+            {
+                before.Set(i, (byte)(i % before.MaxBucketValue() + 1));
+            }
+            var snapshot = before.RawData.Select(array => array.ToArray()).ToArray();
+            var other = new Buckets64(otherCount, otherSize);
+            for (ulong i = 0; i < otherCount; i++)
+            {
+                other.Set(i, 1);
+            }
+
+            Assert.ThrowsExactly<ArgumentException>(() => before.Add(other),
+                $"Add must refuse 64-bit tables that differ in {what}.");
+            Assert.HasCount(snapshot.Length, before.RawData);
+            for (var a = 0; a < snapshot.Length; a++)
+            {
+                CollectionAssert.AreEqual(snapshot[a], before.RawData[a],
+                    $"A refused Add ({what}) must leave the receiver as it found it.");
+            }
+        }
     }
 }

@@ -78,6 +78,106 @@ namespace TestProbabilisticDataStructures
             return (uint)(unchecked(first + second * i) % m);
         }
 
+        /// <summary>
+        /// The 64-bit scheme among a 64-bit count of positions, restated as
+        /// <see cref="Wide"/> is, without narrowing the position.
+        /// </summary>
+        private static ulong Wide64(byte[] data, uint i, ulong m)
+        {
+            var first = XxHash3.HashToUInt64(data);
+            Span<byte> bytes = stackalloc byte[8];
+            BinaryPrimitives.WriteUInt64LittleEndian(bytes, first);
+            var second = XxHash3.HashToUInt64(bytes);
+            return unchecked(first + second * i) % m;
+        }
+
+        /// <summary>
+        /// The positions a 64-bit count of positions gives are the ones a 32-bit count gives,
+        /// under both schemes, at every size both can hold: the filters that place through
+        /// <see cref="Positions64"/> place exactly as they did through <see cref="Positions"/>,
+        /// which their stored payloads were placed with.
+        /// </summary>
+        /// <remarks>
+        /// The sizes straddle the threshold and reach the largest a <c>u32</c> holds, where
+        /// the 32-bit scheme's reduction and the 64-bit scheme's narrowing to a <c>uint</c>
+        /// are each about to be wrong. The positions are the first few, the tenth and the
+        /// last a filter can have, since the step is multiplied by <c>i</c>.
+        /// </remarks>
+        [TestMethod]
+        public void TestPositions64PlaceAsPositionsAtEverySizeAU32Holds()
+        {
+            var hash = Defaults.GetDefaultHashFunction();
+            var sizes = new uint[]
+            {
+                1, 2, 3, 7, 959, (uint)Threshold - 1, (uint)Threshold, (uint)Threshold + 1,
+                (3u << 30) | 7, uint.MaxValue - 1, uint.MaxValue,
+            };
+            var indices = new uint[] { 0, 1, 2, 6, 9, Utils.MaxHashCount - 1 };
+            var compared = 0;
+
+            foreach (var placement in new[] { Placement.Narrow, Placement.Wide })
+            {
+                foreach (var m in sizes)
+                {
+                    for (var t = 0; t < 64; t++)
+                    {
+                        var key = Key($"p64-{m}-{t}");
+                        var thirtyTwo = Positions.Of(key, hash, placement, m);
+                        var sixtyFour = Positions64.Of(key, hash, placement, m);
+                        foreach (var i in indices)
+                        {
+                            Assert.AreEqual((ulong)thirtyTwo[i], sixtyFour[i], $"{placement}, m = {m}, key {t}, position {i}");
+                            compared++;
+                        }
+                    }
+                }
+            }
+
+            Assert.AreEqual(2 * sizes.Length * 64 * indices.Length, compared);
+        }
+
+        /// <summary>
+        /// Placed with 64-bit values among more than 2^32 positions, an item's positions are
+        /// the 64-bit scheme's without narrowing: <c>(first + i * second) mod m</c> in 64-bit
+        /// arithmetic, restated here from XxHash3, as <see cref="BloomFilter64"/> places them.
+        /// Narrowed to 32 bits anywhere, a position passes 2^32 never, and a filter past 2^32
+        /// positions uses only its first 2^32.
+        /// </summary>
+        /// <remarks>
+        /// The coarsest size is the most positions a 64-bit table holds, where nearly every
+        /// position is past 2^32; 2^32 + 1 is the finest past it, where nearly none is, and a
+        /// position below m is checked at every size. Both sides of 2^32 are required to be
+        /// reached, so neither a narrowing nor a position that ignored m could pass.
+        /// </remarks>
+        [TestMethod]
+        public void TestPositions64ReachPastTwoToTheThirtyTwo()
+        {
+            var hash = Defaults.GetDefaultHashFunction();
+            var sizes = new[] { TwoTo32, TwoTo32 + 1, 5 * TwoTo32 + 3, (1UL << 40) + 7, Buckets64.MaxCount };
+            var indices = new uint[] { 0, 1, 2, 6, 9, Utils.MaxHashCount - 1 };
+            var above = 0;
+            var below = 0;
+
+            foreach (var m in sizes)
+            {
+                for (var t = 0; t < 64; t++)
+                {
+                    var key = Key($"p64-{m}-{t}");
+                    var positions = Positions64.Of(key, hash, Placement.Wide, m);
+                    foreach (var i in indices)
+                    {
+                        var position = positions[i];
+                        Assert.AreEqual(Wide64(key, i, m), position, $"m = {m}, key {t}, position {i}");
+                        Assert.IsLessThan(m, position, $"m = {m}, key {t}, position {i} is past the filter");
+                        if (position > uint.MaxValue) above++; else below++;
+                    }
+                }
+            }
+
+            Assert.IsGreaterThan(0, above, "no position passed 2^32, so a narrowing would have passed");
+            Assert.IsGreaterThan(0, below, "no position was below 2^32");
+        }
+
         private static ushort VersionOf(byte[] frame) =>
             BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(4));
 
