@@ -481,6 +481,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is and where it began as 64-bit values, and resume from those however they were seeded.
   (#235)
 
+- **The README's and CAPACITY.md's "Saves up to" column is now "As a byte array".** Its
+  figures are unchanged: each is the largest a structure can be built and still be saved
+  with `ToByteArray`, whose array holds a payload of at most 2,147,483,573 bytes. Since
+  `WriteTo` writes a payload past that in the large form, the old name read as a limit on
+  saving at all, and a sentence above the table now says what is: through
+  `WriteTo(Stream)` every structure saves as built, limited only by memory. A test over
+  every structure holds the sentence. Each whose payload a field sizes is made to claim its
+  largest build, and `WriteTo`'s count of it refuses nothing and is the length its layout
+  gives, up to 12,197,706,796,913 bytes for a count-min sketch of 2,147,483,591 counters by
+  710 rows; each sized by the arrays or items it holds is written for real, with the
+  threshold and the longest run lowered beneath its own. No structure needed a change.
+  (#279)
+
 ### Fixed
 
 - **What a read allocates no longer depends on when the last collection ran.** Every read
