@@ -29,19 +29,27 @@ namespace TestProbabilisticDataStructures
     /// new region, after a pause that grows with each one lost. An attempt can be repeated, so
     /// the work must be repeatable: work that changes what it works on, an add that doubles a
     /// table or a write into a stream that is then read, has that rebuilt by the action run
-    /// before each attempt. Work that cannot be measured in one fails, saying why: a region that
-    /// cannot be entered, work that allocates more than the room, or a region ended by a
-    /// collection at every attempt. Nothing is ever counted outside a region instead.
+    /// before each attempt. Work that cannot be measured in one fails, saying why: a room past
+    /// what every runner gives one region, a region that cannot be entered, work that allocates
+    /// more than the room, or a region ended by a collection at every attempt. Nothing is ever
+    /// counted outside a region instead.
     /// </para>
     /// </remarks>
     internal static class NoGCRegion
     {
         /// <summary>
-        /// The room a region is entered with unless a measurement asks for more: what all
+        /// The room a region is entered with unless a measurement asks for another: what all
         /// threads may allocate, on the small object heap and the large one each, before a
-        /// collection ends the region.
+        /// collection ends the region. 240 MiB, under <see cref="Largest"/>.
         /// </summary>
-        internal const long Room = 256L << 20;
+        /// <remarks>
+        /// As much as every runner gives, rather than what the work needs, since most of a
+        /// region's room is spent by other threads. In full runs of the suite, one at each
+        /// room, the regions lost to a collection rose from 22 at 256 MiB to 48 at 128 MiB and
+        /// 177 at 16 MiB, and from 64 MiB down the largest work no longer fitted: a Grafite
+        /// build of 116,533,176 bytes, which CapacityClaims measures.
+        /// </remarks>
+        internal const long Room = 240L << 20;
 
         /// <summary>
         /// The largest room every runner the suite runs on gives one region: what a 64-bit
@@ -144,6 +152,16 @@ namespace TestProbabilisticDataStructures
 
         private static void Enter(long room)
         {
+            // Refused here on every runner, where macOS alone would refuse it and the others
+            // would measure it.
+            if (room > Largest)
+            {
+                Assert.Fail(
+                    $"a no-GC region of {room:N0} bytes is more than the {Largest:N0} bytes macOS's collector, on " +
+                    "segments rather than regions, gives one, so it is refused on every runner rather than " +
+                    "measured on some. Give the work less room, or measure less of it at once.");
+            }
+
             bool entered;
             try
             {

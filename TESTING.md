@@ -899,7 +899,10 @@ rest of a message survives, as it should, and one that deletes the guard does no
   the process's, so measurements take turns and every thread's allocations spend its
   room. One that a collection ended is measured again, so measured work must be
   repeatable and rebuild what it changes before each attempt, and work that cannot get
-  a region fails saying so rather than being counted without one.
+  a region fails saying so rather than being counted without one. A room must be one
+  every runner gives: macOS collects on segments, which refuse a region of more than
+  255,637,165 bytes there, where the regions Linux and Windows collect on refuse none
+  that size, so `NoGCRegion` refuses a larger room on every runner and not only on macOS.
   `TestAReadIsMeasuredExactlyWithABackgroundCollectionRunning` starts a background
   collection before each repeat of that read and asks for the quiet figure, and its
   guard needs the same read, counted without a region, to come out high, so that a
