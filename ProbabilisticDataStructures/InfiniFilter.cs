@@ -143,6 +143,10 @@ namespace ProbabilisticDataStructures
         /// <remarks>
         /// The hash never binds first: an entry needs the address and the fingerprint from one
         /// 64-bit hash, and the widest table has bits to spare for any fingerprint it allows.
+        /// It bounds the scan all the same, so that the scan ends whatever the words come to:
+        /// with the slot count worked out in 32 bits, which wraps, the words never pass an
+        /// array, and the scan spun in the type's static initializer, which every filter waits
+        /// on (#231).
         /// </remarks>
         internal static int QuotientBitsLimitFor(int fingerprintBits) =>
             QuotientBitsLimitFor(fingerprintBits, InfiniSegment.LongestTable);
@@ -156,7 +160,8 @@ namespace ProbabilisticDataStructures
         private static int QuotientBitsLimitFor(int fingerprintBits, long longest)
         {
             var quotientBits = 2;
-            while (InfiniSegment.Words(quotientBits + 1, fingerprintBits) <= longest)
+            while (quotientBits + 1 + fingerprintBits <= 64
+                && InfiniSegment.Words(quotientBits + 1, fingerprintBits) <= longest)
             {
                 quotientBits++;
             }
