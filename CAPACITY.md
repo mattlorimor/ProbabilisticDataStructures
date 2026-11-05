@@ -36,7 +36,7 @@ two numbers differ. The default's refusal of a larger one names the bytes to pas
 whole of what the read is charged, worked out before anything is allocated, and a budget
 of that reads it. `any` means every size the constructor builds reads back by default.
 
-**Saves up to** is the largest that `ToByteArray` returns, which is also the largest
+**As a byte array** is the largest that `ToByteArray` returns, which is also the largest
 written in the ordinary envelope, the one every release that reads its format version
 reads. For most structures it is the same as what they build, which the table says as
 `as built`. Such a payload is built in one `byte[]`, wrapped in a frame that is another, so
@@ -50,7 +50,9 @@ the payload is held. `ToByteArray` of a structure built larger than that throws 
 structure unchanged, and says to write it with `WriteTo` instead. In the large form a
 run's length is a `u64`, so a table written as one run, or a structure held inside another,
 can pass `Array.MaxLength` bytes, the most one array holds, and `WriteTo` writes it. In the
-ordinary envelope no run is that long: the payload around it is shorter. The figure in this column is worked out from the payload
+ordinary envelope no run is that long: the payload around it is shorter. Through
+`WriteTo(Stream)` every structure saves as built, limited only by memory. The figure in
+this column is worked out from the payload
 each structure writes, so it follows the layouts in [FORMAT.md](FORMAT.md). A read of a
 payload in the ordinary envelope is charged at least twice the payload, which is why the
 default budget reads payloads of up to about half a gigabyte. A payload in the large form is
@@ -184,7 +186,7 @@ the same false positive rate. Because the bucket array is `m · b` bits and is o
 the largest `n` falls in proportion to `b` from four bits up: the table gives 4-bit and
 8-bit counters at 1%, and a constructor asked for more refuses, naming `n`. The array is
 as large as the table, so the largest build is more than the ordinary envelope holds and
-the "Saves up to" figure is lower than the "Builds up to" one. A counter that reaches its
+the "As a byte array" figure is lower than the "Builds up to" one. A counter that reaches its
 maximum stays there rather than wrapping.
 
 ### `DeletableBloomFilter`
@@ -251,9 +253,9 @@ with an `OutOfMemoryException`, however few of them are distinct.
 Built once from the whole set of keys and their values, at about the same cells per key. A
 cell holds an 8-bit fingerprint and a value of `v` bits, rounded up to whole bytes: 2
 bytes at `v = 8`, and 6 at `v = 40`, the widest. The cells are one array, so the most
-distinct keys are 954,204,160 at `v` up to 8, 636,136,107 up to 16 and 318,068,053 up to
-40; a set with more is refused, naming `pairs`, before the cells are allocated. A read is
-charged twice the table.
+distinct keys are 954,204,160 for `v` from 1 to 8, 636,136,107 from 9 to 16, 476,985,572
+from 17 to 24, 381,681,664 from 25 to 32 and 318,068,053 from 33 to 40; a set with more is
+refused, naming `pairs`, before the cells are allocated. A read is charged twice the table.
 
 A key is known to the map by its 64-bit hash alone, and the keys are not kept, so two
 different keys with one hash are one key to it. With the same value that costs nothing; with
