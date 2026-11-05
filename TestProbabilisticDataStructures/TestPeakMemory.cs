@@ -15,9 +15,11 @@ namespace TestProbabilisticDataStructures
     /// <remarks>
     /// Every figure is the least of several measurements with
     /// <see cref="GC.GetAllocatedBytesForCurrentThread"/>, as <c>TestReadBudget</c> measures a
-    /// read: the counter is exact for what the thread allocates, but a collection that lands
-    /// mid-measurement can add a retired allocation context's worth, and that noise only ever
-    /// adds. None of these builds anything near the sizes the issue describes; each holds the
+    /// read: the counter is exact for what the thread allocates, but a background collection
+    /// running beside a measurement can add a few kilobytes to it, and that noise only ever
+    /// adds. The least removes noise that comes and goes, not an allocation made only after a
+    /// collection, such as a runtime cache built again once a collection has reclaimed it
+    /// (TESTING.md, on what a read allocates, and #287). None of these builds anything near the sizes the issue describes; each holds the
     /// allocation to what does not grow with the size, at a size where the old allocation is
     /// megabytes.
     /// </remarks>
@@ -292,6 +294,62 @@ namespace TestProbabilisticDataStructures
             {
                 Assert.AreEqual((int)sketch.Width, row.Length, "a reset row is not the width it was");
                 Assert.IsTrue(row.AsSpan().IndexOfAnyExcept(0UL) < 0, "the reset left a counter set");
+            }
+        }
+
+        // ---- HyperLogLog: Reset --------------------------------------------------------------
+
+        /// <summary>
+        /// A HyperLogLog of 2^24 registers, 16 MiB, so that a reset that allocated a second
+        /// register array would show as megabytes, far past the slack.
+        /// </summary>
+        private const uint ResetRegisters = 1u << 24;
+
+        /// <summary>
+        /// Resetting a HyperLogLog clears its registers where they are. A reset that allocated
+        /// a new register array while the old one was still held needed both at once, twice
+        /// the estimator: 2 GiB at the most registers the constructor takes, 2^30 (#277). Each
+        /// measured reset clears registers set just before it, the first and the last, and the
+        /// estimator is then asked to have every register nought, as many registers as it had,
+        /// and a count of nought.
+        /// </summary>
+        [TestMethod]
+        public void TestResettingAHyperLogLogAllocatesNothing()
+        {
+            var hll = new HyperLogLog(ResetRegisters);
+            for (var i = 0; i < 100; i++)
+            {
+                hll.Add(Key(i));
+            }
+
+            var allocated = Allocated(() =>
+            {
+                DirtyRegisters(hll);
+                return hll.Reset();
+            });
+
+            Assert.AreEqual((int)ResetRegisters, hll.RegisterState.Length,
+                "the reset estimator has another number of registers");
+            Assert.IsTrue(hll.RegisterState.AsSpan().IndexOfAnyExcept((byte)0) < 0,
+                "the reset left a register set");
+            Assert.AreEqual(0UL, hll.Count(), "the reset estimator counts something");
+            Assert.IsLessThan(1024L, allocated,
+                $"resetting {ResetRegisters:N0} registers allocated {allocated:N0} bytes: the " +
+                "reset built a new register array rather than clearing the one it had");
+
+            // Not vacuous: the registers each reset cleared were set, and an array of the
+            // registers is an allocation the measurement sees.
+            DirtyRegisters(hll);
+            Assert.AreEqual((byte)1, hll.RegisterState[0]);
+            Assert.AreEqual((byte)1, hll.RegisterState[ResetRegisters - 1]);
+            Assert.IsGreaterThanOrEqualTo((long)ResetRegisters, Allocated(() => new HyperLogLog(ResetRegisters)),
+                "building the estimator measured less than its registers, so the measurement " +
+                "cannot see the allocation the reset is held to not making");
+
+            static void DirtyRegisters(HyperLogLog hll)
+            {
+                hll.RegisterState[0] = 1;
+                hll.RegisterState[ResetRegisters - 1] = 1;
             }
         }
 
