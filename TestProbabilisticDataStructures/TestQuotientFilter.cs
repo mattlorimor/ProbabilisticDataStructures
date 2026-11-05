@@ -376,9 +376,9 @@ namespace TestProbabilisticDataStructures
         /// <para>
         /// The target is read from a payload each time so that every repeat merges into
         /// the same table, and the measurement is the least of five, as
-        /// <see cref="TestReadBudget"/> takes it: a collection landing mid-merge retires
-        /// this thread's allocation context, and the counter can then report a few
-        /// kilobytes the merge did not ask for. That noise only ever adds.
+        /// <see cref="TestReadBudget"/> takes it: a background collection running beside the
+        /// merge can add a few kilobytes to the counter that the merge did not ask for, as
+        /// TESTING.md says of a read. That noise only ever adds.
         /// </para>
         /// </remarks>
         [TestMethod]

@@ -140,6 +140,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`ToByteArray`'s refusal of a payload past one array says which form its size is
+  for.** It names the payload's size as a byte array would hold it, in the ordinary form
+  of the envelope, with each run's length a `u32`. The large form counts each run's length
+  as a `u64`, so for a payload with runs its refusals, such as a read's from a stream that
+  cannot seek, name a larger number for the same structure. The number is unchanged, and each message now says which form it counts. (#290)
+
 - **The package's minimum `System.IO.Hashing` rises from 10.0.11 to 10.0.14.** A project
   that pins an earlier version of that package has to raise it to restore this one. (#142)
 
@@ -412,6 +418,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a shared machine. It refuses what it refused, in the same order, and builds every map to
   the same bytes.
 
+- **A `HyperLogLog`'s reset holds one register array.** No answer and no stored byte
+  changes. (#277)
+  <br><br>
+  `HyperLogLog.Reset` clears the registers where they are. It allocated a new array while
+  the old one was still held, so a reset needed twice the estimator at once: 2 GiB at the
+  2^30 registers of the largest.
+
 - **`VarOpt` now says what is exact about its total weight, and keeps the arithmetic.**
   The documentation said the sampled weights sum to *exactly* the stream's total weight.
   What holds is that no weight is lost when an item is dropped, because the survivors
@@ -497,6 +510,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FORMAT.md gives 3.2.0 as the release that first wrote format version 1.** Its version
+  table said 3.1.0, but persistence first shipped in 3.2.0: the 3.1.0 package on nuget.org
+  has no `WriteTo`, `ToByteArray` or `PersistenceFormat`, and the 3.2.0 package has them.
+  (#272)
+
 - **What a read allocates no longer depends on when the last collection ran.** Every read
   named its structure with `ToString` as its budget was made, and the runtime keeps an
   enum's names in a cache it holds only weakly, so a read after a collection had reclaimed
@@ -534,6 +552,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged, and a payload that fits is now built into a buffer allocated once, at its
   counted size. Past that size `WriteTo` now writes the large form instead, and the refusal
   by size is `ToByteArray`'s (#225, #229). (#216)
+
+- **A payload's run or block whose length is below nought is refused as it is begun.**
+  Nothing in the library begins one, so no write changes. One would have been counted that
+  many bytes short and then failed at the write without being named: an
+  `OverflowException`, or a refusal for writing other than was counted. It is now the
+  `InvalidOperationException` that `WriteTo` documents for a structure too large to write,
+  naming the length: from the count, before anything is written, and alike from the writer
+  that holds a payload and the one that streams the large form. A length worked out from a
+  structure's shape comes below nought only at 2^63 bytes or more, when its 64-bit product
+  wraps. (#278)
 
 - **A `CountMinSketch` counter, and its total, wrapped to nought at 2^64 instead of
   stopping at `ulong.MaxValue`, so `Merge` could take an estimate to 0.** A wrapped counter
