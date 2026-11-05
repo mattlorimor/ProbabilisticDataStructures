@@ -539,6 +539,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counted size. Past that size `WriteTo` now writes the large form instead, and the refusal
   by size is `ToByteArray`'s (#225, #229). (#216)
 
+- **A payload's run or block whose length is below nought is refused as it is begun.**
+  Nothing in the library begins one, so no write changes. One would have been counted that
+  many bytes short and then failed at the write without being named: an
+  `OverflowException`, or a refusal for writing other than was counted. It is now the
+  `InvalidOperationException` that `WriteTo` documents for a structure too large to write,
+  naming the length: from the count, before anything is written, and alike from the writer
+  that holds a payload and the one that streams the large form. A length worked out from a
+  structure's shape comes below nought only at 2^63 bytes or more, when its 64-bit product
+  wraps. (#278)
+
 - **A `CountMinSketch` counter, and its total, wrapped to nought at 2^64 instead of
   stopping at `ulong.MaxValue`, so `Merge` could take an estimate to 0.** A wrapped counter
   makes `Count(key)` an undercount, which a Count-Min sketch never gives, and
