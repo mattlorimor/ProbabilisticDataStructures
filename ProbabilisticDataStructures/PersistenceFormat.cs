@@ -315,6 +315,14 @@ namespace ProbabilisticDataStructures
         internal const ushort QuotientWideVersion = 12;
 
         /// <summary>
+        /// The version at which <see cref="InfiniFilter"/> counts each table's entries and words
+        /// in 64 bits, so that a table can have more slots than a <c>u32</c> counts: one is as
+        /// wide as one array holds its words (#231). The layout is version 1's with those two
+        /// fields widened; every save is written at it, whatever the size of its tables.
+        /// </summary>
+        internal const ushort InfiniWideVersion = 13;
+
+        /// <summary>
         /// The format versions each structure has defined, which are exactly the ones its
         /// reader reads. This is the one place that says so.
         /// </summary>
@@ -366,7 +374,7 @@ namespace ProbabilisticDataStructures
             [StructureId.VarOpt] = [DefaultVersion],
             [StructureId.UltraLogLog] = [DefaultVersion],
             [StructureId.Grafite] = [DefaultVersion],
-            [StructureId.InfiniFilter] = [DefaultVersion],
+            [StructureId.InfiniFilter] = [DefaultVersion, InfiniWideVersion],
             [StructureId.MementoFilter] = [DefaultVersion],
             [StructureId.SublimeCountMinSketch] = [DefaultVersion, SublimeTuningVersion],
             [StructureId.SetSketch] = [DefaultVersion, SetSketchVariantVersion],

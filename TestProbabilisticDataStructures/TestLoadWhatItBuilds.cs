@@ -1264,34 +1264,45 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A table's slot count is a uint holding 2^q, so q is at most 31; the constructor
-        /// starts no wider, an expansion stops there, and the reader takes no more. The
-        /// largest table is gigabytes, so each side is checked where it can be: the
-        /// constructor through its sizing, the expansion in <see cref="TestExpandingTableLimits"/>
-        /// with a lower limit, and the reader on payloads that name the widths. The other
-        /// two things the reader caps are still beyond the constructor: the fingerprint's
-        /// range is the same on both sides, and the chain would need more items than
-        /// <c>Added</c> can count to reach its cap.
+        /// A table is as wide as one array holds its words, which depends on its fingerprint
+        /// (#231), and the widest of any is the narrowest fingerprint's; the constructor starts
+        /// no wider, an expansion stops there, and the reader takes no more. The largest table
+        /// is gigabytes, so each side is checked where it can be: the constructor through its
+        /// sizing, the expansion in <see cref="TestExpandingTableLimits"/> with a lower limit,
+        /// and the reader on payloads that name the widths, there at every fingerprint and here
+        /// at the widest any table has. A version 1 payload is still held to the 31 bits a
+        /// <c>u32</c> slot count gave it. The other two things the reader caps are still beyond
+        /// the constructor: the fingerprint's range is the same on both sides, and the chain
+        /// would need more items than <c>Added</c> can count to reach its cap.
         /// </summary>
         [TestMethod]
         public void TestInfiniFilterLimitIsShared()
         {
-            Assert.AreEqual(typeof(uint),
+            Assert.AreEqual(typeof(ulong),
                 typeof(InfiniSegment).GetProperty(nameof(InfiniSegment.Slots), BindingFlags.Instance | BindingFlags.NonPublic)!.PropertyType);
-            Assert.IsLessThanOrEqualTo((ulong)uint.MaxValue, 1UL << InfiniFilter.MaxQuotientBits);
-            Assert.IsGreaterThan((ulong)uint.MaxValue, 1UL << (InfiniFilter.MaxQuotientBits + 1));
+            Assert.IsGreaterThan((ulong)uint.MaxValue, 1UL << InfiniFilter.MaxQuotientBits,
+                "no table is wider than a u32 counts, which is the limit this replaced");
 
-            Assert.AreEqual(InfiniFilter.MaxQuotientBits, InfiniFilter.InitialQuotientBits(uint.MaxValue));
+            for (var f = 2; f <= 32; f++)
+            {
+                Assert.AreEqual(InfiniFilter.QuotientBitsLimitFor(f), InfiniFilter.InitialQuotientBits(ulong.MaxValue, f),
+                    $"the largest capacity does not start a table of {f}-bit fingerprints at its limit");
+            }
+
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new InfiniFilter(1, 1));
             Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new InfiniFilter(1, 33));
 
             AssertRefused<InfiniFilter>(
                 TestExpandingTableLimits.OnePayload(
-                    StructureId.InfiniFilter, InfiniFilter.MaxQuotientBits + 1, 4, includeWords: true),
+                    StructureId.InfiniFilter, InfiniFilter.NarrowQuotientBits + 1, 4, includeWords: true),
                 "between 2 and 31");
+            AssertRefused<InfiniFilter>(
+                TestExpandingTableLimits.OnePayload(
+                    StructureId.InfiniFilter, InfiniFilter.MaxQuotientBits + 1, 2, includeWords: false, version: 13),
+                $"between 2 and {InfiniFilter.MaxQuotientBits}");
             var atTheLimit = Assert.ThrowsExactly<InvalidDataException>(() => Persistence.FromByteArray<InfiniFilter>(
                 TestExpandingTableLimits.OnePayload(
-                    StructureId.InfiniFilter, InfiniFilter.MaxQuotientBits, 4, includeWords: false)));
+                    StructureId.InfiniFilter, InfiniFilter.MaxQuotientBits, 2, includeWords: false, version: 13)));
             Assert.IsInstanceOfType<ReadBudgetExceededException>(atTheLimit.InnerException);
 
             var filter = new InfiniFilter(1, fingerprintBits: 2);

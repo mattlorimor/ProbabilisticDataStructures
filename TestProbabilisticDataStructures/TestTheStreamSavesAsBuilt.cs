@@ -282,11 +282,22 @@ namespace TestProbabilisticDataStructures
                 },
                 s => Big(s, "cells") * (8 + Big(s, "keySize") + 8));
 
-            yield return new(StructureId.InfiniFilter, "its newest table at 2^31 slots of 32-bit fingerprints", true,
-                () => Filled(new InfiniFilter(64, fingerprintBits: 32), (f, k) => f.Add(k)),
-                s => new[] { new Claim(Segments(s).Last(), "QuotientBits", InfiniFilter.MaxQuotientBits) },
-                s => Segments(s).Aggregate(BigInteger.Zero, (sum, seg) =>
-                    sum + TableBytes(Big(seg, "QuotientBits"), Big(seg, "FingerprintBits") + 1 + 3)));
+            // A table is as wide as one array holds its words (#231), so where it stops depends
+            // on its fingerprint. Each width a table stops at is claimed with the widest
+            // fingerprint that stops there, the largest table of that width: 2^34 slots for the
+            // narrowest fingerprints, down to 2^31 for the widest. The widths are the test's own,
+            // worked out in arbitrary precision.
+            foreach (var (quotientBits, fingerprintBits) in Enumerable.Range(2, 31)
+                .GroupBy(TestExpandingTableLimits.WidestInfiniTable)
+                .Select(g => (g.Key, g.Max())))
+            {
+                yield return new(StructureId.InfiniFilter,
+                    $"its newest table at 2^{quotientBits} slots of {fingerprintBits}-bit fingerprints", true,
+                    () => Filled(new InfiniFilter(64, fingerprintBits: fingerprintBits), (f, k) => f.Add(k)),
+                    s => new[] { new Claim(Segments(s).Last(), "QuotientBits", quotientBits) },
+                    s => Segments(s).Aggregate(BigInteger.Zero, (sum, seg) =>
+                        sum + TableBytes(Big(seg, "QuotientBits"), Big(seg, "FingerprintBits") + 1 + 3)));
+            }
 
             yield return new(StructureId.MementoFilter, "its newest table at 2^31 slots of 64 bits", true,
                 () =>

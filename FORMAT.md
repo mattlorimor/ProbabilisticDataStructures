@@ -127,6 +127,7 @@ structure whose layout changes bumps only its own.
 | 10 | the release after 6.2.0 | `SublimeCountMinSketch` | the packing tuning of each state, before its counters; written by every save |
 | 11 | the release after 6.2.0 | `CuckooBloomFilter` | the whole table, word by word, in place of the list of occupied entries, and the sizes as `u64`s; written by every save |
 | 12 | the release after 6.2.0 | `QuotientFilter` | the number of entries as a `u64`, and quotient bits that name a table of 2^q slots up to 34; written by every save but that of a one-slot table read from version 1 |
+| 13 | the release after 6.2.0 | `InfiniFilter` | each table's count of entries and of words as a `u64`; written by every save |
 
 The version field's high bit, `0x8000`, is not part of a version: it marks
 [the large form](#the-large-form) of the envelope, and the version is the other fifteen
@@ -259,6 +260,13 @@ again as version 11. The table is written whole however little the filter holds,
 payload of 2,952,790,064 bytes, more than the ordinary envelope holds, and is written only
 in [the large form](#the-large-form), by `WriteTo`; `ToByteArray` refuses it. Before
 version 11 the same filter was a payload of 40 bytes.
+
+Version 13 is `InfiniFilter`'s. It writes the layout of version 1 with each table's count of
+entries and of words widened from a `u32` to a `u64`, and nothing else moved, because a
+table can now have more slots than a `u32` counts: [its section](#infinifilter-id-27) says
+how wide. Every save is version 13, so no save is readable by 6.2.0 or an earlier release,
+which refuse it as written by a later version; a payload written at version 1 still reads,
+and saves again as version 13.
 
 A reader refuses a payload whose magic does not match, whose version is not one its
 structure has defined, whose structure id is not the type being read, or whose
@@ -428,8 +436,8 @@ address.
 | `DeletableBloomFilter` | hash functions, `k` | 1,024 | as `CountingBloomFilter` |
 | `PartitionedBloomFilter` | hash functions, `k` | 1,024 | as `BloomFilter`; it is also the number of partitions, and the reader checks it first |
 | `StableBloomFilter` | hash functions, `k` | 1,024 | as `CountingBloomFilter`; the constructor halves the count, and the factory that builds a plain Bloom filter of cells does not, so the reader accepts the whole of it |
-| `InfiniFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; a filter stops expanding there |
-| `MementoFilter` | quotient bits | 31 | as `InfiniFilter` |
+| `InfiniFilter` | quotient bits | 34 | a table is one array of words, its slots of fingerprint bits + 4 end to end, and 2^34 slots of the narrowest fingerprint fit one where 2^35 do not; a wider fingerprint stops sooner, at as many slots as fit, and a filter stops expanding there. At version 1 the slot count was a `u32` holding 2^q, and the limit 31 |
+| `MementoFilter` | quotient bits | 31 | the slot count is a `u32` holding 2^q; a filter stops expanding there |
 | `MementoFilter` | bits of a slot | 64 | a slot is held in a 64-bit word: three bits of metadata, and a field of the fingerprint, one bit for its age counter and the memento |
 | `QuotientFilter` | quotient bits | 34 | the table is one array of 64-bit words, and 2^35 slots of the narrowest slot, four bits, are more than one holds; at version 1 the reader reads 32, which earlier constructors wrote as a wrapped one-slot table |
 | `QuotientFilter` | words of the table | 2,147,483,591 | they are one array, which at 2^32 slots holds slots of up to 31 bits, at 2^33 up to 15 and at 2^34 up to 7 |
@@ -1293,8 +1301,8 @@ u32     the number of tables in the chain
         per table:
 u32       address bits, so the table has 2^this slots
 u32       fingerprint bits given to a fresh entry
-u32       how many entries the table holds
-u32       the number of 64-bit words that follow
+u64       how many entries the table holds        (a u32 before version 13)
+u64       the number of 64-bit words that follow  (a u32 before version 13)
 u64       each word of the table
 ```
 
@@ -1317,11 +1325,19 @@ is the opposite of the usual quotient filter arrangement. It has to be: an expan
 takes the next bit up, so an entry's address is a growing prefix of its hash and the
 table can double without the original keys.
 
+A table's words are its slots end to end, each of *fingerprint bits + 4*, and two words
+more, and a table is one array of them, so it is as wide as an array holds its words,
+2,147,483,591 of them: 2^34 slots for the narrowest fingerprints, and fewer the wider the
+fingerprint, down to 2^31 for the widest. A filter's table stops doubling there. Until
+version 13 a table's slot count was a `u32`, so every table stopped at 2^31 slots, and its
+counts were `u32`s.
+
 A reader rejects a chain of no tables, a chain longer than a 64-bit hash could justify,
-a table with more than 31 bits of address (releases up to 6.2.0 read up to 40, with a slot
-count that wrapped and gave a table of 1 to 256 slots; no writer ever produced one), a
-table holding more entries than it has slots, a table whose address and fingerprint
-together exceed the hash, and a word count that disagrees with the shape claimed. It then
+a table with more than 34 bits of address, a table at version 1 with more than 31 (releases
+up to 6.2.0 read up to 40, with a slot count that wrapped and gave a table of 1 to 256
+slots; no writer ever produced one), a table holding more entries than it has slots, a
+table whose address and fingerprint together exceed the hash, a word count that disagrees
+with the shape claimed, and a table whose words are more than one array holds. It then
 checks each table's metadata as `QuotientFilter`'s reader does, and refuses the same
 tables. The tables are stored newest first, and each table's count of entries is stored as
 well; it must be the slots whose metadata has any bit set, which the reader checks.
@@ -1358,7 +1374,7 @@ The count is written in memento-sized pieces, an all-ones piece meaning "add thi
 read another", so a small count costs as much as one memento and a large one still fits.
 
 A reader rejects an impossible memento width, a chain of no tables or absurdly many, a
-table with more than 31 bits of address (as `InfiniFilter`'s), a table whose slots are wider
+table with more than 31 bits of address (as `InfiniFilter`'s did before version 13), a table whose slots are wider
 than 64 bits, a table with more entries than slots, and a word count disagreeing with the
 shape claimed. It then checks each table's metadata as `QuotientFilter`'s reader does, with
 the count of slots used held to the slots whose metadata has any bit set, and refuses the

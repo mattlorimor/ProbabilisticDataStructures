@@ -786,7 +786,7 @@ namespace TestProbabilisticDataStructures
                     && Assert.Throws<ArgumentOutOfRangeException>(
                         () => new StableBloomFilter(Buckets.MaxCount(8) + 1, 8, 0.01, seed: 1)).ParamName == "m";
             }),
-            new Claim("the `Add` that would double it past that throws, with the filter as it was", () =>
+            new Claim("the `Add` that would double it past its limit throws, with the filter as it was", () =>
             {
                 var filter = new InfiniFilter(initialCapacity: 3, fingerprintBits: 8) { QuotientBitsLimit = 2 };
                 for (var i = 0; i < 3; i++) filter.Add(Key(i));
@@ -794,12 +794,24 @@ namespace TestProbabilisticDataStructures
                 var memento = new MementoFilter(2, fingerprintBits: 8, initialCapacity: 3) { QuotientBitsLimit = 2 };
                 for (ulong i = 0; i < 3; i++) memento.Add(i * 1_000);
                 var mementoBefore = memento.ToByteArray();
-                return InfiniFilter.MaxQuotientBits == 31 && MementoFilter.MaxQuotientBits == 31
-                    && Assert.Throws<InvalidOperationException>(() => filter.Add(Key(3))) is not null
+                return Assert.Throws<InvalidOperationException>(() => filter.Add(Key(3))) is not null
                     && Assert.Throws<InvalidOperationException>(() => memento.Add(3_000)) is not null
                     && before.AsSpan().SequenceEqual(filter.ToByteArray())
                     && mementoBefore.AsSpan().SequenceEqual(memento.ToByteArray());
             }),
+            new Claim("2^34 slots for the narrowest fingerprints, down to 2^31 for the widest", () =>
+                InfiniFilter.QuotientBitsLimitFor(2) == 34 && InfiniFilter.QuotientBitsLimitFor(32) == 31
+                && InfiniFilter.MaxQuotientBits == 34
+                && Enumerable.Range(3, 30).All(f =>
+                    InfiniFilter.QuotientBitsLimitFor(f) <= InfiniFilter.QuotientBitsLimitFor(f - 1))),
+            new Claim("A `MementoFilter` table counts its slots with a `uint`, up to 2^31 slots", () =>
+                MementoFilter.MaxQuotientBits == 31
+                && typeof(MementoSegment).GetProperty(nameof(MementoSegment.Slots), BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .PropertyType == typeof(uint)),
+            new Claim("2^33 slots at 8 bits and 2^32 at 16", () =>
+                InfiniFilter.QuotientBitsLimitFor(8) == 33 && InfiniFilter.QuotientBitsLimitFor(16) == 32),
+            new Claim("Until the release after 6.2.0 every table stopped at 2^31 slots", () =>
+                InfiniFilter.NarrowQuotientBits == 31),
             new Claim("or 2^30 for a Memento slot of 64 bits", () =>
                 MementoFilter.QuotientBitsLimitFor(MementoSegment.MaxSlotBits) == 30
                 && new MementoFilter(1UL << 32, 28, initialCapacity: 4).QuotientBitsLimit == 30
