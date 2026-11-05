@@ -1082,6 +1082,12 @@ filter, exactly as it was written. It is also written back at version 1, as it w
 because at version 12 its 32 quotient bits would say 2^32 slots. Remainders wider than the
 constructor now builds are read as written in the same way, at either version.
 
+At either version the two widths together come to at most 64. Releases up to 6.2.0 added
+them in 32 bits, so a remainder within the quotient's width of 2^32 wrapped the sum and
+was let through. The slot's width wrapped with it, and a table of eight slots or fewer can
+be two words at its own width and at the wrapped one, so such a payload read, with slots
+narrower than their metadata. It is refused for its split now.
+
 ### `ThetaSketch` (id 18)
 
 ```

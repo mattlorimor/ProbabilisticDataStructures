@@ -731,6 +731,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `QuotientFilter` payload whose two widths come to more than 64 bits is refused
+  however far past they go.** The reader added the quotient and remainder widths, both
+  `u32`s, in 32 bits, as it had since the filter was added in 6.0.0, so a remainder within
+  the quotient's width of 2^32 wrapped the sum to a few bits and passed the check that the
+  widths split a 64-bit hash. Most such payloads were refused anyway, for their bytes or
+  their array, but the slot's width wrapped as well, to 0, 1 or 2 bits, and a table of
+  eight slots or fewer can be two words at its own width and at those: two slots with the
+  remainder edited to 2^32 - 1, the checksum repaired, read as slots of 2 bits, and a key
+  added to that filter was then not found. The widths are added in 64 bits now, and every
+  such payload is refused for its split, at both versions the reader reads.
+
 - **A 64-bit table whose count, width and arrays disagree is refused for that before it is
   priced.** The price of a `Buckets64` walked its arrays without checking them against its
   count and width, which only its reader did, so such a payload over its budget was refused
