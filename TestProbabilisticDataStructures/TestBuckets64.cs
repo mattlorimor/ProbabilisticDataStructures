@@ -856,6 +856,66 @@ namespace TestProbabilisticDataStructures
 
         private delegate Buckets64 TableReader(ref PayloadReader reader);
 
+        /// <summary>
+        /// A stored 64-bit table's price refuses each shape its reader refuses, with the
+        /// reader's message, and accepts the table the reader accepts (#232). A filter's own
+        /// checks of the count it is handed cannot stand in for these: a table with one
+        /// array more than its count needs, the extra one empty, holds the count it should,
+        /// and every array it stores is the length the count gives it, so only the count of
+        /// arrays is wrong. Before, the price walked that table and priced it, and a payload
+        /// holding it over its budget was refused for the budget rather than its shape.
+        /// The tables are built here by hand, at 100 one-bit buckets, thirteen bytes in one
+        /// array.
+        /// </summary>
+        [TestMethod]
+        public void TestATablesPriceRefusesWhatItsReaderRefuses()
+        {
+            static byte[] Table(ulong count, byte width, params int[] lengths)
+            {
+                // Version 14: u64 count, u8 width, u32 array count, then each array's run.
+                var payload = new List<byte>(BitConverter.GetBytes(count)) { width };
+                payload.AddRange(BitConverter.GetBytes((uint)lengths.Length));
+                foreach (var length in lengths)
+                {
+                    payload.AddRange(BitConverter.GetBytes((uint)length));
+                    payload.AddRange(new byte[length]);
+                }
+
+                return payload.ToArray();
+            }
+
+            static ReadBudget Unlimited() => new(long.MaxValue, StructureId.BloomFilter64);
+
+            var whole = Table(100, 1, 13);
+            var priceOfWhole = new PayloadReader(whole, Unlimited());
+            Assert.AreEqual(100UL, PersistenceFormat.PriceBuckets64(ref priceOfWhole), "the price refused a table its reader reads");
+            var readOfWhole = new PayloadReader(whole, Unlimited());
+            Assert.AreEqual(100UL, PersistenceFormat.ReadBuckets64(ref readOfWhole).count, "premise: the reader reads the table");
+
+            foreach (var (what, table, because) in new[]
+            {
+                ("one array too many, empty", Table(100, 1, 13, 0), "need 1 arrays and 2 were stored"),
+                ("its width disagreeing with its bytes", Table(100, 2, 13), "needs 25 bytes and 13 were stored"),
+                ("a width of none", Table(100, 0, 13), "claims buckets of 0 bits"),
+                ("more buckets than a table holds", Table(Buckets64.MaxCount + 1, 1, 13), "beyond anything"),
+            })
+            {
+                var read = Assert.ThrowsExactly<InvalidDataException>(() =>
+                {
+                    var reader = new PayloadReader(table, Unlimited());
+                    PersistenceFormat.ReadBuckets64(ref reader);
+                }, $"premise: the reader takes a table with {what}");
+                StringAssert.Contains(read.Message, because, $"premise: the reader refuses a table with {what} for another reason");
+
+                var priced = Assert.ThrowsExactly<InvalidDataException>(() =>
+                {
+                    var reader = new PayloadReader(table, Unlimited());
+                    PersistenceFormat.PriceBuckets64(ref reader);
+                }, $"the price takes a table with {what}, which its reader refuses");
+                Assert.AreEqual(read.Message, priced.Message, $"the price refuses a table with {what} for another reason than its reader");
+            }
+        }
+
         // ---- Adding one table of counters to another (#232) -------------------------------
 
         /// <summary>
