@@ -383,6 +383,40 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The choice every constructor of a 64-bit filter makes (#315): 32-bit placement asked
+        /// for is kept among as many positions as a <c>u32</c> counts and refused among one more,
+        /// naming the parameter; 64-bit placement asked for is kept either side; and with none
+        /// asked for, the choice is the one its size calls for, either side of the threshold and
+        /// past the edge. Held at the edge itself, which no filter in the suite can be built at:
+        /// at 4,294,967,295 positions and 4,294,967,296.
+        /// </summary>
+        [TestMethod]
+        public void TestThirtyTwoBitPlacementIsKeptUpToWhatAUintCountsAndRefusedPastIt()
+        {
+            const ulong Edge = uint.MaxValue;
+            Assert.AreEqual(Placement.Narrow, BitPlacement.Choose(Placement.Narrow, Edge, "placement"),
+                "32-bit placement was not kept among as many positions as a uint counts");
+            Assert.AreEqual(Placement.Narrow, BitPlacement.Choose(Placement.Narrow, 1, "placement"));
+            var past = Assert.ThrowsExactly<ArgumentOutOfRangeException>(
+                () => BitPlacement.Choose(Placement.Narrow, Edge + 1, "placement"),
+                "32-bit placement was kept among more positions than a uint counts");
+            Assert.AreEqual("placement", past.ParamName);
+            StringAssert.Contains(past.Message, $"{Edge + 1:N0}", past.Message);
+
+            foreach (var positions in new[] { 1UL, Edge, Edge + 1, ulong.MaxValue })
+            {
+                Assert.AreEqual(Placement.Wide, BitPlacement.Choose(Placement.Wide, positions, "placement"),
+                    $"64-bit placement was not kept among {positions:N0} positions");
+            }
+
+            foreach (var positions in new[] { Threshold - 1, Threshold, Edge, Edge + 1 })
+            {
+                Assert.AreEqual(BitPlacement.For(positions), BitPlacement.Choose(null, positions, "placement"),
+                    $"with no placement asked for, {positions:N0} positions were not placed as their size calls for");
+            }
+        }
+
+        /// <summary>
         /// Every internal constructor of a filter whose table is a 64-bit one, asked to place
         /// with 32-bit values among more positions than a <c>u32</c> counts, refuses it, naming
         /// the placement and the positions, before it allocates anything (#315). The 32-bit

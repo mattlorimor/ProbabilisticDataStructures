@@ -128,6 +128,7 @@ namespace ProbabilisticDataStructures
                 $"Holding {n:N0} items at a false positive rate of {fpRate} needs {k:N0} " +
                 $"partitions of {s:N0} bits",
                 "Use fewer items or a looser false positive rate.");
+            var chosen = BitPlacement.Choose(placement, s, nameof(placement));
             var partitions = new Buckets64[k];
             for (uint i = 0; i < k; i++)
             {
@@ -139,7 +140,7 @@ namespace ProbabilisticDataStructures
             this.M = m;
             this.k = k;
             this.S = s;
-            this.Placement = placement ?? BitPlacement.For(s);
+            this.Placement = chosen;
         }
 
         /// <summary>

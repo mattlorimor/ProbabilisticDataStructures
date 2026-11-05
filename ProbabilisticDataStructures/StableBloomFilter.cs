@@ -170,6 +170,7 @@ namespace ProbabilisticDataStructures
             Buckets64.CheckSize(m, d, nameof(m),
                 $"A stable filter of {m:N0} cells of {d} bits",
                 "Use fewer cells or narrower ones.");
+            var chosen = BitPlacement.Choose(placement, m, nameof(placement));
             var cells = new Buckets64(m, d);
 
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
@@ -183,7 +184,7 @@ namespace ProbabilisticDataStructures
             this.Max = cells.MaxBucketValue();
             this.cells = cells;
             this.IndexBuffer = new ulong[k];
-            this.Placement = placement ?? BitPlacement.For(m);
+            this.Placement = chosen;
         }
 
         /// <summary>
