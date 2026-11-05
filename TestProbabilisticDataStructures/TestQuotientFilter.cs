@@ -864,6 +864,42 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// Past 2^32 slots a quotient has more bits than a uint holds, and the cut of a hash
+        /// keeps every one of them (#231). At each width from 31 to 34, at its widest
+        /// remainder, the quotient is the hash's top q bits and the remainder the r bits below
+        /// them, restated here in shifts of the hash itself; the hashes set the top bit, the
+        /// bit at 2^32 of the quotient, or every bit. No table that wide is built here; the cut
+        /// is the one every add and lookup goes through. The one-slot table of version 1 has a
+        /// mask of no bits, and cuts every hash to quotient 0 and the 20 bits below its 32.
+        /// </summary>
+        [TestMethod]
+        public void TestAHashIsCutIntoAQuotientOfEveryBitPastThirtyTwo()
+        {
+            var hashes = new[] { ulong.MaxValue, 1UL << 63, 0x9E3779B97F4A7C15UL, 0x0123456789ABCDEFUL, 1UL << 31 };
+            foreach (var (q, r) in new[] { (31, 33), (32, 28), (33, 12), (34, 4) })
+            {
+                var slotMask = (1UL << q) - 1;
+                var remainderMask = (1UL << r) - 1;
+                foreach (var hash in hashes.Append(1UL << (64 - q)))
+                {
+                    var (quotient, remainder) = QuotientFilter.Cut(hash, (uint)q, (uint)r, slotMask, remainderMask);
+                    Assert.AreEqual(hash >> (64 - q), quotient, $"q {q}: the quotient of {hash:X16}");
+                    Assert.AreEqual((hash >> (64 - q - r)) & remainderMask, remainder, $"q {q}: the remainder of {hash:X16}");
+                }
+            }
+
+            Assert.IsGreaterThan((ulong)uint.MaxValue,
+                QuotientFilter.Cut(ulong.MaxValue, 33, 12, (1UL << 33) - 1, (1UL << 12) - 1).Quotient,
+                "premise: a quotient of 33 bits passes what a uint holds");
+
+            foreach (var hash in hashes)
+            {
+                Assert.AreEqual((0UL, (hash >> 12) & ((1UL << 20) - 1)),
+                    QuotientFilter.Cut(hash, 32, 20, 0, (1UL << 20) - 1), $"the one-slot table's cut of {hash:X16}");
+            }
+        }
+
+        /// <summary>
         /// A filter merges only with one of the same table. Every split names its table but
         /// one: a payload of version 1 at 32 quotient bits is the one slot that a constructor
         /// of 6.2.0 or earlier wrapped a request past its largest table to, and a table of 2^32

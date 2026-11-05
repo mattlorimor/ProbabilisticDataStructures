@@ -1154,13 +1154,24 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// The quotient that picks a slot and the remainder stored in it.
         /// </summary>
-        private (ulong Quotient, ulong Remainder) Fingerprint(ReadOnlySpan<byte> data)
-        {
-            var hash = this.Hash(data);
-            var fingerprint = hash >> (64 - (int)(this.quotientBits + this.remainderBits));
+        private (ulong Quotient, ulong Remainder) Fingerprint(ReadOnlySpan<byte> data) =>
+            Cut(this.Hash(data), this.quotientBits, this.remainderBits, this.slotMaskIndex, this.remainderMask);
 
-            return ((fingerprint >> (int)this.remainderBits) & this.slotMaskIndex,
-                    fingerprint & this.remainderMask);
+        /// <summary>
+        /// The quotient and the remainder cut from a hash: its top q + r bits, the quotient
+        /// above the remainder, each held to the table's mask. The one-slot table of
+        /// version 1 has a mask of no bits, so its quotient is always 0.
+        /// </summary>
+        /// <remarks>
+        /// Static and internal so that the cut can be checked at the widths past 2^32 slots,
+        /// where a quotient has more bits than a uint holds, which no table in the suite
+        /// reaches. Every add, lookup and removal goes through it.
+        /// </remarks>
+        internal static (ulong Quotient, ulong Remainder) Cut(
+            ulong hash, uint quotientBits, uint remainderBits, ulong slotMask, ulong remainderMask)
+        {
+            var fingerprint = hash >> (64 - (int)(quotientBits + remainderBits));
+            return ((fingerprint >> (int)remainderBits) & slotMask, fingerprint & remainderMask);
         }
 
         private ulong ReadSlot(ulong index)
