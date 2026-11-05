@@ -731,6 +731,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An `InfiniFilter` or `MementoFilter` payload claiming more expansions than its first
+  table can have had is refused.** A first table starts with at least two bits of address
+  and gains one with each expansion, and `Reset` builds the table the filter started with
+  as the first table's bits less the count. The readers took the count as written, so a
+  first table of 2^4 slots whose count was edited to `0xFFFFFFFF`, its checksum repaired,
+  read: the count became -1 in `Reset`, which built a table of 2^5 slots, a size the filter
+  was never built at. A smaller excess read as well, and `Reset`'s floor of four slots hid
+  it. Both readers now refuse a count above the first table's address bits less two, naming
+  both, at every version each reads. No release wrote such a count: in every one the first
+  table starts at four slots or more, only its doublings are counted, and `Reset` sets the
+  count back to zero.
+
 - **A 64-bit table whose count, width and arrays disagree is refused for that before it is
   priced.** The price of a `Buckets64` walked its arrays without checking them against its
   count and width, which only its reader did, so such a payload over its budget was refused

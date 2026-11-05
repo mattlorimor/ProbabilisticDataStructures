@@ -869,6 +869,7 @@ namespace ProbabilisticDataStructures
                 filter.Segments.Add(segment);
             }
 
+            CheckExpansions(expansions, filter.Segments[0].QuotientBits);
             reader.ExpectEnd();
             return filter;
         }
@@ -945,6 +946,27 @@ namespace ProbabilisticDataStructures
                 throw new InvalidDataException(
                     $"Filter claims a chain of {segmentCount} tables, longer than a " +
                     "64-bit hash could ever justify.");
+            }
+        }
+
+        /// <summary>
+        /// Refuses an expansion count the first table could not have come from, as
+        /// <see cref="InfiniFilter"/>'s reader does: the first table starts with at least two
+        /// bits of address and gains one with each expansion, which is all the count counts, so
+        /// <see cref="Reset"/>, which takes the table the filter was built with to be the first
+        /// less a bit for each expansion, then builds one the constructor builds; a count above
+        /// it once reset a filter to a table it never had. The tables behind the first double
+        /// on their own, uncounted, and are not held to it.
+        /// </summary>
+        private static void CheckExpansions(uint expansions, int quotientBits)
+        {
+            if (expansions > quotientBits - 2)
+            {
+                throw new InvalidDataException(
+                    $"Filter claims {expansions:N0} expansions, and its first table has " +
+                    $"{quotientBits} bits of address. A first table starts with at least 2 and " +
+                    $"gains one with each expansion, so this one has been through at most " +
+                    $"{quotientBits - 2}.");
             }
         }
 
