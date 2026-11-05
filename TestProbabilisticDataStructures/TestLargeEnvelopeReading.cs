@@ -1191,6 +1191,62 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// An <see cref="InfiniFilter"/>'s table, whose words have no length before them, is read
+        /// from the large form in pieces straight into its segment's table (#313), as a count-min
+        /// sketch's counters are: through the stream's span overload, every piece as long as a
+        /// piece but the last, one after another from the table's first byte to its last, and
+        /// nothing else read among them. Shown with the piece as it ships and lowered to eight
+        /// words.
+        /// </summary>
+        /// <remarks>
+        /// Before #313 the words were read a word at a time, eight bytes asked of the stream and
+        /// appended to the checksum for each. The table is found as the bytes its words are
+        /// written as, which nothing else in the payload repeats; the budget sample is one table
+        /// longer than a piece as it ships, so it is read in more than one at either length.
+        /// </remarks>
+        [TestMethod]
+        public void TestAnInfiniFiltersTableIsReadFromTheLargeFormInPiecesStraightIntoItsSegment()
+        {
+            var sample = TestReadBudget.Samples.Value[StructureId.InfiniFilter];
+            var large = TestReadBudget.InTheLargeForm(sample).Bytes;
+            var filter = (InfiniFilter)sample.Read(sample.Bytes, ReadOptions.Unlimited);
+            Assert.HasCount(1, filter.Segments, "premise: the sample is not one table");
+
+            var words = filter.Segments[0].Data;
+            var table = new byte[words.Length * sizeof(ulong)];
+            for (var w = 0; w < words.Length; w++)
+            {
+                BinaryPrimitives.WriteUInt64LittleEndian(table.AsSpan(w * sizeof(ulong)), words[w]);
+            }
+
+            long at = large.AsSpan().IndexOf(table);
+            Assert.IsGreaterThanOrEqualTo(0L, at, "the table is not in the payload in the large form");
+            Assert.AreEqual(at, (long)large.AsSpan().LastIndexOf(table), "the table appears in the payload twice");
+            Assert.IsGreaterThan((long)ShippedBlockPiece, (long)table.Length,
+                $"the table's {table.Length:N0} bytes are no longer than a piece as it ships");
+            var end = at + table.Length;
+
+            foreach (var piece in new int?[] { null, Piece })
+            {
+                var length = (long)(piece ?? ShippedBlockPiece);
+                var reads = SecondPass(sample, large, piece).Where(a => a.From < end && at < a.To).ToList();
+                var expected = new List<Asked>();
+                for (var from = at; from < end; from += length)
+                {
+                    expected.Add(new Asked(false, from, Math.Min(from + length, end), false));
+                }
+
+                Console.WriteLine(
+                    $"[TABLE] InfiniFilter: {table.Length:N0} bytes at {at:N0}, piece {length:N0}: " +
+                    $"{reads.Count:N0} reads, the first {reads[0].Count:N0} bytes");
+                CollectionAssert.AreEqual(expected, reads,
+                    $"the table's {table.Length:N0} bytes at {at:N0}, with the piece at {length:N0}, were read in " +
+                    $"{reads.Count:N0} reads, the first of {reads[0].Count:N0} bytes through the " +
+                    $"{(reads[0].Array ? "array" : "span")} overload, and not in {expected.Count:N0} pieces through the span overload");
+            }
+        }
+
+        /// <summary>
         /// Reading a count-min sketch's counters in pieces (#289) charges what reading them a
         /// counter at a time did, and reads back the sketch that writes the same bytes: in the
         /// ordinary envelope and in the large form, with the piece as it ships and lowered to
