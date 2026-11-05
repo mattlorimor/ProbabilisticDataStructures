@@ -775,6 +775,11 @@ namespace ProbabilisticDataStructures
                 // move the conversion point. A payload holding exactly the cap comes back
                 // full, so its first new item converts it and a repeat does not.
                 budget.Charge(SparseCost(estimator.m, held));
+
+                // The hashes are read one at a time below, so the payload has to hold them
+                // before their buffer is allocated: a price that found them missing is set
+                // aside so that this read refuses the payload.
+                reader.RequireHolds(held, sizeof(ulong), "stored hashes");
                 var buffer = new ulong[Math.Max(estimator.InitialSparseEntries, (int)held)];
                 var previous = 0UL;
 

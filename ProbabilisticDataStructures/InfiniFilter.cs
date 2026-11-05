@@ -681,8 +681,12 @@ namespace ProbabilisticDataStructures
                 CheckSegment(i, version, quotientBits, fingerprintBits, count, words);
 
                 // Read into one array, then copied into the table the segment builds. The
-                // shape's check holds the words to what one array holds.
+                // shape's check holds the words to what one array holds, and the payload has
+                // to hold them before they are allocated: a price that found them missing is
+                // set aside so that this read refuses the payload, and nothing else stops a
+                // table of any width being allocated for a few bytes.
                 budget.Charge(SegmentCost(words));
+                reader.RequireHolds(words, sizeof(ulong), "words");
                 var data = new ulong[words];
                 for (var w = 0; w < data.Length; w++)
                 {

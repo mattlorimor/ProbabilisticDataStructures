@@ -731,6 +731,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A reader no longer allocates for data its payload does not hold.** A read is priced
+  before it allocates, and a price that finds the payload ending early is set aside so that
+  the reader refuses it with its own explanation, at whatever had been priced by then.
+  Some readers allocated for what a size field claimed before checking the bytes were there,
+  so under `ReadOptions.Unlimited`, or any budget covering the claim, a payload of a few
+  dozen bytes made them allocate for all of it before it was refused: `InfiniFilter` and
+  `MementoFilter` a table's words; `VarOpt` a sampling reservoir's regions;
+  `HyperLogLogPlus` its sparse buffer; and every filter whose buckets are a `Buckets64`,
+  `BloomFilter64` included, the array of its arrays. The widest table an `InfiniFilter`
+  payload can name is 2,080,374,786 words, 16.6 GB, and a 58-byte payload naming it, read
+  with no budget in a process whose heap was held to 4 GiB, threw `OutOfMemoryException`
+  rather than being refused; it is now refused in milliseconds. Each of those readers now
+  checks, just before the allocation and after the budget is charged for it, that the rest
+  of the payload holds what it is about to allocate for, so a read refused for its budget is
+  refused as before, and nothing the library wrote is refused. A new sweep cuts every
+  structure's payload short at every length and holds each refusal to what the bytes it was
+  given allow.
+
 - **A 64-bit table whose count, width and arrays disagree is refused for that before it is
   priced.** The price of a `Buckets64` walked its arrays without checking them against its
   count and width, which only its reader did, so such a payload over its budget was refused

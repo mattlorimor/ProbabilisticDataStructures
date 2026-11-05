@@ -833,8 +833,12 @@ namespace ProbabilisticDataStructures
                 // has the same width, and if a payload says otherwise the lowest limit holds.
                 filter.QuotientBitsLimit = Math.Min(filter.QuotientBitsLimit, QuotientBitsLimitFor(slotBits));
 
-                // Read into one array, then copied into the table the segment builds.
+                // Read into one array, then copied into the table the segment builds, once the
+                // payload is seen to hold them: a price that found them missing is set aside so
+                // that this read refuses the payload, and nothing else stops a table of any
+                // width being allocated for a few bytes.
                 budget.Charge(SegmentCost(words));
+                reader.RequireHolds(words, sizeof(ulong), "words");
                 var data = new ulong[words];
                 var anyBitSet = false;
                 for (var w = 0; w < words; w++)

@@ -1453,6 +1453,12 @@ namespace ProbabilisticDataStructures
             var arrayCount = ReadArrayCount(ref reader);
 
             reader.Budget.Charge(ArraysCost(arrayCount));
+
+            // The arrays are read one at a time below, each after its length, so the payload has
+            // to hold a length for each before the array of them is allocated: a price that found
+            // them missing is set aside so that this read refuses the payload, and nothing else
+            // stops it allocating for them. Their lengths and shape are checked as they are read.
+            reader.RequireHolds(arrayCount, sizeof(uint), "arrays of buckets");
             var arrays = new byte[arrayCount][];
             for (uint i = 0; i < arrayCount; i++)
             {

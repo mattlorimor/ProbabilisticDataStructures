@@ -900,6 +900,13 @@ namespace ProbabilisticDataStructures
             // Its five regions, k + 1 slots each, whatever the payload holds: the
             // sample's arithmetic assumes their size.
             budget.Charge(RegionsCost(k));
+
+            // Every item it claims is a run, of at least its length, read after the regions
+            // are allocated. A sampling reservoir holds k of them, so its regions are what the
+            // payload holds, and a price that found the items missing is set aside so that
+            // this read refuses the payload; nothing else stops k slots being allocated for
+            // a few bytes.
+            reader.RequireHolds(heavyCount + (ulong)lightCount, sizeof(uint), "items");
             var restored = new VarOpt(k, randomState)
             {
                 N = n,
