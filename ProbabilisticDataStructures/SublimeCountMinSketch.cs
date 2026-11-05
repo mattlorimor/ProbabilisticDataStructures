@@ -952,23 +952,25 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Prices what <see cref="ReadCounters"/> allocates for one state, and moves past
-        /// its counts: from the tuning the payload stores, seeking past the counts, or before
-        /// version 10, reading the counts for what tuning them chooses.
+        /// Prices what <see cref="ReadCounters"/> allocates for one state, once the payload is
+        /// checked to hold its counts, and moves past them: from the tuning the payload stores,
+        /// seeking past the counts, or before version 10, reading the counts for what tuning
+        /// them chooses.
         /// </summary>
         private static void PriceCounters(ref PayloadReader reader, ushort version, int depth, int forWidth)
         {
             var counts = (long)depth * forWidth;
-            if (StoresTuning(version))
+            (int CountersPerChunk, int StubBits)? stored =
+                StoresTuning(version) ? ReadTuning(ref reader) : null;
+            RequireCounts(ref reader, depth, forWidth);
+
+            reader.Budget.Price(CountsCost(depth, forWidth));
+            if (stored is { } tuning)
             {
-                var (chunkCounters, _) = ReadTuning(ref reader);
-                reader.Budget.Price(CountsCost(depth, forWidth));
-                reader.Budget.Price(PackedCost(depth, forWidth, chunkCounters));
+                reader.Budget.Price(PackedCost(depth, forWidth, tuning.CountersPerChunk));
                 reader.Skip(counts * sizeof(ulong));
                 return;
             }
-
-            reader.Budget.Price(CountsCost(depth, forWidth));
 
             Span<long> lengths = stackalloc long[CounterLengthCount];
             for (var i = 0L; i < counts; i++)
@@ -978,6 +980,26 @@ namespace ProbabilisticDataStructures
 
             reader.Budget.Price(PackedCost(depth, forWidth, Tune(lengths).CountersPerChunk));
         }
+
+        /// <summary>
+        /// Checks that the rest of the payload holds one state's counts, a record's or the
+        /// current rows', each a plain <c>u64</c>, as both the read and its price do where the
+        /// state begins, before they price, charge or allocate anything for it.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="CheckShape"/> holds the current rows to the bytes after the shape, before
+        /// any record is read, and the records share those bytes. So a payload cut inside the
+        /// current rows passes it, and so does one cut inside the last record of a sketch whose
+        /// records are narrow enough for their own fields to make up the counters they lack
+        /// beside the rows, as a sketch whose first record is one counter wide is. Each such state
+        /// used to be priced, plain and packed, and its rows of counts allocated, before the
+        /// payload ran out in them. A price that stops here is set aside, as every price that
+        /// finds its payload ending is, and the read admitted at what it had priced, so the read
+        /// checks as well, before it charges: otherwise it would charge past that price and be
+        /// refused for its budget rather than for what the payload lacks.
+        /// </remarks>
+        private static void RequireCounts(ref PayloadReader reader, int depth, int forWidth) =>
+            reader.RequireHolds((ulong)depth * (ulong)forWidth, sizeof(ulong), "counters");
 
         /// <summary>Whether a payload of this version stores each state's tuning before its counts.</summary>
         private static bool StoresTuning(ushort version) => version >= PersistenceFormat.SublimeTuningVersion;
@@ -1135,11 +1157,12 @@ namespace ProbabilisticDataStructures
             // a few bytes claiming millions of counters had the reader allocate a row of
             // them before it found them missing. The rows are the last thing in the payload,
             // after the totals and any records of earlier states, so the bytes left here
-            // hold at least their counters. Each record is half the width of the state after
-            // it, so the records together hold fewer counters than the rows, and what is
-            // allocated for them is bounded by the same bytes. The product of two u32 cannot
-            // wrap a ulong, and the check divides. The read makes it as well as the price,
-            // since a price that throws does not stop the read.
+            // hold at least their counters, and a claim to more is refused before any record
+            // is read. The records share those bytes, so this does not show that any one
+            // state's counts are there, and each is held again to the bytes left where it
+            // begins (RequireCounts). The product of two u32 cannot wrap a ulong, and the
+            // check divides. The read makes it as well as the price, since a price that
+            // throws does not stop the read.
             reader.RequireHolds((ulong)depth * width, sizeof(ulong), "counters");
         }
 
@@ -1215,6 +1238,10 @@ namespace ProbabilisticDataStructures
         {
             (int CountersPerChunk, int StubBits)? stored =
                 StoresTuning(version) ? ReadTuning(ref reader) : null;
+
+            // The counts are held to the bytes left before anything is charged for them, as the
+            // price holds them before it prices them.
+            RequireCounts(ref reader, depth, forWidth);
 
             // Each row of plain counts is allocated before it is read.
             reader.Budget.Charge(CountsCost(depth, forWidth));
