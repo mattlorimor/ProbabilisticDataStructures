@@ -114,6 +114,24 @@ namespace ProbabilisticDataStructures
         /// <summary>The slot before, as <see cref="Next(ulong, ulong)"/>.</summary>
         internal static ulong Prev(ulong slot, ulong mask) => (slot - 1) & mask;
 
+        /// <summary>
+        /// The quotient an entry has once its table of 2^<paramref name="quotientBits"/> slots
+        /// doubles: its own, with the fingerprint's low bit, which it gives up, as the new top
+        /// bit of its address. Static, as <see cref="Locate"/> is; the doubling places every
+        /// entry it moves by it.
+        /// </summary>
+        internal static ulong Doubled(ulong quotient, ulong fingerprint, int quotientBits) =>
+            quotient + ((fingerprint & 1) == 1 ? 1UL << quotientBits : 0UL);
+
+        /// <summary>
+        /// Where an entry that has gone void lands in the table down the chain of
+        /// 2^<paramref name="quotientBits"/> slots: the low bits of the address it had, and
+        /// what is left of that address above them, which it carries as its fingerprint.
+        /// Static, as <see cref="Locate"/> is; every void entry is moved by it.
+        /// </summary>
+        internal static (ulong Quotient, ulong Carried) Shed(ulong address, int quotientBits) =>
+            (address & ((1UL << quotientBits) - 1), address >> quotientBits);
+
         /// <summary>The words of this segment's table, from its two widths.</summary>
         internal long TableWords => Words(this.QuotientBits, this.FingerprintBits);
 

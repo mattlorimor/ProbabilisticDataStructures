@@ -171,8 +171,10 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// A table past 2^31 slots is gigabytes, so the slot arithmetic every read, write and
         /// walk of a table runs is asked of the tables the filter stops at without building
-        /// them (#231): where a slot's bits begin, the slots after and before it, and the
-        /// quotient and fingerprint a hash yields. The oracle is arbitrary precision, at the
+        /// them (#231): where a slot's bits begin, the slots after and before it, the quotient
+        /// and fingerprint a hash yields, where a doubling moves an entry, and where a void
+        /// entry lands in a table down the chain of any width from 2^31 slots to this one's,
+        /// which a payload's chain can hold. The oracle is arbitrary precision, at the
         /// first and last slots and either side of every power of two from 2^31 up, where an
         /// index narrowed to 32 bits, or a product of it, loses its top bits. The last slot of
         /// each widest table has to end within its words, the next word included, which a
@@ -213,6 +215,17 @@ namespace TestProbabilisticDataStructures
                     Assert.AreEqual(slot, quotient, $"{what}: the quotient of a hash");
                     Assert.AreEqual(((BigInteger)hash >> q) % (BigInteger.One << f), (BigInteger)fingerprint,
                         $"{what}: the fingerprint of a hash");
+
+                    Assert.AreEqual(slot + size, (BigInteger)InfiniSegment.Doubled(slot, 0b101, q),
+                        $"{what}: moved by a doubling, its fingerprint's low bit set");
+                    Assert.AreEqual(slot, InfiniSegment.Doubled(slot, 0b110, q),
+                        $"{what}: moved by a doubling, its fingerprint's low bit clear");
+                    for (var t = 31; t <= q; t++)
+                    {
+                        var (into, carried) = InfiniSegment.Shed(slot, t);
+                        Assert.AreEqual(slot % (BigInteger.One << t), (BigInteger)into, $"{what}: shed into 2^{t} slots");
+                        Assert.AreEqual((BigInteger)slot >> t, (BigInteger)carried, $"{what}: carried into 2^{t} slots");
+                    }
 
                     if (slot > uint.MaxValue)
                     {

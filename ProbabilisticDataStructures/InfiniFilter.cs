@@ -358,8 +358,7 @@ namespace ProbabilisticDataStructures
             }
 
             var target = this.Segments[index];
-            var quotient = address & (target.Slots - 1);
-            var carried = address >> target.QuotientBits;
+            var (quotient, carried) = InfiniSegment.Shed(address, target.QuotientBits);
 
             // What is left of the address after the target's own addressing is the
             // fingerprint. A shorter one would mean the entry arrives already aged
@@ -417,8 +416,7 @@ namespace ProbabilisticDataStructures
                 }
 
                 var fingerprint = old.FingerprintOf(field, age);
-                var moved = quotient + ((fingerprint & 1) == 1 ? old.Slots : 0UL);
-                grown.Insert(moved, age + 1, fingerprint >> 1);
+                grown.Insert(InfiniSegment.Doubled(quotient, fingerprint, old.QuotientBits), age + 1, fingerprint >> 1);
             }
 
             this.Segments[index] = grown;
