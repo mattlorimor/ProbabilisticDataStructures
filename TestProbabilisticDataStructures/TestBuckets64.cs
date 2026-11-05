@@ -200,6 +200,72 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A table of one array, which reads and writes a bucket as a shift and mask of one
+        /// byte where no bucket crosses a byte, answers as a table of several arrays does,
+        /// which always takes the general path, and both answer as a plain list of values
+        /// clamped to the width (#232). At every width from 1 to 8 bits, the two tables take
+        /// the same seeded run of sets, increments up and down past both ends, and reads, and
+        /// after every step the bucket it touched and its two neighbours read alike in both
+        /// and in the list; at the end every bucket does, and the bytes of the one array are
+        /// the bytes of the several laid end to end, so no write strayed into a neighbour's
+        /// bits. Widths 3, 5, 6 and 7 cross bytes, so even in one array they take the
+        /// general path, and are held to the same.
+        /// </summary>
+        [TestMethod]
+        public void TestATableOfOneArrayAnswersAsOneOfSeveralDoes()
+        {
+            const ulong Count = 1_000;
+            for (byte width = 1; width <= 8; width++)
+            {
+                var one = new Buckets64(Count, width);
+                var several = WithArrayBits(4, () => new Buckets64(Count, width));
+                Assert.HasCount(1, one.RawData, $"premise: the {width}-bit table is one array");
+                Assert.IsGreaterThan(1, several.RawData.Count(array => array.Length > 0),
+                    $"premise: the lowered {width}-bit table holds its bytes in several arrays");
+
+                var max = (1 << width) - 1;
+                var model = new int[Count];
+                var random = new Random(232 + width);
+                for (var step = 0; step < 20_000; step++)
+                {
+                    var bucket = (ulong)random.Next((int)Count);
+                    switch (random.Next(3))
+                    {
+                        case 0:
+                            var value = (byte)random.Next(256);
+                            one.Set(bucket, value);
+                            several.Set(bucket, value);
+                            model[bucket] = Math.Min(value, max);
+                            break;
+                        case 1:
+                            var delta = random.Next(-2 * max - 2, 2 * max + 3);
+                            one.Increment(bucket, delta);
+                            several.Increment(bucket, delta);
+                            model[bucket] = Math.Clamp(model[bucket] + delta, 0, max);
+                            break;
+                        default:
+                            break;
+                    }
+
+                    for (var b = bucket == 0 ? 0 : bucket - 1; b <= Math.Min(bucket + 1, Count - 1); b++)
+                    {
+                        Assert.AreEqual((uint)model[b], one.Get(b), $"{width}-bit, step {step}: bucket {b} of one array");
+                        Assert.AreEqual((uint)model[b], several.Get(b), $"{width}-bit, step {step}: bucket {b} of several");
+                    }
+                }
+
+                for (var b = 0UL; b < Count; b++)
+                {
+                    Assert.AreEqual((uint)model[b], one.Get(b), $"{width}-bit: bucket {b} of one array at the end");
+                    Assert.AreEqual((uint)model[b], several.Get(b), $"{width}-bit: bucket {b} of several at the end");
+                }
+
+                CollectionAssert.AreEqual(several.RawData.SelectMany(array => array).ToArray(), one.RawData[0],
+                    $"{width}-bit: the one array's bytes are not the several arrays' laid end to end");
+            }
+        }
+
+        /// <summary>
         /// Buckets split at a lowered size answer for every bucket as buckets of the real size
         /// do, on the thread that built them, on another, and once the size is put back: they
         /// keep the size they were built at, and a reset on another thread clears every array

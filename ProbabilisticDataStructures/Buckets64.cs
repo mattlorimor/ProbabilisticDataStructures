@@ -91,6 +91,21 @@ namespace ProbabilisticDataStructures
         /// that place it in its array. Held rather than worked out on every read and write.
         /// </summary>
         private readonly ulong arrayMask;
+
+        /// <summary>
+        /// The table's one array, where it has one and no bucket crosses a byte, so that a
+        /// bucket is a single shift and mask of a single byte in it; null otherwise, and
+        /// every read and write takes the general path (#232).
+        /// </summary>
+        /// <remarks>
+        /// Set when the buckets are built or restored, from the arrays they have then, which
+        /// they keep, and from their width, which is fixed. One array is the common case: a
+        /// table of fewer buckets than an array holds bytes, at the real size every filter
+        /// below 2^30 buckets. A width of 1, 2, 4 or 8 bits divides a byte, so no bucket
+        /// crosses one. Both paths read and write the same bits, which
+        /// TestBuckets64.TestATableOfOneArrayAnswersAsOneOfSeveralDoes holds them to.
+        /// </remarks>
+        private readonly byte[]? single;
         private byte[][] Data { get; set; }
         private int arrayCount { get; set; }
         private byte bucketSize { get; set; }
@@ -252,7 +267,12 @@ namespace ProbabilisticDataStructures
             this.arrayCount = data.Length;
             this.Data = data;
             this.Max = (1 << bucketSize) - 1;
+            this.single = Single(data, bucketSize);
         }
+
+        /// <summary>The array <see cref="single"/> holds for these arrays and width, or null.</summary>
+        private static byte[]? Single(byte[][] data, byte bucketSize) =>
+            data.Length == 1 && 8 % bucketSize == 0 ? data[0] : null;
 
         /// <summary>
         /// Refuses a bucket width read from a payload that no bucket has, as the payload's
@@ -340,6 +360,7 @@ namespace ProbabilisticDataStructures
             this.bucketSize = bucketSize;
             AllocateArray(count, bucketSize);
             this.Max = (1 << bucketSize) - 1;
+            this.single = Single(this.Data, bucketSize);
         }
 
         [MemberNotNull(nameof(Data))]
@@ -379,14 +400,30 @@ namespace ProbabilisticDataStructures
         /// <returns>The modified bucket.</returns>
         internal Buckets64 Increment(ulong bucket, int delta)
         {
-            int val = (int)(Get(bucket) + delta);
+            var offset = bucket * this.bucketSize;
+            if (this.single is { } bytes)
+            {
+                // One byte holds the bucket: read it, move it and write it back in place.
+                var shift = (int)offset & 7;
+                ref var cell = ref bytes[offset >> 3];
+                var moved = ((cell >> shift) & this._max) + delta;
+                if (moved > this._max)
+                    moved = this._max;
+                else if (moved < 0)
+                    moved = 0;
+
+                cell = (byte)((cell & ~(this._max << shift)) | (moved << shift));
+                return this;
+            }
+
+            int val = (int)(GetBits(offset, this.bucketSize) + delta);
 
             if (val > this.Max)
                 val = this.Max;
             else if (val < 0)
                 val = 0;
 
-            Set(bucket, (byte)val);
+            SetBits(offset, this.bucketSize, (uint)val);
             return this;
         }
 
@@ -402,7 +439,16 @@ namespace ProbabilisticDataStructures
             if (value > this._max)
                 value = this._max;
 
-            SetBits(bucket * this.bucketSize, this.bucketSize, value);
+            var offset = bucket * this.bucketSize;
+            if (this.single is { } bytes)
+            {
+                var shift = (int)offset & 7;
+                ref var cell = ref bytes[offset >> 3];
+                cell = (byte)((cell & ~(this._max << shift)) | (value << shift));
+                return this;
+            }
+
+            SetBits(offset, this.bucketSize, value);
             return this;
         }
 
@@ -413,7 +459,13 @@ namespace ProbabilisticDataStructures
         /// <returns>The specified bucket.</returns>
         internal uint Get(ulong bucket)
         {
-            return GetBits(bucket * this.bucketSize, this.bucketSize);
+            var offset = bucket * this.bucketSize;
+            if (this.single is { } bytes)
+            {
+                return (uint)(bytes[offset >> 3] >> ((int)offset & 7)) & this._max;
+            }
+
+            return GetBits(offset, this.bucketSize);
         }
 
         /// <summary>
