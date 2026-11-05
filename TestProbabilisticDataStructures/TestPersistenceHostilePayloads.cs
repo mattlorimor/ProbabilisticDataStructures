@@ -2229,6 +2229,10 @@ namespace TestProbabilisticDataStructures
                     Filled(new CountingBloomFilter(200, 4, 0.01)).ToByteArray(),
                     Filled(new CountingBloomFilter(200, 4, 0.01, null, Placement.Wide)).ToByteArray(),
                     0, 12, (b, o) => Persistence.FromByteArray<CountingBloomFilter>(b, o)),
+                (nameof(DeletableBloomFilter),
+                    Filled(new DeletableBloomFilter(200, 10, 0.01)).ToByteArray(),
+                    Filled(new DeletableBloomFilter(200, 10, 0.01, null, Placement.Wide)).ToByteArray(),
+                    0, 12, (b, o) => Persistence.FromByteArray<DeletableBloomFilter>(b, o)),
             };
 
             foreach (var (name, narrow, wide, size, placement, readUnder) in reads)

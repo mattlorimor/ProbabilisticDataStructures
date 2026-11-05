@@ -217,6 +217,7 @@ namespace TestProbabilisticDataStructures
         // And in each version 14 payload: after u64 m and u32 k for the counting and
         // deletable filters, then u64 s for the partitioned one and u32 p for the stable one.
         private const int CountingPlacement14 = 12;
+        private const int DeletablePlacement14 = 12;
 
         /// <summary>
         /// The two version 14 fixtures of a filter, with what each was placed with and how
@@ -276,6 +277,48 @@ namespace TestProbabilisticDataStructures
             {
                 CollectionAssert.AreEqual(ReadFixture($"countingbloomfilter-v8-{placed}.bin"),
                     TestBitPlacement.Narrowed(ReadFixture($"countingbloomfilter-v14-{placed}.bin"), "mubqt"),
+                    $"the version 14 {placed} fixture narrowed is not the version 8 one");
+            }
+        }
+
+        /// <summary>
+        /// The deletable filter's version 14 fixtures, re-laid by hand from its version 8
+        /// ones as the counting filter's are, with both of its regions a <c>Buckets64</c>.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredDeletableBloomFilterAtVersionFourteenStillReads()
+        {
+            foreach (var (fixture, placement, words) in PlacedAt14("deletablebloomfilter", 10))
+            {
+                var f = DeletableBloomFilter.ReadFrom(Fixture(fixture));
+
+                Assert.AreEqual(949UL, (ulong)f.Capacity());
+                Assert.AreEqual(7u, f.K());
+                Assert.AreEqual(10UL, (ulong)f.Count());
+                Assert.AreEqual(placement, f.Placement);
+                AssertAllPresent(f.Test, words);
+                AssertLostWhenPlacedTheOtherWay(fixture, DeletablePlacement14, b => DeletableBloomFilter.ReadFrom(new MemoryStream(b)).Test, words);
+                Assert.IsTrue(f.TestAndRemove(Key("alpha")));
+                Assert.AreEqual(9UL, (ulong)f.Count());
+            }
+        }
+
+        /// <summary>
+        /// Every save of the deletable filter is version 14, as the counting filter's is.
+        /// </summary>
+        [TestMethod]
+        public void TestAnEarlierDeletablePayloadSavesAgainAsVersionFourteen()
+        {
+            static byte[] Resave(byte[] b) => DeletableBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray();
+
+            AssertBytes("deletablebloomfilter-v14-narrow.bin", Resave(ReadFixture("deletablebloomfilter-v1.bin")));
+            AssertBytes("deletablebloomfilter-v14-narrow.bin", Resave(ReadFixture("deletablebloomfilter-v8-narrow.bin")));
+            AssertBytes("deletablebloomfilter-v14-wide.bin", Resave(ReadFixture("deletablebloomfilter-v8-wide.bin")));
+
+            foreach (var placed in new[] { "narrow", "wide" })
+            {
+                CollectionAssert.AreEqual(ReadFixture($"deletablebloomfilter-v8-{placed}.bin"),
+                    TestBitPlacement.Narrowed(ReadFixture($"deletablebloomfilter-v14-{placed}.bin"), "mubqtt"),
                     $"the version 14 {placed} fixture narrowed is not the version 8 one");
             }
         }
@@ -617,6 +660,7 @@ namespace TestProbabilisticDataStructures
             var newest = new (string Fixture, Func<Stream, object> Read)[]
             {
                 ("countingbloomfilter-v14-narrow.bin", s => CountingBloomFilter.ReadFrom(s)),
+                ("deletablebloomfilter-v14-narrow.bin", s => DeletableBloomFilter.ReadFrom(s)),
                 ("stablebloomfilter-v8-narrow.bin", s => StableBloomFilter.ReadFrom(s)),
                 ("cuckoobloomfilter-v6.bin", s => CuckooBloomFilter.ReadFrom(s)),
                 ("bloomfilter-v8-narrow.bin", s => BloomFilter.ReadFrom(s)),
@@ -1885,7 +1929,7 @@ namespace TestProbabilisticDataStructures
             AssertBytes("bloomfilter-v8-narrow.bin", bloom.ToByteArray());
             AssertBytes("bloomfilter64-v1.bin", bloom64.ToByteArray());
             AssertBytes("countingbloomfilter-v14-narrow.bin", counting.ToByteArray());
-            AssertBytes("deletablebloomfilter-v8-narrow.bin", deletable.ToByteArray());
+            AssertBytes("deletablebloomfilter-v14-narrow.bin", deletable.ToByteArray());
             AssertBytes("partitionedbloomfilter-v8-narrow.bin", partitioned.ToByteArray());
 
             // Version 9 since the sketches and the inverse filter began recording their
@@ -2166,7 +2210,7 @@ namespace TestProbabilisticDataStructures
 
             AssertBytes("bloomfilter-v8-wide.bin", bloom.ToByteArray());
             AssertBytes("countingbloomfilter-v14-wide.bin", counting.ToByteArray());
-            AssertBytes("deletablebloomfilter-v8-wide.bin", deletable.ToByteArray());
+            AssertBytes("deletablebloomfilter-v14-wide.bin", deletable.ToByteArray());
             AssertBytes("partitionedbloomfilter-v8-wide.bin", partitioned.ToByteArray());
             AssertBytes("stablebloomfilter-v8-wide.bin", StoredStableTwin(Placement.Wide).ToByteArray());
         }
@@ -2247,6 +2291,8 @@ namespace TestProbabilisticDataStructures
                 ("countingbloomfilter-v8-wide.bin", 3, 8),
                 ("deletablebloomfilter-v8-narrow.bin", 4, 8),
                 ("deletablebloomfilter-v8-wide.bin", 4, 8),
+                ("deletablebloomfilter-v14-narrow.bin", 4, 14),
+                ("deletablebloomfilter-v14-wide.bin", 4, 14),
                 ("partitionedbloomfilter-v8-narrow.bin", 5, 8),
                 ("partitionedbloomfilter-v8-wide.bin", 5, 8),
                 ("stablebloomfilter-v8-narrow.bin", 7, 8),

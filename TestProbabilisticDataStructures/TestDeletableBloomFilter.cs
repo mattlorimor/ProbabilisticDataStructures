@@ -1,5 +1,7 @@
 ﻿using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
+using System;
+using System.Buffers.Binary;
 using System.Text;
 
 namespace TestProbabilisticDataStructures
@@ -33,6 +35,34 @@ namespace TestProbabilisticDataStructures
         private static byte[] B_BYTES = Encoding.ASCII.GetBytes("b");
         private static byte[] C_BYTES = Encoding.ASCII.GetBytes("c");
         private static byte[] X_BYTES = Encoding.ASCII.GetBytes("x");
+
+        /// <summary>
+        /// A read allocates a scratch buffer of a position for each hash function, eight bytes
+        /// each since positions are 64-bit (#232), and is charged for it to the byte, as the
+        /// counting filter's is.
+        /// </summary>
+        [TestMethod]
+        public void TestTheScratchBufferIsChargedWhatItAllocates()
+        {
+            // Version 14: u64 m, then the u32 hash count at 8.
+            const int HashCount = 8;
+            var seven = TestPersistenceFormatStability.ReadFixture("deletablebloomfilter-v14-narrow.bin");
+            Assert.AreEqual(7u, BinaryPrimitives.ReadUInt32LittleEndian(seven.AsSpan(14 + HashCount)), "premise: the hash count");
+            var most = TestPersistenceHostilePayloads.PokeUInt32(seven, HashCount, Utils.MaxHashCount);
+
+            static (long Charged, long Allocated) Read(byte[] bytes)
+            {
+                var budget = new ReadBudget(long.MaxValue, StructureId.DeletableBloomFilter);
+                Persistence.FromByteArray<DeletableBloomFilter>(bytes, new ReadOptions(budget));
+                return (budget.Spent, TestReadBudget.Allocated(() => Persistence.FromByteArray<DeletableBloomFilter>(bytes)));
+            }
+
+            var (fewer, more) = (Read(seven), Read(most));
+            Assert.IsGreaterThanOrEqualTo(8L * (Utils.MaxHashCount - 7), more.Allocated - fewer.Allocated,
+                "premise: the buffer is eight bytes a position");
+            Assert.AreEqual(more.Allocated - fewer.Allocated, more.Charged - fewer.Charged,
+                "the read was charged other than the scratch buffer it allocated");
+        }
 
         /// <summary>
         /// Ensures that Capacity() returns the number of bits, m, in the Bloom filter.
