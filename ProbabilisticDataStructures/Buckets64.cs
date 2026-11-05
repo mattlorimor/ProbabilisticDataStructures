@@ -200,16 +200,27 @@ namespace ProbabilisticDataStructures
         /// <exception cref="InvalidDataException">It holds some other length.</exception>
         internal static void CheckStoredArray(ulong count, byte bucketSize, ulong index, long length)
         {
-            var arraySize = ArraySize;
-            var bytes = (count * bucketSize + 7) / 8;
-            var before = Math.Min(bytes, index * arraySize);
-            var needed = Math.Min(bytes - before, arraySize);
+            var needed = StoredArrayLength(count, bucketSize, index);
             if ((ulong)length != needed)
             {
                 throw new InvalidDataException(
                     $"Array {index} of the bucket data needs {needed} " +
                     $"bytes and {length} were stored.");
             }
+        }
+
+        /// <summary>
+        /// The bytes array <paramref name="index"/> of a table of <paramref name="count"/>
+        /// buckets of <paramref name="bucketSize"/> bits packs, at the size of the arrays built
+        /// and restored on this thread: every array but the last is whole, the last holds what
+        /// is left, and an array past the bytes the buckets need holds none.
+        /// </summary>
+        internal static ulong StoredArrayLength(ulong count, byte bucketSize, ulong index)
+        {
+            var arraySize = ArraySize;
+            var bytes = (count * bucketSize + 7) / 8;
+            var before = Math.Min(bytes, index * arraySize);
+            return Math.Min(bytes - before, arraySize);
         }
 
         /// <summary>

@@ -820,10 +820,12 @@ namespace TestProbabilisticDataStructures
         /// The one boundary in laying out a run of buckets as a 64-bit table, at arrays of 16
         /// bytes: runs of 15 and 16 eight-bit buckets fit the first array and are kept, the
         /// 16's second array empty, and one of 17 is split into 16 bytes and 1, which copies
-        /// it. Each is read with the buckets it holds and priced at what it is charged. What
-        /// each allocates beyond its charge is, to the byte, what reading a table stored at
-        /// version 14 allocates beyond its own: the two readers build the same table, so
-        /// what differs is the arrays, and each is charged for the arrays it allocates.
+        /// it. Each is read with the buckets it holds and priced at what it is charged, and so
+        /// is the table of the same buckets stored at version 14. What each allocates beyond
+        /// its charge is, to the byte, what reading a stored table allocates beyond its own,
+        /// whether or not that table holds an empty array, as the stored table of 16 does: the
+        /// readers build the same table, so what differs is the arrays, and each is charged for
+        /// the arrays it allocates, and for no empty one, which it does not.
         /// </summary>
         [TestMethod]
         public void TestARunIsChargedWhatLayingItOutAsATableAllocates()
@@ -878,8 +880,17 @@ namespace TestProbabilisticDataStructures
                 PersistenceFormat.ReadBucketsAs64(ref once);
                 Assert.AreEqual(priced.Charged, charged.Spent, $"a run of {length} was priced at one sum and charged another");
 
+                var table = Table(length);
+                var tablePriced = new ReadBudget(long.MaxValue, StructureId.CountingBloomFilter);
+                var tablePricer = new PayloadReader(table, tablePriced);
+                Assert.AreEqual((ulong)length, PersistenceFormat.PriceBuckets64(ref tablePricer), "the price read another count");
+                var tableCharged = new ReadBudget(long.MaxValue, StructureId.CountingBloomFilter);
+                var tableOnce = new PayloadReader(table, tableCharged);
+                PersistenceFormat.ReadBuckets64(ref tableOnce);
+                Assert.AreEqual(tablePriced.Charged, tableCharged.Spent, $"the stored table of {length} was priced at one sum and charged another");
+
                 var (buckets, beyond) = Read(payload, PersistenceFormat.ReadBucketsAs64);
-                var (stored, storedBeyond) = Read(Table(length), PersistenceFormat.ReadBuckets64);
+                var (stored, storedBeyond) = Read(table, PersistenceFormat.ReadBuckets64);
                 for (ulong i = 0; i < (ulong)length; i++)
                 {
                     Assert.AreEqual((uint)i + 1, buckets.Get(i), $"bucket {i} of a run of {length}");
@@ -895,11 +906,15 @@ namespace TestProbabilisticDataStructures
             CollectionAssert.AreEqual(new[] { Size, 0 }, kept.Lengths, "a run as long as an array was not kept whole");
             CollectionAssert.AreEqual(new[] { Size, 1 }, split.Lengths, "a run a byte longer was not split at the array");
 
-            // The stored tables of 15 and 17 hold no empty array, and those are the
-            // reference: a stored table's reader charges an empty run as the array of
-            // nothing it would be, and allocates none, so the stored table of 16 is charged
-            // a little more than it allocates, where the run laid out as it holds no such array.
+            // The stored tables of 15 and 17 hold no empty array, and the stored table of 16
+            // holds one: its second, past the bytes its buckets need, which is read as the
+            // one empty array the runtime keeps and so allocates nothing. It is charged
+            // nothing for it either (#315), so all three allocate beyond their charge alike,
+            // as the runs laid out as tables do.
             Assert.AreEqual(shorter.Stored, split.Stored, "premise: the stored tables allocate beyond their charge alike");
+            Assert.AreEqual(split.Stored, kept.Stored,
+                "the stored table with an empty array allocated other than it was charged, beyond what a stored table " +
+                "without one does: its empty array was charged as one allocated");
             foreach (var (what, layout) in new[] { ("shorter", shorter), ("kept", kept), ("split", split) })
             {
                 Assert.AreEqual(split.Stored, layout.Beyond,
@@ -941,7 +956,8 @@ namespace TestProbabilisticDataStructures
         /// arrays is wrong. Before, the price walked that table and priced it, and a payload
         /// holding it over its budget was refused for the budget rather than its shape.
         /// The tables are built here by hand, at 100 one-bit buckets, thirteen bytes in one
-        /// array.
+        /// array, and in arrays of 16 bytes, where the arrays past those thirteen are empty
+        /// and are read and priced as their lengths alone (#315).
         /// </summary>
         [TestMethod]
         public void TestATablesPriceRefusesWhatItsReaderRefuses()
@@ -962,19 +978,15 @@ namespace TestProbabilisticDataStructures
 
             static ReadBudget Unlimited() => new(long.MaxValue, StructureId.BloomFilter64);
 
-            var whole = Table(100, 1, 13);
-            var priceOfWhole = new PayloadReader(whole, Unlimited());
-            Assert.AreEqual(100UL, PersistenceFormat.PriceBuckets64(ref priceOfWhole), "the price refused a table its reader reads");
-            var readOfWhole = new PayloadReader(whole, Unlimited());
-            Assert.AreEqual(100UL, PersistenceFormat.ReadBuckets64(ref readOfWhole).count, "premise: the reader reads the table");
-
-            foreach (var (what, table, because) in new[]
+            static void AssertReadAndPriced(byte[] table, string what)
             {
-                ("one array too many, empty", Table(100, 1, 13, 0), "need 1 arrays and 2 were stored"),
-                ("its width disagreeing with its bytes", Table(100, 2, 13), "needs 25 bytes and 13 were stored"),
-                ("a width of none", Table(100, 0, 13), "claims buckets of 0 bits"),
-                ("more buckets than a table holds", Table(Buckets64.MaxCount + 1, 1, 13), "beyond anything"),
-            })
+                var priceOfWhole = new PayloadReader(table, Unlimited());
+                Assert.AreEqual(100UL, PersistenceFormat.PriceBuckets64(ref priceOfWhole), $"the price refused {what} its reader reads");
+                var readOfWhole = new PayloadReader(table, Unlimited());
+                Assert.AreEqual(100UL, PersistenceFormat.ReadBuckets64(ref readOfWhole).count, $"premise: the reader reads {what}");
+            }
+
+            static void AssertRefusedAlike(byte[] table, string what, string because)
             {
                 var read = Assert.ThrowsExactly<InvalidDataException>(() =>
                 {
@@ -990,6 +1002,31 @@ namespace TestProbabilisticDataStructures
                 }, $"the price takes a table with {what}, which its reader refuses");
                 Assert.AreEqual(read.Message, priced.Message, $"the price refuses a table with {what} for another reason than its reader");
             }
+
+            AssertReadAndPriced(Table(100, 1, 13), "the table");
+            foreach (var (what, table, because) in new[]
+            {
+                ("one array too many, empty", Table(100, 1, 13, 0), "need 1 arrays and 2 were stored"),
+                ("its width disagreeing with its bytes", Table(100, 2, 13), "needs 25 bytes and 13 were stored"),
+                ("a width of none", Table(100, 0, 13), "claims buckets of 0 bits"),
+                ("more buckets than a table holds", Table(Buckets64.MaxCount + 1, 1, 13), "beyond anything"),
+            })
+            {
+                AssertRefusedAlike(table, what, because);
+            }
+
+            // At arrays of 16 bytes the same table is seven arrays, its thirteen bytes in the
+            // first and the six past them empty, which are read as their lengths alone (#315).
+            // One of those holding bytes is refused by both, before the bytes are read.
+            WithArrayBits(4, () =>
+            {
+                AssertReadAndPriced(Table(100, 1, 13, 0, 0, 0, 0, 0, 0), "the table in arrays of 16 bytes");
+                AssertRefusedAlike(Table(100, 1, 13, 0, 3, 0, 0, 0, 0), "an array past its bytes holding some",
+                    "Array 2 of the bucket data needs 0 bytes and 3 were stored");
+                AssertRefusedAlike(Table(100, 1, 13, 0, 0, 0, 0, 0, 0, 0), "one array too many in arrays of 16 bytes, empty",
+                    "need 7 arrays and 8 were stored");
+                return 0;
+            });
         }
 
         // ---- Adding one table of counters to another (#232) -------------------------------

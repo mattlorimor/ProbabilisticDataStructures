@@ -127,6 +127,9 @@ namespace ProbabilisticDataStructures
             // room; a larger value underflows m - r and allocates enormously.
             Guard.ValidCollisionRegionCount(r, m, nameof(r));
 
+            // Placed among the data region, which is what an item's positions are reduced
+            // modulo.
+            var chosen = BitPlacement.Choose(placement, m - r, nameof(placement));
             this.Buckets = new Buckets64(m - r, 1);
             this.Collisions = new Buckets64(r, 1);
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
@@ -145,7 +148,7 @@ namespace ProbabilisticDataStructures
             this.RegionSize = (this.M + r - 1) / r;
             this.k = k;
             this.IndexBuffer = new ulong[k];
-            this.Placement = placement ?? BitPlacement.For(this.M);
+            this.Placement = chosen;
         }
 
         /// <summary>

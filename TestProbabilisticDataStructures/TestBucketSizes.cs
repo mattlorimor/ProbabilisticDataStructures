@@ -193,40 +193,6 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The first item count whose sizing passes a number of buckets, so the filter
-        /// built from it is one bucket past a limit without being built.
-        /// </summary>
-        internal static uint FirstItemCountSizedAbove(ulong buckets, double fpRate)
-        {
-            uint low = 1;
-            uint high = uint.MaxValue;
-            while (low < high)
-            {
-                var mid = low + (high - low) / 2;
-                ulong sized;
-                try
-                {
-                    sized = Utils.OptimalM(mid, fpRate);
-                }
-                catch (ArgumentOutOfRangeException)
-                {
-                    sized = ulong.MaxValue;
-                }
-
-                if (sized > buckets)
-                {
-                    high = mid;
-                }
-                else
-                {
-                    low = mid + 1;
-                }
-            }
-
-            return low;
-        }
-
-        /// <summary>
         /// A counting filter is refused past the counters a 64-bit table holds,
         /// <c>Buckets64.MaxCount</c>, and the refusal is against <c>n</c>, which is what the
         /// caller chose: the first item count that sizes past it is refused, and the one

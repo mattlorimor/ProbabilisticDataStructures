@@ -99,6 +99,38 @@ namespace ProbabilisticDataStructures
             positions >= WideFrom ? Placement.Wide : Placement.Narrow;
 
         /// <summary>
+        /// The placement a filter built among <paramref name="positions"/> places with: the one
+        /// <paramref name="placement"/> asks for, or the one its size calls for (<see cref="For"/>)
+        /// when it asks for none. Refuses the 32-bit scheme among more positions than a
+        /// <c>u32</c> counts, as <see cref="ReadFor"/> refuses a payload that says so.
+        /// </summary>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// The 32-bit scheme is asked for among more than 4,294,967,295 positions; the
+        /// exception names <paramref name="paramName"/>.
+        /// </exception>
+        /// <remarks>
+        /// Only a filter's internal constructor asks for a scheme, so that a test can have a
+        /// small filter place its bits the way a large one does, and every public one asks for
+        /// none (#315). The 32-bit scheme reduces modulo a 32-bit count of positions
+        /// (<see cref="Positions64"/>), so a filter built with it among more would place every
+        /// item modulo its count truncated to 32 bits: among 2^32 positions, modulo nought, and
+        /// its first add throws a <see cref="DivideByZeroException"/>. Each constructor asks
+        /// this after its size is checked and before it allocates.
+        /// </remarks>
+        internal static Placement Choose(Placement? placement, ulong positions, string paramName)
+        {
+            if (placement == Placement.Narrow && positions > uint.MaxValue)
+            {
+                throw new ArgumentOutOfRangeException(paramName, placement,
+                    $"Placing with 32-bit values reduces an item's positions modulo a 32-bit count of " +
+                    $"them, at most {uint.MaxValue:N0}, and this filter has {positions:N0}. Place it " +
+                    "with 64-bit values, as a filter of its size is placed.");
+            }
+
+            return placement ?? For(positions);
+        }
+
+        /// <summary>
         /// The placement byte's value for 32-bit placement.
         /// </summary>
         private const byte NarrowByte = 0;
@@ -351,9 +383,10 @@ namespace ProbabilisticDataStructures
     /// The 32-bit scheme is reduced modulo a 32-bit <c>m</c>, as every payload placed with
     /// it records one: its sum, and every filter it has placed, are below 2^32. A
     /// <see cref="Positions64"/> under it is for an <c>m</c> of at most
-    /// <see cref="uint.MaxValue"/>, which a filter's reader holds a payload to, and which no
-    /// constructor's choice can pass: <see cref="BitPlacement.For"/> chooses it only below
-    /// 2^27. The reduction is in 32 bits, as <see cref="Positions"/>' is, so that the
+    /// <see cref="uint.MaxValue"/>, which a filter's reader holds a payload to, and its
+    /// constructor holds itself to: <see cref="BitPlacement.For"/> chooses it only below
+    /// 2^27, and <see cref="BitPlacement.Choose"/> refuses it past the edge when a test asks for
+    /// it (#315). The reduction is in 32 bits, as <see cref="Positions"/>' is, so that the
     /// filters below 2^27, which are most of them, divide as they did.
     /// </para>
     /// </remarks>

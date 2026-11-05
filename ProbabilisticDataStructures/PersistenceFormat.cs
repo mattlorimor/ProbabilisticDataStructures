@@ -1463,10 +1463,36 @@ namespace ProbabilisticDataStructures
             var arrays = new byte[arrayCount][];
             for (uint i = 0; i < arrayCount; i++)
             {
-                arrays[i] = reader.ReadBytes();
+                arrays[i] = HoldsNone(count, bucketSize, i)
+                    ? ReadEmptyArray(ref reader, count, bucketSize, i)
+                    : reader.ReadBytes();
             }
 
             return Buckets64.Restore(count, bucketSize, arrays);
+        }
+
+        /// <summary>
+        /// Whether array <paramref name="index"/> of a stored table is one past the bytes its
+        /// buckets need, which holds none: a table of narrow buckets in many arrays has more of
+        /// those than of any other, since it has an array for every <see cref="Buckets64.ArraySize"/>
+        /// buckets and packs several into a byte.
+        /// </summary>
+        private static bool HoldsNone(ulong count, byte bucketSize, uint index) =>
+            Buckets64.StoredArrayLength(count, bucketSize, index) == 0;
+
+        /// <summary>
+        /// Reads an array of a stored table that holds none (<see cref="HoldsNone"/>) as its
+        /// length alone, refused unless it is nought, and hands back the one empty array the
+        /// runtime keeps, which allocates nothing and is charged nothing (#315). Read as a run,
+        /// it was the same empty array from a held payload, charged 24 bytes as an array of
+        /// nothing all the same, and from the large form's stream an array of nothing that it
+        /// was charged for. A run that claims bytes there is refused before they are read, as
+        /// <see cref="Buckets64.Restore"/> would refuse it once they had been.
+        /// </summary>
+        private static byte[] ReadEmptyArray(ref PayloadReader reader, ulong count, byte bucketSize, uint index)
+        {
+            Buckets64.CheckStoredArray(count, bucketSize, index, reader.BeginRun());
+            return Array.Empty<byte>();
         }
 
         /// <summary>
@@ -1483,10 +1509,13 @@ namespace ProbabilisticDataStructures
             Buckets64.CheckRestorable(count, bucketSize, arrayCount);
             reader.RequireHolds(arrayCount, sizeof(uint), "arrays of buckets");
 
+            // An array that holds none is walked as its reader reads it, as its length alone,
+            // and priced at nothing.
             reader.Budget.Price(ArraysCost(arrayCount));
             for (uint i = 0; i < arrayCount; i++)
             {
-                Buckets64.CheckStoredArray(count, bucketSize, i, reader.SkipBytes());
+                Buckets64.CheckStoredArray(count, bucketSize, i,
+                    HoldsNone(count, bucketSize, i) ? reader.BeginRun() : reader.SkipBytes());
             }
 
             return count;

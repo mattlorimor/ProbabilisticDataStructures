@@ -823,6 +823,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first. It now refuses what the reader refuses, with the same message, for every filter
   whose buckets are a `Buckets64`, `BloomFilter64` included. (#232)
 
+- **A 64-bit table is charged nothing for the empty arrays it stores.** A `Buckets64` has
+  an array for every 2^30 buckets, so a table of buckets narrower than a byte stores arrays
+  past the bytes its buckets need, which hold none: seven in eight of them for one-bit
+  buckets. Each array was read as a run, and a run is charged as the array it is read into,
+  so an empty one was charged 24 bytes and priced the same, though from a held payload it
+  is read as the one empty array the runtime keeps and allocates nothing. An array the
+  table's shape says holds none is now read, and priced, as its length alone, refused unless
+  it is nought, and charged nothing, in the ordinary envelope and in the large form. This
+  applies to every filter whose buckets are a `Buckets64`. A real filter has at most one
+  empty array for every 2^30 buckets, so it was overcharged little; the sweep of payloads
+  cut short, which stores tables in arrays of 16 bytes, had allowed the price of a table of
+  bits 8 bytes for each byte a cut held because of it, and holds it to the 4 every
+  structure is held to now. (#315)
+
 - **FORMAT.md gives 3.2.0 as the release that first wrote format version 1.** Its version
   table said 3.1.0, but persistence first shipped in 3.2.0: the 3.1.0 package on nuget.org
   has no `WriteTo`, `ToByteArray` or `PersistenceFormat`, and the 3.2.0 package has them.

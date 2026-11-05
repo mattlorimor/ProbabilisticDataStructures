@@ -129,12 +129,13 @@ namespace ProbabilisticDataStructures
                 $"Holding {n:N0} items at a false positive rate of {fpRate} needs " +
                 $"{m:N0} counters of {b} bits",
                 "Use fewer items, a looser false positive rate or narrower counters.");
+            var chosen = BitPlacement.Choose(placement, m, nameof(placement));
             this.Buckets = new Buckets64(m, b);
             this.Hash = hash ?? Defaults.GetDefaultHashFunction();
             this.m = m;
             this.k = k;
             this.indexBuffer = new ulong[k];
-            this.Placement = placement ?? BitPlacement.For(m);
+            this.Placement = chosen;
         }
 
         /// <summary>
