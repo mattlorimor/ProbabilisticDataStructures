@@ -201,6 +201,93 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        // ---- Buckets64 and BloomFilter64: Reset ----------------------------------------------
+
+        /// <summary>
+        /// Resetting a 64-bit bucket array clears each of its arrays where it is, as
+        /// <see cref="TestResettingBucketsAllocatesNothing"/> holds of the 32-bit one (#297). A
+        /// reset that allocated every array again allocated the whole filter at each reset,
+        /// gigabytes for a large one. 16 MiB of 8-bit buckets is one array: an array holds
+        /// 2^30 bytes, so a second holds anything only once the first holds a gigabyte. Each
+        /// measured reset clears buckets set just before it, from the first to the last, and
+        /// the arrays are then asked to be every byte zero and as many and as long as they were.
+        /// </summary>
+        [TestMethod]
+        public void TestResettingBuckets64AllocatesNothing()
+        {
+            var buckets = new Buckets64(ResetBuckets, 8);
+            var lengths = buckets.RawData.Select(array => array.Length).ToArray();
+
+            var allocated = Allocated(() =>
+            {
+                Dirty(buckets);
+                return buckets.Reset();
+            });
+
+            CollectionAssert.AreEqual(lengths, buckets.RawData.Select(array => array.Length).ToArray(),
+                "the reset arrays are not the number and lengths they were");
+            Assert.IsTrue(buckets.RawData.All(array => array.AsSpan().IndexOfAnyExcept((byte)0) < 0),
+                "the reset left a bucket set");
+            Assert.IsLessThan(1024L, allocated,
+                $"resetting {lengths.Sum(length => (long)length):N0} bytes of buckets allocated " +
+                $"{allocated:N0} bytes: the reset built new arrays rather than clearing the ones it had");
+
+            // Not vacuous: the buckets each reset cleared were set, and building the arrays
+            // is an allocation the measurement sees.
+            Dirty(buckets);
+            Assert.AreEqual(255u, buckets.Get(0));
+            Assert.AreEqual(255u, buckets.Get(ResetBuckets - 1));
+            Assert.IsGreaterThanOrEqualTo((long)ResetBuckets, Allocated(() => new Buckets64(ResetBuckets, 8)),
+                "building the buckets measured less than their bytes, so the measurement cannot " +
+                "see the allocation the reset is held to not making");
+
+            static void Dirty(Buckets64 buckets)
+            {
+                for (var i = 0ul; i < ResetBuckets; i += 4099)
+                {
+                    buckets.Set(i, 255);
+                }
+
+                buckets.Set(ResetBuckets - 1, 255);
+            }
+        }
+
+        /// <summary>
+        /// A 64-bit Bloom filter's reset resets its buckets, so it is held to the same: a reset
+        /// of a filter of about 16 MiB of bits allocates nothing, and leaves every bit clear
+        /// and a count of nought. Each measured reset clears the first bit and the last, set
+        /// just before it.
+        /// </summary>
+        [TestMethod]
+        public void TestResettingABloomFilter64AllocatesNothing()
+        {
+            var filter = new BloomFilter64(14_000_000, 0.01);
+            for (var i = 0; i < 100; i++)
+            {
+                filter.Add(Key(i));
+            }
+
+            Assert.AreEqual(100UL, filter.Count(), "premise: there is a count to reset");
+            var bits = filter.Capacity();
+            var allocated = Allocated(() =>
+            {
+                filter.Buckets.Set(0, 1);
+                filter.Buckets.Set(bits - 1, 1);
+                return filter.Reset();
+            });
+
+            Assert.AreEqual(0UL, filter.Count(), "the reset filter counts something");
+            Assert.AreEqual(bits, filter.Buckets.count, "the reset filter has another number of bits");
+            Assert.IsTrue(filter.Buckets.RawData.All(array => array.AsSpan().IndexOfAnyExcept((byte)0) < 0),
+                "the reset left a bit set");
+            Assert.IsLessThan(1024L, allocated,
+                $"resetting a filter of {bits / 8:N0} bytes of bits allocated {allocated:N0} bytes: " +
+                "its buckets' reset built new arrays rather than clearing the ones they had");
+
+            // Not vacuous: the filter is the size its name says.
+            Assert.IsGreaterThan(16_000_000UL, bits / 8, "premise: the filter's bits");
+        }
+
         // ---- CountMinSketch and TopK: Reset --------------------------------------------------
 
         /// <summary>
