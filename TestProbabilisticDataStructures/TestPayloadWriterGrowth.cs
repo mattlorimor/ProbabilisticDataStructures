@@ -108,6 +108,9 @@ namespace TestProbabilisticDataStructures
 
             StringAssert.Contains(ex.Message, wouldBe.ToString("N0"),
                 "the refusal should say how large the payload would have been");
+            StringAssert.Contains(ex.Message,
+                $"{wouldBe:N0} bytes as a byte array would hold it, in the ordinary form of the envelope",
+                "the refusal should say which form the size it names is for (#290)");
             StringAssert.Contains(ex.Message, Largest.ToString("N0"),
                 "the refusal should say how large a payload can be");
         }

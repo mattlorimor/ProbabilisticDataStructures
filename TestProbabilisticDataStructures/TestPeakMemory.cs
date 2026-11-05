@@ -15,9 +15,11 @@ namespace TestProbabilisticDataStructures
     /// <remarks>
     /// Every figure is the least of several measurements with
     /// <see cref="GC.GetAllocatedBytesForCurrentThread"/>, as <c>TestReadBudget</c> measures a
-    /// read: the counter is exact for what the thread allocates, but a collection that lands
-    /// mid-measurement can add a retired allocation context's worth, and that noise only ever
-    /// adds. None of these builds anything near the sizes the issue describes; each holds the
+    /// read: the counter is exact for what the thread allocates, but a background collection
+    /// running beside a measurement can add a few kilobytes to it, and that noise only ever
+    /// adds. The least removes noise that comes and goes, not an allocation made only after a
+    /// collection, such as a runtime cache built again once a collection has reclaimed it
+    /// (TESTING.md, on what a read allocates, and #287). None of these builds anything near the sizes the issue describes; each holds the
     /// allocation to what does not grow with the size, at a size where the old allocation is
     /// megabytes.
     /// </remarks>
