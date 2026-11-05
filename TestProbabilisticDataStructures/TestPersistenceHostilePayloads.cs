@@ -2237,6 +2237,12 @@ namespace TestProbabilisticDataStructures
                     Filled(new StableBloomFilter(200, 2, 0.01, null, 1, Placement.Narrow)).ToByteArray(),
                     Filled(new StableBloomFilter(200, 2, 0.01, null, 1, Placement.Wide)).ToByteArray(),
                     0, 16, (b, o) => Persistence.FromByteArray<StableBloomFilter>(b, o)),
+                // A partitioned filter places among a partition's s bits, not its m: u64 m,
+                // u32 k, then u64 s.
+                (nameof(PartitionedBloomFilter),
+                    Filled(new PartitionedBloomFilter(200, 0.01)).ToByteArray(),
+                    Filled(new PartitionedBloomFilter(200, 0.01, null, Placement.Wide)).ToByteArray(),
+                    12, 20, (b, o) => Persistence.FromByteArray<PartitionedBloomFilter>(b, o)),
             };
 
             foreach (var (name, narrow, wide, size, placement, readUnder) in reads)

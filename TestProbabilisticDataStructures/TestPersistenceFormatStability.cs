@@ -217,6 +217,7 @@ namespace TestProbabilisticDataStructures
         private const int CountingPlacement14 = 12;
         private const int DeletablePlacement14 = 12;
         private const int StablePlacement14 = 16;
+        private const int PartitionedPlacement14 = 20;
 
         /// <summary>
         /// The two version 14 fixtures of a filter, with what each was placed with and how
@@ -377,6 +378,86 @@ namespace TestProbabilisticDataStructures
                 CollectionAssert.AreEqual(ReadFixture($"stablebloomfilter-v8-{placed}.bin"),
                     TestBitPlacement.Narrowed(ReadFixture($"stablebloomfilter-v14-{placed}.bin"), "muubtqq"),
                     $"the version 14 {placed} fixture narrowed is not the version 8 one");
+            }
+        }
+
+        /// <summary>
+        /// The partitioned filter's version 14 fixtures, re-laid by hand from its version 8
+        /// ones with m and s <c>u64</c>s and each partition a <c>Buckets64</c>.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredPartitionedBloomFilterAtVersionFourteenStillReads()
+        {
+            foreach (var (fixture, placement, words) in PlacedAt14("partitionedbloomfilter", 10))
+            {
+                var f = PartitionedBloomFilter.ReadFrom(Fixture(fixture));
+
+                Assert.AreEqual(959UL, (ulong)f.Capacity());
+                Assert.AreEqual(7u, f.K());
+                Assert.AreEqual(10UL, (ulong)f.Count());
+                Assert.AreEqual(placement, f.Placement);
+                AssertAllPresent(f.Test, words);
+                AssertLostWhenPlacedTheOtherWay(fixture, PartitionedPlacement14, b => PartitionedBloomFilter.ReadFrom(new MemoryStream(b)).Test, words);
+            }
+        }
+
+        /// <summary>
+        /// Every save of the partitioned filter is version 14, and the version 14 fixtures
+        /// narrowed back are the version 8 ones.
+        /// </summary>
+        [TestMethod]
+        public void TestAnEarlierPartitionedPayloadSavesAgainAsVersionFourteen()
+        {
+            static byte[] Resave(byte[] b) => PartitionedBloomFilter.ReadFrom(new MemoryStream(b)).ToByteArray();
+
+            AssertBytes("partitionedbloomfilter-v14-narrow.bin", Resave(ReadFixture("partitionedbloomfilter-v1.bin")));
+            AssertBytes("partitionedbloomfilter-v14-narrow.bin", Resave(ReadFixture("partitionedbloomfilter-v8-narrow.bin")));
+            AssertBytes("partitionedbloomfilter-v14-wide.bin", Resave(ReadFixture("partitionedbloomfilter-v8-wide.bin")));
+
+            foreach (var placed in new[] { "narrow", "wide" })
+            {
+                CollectionAssert.AreEqual(ReadFixture($"partitionedbloomfilter-v8-{placed}.bin"),
+                    TestBitPlacement.Narrowed(ReadFixture($"partitionedbloomfilter-v14-{placed}.bin"), "mumbqn"),
+                    $"the version 14 {placed} fixture narrowed is not the version 8 one");
+            }
+        }
+
+        /// <summary>
+        /// The scalable filter's version 14 fixtures: its version 7 fixture, which grows by
+        /// 2, and its version 1 one, which adds every filter at its hint, re-laid by hand
+        /// with the hint a <c>u64</c>, the growth factor written even when it is 1, and each
+        /// contained filter a partitioned filter at version 14. Each reads, finds what it
+        /// held, and goes on growing as a filter that was never saved does. Both save again
+        /// from their earlier fixtures as these.
+        /// </summary>
+        [TestMethod]
+        public void TestStoredScalableBloomFilterAtVersionFourteenStillReads()
+        {
+            foreach (var (fixture, earlier, growth) in new[]
+            {
+                ("scalablebloomfilter-v14.bin", "scalablebloomfilter-v7.bin", 2u),
+                ("scalablebloomfilter-v14-g1.bin", "scalablebloomfilter-v1.bin", 1u),
+            })
+            {
+                var f = ScalableBloomFilter.ReadFrom(Fixture(fixture));
+                Assert.AreEqual(growth, (uint)f.Growth, fixture);
+                Assert.AreEqual(20UL, (ulong)f.Hint, fixture);
+                for (int i = 0; i < 100; i++)
+                {
+                    Assert.IsTrue(f.Test(Key($"s{i}")), $"{fixture} no longer finds s{i}");
+                }
+
+                AssertBytes(fixture, ScalableBloomFilter.ReadFrom(Fixture(earlier)).ToByteArray());
+
+                var twin = new ScalableBloomFilter(20, 0.01, 0.8, growth);
+                for (int i = 0; i < 400; i++)
+                {
+                    if (i >= 100) f.Add(Key($"s{i}"));
+                    twin.Add(Key($"s{i}"));
+                }
+
+                CollectionAssert.AreEqual(twin.ToByteArray(), f.ToByteArray(),
+                    $"{fixture} grew differently from a filter that was never saved");
             }
         }
 
@@ -720,6 +801,8 @@ namespace TestProbabilisticDataStructures
                 ("deletablebloomfilter-v14-narrow.bin", s => DeletableBloomFilter.ReadFrom(s)),
                 ("stablebloomfilter-v8-narrow.bin", s => StableBloomFilter.ReadFrom(s)),
                 ("stablebloomfilter-v14-narrow.bin", s => StableBloomFilter.ReadFrom(s)),
+                ("partitionedbloomfilter-v14-narrow.bin", s => PartitionedBloomFilter.ReadFrom(s)),
+                ("scalablebloomfilter-v14.bin", s => ScalableBloomFilter.ReadFrom(s)),
                 ("cuckoobloomfilter-v6.bin", s => CuckooBloomFilter.ReadFrom(s)),
                 ("bloomfilter-v8-narrow.bin", s => BloomFilter.ReadFrom(s)),
                 ("scalablebloomfilter-v7.bin", s => ScalableBloomFilter.ReadFrom(s)),
@@ -1988,38 +2071,36 @@ namespace TestProbabilisticDataStructures
             AssertBytes("bloomfilter64-v1.bin", bloom64.ToByteArray());
             AssertBytes("countingbloomfilter-v14-narrow.bin", counting.ToByteArray());
             AssertBytes("deletablebloomfilter-v14-narrow.bin", deletable.ToByteArray());
-            AssertBytes("partitionedbloomfilter-v8-narrow.bin", partitioned.ToByteArray());
+            AssertBytes("partitionedbloomfilter-v14-narrow.bin", partitioned.ToByteArray());
 
             // Version 9 since the sketches and the inverse filter began recording their
             // placement; the version 1 fixture is read, above.
             AssertBytes("inversebloomfilter-v9-narrow.bin", inverse.ToByteArray());
 
-            // A filter that adds every filter at its hint writes the layout it always
-            // wrote, version 1, with no growth factor in it. Its contained filters are
-            // partitioned filters in envelopes of their own, which are version 8 since
-            // those began recording their placement and a 64-bit count, so it is pinned to
-            // v1b: the v1 fixture with each contained filter rewritten at version 8 by
-            // hand, outside the library. The v1 fixture is read, above.
+            // Every save of a scalable filter is version 14 (#232), with its hint a u64 and
+            // its growth factor written even when it is 1, and its contained filters are
+            // partitioned filters at version 14 in envelopes of their own. A filter that
+            // adds every filter at its hint is pinned to v14-g1, the v1 fixture re-laid by
+            // hand outside the library; the v1 fixture is read, above.
             var scalable = new ScalableBloomFilter(20, 0.01, 0.8, 1);
             for (int i = 0; i < 100; i++)
             {
                 scalable.Add(Key($"s{i}"));
             }
 
-            AssertBytes("scalablebloomfilter-v1b.bin", scalable.ToByteArray());
+            AssertBytes("scalablebloomfilter-v14-g1.bin", scalable.ToByteArray());
 
-            // One that grows writes version 7. The fixture was assembled from FORMAT.md's
-            // layout outside the library's writer -- the outer fields by hand, each
-            // contained filter built for 20*2^i items directly -- so this holds the
-            // writer to the layout rather than to itself.
+            // One that grows is pinned to v14, the v7 fixture re-laid the same way. The v7
+            // fixture was assembled from FORMAT.md's layout outside the library's writer --
+            // the outer fields by hand, each contained filter built for 20*2^i items
+            // directly -- so this holds the writer to the layout rather than to itself.
             var growing = new ScalableBloomFilter(20, 0.01, 0.8, 2);
             for (int i = 0; i < 100; i++)
             {
                 growing.Add(Key($"s{i}"));
             }
 
-            // And v7b is the v7 fixture with its contained filters rewritten the same way.
-            AssertBytes("scalablebloomfilter-v7b.bin", growing.ToByteArray());
+            AssertBytes("scalablebloomfilter-v14.bin", growing.ToByteArray());
 
             var hll = new HyperLogLog(64);
             for (int i = 0; i < 20; i++)
@@ -2269,7 +2350,7 @@ namespace TestProbabilisticDataStructures
             AssertBytes("bloomfilter-v8-wide.bin", bloom.ToByteArray());
             AssertBytes("countingbloomfilter-v14-wide.bin", counting.ToByteArray());
             AssertBytes("deletablebloomfilter-v14-wide.bin", deletable.ToByteArray());
-            AssertBytes("partitionedbloomfilter-v8-wide.bin", partitioned.ToByteArray());
+            AssertBytes("partitionedbloomfilter-v14-wide.bin", partitioned.ToByteArray());
             AssertBytes("stablebloomfilter-v14-wide.bin", StoredStableTwin(Placement.Wide).ToByteArray());
         }
 
@@ -2334,6 +2415,8 @@ namespace TestProbabilisticDataStructures
                 ("scalablebloomfilter-v1b.bin", 6, 1),
                 ("scalablebloomfilter-v7.bin", 6, 7),
                 ("scalablebloomfilter-v7b.bin", 6, 7),
+                ("scalablebloomfilter-v14.bin", 6, 14),
+                ("scalablebloomfilter-v14-g1.bin", 6, 14),
                 ("stablebloomfilter-v1.bin", 7, 1),
                 ("inversebloomfilter-v1.bin", 8, 1),
                 ("cuckoobloomfilter-v1.bin", 9, 1),
@@ -2353,6 +2436,8 @@ namespace TestProbabilisticDataStructures
                 ("deletablebloomfilter-v14-wide.bin", 4, 14),
                 ("partitionedbloomfilter-v8-narrow.bin", 5, 8),
                 ("partitionedbloomfilter-v8-wide.bin", 5, 8),
+                ("partitionedbloomfilter-v14-narrow.bin", 5, 14),
+                ("partitionedbloomfilter-v14-wide.bin", 5, 14),
                 ("stablebloomfilter-v8-narrow.bin", 7, 8),
                 ("stablebloomfilter-v8-wide.bin", 7, 8),
                 ("stablebloomfilter-v14-narrow.bin", 7, 14),
