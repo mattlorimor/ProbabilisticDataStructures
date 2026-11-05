@@ -351,6 +351,230 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        // ---- InfiniFilter and MementoFilter: Reset -------------------------------------------
+
+        /// <summary>
+        /// The keys given to a filter that is not to grow: its first table is sized for them, so
+        /// they fill it short of its expansion threshold.
+        /// </summary>
+        private const int UngrownKeys = 500;
+
+        /// <summary>
+        /// A Memento key: the integers spread over the key space, so that no two share a block.
+        /// </summary>
+        private static ulong MementoKey(int i) => (ulong)i * 0x9E3779B97F4A7C15UL;
+
+        /// <summary>
+        /// A bound on the keys given to a filter waiting for a table of its chain to be made at
+        /// the size it started at, so that a filter that never makes one fails by count.
+        /// </summary>
+        private const int MostKeysToAChainTable = 1_000_000;
+
+        /// <summary>
+        /// The least of five measurements of what <paramref name="reset"/> allocates, each of a
+        /// filter built by <paramref name="make"/> before the attempt, since a reset changes the
+        /// filter and an attempt can be repeated. Returns the least, and the filter the last
+        /// attempt reset.
+        /// </summary>
+        private static (long Least, T Filter) LeastAllocatedByReset<T>(Func<T> make, Func<T, object> reset)
+            where T : class
+        {
+            var least = long.MaxValue;
+            T filter = null;
+            for (var run = 0; run < 5; run++)
+            {
+                least = Math.Min(least, NoGCRegion.Allocated(() => reset(filter), first: () => filter = make()));
+            }
+
+            return (least, filter);
+        }
+
+        /// <summary>
+        /// Holds a reset that had a table of the size it returns to: it allocated nothing, kept
+        /// that table as its only one, and left a filter that writes what a new one does and
+        /// has counted no slot read since.
+        /// </summary>
+        private static void AssertResetInPlace(
+            string what, long allocated, long tableBytes, bool keptTheTable, byte[] fresh, byte[] reset,
+            long slotReads)
+        {
+            Assert.AreEqual(0L, allocated,
+                $"resetting {what} allocated {allocated:N0} bytes where it held a table of the size it " +
+                $"returns to, {tableBytes:N0} bytes: the reset built a table rather than clearing that " +
+                "one, so it needed both at once and could run out of memory");
+            Assert.IsTrue(keptTheTable,
+                $"resetting {what} did not leave the table of the size it returns to as its only one");
+            CollectionAssert.AreEqual(fresh, reset, $"{what}, reset, writes what a new filter does not");
+            Assert.AreEqual(0L, slotReads, $"{what}'s reset table counts slot reads from before the reset");
+        }
+
+        /// <summary>
+        /// Not vacuous: the table a reset is to clear holds entries, and has read slots, so a
+        /// reset that left it as it was would write something a new filter does not and would
+        /// count reads.
+        /// </summary>
+        private static void AssertHoldsEntries(string what, uint count, long slotReads, ulong[] words)
+        {
+            Assert.IsGreaterThan(0u, count, $"premise: {what} holds entries");
+            Assert.IsGreaterThan(0L, slotReads, $"premise: {what} has read slots");
+            Assert.IsTrue(words.AsSpan().IndexOfAnyExcept(0UL) >= 0, $"premise: {what} has a word set");
+        }
+
+        /// <summary>
+        /// Resetting an <see cref="InfiniFilter"/> that has not grown clears its table where it
+        /// is. The reset built a new table while the old one was still held, so it needed twice
+        /// the filter at once: 3 GiB more at the largest table the constructor builds with 8-bit
+        /// fingerprints, 2^31 slots (#298). The only table of a filter that has not grown is the one
+        /// it returns to, so the reset needs no memory, and so cannot fail for want of it.
+        /// </summary>
+        /// <remarks>
+        /// Each measured reset clears a table that holds entries and has read slots. The
+        /// measurement is held to nothing at all rather than to a slack, since anything a reset
+        /// allocates is something it can fail to get; and building a table of the size reset
+        /// measures at least its words, so the measurement sees the allocation it is held to not
+        /// making.
+        /// </remarks>
+        [TestMethod]
+        public void TestResettingAnInfiniFilterThatHasNotGrownAllocatesNothing()
+        {
+            InfiniSegment table = null;
+            var (allocated, filter) = LeastAllocatedByReset(() =>
+            {
+                var built = new InfiniFilter(initialCapacity: UngrownKeys, fingerprintBits: 8);
+                for (var i = 0; i < UngrownKeys; i++)
+                {
+                    built.Add(Key(i));
+                }
+
+                Assert.AreEqual(0u, built.ExpansionCount(), "premise: the filter has not grown");
+                table = built.Segments[0];
+                AssertHoldsEntries("its table", table.Count, table.SlotReads, table.Data);
+                return built;
+            }, filter => filter.Reset());
+
+            var tableBytes = table.TableWords * sizeof(ulong);
+            AssertResetInPlace("an InfiniFilter that has not grown", allocated, tableBytes,
+                filter.Segments.Count == 1 && ReferenceEquals(table, filter.Segments[0]),
+                new InfiniFilter(initialCapacity: UngrownKeys, fingerprintBits: 8).ToByteArray(),
+                filter.ToByteArray(), filter.Segments[0].SlotReads);
+
+            Assert.IsGreaterThanOrEqualTo(tableBytes,
+                Allocated(() => new InfiniSegment(table.QuotientBits, table.FingerprintBits)),
+                "building a table measured less than its words, so the measurement cannot see the " +
+                "allocation the reset is held to not making");
+        }
+
+        /// <summary>
+        /// Resetting a grown <see cref="InfiniFilter"/> whose chain holds a table of the size the
+        /// filter started at clears that table, keeps it as the only one, and allocates nothing.
+        /// </summary>
+        /// <remarks>
+        /// Grown from 2^5 slots with 2-bit fingerprints, the narrowest the constructor takes and
+        /// so the soonest to send entries down the chain, the filter is filled until a table
+        /// past the second in its chain has 2^5 slots. The tables before it, the active one
+        /// included, are larger, and are dropped. The table kept was made of entries moved down
+        /// the chain, so it holds entries for the reset to clear.
+        /// </remarks>
+        [TestMethod]
+        public void TestResettingAnInfiniFilterKeepsAChainTableOfTheSizeItStartedAt()
+        {
+            const int startBits = 5;
+            InfiniSegment table = null;
+            var (allocated, filter) = LeastAllocatedByReset(() =>
+            {
+                var built = new InfiniFilter(initialCapacity: 16, fingerprintBits: 2);
+                Assert.AreEqual(startBits, built.Segments[0].QuotientBits, "premise: the size it starts at");
+                var added = 0;
+                while ((table = built.Segments.Skip(2).FirstOrDefault(t => t.QuotientBits == startBits)) == null)
+                {
+                    Assert.IsLessThan(MostKeysToAChainTable, added, "no table in the chain came to the starting size");
+                    built.Add(Key(added++));
+                }
+
+                Assert.IsGreaterThan(startBits, built.Segments[0].QuotientBits, "premise: the filter has grown");
+                AssertHoldsEntries("the chain's table", table.Count, table.SlotReads, table.Data);
+                return built;
+            }, filter => filter.Reset());
+
+            AssertResetInPlace("an InfiniFilter whose chain holds a table of its starting size", allocated,
+                table.TableWords * sizeof(ulong),
+                filter.Segments.Count == 1 && ReferenceEquals(table, filter.Segments[0]),
+                new InfiniFilter(initialCapacity: 16, fingerprintBits: 2).ToByteArray(),
+                filter.ToByteArray(), filter.Segments[0].SlotReads);
+        }
+
+        /// <summary>
+        /// Resetting a <see cref="MementoFilter"/> that has not grown clears its table where it
+        /// is, as <see cref="TestResettingAnInfiniFilterThatHasNotGrownAllocatesNothing"/> holds
+        /// of an <see cref="InfiniFilter"/>. The reset built a new table while the old one was
+        /// still held: 5 GiB more at the largest table the constructor builds with the default
+        /// range and fingerprint, 2^31 slots of 20 bits (#298).
+        /// </summary>
+        [TestMethod]
+        public void TestResettingAMementoFilterThatHasNotGrownAllocatesNothing()
+        {
+            MementoSegment table = null;
+            var (allocated, filter) = LeastAllocatedByReset(() =>
+            {
+                var built = new MementoFilter(maxRangeSize: 256, fingerprintBits: 8, initialCapacity: UngrownKeys);
+                for (var i = 0; i < UngrownKeys; i++)
+                {
+                    built.Add(MementoKey(i));
+                }
+
+                Assert.AreEqual(0u, built.ExpansionCount(), "premise: the filter has not grown");
+                table = built.Segments[0];
+                AssertHoldsEntries("its table", table.Count, table.SlotReads, table.Data);
+                return built;
+            }, filter => filter.Reset());
+
+            var tableBytes = table.TableWords * sizeof(ulong);
+            AssertResetInPlace("a MementoFilter that has not grown", allocated, tableBytes,
+                filter.Segments.Count == 1 && ReferenceEquals(table, filter.Segments[0]),
+                new MementoFilter(maxRangeSize: 256, fingerprintBits: 8, initialCapacity: UngrownKeys).ToByteArray(),
+                filter.ToByteArray(), filter.Segments[0].SlotReads);
+
+            Assert.IsGreaterThanOrEqualTo(tableBytes,
+                Allocated(() => new MementoSegment(table.QuotientBits, table.FingerprintBits, table.MementoBits)),
+                "building a table measured less than its words, so the measurement cannot see the " +
+                "allocation the reset is held to not making");
+        }
+
+        /// <summary>
+        /// Resetting a grown <see cref="MementoFilter"/> whose chain holds a table of the size the
+        /// filter started at clears that table, keeps it as the only one, and allocates nothing,
+        /// as <see cref="TestResettingAnInfiniFilterKeepsAChainTableOfTheSizeItStartedAt"/> holds
+        /// of an <see cref="InfiniFilter"/>, and at the same corner: 2^5 slots and 2-bit
+        /// fingerprints, with the narrowest range the constructor takes.
+        /// </summary>
+        [TestMethod]
+        public void TestResettingAMementoFilterKeepsAChainTableOfTheSizeItStartedAt()
+        {
+            const int startBits = 5;
+            MementoSegment table = null;
+            var (allocated, filter) = LeastAllocatedByReset(() =>
+            {
+                var built = new MementoFilter(maxRangeSize: 2, fingerprintBits: 2, initialCapacity: 16);
+                Assert.AreEqual(startBits, built.Segments[0].QuotientBits, "premise: the size it starts at");
+                var added = 0;
+                while ((table = built.Segments.Skip(2).FirstOrDefault(t => t.QuotientBits == startBits)) == null)
+                {
+                    Assert.IsLessThan(MostKeysToAChainTable, added, "no table in the chain came to the starting size");
+                    built.Add(MementoKey(added++));
+                }
+
+                Assert.IsGreaterThan(startBits, built.Segments[0].QuotientBits, "premise: the filter has grown");
+                AssertHoldsEntries("the chain's table", table.Count, table.SlotReads, table.Data);
+                return built;
+            }, filter => filter.Reset());
+
+            AssertResetInPlace("a MementoFilter whose chain holds a table of its starting size", allocated,
+                table.TableWords * sizeof(ulong),
+                filter.Segments.Count == 1 && ReferenceEquals(table, filter.Segments[0]),
+                new MementoFilter(maxRangeSize: 2, fingerprintBits: 2, initialCapacity: 16).ToByteArray(),
+                filter.ToByteArray(), filter.Segments[0].SlotReads);
+        }
+
         // ---- InfiniFilter: doubling ----------------------------------------------------------
 
         /// <summary>
