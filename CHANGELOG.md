@@ -140,6 +140,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`ToByteArray`'s refusal of a payload past one array says which form its size is
+  for.** It names the payload's size as a byte array would hold it, in the ordinary form
+  of the envelope, with each run's length a `u32`. The large form counts each run's length
+  as a `u64`, so for a payload with runs its refusals, such as a read's from a stream that
+  cannot seek, name a larger number for the same structure. The number is unchanged, and each message now says which form it counts. (#290)
+
 - **The package's minimum `System.IO.Hashing` rises from 10.0.11 to 10.0.14.** A project
   that pins an earlier version of that package has to raise it to restore this one. (#142)
 
