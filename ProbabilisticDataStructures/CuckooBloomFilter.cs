@@ -1268,37 +1268,26 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Copies the first <paramref name="length"/> bytes of <paramref name="source"/>,
-        /// clamped to its length. Matches what Take(length).ToArray() produced, which
-        /// returned a short array rather than throwing when the source was smaller.
-        /// </summary>
-        private static byte[] Slice(ReadOnlySpan<byte> source, int length)
-        {
-            return source.Slice(0, Math.Min(length, source.Length)).ToArray();
-        }
-
-        /// <summary>
-        /// Returns the optimal fingerprint length in bytes for the given bucket size and
-        /// false-positive rate epsilon.
-        /// </summary>
-        /// <param name="b">Bucket size</param>
-        /// <param name="epsilon">False positive rate</param>
-        /// <returns>The optimal fingerprint length</returns>
-        /// <summary>
-        /// The fingerprint size, in bytes, that holds the false positive rate to
+        /// The fingerprint width, in bits, that holds the false positive rate to
         /// epsilon. A cuckoo filter's rate is about 2b / 2^f for a fingerprint of f
-        /// bits, so f is log2(2b / epsilon), rounded up to whole bytes.
+        /// bits, so f is log2(2b / epsilon), rounded up to a whole bit and clamped to
+        /// between 1 and the hash's 64.
         /// </summary>
+        /// <param name="b">Entries per bucket</param>
+        /// <param name="epsilon">False positive rate</param>
+        /// <returns>The fingerprint width in bits</returns>
         /// <remarks>
-        /// Both steps used to be wrong in the same direction. The logarithm was natural
-        /// rather than base two, which understates the bits needed by a factor of
-        /// ln(2); and the conversion to bytes divided rather than rounding up, which
-        /// floors to zero for every rate this library accepts and was then clamped to
-        /// one. The result was a one-byte fingerprint whatever epsilon was asked for --
-        /// eight bits, for a rate of about 3%, whether the caller wanted 1% or 0.001%.
+        /// This used to return bytes, and both of its steps were wrong in the same
+        /// direction. The logarithm was natural rather than base two, which understates
+        /// the bits needed by a factor of ln(2); and the conversion to bytes divided
+        /// rather than rounding up, which floors to zero for every rate this library
+        /// accepts and was then clamped to one. The result was a one-byte fingerprint
+        /// whatever epsilon was asked for -- eight bits, for a rate of about 3%, whether
+        /// the caller wanted 1% or 0.001%.
         /// <para>
-        /// Whole bytes mean the rate delivered is usually better than the rate asked
-        /// for, since the last partial byte is rounded up rather than away.
+        /// Fingerprints are now stored packed at exactly this width, so the rate
+        /// delivered is better than the rate asked for only by what rounding up to a
+        /// whole bit gives, until the clamp at 64 bits is reached.
         /// </para>
         /// </remarks>
         private static uint CalculateFingerprintBits(uint b, double epsilon)

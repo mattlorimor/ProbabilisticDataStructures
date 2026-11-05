@@ -58,8 +58,11 @@ current default.
 | `Stable_Hit` | 248.1 ns | **5.45 ns** | 46x |
 | `Cuckoo_Hit` | 755.1 ns | **11.24 ns** | **67x** |
 
-Nothing allocates except the Cuckoo filter's 32-byte fingerprint, which is stored in a
-bucket and cannot be avoided.
+Today none of these allocates. When this table was measured, the Cuckoo filter's
+`Test` still allocated 32 bytes a call, for the array its fingerprint was copied into.
+Its fingerprints have since been stored packed into 64-bit words at their exact width
+(#88), and a fingerprint is now a `ulong` that never reaches the heap. `Cuckoo_Hit`
+reports no allocation, like the rest of `FilterTestBenchmarks`.
 
 ## What the numbers show
 
