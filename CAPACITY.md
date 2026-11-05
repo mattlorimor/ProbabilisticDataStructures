@@ -391,10 +391,10 @@ a sliver of the main one.
 A table is as wide as one array holds its words, so the largest that works depends on the
 fingerprint: 2^33 slots at 8 bits and 2^32 at 16, which are the figures in the table; the
 `Add` that would double it throws, with the filter as it was. Until the release after 6.2.0
-every table stopped at 2^31 slots, its slot count being a `uint`. A read is charged three
-times the table, which at 8 or 16 bits is the table of 2^27 slots. The fingerprint width does
-not move that number, because the table doubles at the same load whatever the width, and
-2^28 slots do not fit either way.
+every table stopped at 2^31 slots, its slot count being a `uint`. A read is charged twice
+the table: the payload, and the table its words are read straight into. So the default budget
+reads the table of 2^28 slots at 8 bits, and at 16, whose slots are 20 bits to 12, the table
+of 2^27.
 
 ### `MementoFilter`
 

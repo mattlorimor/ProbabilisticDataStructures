@@ -181,8 +181,10 @@ namespace TestProbabilisticDataStructures
                 [StructureId.Grafite] = Of("Grafite",
                     Grafite.Build(Enumerable.Range(0, 40_000).Select(i => (ulong)i * 1009), 0.01, 64, seed: 7),
                     refusesAHashBecause: "it holds numbers rather than bytes, and hashes nothing"),
+                // Grown to a table of 2^16 slots: its read holds the table once (#313), and in
+                // the large form that is all it allocates.
                 [StructureId.InfiniFilter] = Of("InfiniFilter",
-                    Filled(new InfiniFilter(10_000), (f, k) => f.Add(k), 20_000)),
+                    Filled(new InfiniFilter(10_000), (f, k) => f.Add(k), 40_000)),
                 [StructureId.MementoFilter] = Of("MementoFilter", FilledMemento(),
                     refusesAHashBecause: "it holds numbers rather than bytes, and hashes nothing"),
                 [StructureId.SublimeCountMinSketch] = Of("SublimeCountMinSketch",

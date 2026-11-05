@@ -168,18 +168,12 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Restores a segment from stored fields without rebuilding its table.
+        /// A segment of a stored shape and count, its table allocated and every word of it
+        /// nought, for the reader to read the stored words straight into (#313), and then to
+        /// check its metadata.
         /// </summary>
-        internal static InfiniSegment Restore(
-            int quotientBits, int fingerprintBits, ulong count, ulong[] data)
-        {
-            var segment = new InfiniSegment(quotientBits, fingerprintBits)
-            {
-                Count = count,
-            };
-            data.CopyTo(segment.Data, 0);
-            return segment;
-        }
+        internal static InfiniSegment Restore(int quotientBits, int fingerprintBits, ulong count) =>
+            new(quotientBits, fingerprintBits) { Count = count };
 
         /// <summary>
         /// Empties the table where it is, leaving it as a new one of its shape would be: no
