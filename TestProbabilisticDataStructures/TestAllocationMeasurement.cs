@@ -71,6 +71,88 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// An attempt whose region a collection ended is not counted: the work is measured
+        /// again in a region of its own, and what comes back is that count.
+        /// </summary>
+        /// <remarks>
+        /// The first attempt induces a collection, which ends its region, and allocates more
+        /// than the attempts after it, so a measurement that kept a count from a region that
+        /// did not hold comes to that and not to what the work allocates quietly.
+        /// </remarks>
+        [TestMethod]
+        public void TestAnAttemptWhoseRegionACollectionEndedIsMeasuredAgain()
+        {
+            var attempts = 0;
+            var measured = NoGCRegion.Allocated(() =>
+            {
+                if (attempts++ == 0)
+                {
+                    GC.Collect();
+                    return new byte[4096];
+                }
+
+                return new byte[64];
+            });
+            var quiet = NoGCRegion.Allocated(() => new byte[64]);
+
+            Assert.IsGreaterThan(1, attempts,
+                "the first attempt's region held through the collection it induced, so nothing was measured again");
+            Assert.AreEqual(quiet, measured,
+                $"the work was measured at {measured:N0} bytes and allocates {quiet:N0} quietly: the count was " +
+                "kept from a region a collection had ended");
+        }
+
+        /// <summary>
+        /// Work that allocates more than its region's room fails, saying so, rather than being
+        /// counted with the collection that ended the region in it.
+        /// </summary>
+        /// <remarks>
+        /// The work is many small arrays, eight times the room. The small object heap's room is
+        /// held closely: measured, two megabytes of them ended a region of one, where a single
+        /// large array of four did not, so one allocation can overshoot what is left of a
+        /// budget. A region that holds, however much was allocated in it, ran no collection,
+        /// and its count is exact.
+        /// </remarks>
+        [TestMethod]
+        public void TestWorkLargerThanItsRegionFailsSayingSo()
+        {
+            const long room = 1 << 20;
+            var refused = Assert.ThrowsExactly<AssertFailedException>(
+                () => NoGCRegion.Allocated(
+                    () => Enumerable.Range(0, (int)(8 * room / (16 << 10))).Select(_ => new byte[16 << 10]).ToList(),
+                    room: room),
+                "work allocating eight times its region's room was measured");
+            StringAssert.Contains(refused.Message, $"more than the {room:N0} of the no-GC region", refused.Message);
+        }
+
+        /// <summary>
+        /// A region already in progress, entered by something that does not take turns with
+        /// <see cref="NoGCRegion"/>, fails a measurement, saying so, rather than letting it be
+        /// counted in a region it does not hold. Not run in parallel, since while this test's
+        /// region is held no other measurement can enter one.
+        /// </summary>
+        [TestMethod]
+        [DoNotParallelize]
+        public void TestARegionAlreadyInProgressFailsAMeasurementSayingSo()
+        {
+            Assert.IsTrue(GC.TryStartNoGCRegion(NoGCRegion.Room), "premise: a region could be entered");
+            try
+            {
+                var refused = Assert.ThrowsExactly<AssertFailedException>(
+                    () => NoGCRegion.Allocated(() => new object()),
+                    "work was measured while a region it did not enter was in progress");
+                StringAssert.Contains(refused.Message, "already in progress", refused.Message);
+            }
+            finally
+            {
+                if (GCSettings.LatencyMode == GCLatencyMode.NoGCRegion)
+                {
+                    GC.EndNoGCRegion();
+                }
+            }
+        }
+
+        /// <summary>
         /// Nothing in the suite reads an allocation counter but <see cref="NoGCRegion"/>, so
         /// every allocation the suite holds code to is counted in a region. The roster is the
         /// suite's own code: every method of every type in this assembly, the lambdas and
