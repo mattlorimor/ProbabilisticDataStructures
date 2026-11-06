@@ -839,21 +839,19 @@ namespace ProbabilisticDataStructures
                 // has the same width, and if a payload says otherwise the lowest limit holds.
                 filter.QuotientBitsLimit = Math.Min(filter.QuotientBitsLimit, QuotientBitsLimitFor(slotBits));
 
-                // Read into one array, then copied into the table the segment builds.
+                // The segment's table is allocated, and the words, which have no length before
+                // them, are read straight into it. Read a word at a time into an array of their
+                // own and copied into the table, every table was held, and charged, twice
+                // (#327). The shape's check, above, holds the words to what one array holds.
                 budget.Charge(SegmentCost(words));
-                var data = new ulong[words];
-                var anyBitSet = false;
-                for (var w = 0; w < words; w++)
-                {
-                    data[w] = reader.ReadUInt64();
-                    anyBitSet |= data[w] != 0;
-                }
+                var segment = MementoSegment.Restore(quotientBits, fingerprintBits, mementoBits, count);
+                reader.ReadWords(segment.Data);
 
                 // The one table with a history. A slot of exactly 64 bits was written with
                 // a mask of zero, so such a table counted every key it was given and stored
                 // none: its count is positive and its words are all zero, which no table
                 // that holds an entry can be, since an entry sets its slot's metadata.
-                if (slotBits == MementoSegment.MaxSlotBits && count > 0 && !anyBitSet)
+                if (slotBits == MementoSegment.MaxSlotBits && count > 0 && !segment.Data.AsSpan().ContainsAnyExcept(0UL))
                 {
                     throw new InvalidDataException(
                         $"Table {i} counts {count} entries and every word of it is zero. " +
@@ -868,8 +866,6 @@ namespace ProbabilisticDataStructures
                 // since decoding a run walks it, and then what a run says about its own boxes,
                 // once for each occupied run, so that a box the codec cannot decode is refused
                 // now rather than by the first query that reads it.
-                var segment = MementoSegment.Restore(
-                    quotientBits, fingerprintBits, mementoBits, count, data);
                 segment.CheckMetadata(i);
                 segment.CheckRuns(i);
                 filter.Segments.Add(segment);
@@ -903,9 +899,8 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Prices what <see cref="Read"/> allocates beyond the envelope: each table's
-        /// words, read into one array and copied into the table. See
-        /// <see cref="PayloadPrice"/>.
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: each table, which its
+        /// words are read straight into. See <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
@@ -929,9 +924,13 @@ namespace ProbabilisticDataStructures
             }
         }
 
-        /// <summary>One table's words, read into one array and copied into the table.</summary>
-        private static long SegmentCost(uint words) => ReadBudget.Sum(
-            ReadBudget.Times(2, ReadBudget.ArrayOf(words, sizeof(ulong))),
+        /// <summary>
+        /// One table, its words read straight into it, and the segment that holds it with its
+        /// codec, which come to more than one small object allows for, so are charged as two.
+        /// </summary>
+        internal static long SegmentCost(uint words) => ReadBudget.Sum(
+            ReadBudget.ArrayOf(words, sizeof(ulong)),
+            ReadBudget.SmallObject,
             ReadBudget.SmallObject);
 
         private static void CheckChain(int mementoBits, uint segmentCount)

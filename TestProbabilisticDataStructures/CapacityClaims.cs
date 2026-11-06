@@ -1328,6 +1328,22 @@ namespace TestProbabilisticDataStructures
                 return SlotBits(16) == 20 && SlotBits(8) == 12 && ReadsUpTo(8, 28) && ReadsUpTo(16, 27);
             }),
             new Claim("`F + 1 + m + 3` bits", () => ChargeLine.Known.ContainsKey("MementoFilter 256")),
+            // In bytes a word of the table, as Infini's: eight for the payload's copy of the
+            // word, and eight for the table it is read into, which it once was twice (#327).
+            new Claim("A read holds each table twice, in the payload and in the table its words are read straight into", () =>
+                Near(Slope("MementoFilter 256"), 16, 0.01) && Near(Slope("MementoFilter 65536"), 16, 0.01)),
+            new Claim("so the default budget reads back a table of 2^27 slots at a range of 256 and at a range of 65,536", () =>
+            {
+                static bool ReadsUpTo(ulong range, int q)
+                {
+                    var slotBits = 8 + 1 + (int)Math.Ceiling(Math.Log2(range)) + 3;
+                    var line = ChargeLine.Known[$"MementoFilter {range}"];
+                    return line.Surely((ulong)MementoSegment.Words(1u << q, slotBits))
+                        && !line.Possibly((ulong)MementoSegment.Words(1u << (q + 1), slotBits));
+                }
+
+                return ReadsUpTo(256, 27) && ReadsUpTo(65536, 27);
+            }),
 
             // ---- Inverse and the retaining sketches -----------------------------------------
             new Claim("reads back at 8 bytes a slot, and a full one at 56", () =>

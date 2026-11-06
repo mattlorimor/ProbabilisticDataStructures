@@ -233,7 +233,7 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `InfiniFilter` | items added, 8-bit fingerprints | 6,442,450,944 | 201,326,592 | 805,306,368 |
 | `InfiniFilter` | items added, 16-bit fingerprints | 3,221,225,472 | 100,663,296 | 402,653,184 |
 | `MementoFilter` | items added, one per block, range 256, 8-bit fingerprints | 1,610,612,736 | 100,663,296 | 402,653,184 |
-| `MementoFilter` | items added, one per block, range 65,536, 8-bit fingerprints | 1,610,612,736 | 50,331,648 | 402,653,184 |
+| `MementoFilter` | items added, one per block, range 65,536, 8-bit fingerprints | 1,610,612,736 | 100,663,296 | 402,653,184 |
 
 #### Retains k
 

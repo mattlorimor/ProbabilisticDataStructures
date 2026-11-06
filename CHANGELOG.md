@@ -790,6 +790,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   widest table an array holds, 2^31 slots of 63 bits, is still taken and priced for its words.
   No writer wrote such a table: the constructor and every doubling stop short of it.
 
+- **A `MementoFilter` read holds each table once, and is charged for it once.** Its reader
+  read a table's words a word at a time into an array of their own and then copied them
+  into the table the segment builds, so a read held, and was charged for, every table
+  twice, as an `InfiniFilter` read did before #313. The words are now read straight into
+  the table, in pieces through a 16 KiB buffer on the stack, as an `InfiniFilter`'s are,
+  and the price and the charges are one table each and the segment, so they still come to
+  the same sum. The segment and its codec are charged as two small objects, 128 bytes,
+  where they were charged as one beside the second table: measured in a no-GC region they
+  are 120 bytes, more than the one. Measured in a no-GC region, a filter of 2-bit
+  fingerprints whose chain holds 110,672 bytes of tables allocated 333,024 bytes to read
+  and now allocates 222,352, and in the large form, where the payload is not held, 222,424
+  and now 111,752. So the default budget now reads a filter of 8-bit fingerprints at a
+  range of 65,536 up to a table of 2^27 slots, 100,663,296 items, where it stopped at 2^26;
+  at a range of 256 it still stops at 2^27. A payload claiming a table no array holds is
+  still refused for that before anything is priced or allocated. (#327)
+
 - **An `InfiniFilter` read holds each table once, and is charged for it once.** Its reader
   read a table's words into an array of their own and then copied them into the table the
   segment builds, so a read held, and was charged for, every table twice: a table of 2^32

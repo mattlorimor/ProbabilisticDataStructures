@@ -522,9 +522,11 @@ namespace TestProbabilisticDataStructures
             {
                 problems.Add($"2^31 slots of 63 bits: the price did not walk the table an array holds: {fitting.Stopped.Message}");
             }
-            else if (fitting.Priced < 2 * fits.Words * sizeof(ulong))
+            else if (fitting.Priced < fits.Words * sizeof(ulong) || fitting.Priced >= 2 * fits.Words * sizeof(ulong))
             {
-                problems.Add($"2^31 slots of 63 bits: the price came to {fitting.Priced:N0} bytes, less than the table's words twice over");
+                // Once: the words are read straight into the table (#327), where they were
+                // read into an array of their own and copied, and priced twice over.
+                problems.Add($"2^31 slots of 63 bits: the price came to {fitting.Priced:N0} bytes, not the table's words once");
             }
 
             var (fitsThrown, fitsAllocated, _) = Read(fits, ReadOptions.Default);
