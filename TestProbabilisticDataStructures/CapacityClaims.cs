@@ -1131,7 +1131,22 @@ namespace TestProbabilisticDataStructures
                 QuotientFilter.Split(3UL << 29, Math.ScaleB(1.0, -33)) == (31u, 33u)
                 && Assert.Throws<ArgumentOutOfRangeException>(
                     () => QuotientFilter.Split(3UL << 29, Math.ScaleB(1.0, -34))) is not null),
-            new Claim("A read is charged three times the table", () => Near(Slope("QuotientFilter 1%"), 24, 0.01)),
+            // The lines are in bytes a word of the table: eight for the payload's copy of the
+            // word, and eight for the table it is read into, which it once was twice (#328).
+            new Claim("A read holds the table twice, in the payload and in the table its words are read straight into, and is " +
+                "charged for both", () => Near(Slope("QuotientFilter 1%"), 16, 0.01) && Near(Slope("QuotientFilter 0.1%"), 16, 0.01)),
+            new Claim("so the default budget reads one of 2^28 slots at 1% and at 0.1%", () =>
+            {
+                static bool ReadsUpTo(double fp, string label, int q)
+                {
+                    var r = QuotientFilter.Split(1000, fp).RemainderBits;
+                    var line = ChargeLine.Known[$"QuotientFilter {label}"];
+                    return line.Surely((ulong)QuotientFilter.TableWords(1UL << q, r))
+                        && !line.Possibly((ulong)QuotientFilter.TableWords(1UL << (q + 1), r));
+                }
+
+                return ReadsUpTo(0.01, "1%", 28) && ReadsUpTo(0.001, "0.1%", 28);
+            }),
 
             // ---- BinaryFuseFilter and BloomierFilter ----------------------------------------
             new Claim("about 1.126 cells per key", () => Rounds((double)CapacityRows.FuseCells(100_000_000) / 100_000_000, 1.126, 3)),
