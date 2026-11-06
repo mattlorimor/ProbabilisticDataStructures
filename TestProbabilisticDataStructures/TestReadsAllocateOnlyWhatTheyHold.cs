@@ -1132,21 +1132,22 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A nested envelope claiming a payload longer than the run it is stored in is refused as
-        /// data, by its outer price and its outer read, under no budget and under the default one,
-        /// and a claim the run holds is not refused for that.
+        /// A nested envelope claiming a payload longer than its run holds, with the checksum after
+        /// it, is refused as data, by its outer price for the bytes it lacks and by its outer read,
+        /// under no budget and under the default one, and the claim its writer made, which the run
+        /// holds, is not refused for that.
         /// </summary>
         /// <remarks>
         /// The outer reader holds the run whole before the nested reader sees any of it, so the
         /// nested envelope's length is the one claim inside a run that no cut can make disagree with
-        /// the run, and the price is what holds it to the run, by the run's own reader slicing that
-        /// length from it. Unchecked there, a held payload's slice throws
-        /// <see cref="ArgumentOutOfRangeException"/>, where every payload the library will not read
-        /// is an <see cref="InvalidDataException"/>. The claim is the least the run cannot hold:
-        /// the run holds the header, the payload and the checksum's four bytes, so a payload four
-        /// bytes longer than its writer's still fits, taking the checksum's bytes, and is refused
-        /// by the nested read for its checksum, and one five bytes longer is refused by the price.
-        /// The roster is every structure whose price prices a nested one (<see cref="NestsOf"/>).
+        /// the run, and the price is what holds it to the run: it holds the length to what the run
+        /// holds after the header, less the checksum's four bytes, before it prices anything for it
+        /// (<c>PersistenceFormat.RequireHeld</c>, #347). Before that, the price held it only by
+        /// slicing the length from the run, which let a payload up to four bytes longer than its
+        /// writer's through, taking the checksum's bytes, to be refused by the nested read for its
+        /// checksum. The claims are the coarsest pair: the writer's own, which the run holds with
+        /// its checksum, and a byte more, the least it does not. The roster is every structure
+        /// whose price prices a nested one (<see cref="NestsOf"/>).
         /// </remarks>
         [TestMethod]
         public void TestANestedEnvelopeClaimingMoreThanItsRunIsRefusedAsData()
@@ -1175,12 +1176,14 @@ namespace TestProbabilisticDataStructures
                 Assert.AreEqual(run - (uint)(PayloadStart + ChecksumLength), PayloadUInt32(bytes, lengthAt),
                     $"premise: {id}: the walk of FORMAT.md's layout finds the nested envelope's length, its run less its header and checksum");
 
-                // The run holds the header and run - 14 bytes after it.
+                // The run holds the header and run - 14 bytes after it: the payload its writer
+                // claimed and the checksum's four.
                 var held = run - (uint)PayloadStart;
-                foreach (var claim in new[] { held, held + 1 })
+                var fits = held - (uint)ChecksumLength;
+                foreach (var claim in new[] { fits, fits + 1 })
                 {
                     var edited = Edited(bytes, lengthAt, claim);
-                    var ended = $"while reading {claim} more at offset {PayloadStart}";
+                    var ended = $"The stream ended {held:N0} bytes after the header, too few for the {claim:N0}-byte payload it claims";
                     string why;
                     try
                     {
@@ -1193,15 +1196,15 @@ namespace TestProbabilisticDataStructures
                         continue;
                     }
 
-                    if (claim > held && (why is null || !why.Contains(ended, StringComparison.Ordinal)))
+                    if (claim > fits && (why is null || !why.Contains(ended, StringComparison.Ordinal)))
                     {
                         problems.Add($"{id}: a nested envelope claiming {claim:N0} bytes in a run that holds {held:N0} after its header " +
                             $"was not refused by the price for them: {why ?? "it walked to its end"}");
                     }
-                    else if (claim == held && why is not null && why.Contains(ended, StringComparison.Ordinal))
+                    else if (claim == fits && why is not null)
                     {
-                        problems.Add($"{id}: a nested envelope claiming the {claim:N0} bytes its run holds after its header was refused " +
-                            $"by the price for them: {why}");
+                        problems.Add($"{id}: a nested envelope claiming the {claim:N0} bytes its writer did, which its run holds with " +
+                            $"its checksum, was refused by the price: {why}");
                     }
 
                     foreach (var (budget, options) in new[] { ("no budget", ReadOptions.Unlimited), ("the default budget", ReadOptions.Default) })
@@ -1209,14 +1212,22 @@ namespace TestProbabilisticDataStructures
                         try
                         {
                             sample.Read(edited, options);
-                            problems.Add($"{id}: a nested envelope claiming {claim:N0} bytes was read under {budget}");
+                            if (claim > fits)
+                            {
+                                problems.Add($"{id}: a nested envelope claiming {claim:N0} bytes was read under {budget}");
+                            }
                         }
                         catch (InvalidDataException e) when (e.InnerException is ReadBudgetExceededException)
                         {
                             problems.Add($"{id}: a nested envelope claiming {claim:N0} bytes was refused for {budget}: {e.Message}");
                         }
-                        catch (InvalidDataException)
+                        catch (InvalidDataException e)
                         {
+                            if (claim == fits || !e.Message.Contains(ended, StringComparison.Ordinal))
+                            {
+                                problems.Add($"{id}: a nested envelope claiming {claim:N0} bytes in a run that holds {held:N0} after " +
+                                    $"its header was refused under {budget} for something else: {e.Message}");
+                            }
                         }
                         catch (Exception e)
                         {
