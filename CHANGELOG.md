@@ -764,25 +764,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which a charge, an upper bound, should not do. A segment is now charged as two small
   objects, by the reader and its price alike, so they still come to the same sum. (#329)
 
-- **A `QuotientFilter` read is charged for the filter it builds what building it
-  allocates.** Beside its table, a read charged the filter as one small object, 64 bytes,
-  and building it allocates 136, measured in a no-GC region, the same at tables from two
-  slots to 2^20 and at the one-slot table of version 1: the filter's own 96
-  bytes, and a table of two words, 40 bytes, that the constructor it is built through gives
-  the filter before the read shapes it to the payload. A read was charged 72 bytes less than
-  it allocated, which the budget's slack absorbed. The filter is now charged as three small
-  objects, by the reader and its price alike, so they still come to the same sum, and a
-  read is charged 128 bytes more than it was. (#336)
-
-- **A `QuotientFilter` read no longer makes a table it throws away, and is charged for the
-  filter it builds as two small objects.** The filter a read fills was made for one item
-  and then shaped to the payload, so every read also made the one-item filter's table of
-  two words, 40 bytes, and dropped it. The filter is now made at the payload's widths, and
-  building it allocates its own 96 bytes beyond the table, measured in a no-GC region at
-  tables from two slots to 2^16 and at the one-slot table of version 1. It is charged as
-  two small objects, 128 bytes, where it was charged as three (#336), by the reader and
-  its price alike, so they still come to the same sum: a read allocates 40 bytes less and
-  is charged 64 less. (#343)
+- **A `QuotientFilter` read builds its filter at the payload's widths, with no table to
+  throw away, and is charged for it what building it allocates.** The reader made the
+  filter it fills for one item and then shaped it to the payload, so every read also made
+  the one-item filter's table of two words, 40 bytes, and dropped it, as 6.2.0's reader
+  did. The filter is now made at the payload's widths directly. Measured in a no-GC region,
+  building it allocates the filter's own 96 bytes beyond its table, the same at tables from
+  two slots to 2^16 and at the one-slot table of version 1, where 6.2.0's reader allocated
+  120 at those from two slots to 2^16: its filter, 80 bytes then, and the table it threw
+  away. A read charges the filter as two small objects, 128 bytes, beside its table, by the
+  reader and its price alike, so they still come to the same sum. (#336, #343)
 
 - **A `QuotientFilter` payload with bytes left over after its table is refused for them
   under any budget its price fits.** A read is priced before it allocates, and a price that
