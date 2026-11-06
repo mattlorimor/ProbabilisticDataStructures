@@ -946,6 +946,19 @@ rest of a message survives, as it should, and one that deletes the guard does no
   theirs: a reason stated beside it, and a check that some cut costs that much, which fails
   once none does, because an allowance nothing needs is room for a defect to grow into
   unseen.
+- **A price prices each array where its reader charges it.** A read admitted at what a price
+  that stopped early had priced has to refuse its payload within that, and a price walks the
+  payload apart from its reader, so it can come to the right sum in the wrong order.
+  `InvertibleBloomLookupTable`'s priced the counts it unpacks after walking all three of its
+  runs, where its reader charges them as soon as their run is held, so a payload cut short in
+  the later runs was admitted at the counts' size less than its reader charged, and under a
+  budget of exactly its price was refused for that budget. Every sum `TestReadBudget`
+  compares was right, because it reads payloads whole, and every budget the sweep read cuts
+  under had room for the difference. So the sweep reads every cut under exactly its own
+  price as well, and checks first that the price it works out is the one the read is
+  admitted at: under a byte less, every cut is refused for its budget, and the refusal names
+  that price. A cut cannot show where the last run is priced, since a cut holding it is the
+  whole payload; a byte left over after it can, and the table has a test of its own for that.
 - **An exemption names the test that checks its reason.** The same sweep exempts the
   structures whose readers cap nothing their constructors can reach, and each exemption
   points at a test asserting why -- the cap is unreachable, or the reader caps nothing.
