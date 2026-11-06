@@ -381,8 +381,8 @@ namespace TestProbabilisticDataStructures
         /// Every structure's reader, given a payload of its own cut short at each length, refuses
         /// it for what it lacks, never for its budget, having allocated no more than the bound for
         /// the bytes it holds: under no budget, under the default one, under one that covers no
-        /// more than those bytes allow, and under exactly its own price, so that what its reader
-        /// charges before refusing it is no more than its price admitted.
+        /// more than those bytes allow, and under exactly its own price; and what its reader
+        /// charges before refusing it is its price, no more and no less.
         /// </summary>
         [TestMethod]
         [DynamicData(nameof(Structures))]
@@ -392,7 +392,7 @@ namespace TestProbabilisticDataStructures
             foreach (var sample in SweptFor(id))
             {
                 AssertTheWholeLoads(sample);
-                AssertEveryCutIsAdmittedAtItsOwnPrice(id, sample);
+                AssertEveryCutIsChargedExactlyItsOwnPrice(id, sample);
                 foreach (var (name, options) in BudgetsFor(id, sample))
                 {
                     AssertEveryCutIsRefusedWithinTheBound(sample, name, options);
@@ -402,15 +402,24 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// A cut's own price, as <see cref="PriceOfCut"/> works it out, is the price its read is
-        /// admitted at, neither more nor less: under a byte less, every cut is refused for its
-        /// budget, and the refusal names exactly that price. A price worked out past the read's
-        /// would leave room for a reader to charge past its price unseen, and one short of it
-        /// would refuse a reader that charges no more.
+        /// admitted at, and its reader charges all of it before refusing the cut, no more and no
+        /// less.
         /// </summary>
-        private static void AssertEveryCutIsAdmittedAtItsOwnPrice(StructureId id, Swept sample)
+        /// <remarks>
+        /// Under a byte less than the price, every cut is refused for its budget, and the refusal
+        /// names exactly that price. A price worked out past the read's would leave room for a
+        /// reader to charge past its price unseen, and one short of it would refuse a reader that
+        /// charges no more. Under exactly the price, through the budget a nested read is handed,
+        /// whose charges can be read back as <see cref="TestReadBudget"/> reads them, the reader
+        /// charges the whole price before it refuses the cut. A reader that charges more is
+        /// refused for its budget, which the budget of its own price sees too; a price past what
+        /// its reader charges admits the read at more than it takes, which no refusal shows.
+        /// </remarks>
+        private static void AssertEveryCutIsChargedExactlyItsOwnPrice(StructureId id, Swept sample)
         {
             var length = sample.Bytes.Length - PayloadStart - ChecksumLength;
             var problems = new List<string>();
+            var charged = new List<string>();
             var cuts = 0;
             foreach (var cut in Cuts(length))
             {
@@ -434,11 +443,30 @@ namespace TestProbabilisticDataStructures
                     problems.Add($"cut to {cut:N0} bytes, under a byte less than its price of {price:N0}, it was refused " +
                         $"with {e.GetType().Name}: {e.Message}");
                 }
+
+                var exactly = new ReadBudget(price, id);
+                try
+                {
+                    sample.Read(Cut(sample.Bytes, cut), new ReadOptions(exactly));
+                    charged.Add($"cut to {cut:N0} bytes, it was read under exactly its price of {price:N0}");
+                }
+                catch (InvalidDataException)
+                {
+                    // For what it lacks, or for its budget; what it was charged says which.
+                }
+
+                if (exactly.Spent != price)
+                {
+                    charged.Add($"cut to {cut:N0} bytes, priced {price:N0}, its reader charged {exactly.Spent:N0} before refusing it");
+                }
             }
 
             Assert.IsEmpty(problems,
                 $"{sample.Name}: a cut's own price is not what its read is admitted at, at {problems.Count} of {cuts} cuts; " +
                 "the first: " + string.Join(" | ", problems.Take(3)));
+            Assert.IsEmpty(charged,
+                $"{sample.Name}: a cut's reader does not charge exactly its price, at {charged.Count} of {cuts} cuts; " +
+                "the first: " + string.Join(" | ", charged.Take(3)));
         }
 
         /// <summary>
