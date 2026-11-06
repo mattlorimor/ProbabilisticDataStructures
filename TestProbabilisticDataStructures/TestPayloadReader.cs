@@ -298,56 +298,71 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// An empty run of words, which a structure unpacks into storage of its own, is read as
-        /// the one empty array the runtime keeps, and is charged and priced nothing, from a held
-        /// payload and in the large form, which reads it from the stream in pieces (#336); a run
-        /// of one word is a piece of its own, and is charged, priced and allocated as one. The
-        /// reads are counted in a no-GC region.
+        /// An empty run of words, which a structure reads straight into storage of its own, is
+        /// charged, priced and allocated nothing, from a held payload and in the large form,
+        /// which reads it from the stream in pieces (#336, #335). So is a run of one word, whose
+        /// storage is its structure's to charge, and whose word arrives in it. The same runs read
+        /// whole, as the array they are read into, cost that array. The reads are counted in a
+        /// no-GC region.
         /// </summary>
         /// <remarks>
-        /// From a held payload the run is read whole, as a run of bytes is, and since #329 an
-        /// empty one costs nothing there. In the large form the piece it is read through was
-        /// already the runtime's empty array, and was charged an array's header for it, 24 bytes,
-        /// and priced the same, so that a read was charged for an array it never made: a
-        /// <see cref="DDSketch"/> holding no values, whose two stores are empty runs, by 48 bytes.
-        /// The price is shown from a held payload, from an ordinary payload's stream, which is
-        /// priced apart from its read, and in the large form. The run of one word is the other
-        /// direction, so that a cost of nothing for every run fails.
+        /// Read through a buffer of a piece on the heap, an empty run's buffer was the one
+        /// empty array the runtime keeps, and in the large form it was charged an array's
+        /// header for it, 24 bytes, and priced the same (#336). Read in place it has no buffer
+        /// at all (#335). The only empty run of words the library writes is a store of
+        /// <see cref="DDSketch"/> buckets that holds none. The runs read whole are the other
+        /// direction: they cost nothing only when empty, so a measurement that sees nothing
+        /// fails. The price is shown from a held payload, from an ordinary payload's stream,
+        /// which is priced apart from its read, and in the large form.
         /// </remarks>
         [TestMethod]
-        public void TestAnEmptyRunOfWordsIsTheEmptyArrayAndCostsNothing()
+        public void TestAnEmptyRunOfWordsReadInPlaceCostsNothing()
         {
             const ulong word = 0x0807060504030201;
             foreach (var length in new[] { 0, sizeof(ulong) })
             {
-                var cost = length == 0 ? 0 : ReadBudget.ArrayOf(sizeof(ulong), 1);
+                var whole = length == 0 ? 0 : ReadBudget.ArrayOf(sizeof(ulong), 1);
                 foreach (var large in new[] { false, true })
                 {
-                    var how = $"a run of {length} bytes of words read {(large ? "in the large form" : "from a held payload")}";
+                    var how = $"a run of {length} bytes of words read in place {(large ? "in the large form" : "from a held payload")}";
                     var payload = WordsPayload(length, word, large);
 
                     // The first read is not counted, so that what the runtime does once on a
                     // thread is not taken for the run: the large form's piece length is a
                     // thread static, whose storage the first read of it allocates.
-                    ReadWordsFrom(payload, large ? new PayloadSource(new MemoryStream(payload, writable: false)) : null, Unlimited());
+                    ReadWordsInPlaceFrom(payload, large ? Source(payload) : null, Unlimited(), new ulong[length / sizeof(ulong)]);
 
                     PayloadSource source = null;
                     ReadBudget budget = null;
-                    var read = (Begun: -1L, Piece: -1, Word: 0UL);
-                    // A body, so that the read is an action and its values are not boxed.
+                    ulong[] storage = null;
+                    var begun = -1L;
                     var allocated = NoGCRegion.Allocated(
-                        () => { read = ReadWordsFrom(payload, source, budget); },
+                        () => { begun = ReadWordsInPlaceFrom(payload, source, budget, storage); },
                         first: () =>
                         {
                             budget = Unlimited();
-                            source = large ? new PayloadSource(new MemoryStream(payload, writable: false)) : null;
+                            source = large ? Source(payload) : null;
+                            storage = new ulong[length / sizeof(ulong)];
                         });
 
-                    Assert.AreEqual(length, read.Begun, $"{how} was begun {read.Begun} bytes long");
-                    Assert.AreEqual(length, read.Piece, $"{how} came back {read.Piece} bytes long");
-                    Assert.AreEqual(length == 0 ? 0 : word, read.Word, $"{how} came back holding {read.Word:x}");
-                    Assert.AreEqual(cost, budget.Spent, $"{how} was charged {budget.Spent} bytes");
-                    Assert.AreEqual(cost, allocated, $"{how} allocated {allocated} bytes");
+                    Assert.AreEqual(length, begun, $"{how} was begun {begun} bytes long");
+                    CollectionAssert.AreEqual(length == 0 ? Array.Empty<ulong>() : new[] { word }, storage, $"{how} did not arrive in its storage");
+                    Assert.AreEqual(0L, budget.Spent, $"{how} was charged {budget.Spent} bytes");
+                    Assert.AreEqual(0L, allocated, $"{how} allocated {allocated} bytes");
+
+                    var held = $"the same run read whole {(large ? "in the large form" : "from a held payload")}";
+                    ReadWordsWholeFrom(payload, large ? Source(payload) : null, Unlimited());
+                    ReadBudget wholeBudget = null;
+                    PayloadSource wholeSource = null;
+                    var wholeAllocated = NoGCRegion.Allocated(
+                        () => ReadWordsWholeFrom(payload, wholeSource, wholeBudget),
+                        first: () =>
+                        {
+                            wholeBudget = Unlimited();
+                            wholeSource = large ? Source(payload) : null;
+                        });
+                    Assert.AreEqual(whole, wholeBudget.Spent, $"{held} was charged {wholeBudget.Spent} bytes");
+                    Assert.AreEqual(whole, wholeAllocated, $"{held} allocated {wholeAllocated} bytes");
                 }
 
                 foreach (var (form, fromStream, large) in new[]
@@ -359,13 +374,15 @@ namespace TestProbabilisticDataStructures
                 {
                     var priced = Unlimited();
                     var payload = WordsPayload(length, word, large);
-                    Assert.AreEqual(length, PriceWordsFrom(payload, fromStream, large, priced),
+                    Assert.AreEqual(length, PriceWordsInPlaceFrom(payload, fromStream, large, priced),
                         $"the price of a run of {length} bytes of words {form} skipped the wrong length");
-                    Assert.AreEqual(cost, priced.Charged,
-                        $"the price of a run of {length} bytes of words {form} was {priced.Charged} bytes");
+                    Assert.AreEqual(0L, priced.Charged,
+                        $"the price of a run of {length} bytes of words read in place {form} was {priced.Charged} bytes");
                 }
             }
         }
+
+        private static PayloadSource Source(byte[] payload) => new(new MemoryStream(payload, writable: false));
 
         /// <summary>
         /// A payload of one run of <paramref name="length"/> bytes, each word of it
@@ -394,31 +411,45 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Begins the run of words at the start of <paramref name="payload"/> and reads its first
-        /// piece: in the large form from <paramref name="source"/>, a stream over it, or from the
-        /// payload held when that is null. Returns the run's length, the piece's, and the piece's
-        /// first word, or nought, all values, so that reporting them allocates nothing.
+        /// A reader of <paramref name="payload"/>: in the large form from
+        /// <paramref name="source"/>, a stream over it, or of the payload held when that is null.
         /// </summary>
-        private static (long Begun, int Piece, ulong Word) ReadWordsFrom(byte[] payload, PayloadSource source, ReadBudget budget)
-        {
-            var reader = source is null
+        private static PayloadReader WordsReader(byte[] payload, PayloadSource source, ReadBudget budget) =>
+            source is null
                 ? new PayloadReader(payload, budget)
                 : new PayloadReader(source, payload.Length, budget, wide: true, streamed: true);
-            var begun = reader.BeginWords();
-            var piece = reader.ReadWords();
-            return (begun, piece.Length, piece.Length < sizeof(ulong) ? 0 : BinaryPrimitives.ReadUInt64LittleEndian(piece));
-        }
 
         /// <summary>
-        /// Prices the run of words at the start of <paramref name="payload"/>: held, from a stream
-        /// over it, or from one in the large form.
+        /// Begins the run of words at the start of <paramref name="payload"/> and reads it
+        /// straight into <paramref name="storage"/>, as long as the run. Returns the run's length.
         /// </summary>
-        private static long PriceWordsFrom(byte[] payload, bool fromStream, bool large, ReadBudget budget)
+        private static long ReadWordsInPlaceFrom(byte[] payload, PayloadSource source, ReadBudget budget, ulong[] storage)
+        {
+            var reader = WordsReader(payload, source, budget);
+            var begun = reader.BeginWordsInPlace();
+            reader.ReadWords(storage.AsSpan(0, (int)(begun / sizeof(ulong))));
+            reader.ExpectEnd();
+            return begun;
+        }
+
+        /// <summary>Reads the run of words at the start of <paramref name="payload"/> whole, as an array.</summary>
+        private static byte[] ReadWordsWholeFrom(byte[] payload, PayloadSource source, ReadBudget budget) =>
+            WordsReader(payload, source, budget).ReadBytes();
+
+        /// <summary>
+        /// Prices the run of words at the start of <paramref name="payload"/> as a structure
+        /// that reads it in place does, beginning it and skipping it: held, from a stream over
+        /// it, or from one in the large form. Returns its length.
+        /// </summary>
+        private static long PriceWordsInPlaceFrom(byte[] payload, bool fromStream, bool large, ReadBudget budget)
         {
             var reader = fromStream
-                ? new PayloadReader(new PayloadSource(new MemoryStream(payload, writable: false)), payload.Length, budget, wide: large, streamed: large)
+                ? new PayloadReader(Source(payload), payload.Length, budget, wide: large, streamed: large)
                 : new PayloadReader(payload, budget);
-            return reader.SkipWords();
+            var begun = reader.BeginWordsInPlace();
+            reader.Skip(begun);
+            reader.ExpectEnd();
+            return begun;
         }
 
         /// <summary>

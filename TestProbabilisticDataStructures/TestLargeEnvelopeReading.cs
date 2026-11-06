@@ -962,11 +962,15 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The array reads the second pass makes of a sample's payload in the large form, with
-        /// the piece at <paramref name="piece"/>, or as it ships; the sample has to read back.
+        /// The array reads among what a second pass (<see cref="SecondPass"/>) asked of the
+        /// stream a payload in the large form, <paramref name="large"/>, is read from, before its
+        /// end checksum.
         /// </summary>
-        private static List<Asked> ArrayReads(TestReadBudget.Sample sample, byte[] large, int? piece) =>
-            SecondPass(sample, large, piece).Where(a => !a.IsMove && a.Array && a.From < large.Length - 4).ToList();
+        private static List<Asked> ArrayReads(List<Asked> pass, byte[] large) =>
+            pass.Where(a => !a.IsMove && a.Array && a.From < large.Length - 4).ToList();
+
+        /// <summary>How many of the reads a second pass asked for were through the span overload.</summary>
+        private static int SpanReads(List<Asked> pass) => pass.Count(a => !a.IsMove && !a.Array);
 
         /// <summary>
         /// Everything the second pass asks of the stream a sample's payload in the large form is
@@ -986,118 +990,65 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A run its structure keeps in storage of its own, rather than as the array it is read
-        /// into, is read from the large form in pieces, each no longer than a piece, straight
-        /// into that storage and never through one array: shown with the piece lowered to
-        /// eight words, below the runs of the samples. Which runs those are is found, not
-        /// listed, and each finding is checked by a second behaviour. The roster is
-        /// <see cref="StructureId"/>, through the budget samples.
+        /// No run is read from the large form in pieces through the stream's array overload, into
+        /// a buffer on the heap: a run read through it is read whole, into the one array its
+        /// structure keeps, and claimed a byte past one array at its prefix it is refused as more
+        /// than one array holds. Shown with the piece lowered to eight words, below the runs of
+        /// the samples, where a run read in pieces through the array overload makes more array
+        /// reads than with the piece as it ships. The roster is <see cref="StructureId"/>, through
+        /// the budget samples.
         /// </summary>
         /// <remarks>
         /// A run past one array, which the large form's <c>u64</c> lengths allow (#228), cannot
         /// be read through one, and a structure that keeps its run in words, or in more than
         /// one array, can hold one: a quotient filter's table, a count sketch's cells, a
         /// DDSketch's buckets, and an invertible table's counts and hash sums, which #228
-        /// names. The quotient filter's table is read through the stream's span overload, from
-        /// a buffer on the stack, straight into the table (#328), so it makes no array reads to
-        /// count here, and
+        /// names. Each was read in pieces through the array overload, into a buffer of a piece
+        /// on the heap, and each is now read through the span overload, from a buffer on the
+        /// stack, straight into its storage (#328, #335):
         /// <see cref="TestAQuotientFiltersTableIsReadFromTheLargeFormInPiecesStraightIntoItsTable"/>
-        /// holds it instead. With the piece lowered, such a structure makes more array reads
-        /// than with the piece as it ships, each a piece or the rest of its run, one after
-        /// another to the run's end, which its <c>u64</c> prefix gives. A run read whole at
-        /// either piece is read into the one array its structure keeps, and claimed a byte past
-        /// one array at its prefix it is refused as more than one array holds; a run read in
-        /// pieces is not, since no array of its length is made, and is refused for the bytes the
-        /// stream lacks. A structure that reads in pieces allocates, beyond what streaming adds,
-        /// at least its payload and those runs less than the ordinary envelope's read, which
-        /// holds the payload and copies each run.
+        /// and <see cref="TestARunOfWordsIsReadFromTheLargeFormInPiecesStraightIntoItsStorage"/>
+        /// hold their pieces. So a run read in pieces through the array overload is one that has
+        /// gone back to a buffer on the heap, in one of them or a structure added since. The
+        /// lowered piece is seen to take effect: some sample makes more span reads with it than
+        /// with the piece as it ships, so that a piece that was never lowered cannot pass the
+        /// sweep by showing no array read change.
         /// </remarks>
         [TestMethod]
-        public void TestARunItsStructureKeepsInStorageOfItsOwnIsReadInPiecesIntoIt()
+        public void TestNoRunIsReadFromTheLargeFormInPiecesThroughTheArrayOverload()
         {
             var samples = TestReadBudget.Samples.Value;
-            var pieced = new Dictionary<StructureId, List<(long Prefix, long Length)>>();
+            var pieced = new List<string>();
             var whole = new List<(StructureId Id, byte[] Large, long Prefix)>();
-            var larges = new Dictionary<StructureId, byte[]>();
-            var longest = new Dictionary<StructureId, long>();
+            var lowersSpanReads = new List<StructureId>();
 
             foreach (var (id, sample) in samples)
             {
                 var large = TestReadBudget.InTheLargeForm(sample).Bytes;
-                larges[id] = large;
-                var shipped = ArrayReads(sample, large, null);
-                var lowered = ArrayReads(sample, large, Piece);
-                longest[id] = lowered.Count == 0 ? 0 : lowered.Max(a => a.Count);
-
-                if (lowered.Count == shipped.Count)
+                var shipped = SecondPass(sample, large, null);
+                var lowered = SecondPass(sample, large, Piece);
+                if (SpanReads(lowered) > SpanReads(shipped))
                 {
-                    whole.AddRange(lowered.Where(a => a.Count > Piece).Select(a => (id, large, a.From - 8)));
+                    lowersSpanReads.Add(id);
+                }
+
+                var shippedArrays = ArrayReads(shipped, large);
+                var loweredArrays = ArrayReads(lowered, large);
+                if (loweredArrays.Count != shippedArrays.Count)
+                {
+                    pieced.Add($"{id}, in {loweredArrays.Count:N0} array reads with the piece lowered and {shippedArrays.Count:N0} " +
+                        $"as it ships, the shortest {loweredArrays.Min(a => a.Count):N0} bytes");
                     continue;
                 }
 
-                // Each run from its u64 prefix to its end: in one read, or in pieces of it.
-                var runs = pieced[id] = new List<(long, long)>();
-                for (var i = 0; i < lowered.Count;)
-                {
-                    var prefix = lowered[i].From - 8;
-                    var length = (long)BinaryPrimitives.ReadUInt64LittleEndian(large.AsSpan((int)prefix));
-                    var end = prefix + 8 + length;
-                    var reads = new List<Asked>();
-                    do
-                    {
-                        Assert.IsLessThan(lowered.Count, i, $"{id}'s run at {prefix + 8} of {length:N0} bytes was left unread");
-                        Assert.AreEqual(reads.Count == 0 ? prefix + 8 : reads[^1].To, lowered[i].From,
-                            $"{id}'s run at {prefix + 8} was read out of turn at {lowered[i].From}");
-                        reads.Add(lowered[i++]);
-                    }
-                    while (reads[^1].To < end);
-                    Assert.AreEqual(end, reads[^1].To, $"{id}'s run at {prefix + 8} was read past its {length:N0} bytes");
-
-                    if (reads.Count > 1)
-                    {
-                        Assert.IsTrue(reads.All(r => r.Count <= Piece),
-                            $"{id}'s run at {prefix + 8} was read in pieces longer than {Piece} bytes: {string.Join(", ", reads.Select(r => r.Count))}");
-                        runs.Add((prefix, length));
-                    }
-                    else if (length > Piece)
-                    {
-                        whole.Add((id, large, prefix));
-                    }
-                }
+                whole.AddRange(loweredArrays.Where(a => a.Count > Piece).Select(a => (id, large, a.From - 8)));
             }
 
-            // The structures #228 names: a run of each can pass one array. The quotient filter
-            // reads its table through the span overload (#328), and is held by a test of its own.
-            Assert.IsFalse(pieced.ContainsKey(StructureId.QuotientFilter) || whole.Any(w => w.Id == StructureId.QuotientFilter),
-                "QuotientFilter read its table through the stream's array overload, which it reads straight into the table (#328)");
-            foreach (var capped in new[]
-            {
-                StructureId.CountSketch, StructureId.DDSketch, StructureId.InvertibleBloomLookupTable,
-            })
-            {
-                Assert.IsTrue(pieced.TryGetValue(capped, out var runs) && runs.Count > 0,
-                    $"{capped} did not read a run in pieces of {Piece} bytes: its longest array read was {longest[capped]:N0} bytes");
-            }
-
-            foreach (var (id, runs) in pieced)
-            {
-                foreach (var (prefix, _) in runs)
-                {
-                    var refused = ClaimedPastOneArray(samples[id], larges[id], prefix);
-                    Assert.DoesNotContain("single array", refused.Message,
-                        $"{id}'s run at {prefix + 8}, read in pieces, was refused past one array as if read into one: {refused.Message}");
-                }
-
-                var sample = samples[id];
-                var payload = (long)sample.Bytes.Length - PersistenceFormat.EnvelopeLength;
-                var inPieces = runs.Sum(r => r.Length);
-                var held = TestReadBudget.Allocated(() => sample.Read(sample.Bytes, ReadOptions.Unlimited));
-                var streamed = WithPieces(Piece, () => TestReadBudget.Allocated(() => sample.Read(larges[id], ReadOptions.Unlimited)));
-                Console.WriteLine($"[PIECES] {id}: payload {payload:N0}, in pieces {inPieces:N0}, ordinary read {held:N0}, large {streamed:N0}");
-                Assert.IsGreaterThanOrEqualTo(payload + inPieces - StreamedOverhead, held - streamed,
-                    $"{id} read in pieces allocated {streamed:N0} bytes, and its ordinary read {held:N0}: a run of " +
-                    $"{inPieces:N0} bytes in all was read through an array");
-            }
+            Assert.IsEmpty(pieced,
+                "a run was read in pieces through the stream's array overload, into a buffer on the heap, where a run its structure " +
+                $"keeps in storage of its own is read straight into it (#328, #335): {string.Join("; ", pieced)}");
+            Assert.IsNotEmpty(lowersSpanReads,
+                $"no sample made more span reads with the piece lowered to {Piece} bytes than as it ships, so the piece was not lowered");
 
             Assert.IsNotEmpty(whole, "no run longer than a piece was read whole, so none was shown kept as one array");
             foreach (var (id, large, prefix) in whole)
@@ -1378,6 +1329,136 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A count sketch's counters, a DDSketch's buckets, and an invertible table's counts and
+        /// hash sums, each one run of words, are read from the large form in pieces straight into
+        /// the storage their structure keeps (#335), as a quotient filter's table is: through the
+        /// stream's span overload, one piece after another from the run's first byte to its last,
+        /// every piece as long as a piece but the last, and nothing else read among them. A count
+        /// sketch's run is read into its rows one row at a time, so its pieces start again at
+        /// each row. Shown with the piece as it ships and lowered to eight words. Claimed a byte
+        /// past one array at its <c>u64</c> prefix, each run is refused for the bytes the stream
+        /// lacks, not as more than one array holds, since no array of its length is made.
+        /// </summary>
+        /// <remarks>
+        /// Before #335 each run was read through the stream's array overload, into a buffer on
+        /// the heap as long as a piece of a run (64 KiB) or as the run, whichever was shorter. The
+        /// runs are found where FORMAT.md lays them out, and the layout checks itself: each run
+        /// is as long as its <c>u64</c> prefix says, and the last ends where the payload does. An
+        /// invertible table's key sums lie between its two runs of words, and are kept as the
+        /// array they are read into, so they are not among the runs here. The budget samples' runs
+        /// that hold anything, and a count sketch's rows, are longer than a piece as it ships, so
+        /// each is read in more than one at either length; the DDSketch sample's negative store is
+        /// empty, and is read as nothing.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(nameof(StructureId.CountSketch))]
+        [DataRow(nameof(StructureId.DDSketch))]
+        [DataRow(nameof(StructureId.InvertibleBloomLookupTable))]
+        public void TestARunOfWordsIsReadFromTheLargeFormInPiecesStraightIntoItsStorage(string structure)
+        {
+            var id = Enum.Parse<StructureId>(structure);
+            var sample = TestReadBudget.Samples.Value[id];
+            var large = TestReadBudget.InTheLargeForm(sample).Bytes;
+            var payloadEnd = (long)large.Length - (PersistenceFormat.LargeEnvelopeLength - PersistenceFormat.LargeHeaderLength);
+            const long Header = PersistenceFormat.LargeHeaderLength;
+
+            long LengthAt(long prefix) => (long)BinaryPrimitives.ReadUInt64LittleEndian(large.AsSpan((int)prefix));
+
+            // Each run of words: where its u64 prefix is, and the lengths it is read into storage
+            // in, one after another.
+            var runs = new List<(long Prefix, long[] Reads)>();
+            long last;
+            switch (sample.Read(sample.Bytes, ReadOptions.Unlimited))
+            {
+                case CountSketch sketch:
+                {
+                    // u32 width, u32 depth, then the cells, row by row.
+                    var row = (long)sketch.Width() * sizeof(long);
+                    runs.Add((Header + 8, Enumerable.Repeat(row, (int)sketch.Depth()).ToArray()));
+                    last = Header + 16 + LengthAt(Header + 8);
+                    break;
+                }
+
+                case DDSketch:
+                {
+                    // Five eight-byte fields, then each store: an i32 index and its run.
+                    var positive = Header + 40 + 4;
+                    var negative = positive + 8 + LengthAt(positive) + 4;
+                    runs.Add((positive, [LengthAt(positive)]));
+                    runs.Add((negative, [LengthAt(negative)]));
+                    last = negative + 8 + LengthAt(negative);
+                    break;
+                }
+
+                case InvertibleBloomLookupTable table:
+                {
+                    // u32 cells, u32 key size, then the counts, the key sums and the hash sums.
+                    var words = (long)table.Cells() * sizeof(long);
+                    var keys = Header + 16 + words;
+                    var hashes = keys + 8 + LengthAt(keys);
+                    Assert.AreEqual((long)table.Cells() * table.KeySize(), LengthAt(keys), "the key sums are not where FORMAT.md lays them");
+                    runs.Add((Header + 8, [words]));
+                    runs.Add((hashes, [words]));
+                    last = hashes + 8 + LengthAt(hashes);
+                    break;
+                }
+
+                default:
+                    throw new AssertFailedException($"{structure} is not one of the structures this test reads");
+            }
+
+            Assert.AreEqual(payloadEnd, last, $"{structure}'s runs do not end where its payload does, so are not where FORMAT.md lays them");
+            var read = 0;
+            foreach (var (prefix, lengths) in runs)
+            {
+                Assert.AreEqual(lengths.Sum(), LengthAt(prefix), $"{structure}'s run at {prefix + 8:N0} is not as long as its prefix says");
+                if (lengths.Sum() == 0)
+                {
+                    continue;
+                }
+
+                read++;
+                Assert.IsGreaterThan((long)ShippedBlockPiece, lengths.Min(),
+                    $"{structure}'s run at {prefix + 8:N0} is read into storage {lengths.Min():N0} bytes at a time, no longer than a piece as it ships");
+                var start = prefix + 8;
+                var end = start + lengths.Sum();
+
+                foreach (var piece in new int?[] { null, Piece })
+                {
+                    var length = (long)(piece ?? ShippedBlockPiece);
+                    var reads = SecondPass(sample, large, piece).Where(a => a.From < end && start < a.To).ToList();
+                    var expected = new List<Asked>();
+                    var into = start;
+                    foreach (var part in lengths)
+                    {
+                        for (var from = into; from < into + part; from += length)
+                        {
+                            expected.Add(new Asked(false, from, Math.Min(from + length, into + part), false));
+                        }
+
+                        into += part;
+                    }
+
+                    Console.WriteLine(
+                        $"[WORDS] {structure}: {lengths.Sum():N0} bytes at {start:N0}, piece {length:N0}: " +
+                        $"{reads.Count:N0} reads, the first {reads[0].Count:N0} bytes");
+                    CollectionAssert.AreEqual(expected, reads,
+                        $"{structure}'s run of {lengths.Sum():N0} bytes at {start:N0}, with the piece at {length:N0}, was read in " +
+                        $"{reads.Count:N0} reads, the first of {reads[0].Count:N0} bytes through the " +
+                        $"{(reads[0].Array ? "array" : "span")} overload, and not in {expected.Count:N0} pieces through the span overload");
+                }
+
+                var refused = ClaimedPastOneArray(sample, large, prefix);
+                Assert.DoesNotContain("single array", refused.Message,
+                    $"{structure}'s run at {start:N0}, read in pieces, was refused past one array as if read into one: {refused.Message}");
+                StringAssert.Contains(refused.Message, $"while reading {(long)Array.MaxLength + 1} more at offset",
+                    $"{structure}'s run at {start:N0} claiming a byte past one array was not refused for the bytes the stream lacks: {refused.Message}");
+            }
+
+            Assert.IsGreaterThan(0, read, $"{structure}'s sample holds no run of words to read");
+        }
+
+        /// <summary>
         /// Reading a count-min sketch's counters in pieces (#289) charges what reading them a
         /// counter at a time did, and reads back the sketch that writes the same bytes: in the
         /// ordinary envelope and in the large form, with the piece as it ships and lowered to
@@ -1480,6 +1561,16 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The most a DDSketch's refusal of a run past one array may allocate: 8 KiB. The
+        /// refusal, its message and the reader's own objects took 3,432 bytes, measured on Linux
+        /// x64 in a no-GC region under both collectors, so this is a little more than twice
+        /// that. It is an eighth of the heap piece a run was once read through (64 KiB), and
+        /// half the buffer a run is read through on the stack (16 KiB), so a buffer of either
+        /// on the heap fails it.
+        /// </summary>
+        private const long RefusalRoom = 8 * 1024;
+
+        /// <summary>
         /// A DDSketch keeps each store's counts in one array, so a run of more counts than an
         /// array holds, which the large form's <c>u64</c> length lets a payload claim (#228), is
         /// refused as that, by name, with nothing its size allocated; a run of exactly as many
@@ -1490,8 +1581,10 @@ namespace TestProbabilisticDataStructures
         /// A sketch of one value, in the large form, its positive store's run claiming a count
         /// past one array and its header the payload that makes, on a stream that claims as
         /// much and holds zeros past the run's length. Read unlimited, so unpriced, the run is
-        /// begun, with the piece it would be read through, and refused before the store's
-        /// window is made, so the read allocates that piece and a refusal. Without the check
+        /// begun, with nothing allocated for it, since its words would be read straight into the
+        /// window (#335), and refused before the window is made. So the read allocates the
+        /// refusal and its reader's own objects, and no buffer: <see cref="RefusalRoom"/>.
+        /// Before #335 a heap piece was allocated for the run too, 64 KiB. Without the check
         /// the span passes the store's index check, and the read goes on to make a window of
         /// that many counts, which no array holds. The edges are the span itself, worked out
         /// by the store's own reckoning, since a run of as many counts as an array holds is
@@ -1525,7 +1618,9 @@ namespace TestProbabilisticDataStructures
                 () => DDSketch.ReadFrom(new Sparse(head, PersistenceFormat.LargeEnvelopeLength + payload), ReadOptions.Unlimited),
                 $"a DDSketch whose store claims {counts:N0} counts was read"));
             StringAssert.Contains(refused.Message, $"are {counts} counts, more than the one array", refused.Message);
-            Assert.IsLessThan(PayloadSource.PieceLength + 64L * 1024, allocated, $"the refusal allocated {allocated:N0} bytes");
+            Console.WriteLine($"[PAST ONE ARRAY] DDSketch: the refusal allocated {allocated:N0} bytes");
+            Assert.IsLessThan(RefusalRoom, allocated,
+                $"the refusal allocated {allocated:N0} bytes, more than a refusal and its reader take: a buffer for the run's words");
 
             var spanOf = typeof(DDSketch).GetNestedType("Store", System.Reflection.BindingFlags.NonPublic)!
                 .GetMethod("SpanOf", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
@@ -1540,6 +1635,159 @@ namespace TestProbabilisticDataStructures
             Assert.AreEqual(Array.MaxLength, SpanOf(0, 8L * Array.MaxLength), "a span of one array's counts was refused");
             Refused(0, 8 * counts, "a span of a count past one array was taken");
             Refused(int.MinValue, 8L << 32, "a span of 2^32 counts from the lowest index was taken");
+        }
+
+        /// <summary>
+        /// A count sketch's, a DDSketch's and an invertible table's price takes a run of words
+        /// past one array, which the large form allows and each structure can hold (#228), as
+        /// its reader does: it prices exactly the storage the reader reads the words into, and
+        /// does not refuse the run as more than one array holds (#335). Each payload claims runs
+        /// of more than 2^31 bytes, their lengths where FORMAT.md lays them out and zeros
+        /// everywhere else, on a stream that claims them all.
+        /// </summary>
+        /// <remarks>
+        /// A price that refused such a run would not show in a read of a payload this library
+        /// writes, or in its refusal. A refused price is set aside, and the read is admitted at
+        /// what had been priced by then. Its reader then charges the rest, so a budget too small
+        /// for the whole is refused by the reader instead of by the price, naming the same total,
+        /// after the payload's fields are read a second time. An invertible table's reader would
+        /// first allocate its counts and key sums, gigabytes, before reaching the hash sums. So
+        /// the price is walked here on its own, over a reader of the large form.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(nameof(StructureId.CountSketch))]
+        [DataRow(nameof(StructureId.DDSketch))]
+        [DataRow(nameof(StructureId.InvertibleBloomLookupTable))]
+        public void TestAPriceTakesARunOfWordsPastOneArrayAsItsReaderDoes(string structure)
+        {
+            var id = Enum.Parse<StructureId>(structure);
+            var held = new List<(long At, byte[] Bytes)>();
+            void Field(long at, ulong value, int width)
+            {
+                var bytes = new byte[8];
+                BinaryPrimitives.WriteUInt64LittleEndian(bytes, value);
+                held.Add((at, bytes[..width]));
+            }
+
+            long length;
+            long longest;
+            long storage;
+            PayloadPrice price;
+            switch (id)
+            {
+                case StructureId.CountSketch:
+                {
+                    // u32 width, u32 depth, and the cells: three rows of 2^27 counters, 3 GiB.
+                    const uint width = 1u << 27, depth = 3;
+                    longest = (long)width * depth * sizeof(long);
+                    Field(0, width, 4);
+                    Field(4, depth, 4);
+                    Field(8, (ulong)longest, 8);
+                    length = 16 + longest;
+                    storage = ReadBudget.Sum(
+                        ReadBudget.ArrayOf(depth, sizeof(long)), ReadBudget.Times(depth, ReadBudget.ArrayOf(width, sizeof(long))));
+                    price = CountSketch.Price;
+                    break;
+                }
+
+                case StructureId.DDSketch:
+                {
+                    // Five eight-byte fields, a positive store of 3 x 10^8 buckets from index 0,
+                    // 2.4 GB, and an empty negative store.
+                    const long counts = 300_000_000;
+                    longest = counts * sizeof(ulong);
+                    Field(44, (ulong)longest, 8);
+                    length = 52 + longest + 12;
+                    storage = ReadBudget.ArrayOf((ulong)counts, sizeof(ulong));
+                    price = DDSketch.Price;
+                    break;
+                }
+
+                case StructureId.InvertibleBloomLookupTable:
+                {
+                    // u32 cells, u32 key size, then the counts, the key sums and the hash sums:
+                    // 3 x 10^8 cells of one-byte keys, 2.4 GB each of counts and of hash sums.
+                    const uint cells = 300_000_000;
+                    longest = (long)cells * sizeof(long);
+                    var keys = 16 + longest;
+                    var hashes = keys + 8 + cells;
+                    Field(0, cells, 4);
+                    Field(4, 1, 4);
+                    Field(8, (ulong)longest, 8);
+                    Field(keys, cells, 8);
+                    Field(hashes, (ulong)longest, 8);
+                    length = hashes + 8 + longest;
+                    storage = ReadBudget.Sum(
+                        ReadBudget.ArrayOf(cells, sizeof(long)), ReadBudget.ArrayOf(cells, 1), ReadBudget.ArrayOf(cells, sizeof(ulong)));
+                    price = InvertibleBloomLookupTable.Price;
+                    break;
+                }
+
+                default:
+                    throw new AssertFailedException($"{structure} is not one of the structures this test prices");
+            }
+
+            Assert.IsGreaterThan((long)Array.MaxLength, longest, $"premise: {structure}'s run is not past one array");
+            var budget = new ReadBudget(long.MaxValue, id);
+            var reader = new PayloadReader(new PayloadSource(new Patched(length, held)), length, budget, wide: true, streamed: true);
+            price(ref reader, PersistenceFormat.ReadableVersions(id).Max());
+            Assert.AreEqual(storage, budget.Charged,
+                $"{structure}'s price priced {budget.Charged:N0} bytes, and its reader charges {storage:N0} for the storage it reads the words into");
+        }
+
+        /// <summary>
+        /// A stream that can seek and claims <paramref name="length"/> bytes: zeros, never held,
+        /// but for the bytes <paramref name="held"/> gives at each offset. So a payload whose runs
+        /// are longer than the suite can build has each run's length where its layout puts it.
+        /// </summary>
+        private sealed class Patched(long length, IReadOnlyList<(long At, byte[] Bytes)> held) : Stream
+        {
+            private long position;
+
+            public override bool CanRead => true;
+            public override bool CanSeek => true;
+            public override bool CanWrite => false;
+            public override long Length => length;
+            public override long Position
+            {
+                get => this.position;
+                set => this.position = value;
+            }
+
+            public override int Read(byte[] buffer, int offset, int count) => this.Read(buffer.AsSpan(offset, count));
+
+            public override int Read(Span<byte> buffer)
+            {
+                var read = buffer[..(int)Math.Min(buffer.Length, Math.Max(0, length - this.position))];
+                read.Clear();
+                foreach (var (at, bytes) in held)
+                {
+                    var from = Math.Max(at, this.position);
+                    var to = Math.Min(at + bytes.Length, this.position + read.Length);
+                    if (from < to)
+                    {
+                        bytes.AsSpan((int)(from - at), (int)(to - from)).CopyTo(read[(int)(from - this.position)..]);
+                    }
+                }
+
+                this.position += read.Length;
+                return read.Length;
+            }
+
+            public override long Seek(long offset, SeekOrigin origin)
+            {
+                this.position = origin switch
+                {
+                    SeekOrigin.Begin => offset,
+                    SeekOrigin.Current => this.position + offset,
+                    _ => length + offset,
+                };
+                return this.position;
+            }
+
+            public override void Flush() { }
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         }
 
         /// <summary>

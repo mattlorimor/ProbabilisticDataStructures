@@ -559,7 +559,8 @@ either is refused as beyond anything built.
 ### `CountSketch`
 
 The same, with width `⌈1/ε²⌉`, so a rate ten times finer costs a hundred times the
-width, and counters of 8 bytes that are signed. A read charges 24 bytes a counter. The
+width, and counters of 8 bytes that are signed. A read holds the counters twice, in the
+payload and in the rows they are read straight into, and charges 16 bytes a counter. The
 widest row is the same 2,147,483,591, an `ε` of about 2.16e-5, and the depth is limited
 the same way. A payload that claims more of either is refused as beyond anything built.
 
@@ -599,8 +600,9 @@ Takes any number of items. `k` is how many elements it retains, a `uint` bounded
 Takes any number of values, and what grows is the bucket span: the range of values
 divided by the relative accuracy, `ln(max/min) / ln((1+α)/(1−α))` buckets for each sign.
 A value of one sign spans at most every positive double, which at 1% is a few tens of thousands of buckets,
-and finer accuracies cost proportionally more. A read charges 24 bytes a bucket of span,
-for each sign.
+and finer accuracies cost proportionally more. A read holds the buckets twice, in the
+payload and in the window they are read straight into, and charges 16 bytes a bucket of
+span, for each sign.
 
 Two limits sit beneath that, and `Add` refuses a value that passes either, with an
 `ArgumentOutOfRangeException` and the sketch unchanged. A bucket is numbered by a 32-bit

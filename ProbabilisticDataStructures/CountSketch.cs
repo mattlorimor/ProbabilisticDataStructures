@@ -1,6 +1,6 @@
 ﻿using System;
-using System.Buffers.Binary;
 using System.IO;
+using System.Runtime.InteropServices;
 
 namespace ProbabilisticDataStructures
 {
@@ -426,9 +426,11 @@ namespace ProbabilisticDataStructures
             var depth = reader.ReadUInt32();
 
             // The cells are one run, which in the large form can be longer than one array
-            // (#228): read in pieces, straight into the rows, when the payload is not held,
-            // and copied out whole when it is.
-            var stored = reader.BeginWords();
+            // (#228). They are read straight into the rows, a row at a time and a piece at a time
+            // through a buffer on the stack, whether the payload is held or not. Copied out of a
+            // held payload whole and then into the rows, every sketch's cells were held, and
+            // charged, twice (#335).
+            var stored = reader.BeginWordsInPlace();
             CheckCells(width, depth, stored);
 
             var sketch = new CountSketch(0.5, 0.5)
@@ -438,27 +440,14 @@ namespace ProbabilisticDataStructures
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
             };
 
+            // A cell is a signed word stored as its two's complement, so a row is read as the
+            // unsigned words that share its bits.
             budget.Charge(RowsCost(width, depth));
             sketch.table = new long[depth][];
             for (var row = 0; row < depth; row++)
             {
                 sketch.table[row] = new long[width];
-            }
-
-            var filling = 0;
-            var column = 0;
-            while (filling < depth)
-            {
-                var piece = reader.ReadWords();
-                for (var at = 0; at < piece.Length; at += sizeof(long))
-                {
-                    sketch.table[filling][column] = BinaryPrimitives.ReadInt64LittleEndian(piece[at..]);
-                    if (++column == width)
-                    {
-                        column = 0;
-                        filling++;
-                    }
-                }
+                reader.ReadWords(MemoryMarshal.Cast<long, ulong>(sketch.table[row].AsSpan()));
             }
 
             reader.ExpectEnd();
@@ -466,14 +455,15 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Prices what <see cref="Read"/> allocates beyond the envelope: the copy of the
-        /// cells, and the table they are unpacked into. See <see cref="PayloadPrice"/>.
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the rows its cells are
+        /// read straight into. See <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
             var width = reader.ReadUInt32();
             var depth = reader.ReadUInt32();
-            var stored = reader.SkipWords();
+            var stored = reader.BeginWordsInPlace();
+            reader.Skip(stored);
             reader.ExpectEnd();
             CheckCells(width, depth, stored);
             reader.Budget.Price(RowsCost(width, depth));

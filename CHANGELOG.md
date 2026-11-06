@@ -753,20 +753,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing for it, and its price is nothing too, so price and charge still come to the same
   sum. Measured, a `VarOpt` holding one empty item is charged 816 bytes to read, not 840,
   and from the large form allocates 1,008, not 1,032; a new `DDSketch` is charged 216, not
-  264. A run of words read from the large form in pieces is not read this way, and is
-  charged by the same rule since #336. (#329)
-
-- **An empty run of words read from the large form is charged and priced nothing, as it
-  allocates nothing.** A run of words that a structure unpacks into storage of its own is
-  read from the large form in pieces, through a buffer of a piece or of the run, whichever
-  is shorter. For an empty run that buffer was already the one empty array the runtime
-  keeps, and it was charged an array's header for it, 24 bytes, and priced the same. It is
-  now charged and priced nothing, so price and charge still come to the same sum. The only
-  such empty run the library writes is an empty store of `DDSketch` buckets: measured, a new
-  `DDSketch` read from the large form is charged 240 bytes, not 288, and one holding values
-  of one sign only is charged 24 bytes less than it was, with what either allocates
-  unchanged. Every payload a `CountSketch` or an `InvertibleBloomLookupTable` reads holds a
-  word in each of its runs, so theirs are charged what they were. (#336)
+  264. A run of words that its structure keeps in storage of its own is not read this way:
+  it is read straight into that storage, and costs nothing of its own, empty or not
+  (#335). (#329)
 
 - **An `InfiniFilter` read is charged for each table's segment what the segment
   allocates.** Beside each table's words, a read charged the segment that holds them as
@@ -853,6 +842,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allocates 164,288, and in the large form 147,968 and now 82,408. So the default budget
   now reads a filter at 0.1% up to a table of 2^28 slots, 201,326,592 items, where it
   stopped at 2^27; at 1% it still stops at 2^28. (#328)
+
+- **A `CountSketch`, `InvertibleBloomLookupTable` or `DDSketch` read holds its runs of
+  words once, and is charged for them once, and an empty run of words costs nothing.**
+  Each reader copied a run of words out of a
+  held payload whole and then unpacked the copy into storage of its own: a count sketch's
+  cells into its rows, an invertible table's counts and hash sums into their arrays, and
+  each DDSketch store's buckets into its window. So a read held, and was charged for, each
+  such run twice besides the payload, three times in all. From the large form, where the
+  payload is not held, it read each run through a buffer of up to 64 KiB on the heap. The
+  words are now read straight into the storage, in pieces through a buffer of up to 16 KiB
+  on the stack, as a `QuotientFilter`'s table is. The price and the charges are the
+  storage alone, so they still come to the same sum. Measured in a no-GC region, a count
+  sketch of three rows of 10,000 counters allocated 720,520 bytes to read and now
+  allocates 480,496; in the large form it allocated 306,120 and now 240,560. An invertible
+  table of 15,000 cells of 8-byte keys went from 960,432 to 720,384, and from 491,560 to
+  360,440 in the large form. A DDSketch of 19,991 positive buckets and 11,995 negative ones
+  went from 768,328 to 512,392, and from 387,648 to 256,528. So the default budget now
+  reads a count sketch of 5 rows up to a width of about 13.42 million, where it stopped at
+  about 8.95 million. It reads an invertible table up to about 14.91 million differences of
+  8-byte keys, from 11.18 million, and 7.46 million of 32-byte keys, from 6.39 million. It
+  reads a DDSketch up to a span of about 67.11 million buckets a sign, from 44.74 million.
+  An empty run of words, which a DDSketch store holding no buckets writes, now costs
+  nothing from the large form either. It was read there through the runtime's one empty
+  array, and charged an array's header for it, 24 bytes, and priced the same. From a held
+  payload it was already free (#329). Measured, a new `DDSketch` read from the large form
+  is charged 240 bytes, not 288, and allocates what it did. A `DDSketch` of one positive
+  value is charged 272 there, not 328: 24 bytes for its empty store, and 32 for the piece
+  its other store's run was read through. (#335, #336)
 
 - **An `InfiniFilter` or `MementoFilter` payload claiming more expansions than its first
   table can have had is refused.** A first table starts with at least two bits of address

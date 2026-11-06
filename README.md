@@ -219,8 +219,8 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `Grafite` | keys, fp 1%, ranges up to 64, worst case | ≈ 838.04 million | ≈ 282.51 million | as built |
 | `Grafite` | keys, fp 0.1%, ranges up to 64, worst case | ≈ 727.19 million | ≈ 229.78 million | as built |
 | `Grafite` | keys, fp 1%, ranges up to 1,024, worst case | ≈ 838.04 million | ≈ 223.66 million | as built |
-| `InvertibleBloomLookupTable` | expected differences, 8-byte keys | 178,956,965 | ≈ 11.18 million | 59,652,320 |
-| `InvertibleBloomLookupTable` | expected differences, 32-byte keys | 44,739,241 | ≈ 6.39 million | 29,826,160 |
+| `InvertibleBloomLookupTable` | expected differences, 8-byte keys | 178,956,965 | ≈ 14.91 million | 59,652,320 |
+| `InvertibleBloomLookupTable` | expected differences, 32-byte keys | 44,739,241 | ≈ 7.46 million | 29,826,160 |
 
 #### Grows as items are added
 
@@ -261,12 +261,12 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `SetSketch` | registers m | 2,147,483,591 | ≈ 89.48 million | 1,073,741,774 |
 | `SimHashSignature` | none: one 64-bit value | any | any | as built |
 | `CountMinSketch` | width w = ⌈e/ε⌉ per row, δ 1% (5 rows) | 2,147,483,591 | ≈ 13.42 million | 53,687,088 |
-| `CountSketch` | width w = ⌈1/ε²⌉ per row, δ 1% (5 rows) | 2,147,483,591 | ≈ 8.95 million | 53,687,089 |
+| `CountSketch` | width w = ⌈1/ε²⌉ per row, δ 1% (5 rows) | 2,147,483,591 | ≈ 13.42 million | 53,687,089 |
 | `PrivateCountMinSketch` | width w per row, depth 5 | 2,147,483,591 | ≈ 13.42 million | 53,687,088 |
 | `SublimeCountMinSketch` | width w per row (a power of two), δ 1% (5 rows) | 1,073,741,824 | 2,097,152 † | 16,777,216 |
 | `TopK` | width w of the count-min sketch inside, δ 1% (5 rows) | 2,147,483,591 | ≈ 6.71 million | 53,687,082 |
 | `HeavyKeeper` | width w per row, depth 2 | 2,147,483,591 | ≈ 26.84 million | 107,374,175 |
-| `DDSketch` | bucket span, values of one sign | 2,147,483,591 | ≈ 44.74 million | ≈ 268.44 million |
+| `DDSketch` | bucket span, values of one sign | 2,147,483,591 | ≈ 67.11 million | ≈ 268.44 million |
 | `DpswSketch` | window (items), α 0.5, β 0.7, ρ 1, width 512, depth 5 | 21,445,114,182,289 | 1,500,000,000 † | 100,000,000,000 † |
 
 ---

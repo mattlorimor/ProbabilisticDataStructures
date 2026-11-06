@@ -1781,7 +1781,10 @@ namespace TestProbabilisticDataStructures
             }),
             new Claim("5 at δ = 1%. A read charges 16 bytes a counter", () =>
                 new CountMinSketch(0.01, 0.01).Depth == 5 && Near(Slope("CountMinSketch"), 16, 0.01)),
-            new Claim("A read charges 24 bytes a counter.", () => Near(Slope("CountSketch"), 24, 0.01)),
+            // Eight bytes a counter for the payload's copy of it, and eight for the row it is read
+            // into. Until #335 a copy of the whole run came between them, and the line was 24.
+            new Claim("A read holds the counters twice, in the payload and in the rows they are read straight into, and charges " +
+                "16 bytes a counter", () => Near(Slope("CountSketch"), 16, 0.01)),
             new Claim("A read charges 16 bytes a counter.", () => Near(Slope("PrivateCountMinSketch"), 16, 0.01)),
             // The defaults the measurements were made with, as the constructor declares them.
             new Claim("for the default α of 0.5 and β of 0.7 at a ρ of 1", () =>
@@ -1858,7 +1861,10 @@ namespace TestProbabilisticDataStructures
                 && Rounds(SublimeCountMinSketch.LimitFor(SublimeCountMinSketch.MaxWidth, 1.0, 0.99) / 1e9, 1.3, 1)),
 
             // ---- DDSketch ---------------------------------------------------------------------
-            new Claim("A read charges 24 bytes a bucket of span", () => Near(Slope("DDSketch"), 24, 0.01)),
+            // Eight bytes a bucket for the payload's copy of its count, and eight for the window it
+            // is read into. Until #335 a copy of the whole run came between them, and the line was 24.
+            new Claim("A read holds the buckets twice, in the payload and in the window they are read straight into, and charges " +
+                "16 bytes a bucket of span", () => Near(Slope("DDSketch"), 16, 0.01)),
             new Claim("which at 1% is a few tens of thousands of buckets", () =>
             {
                 var sketch = new DDSketch(0.01);

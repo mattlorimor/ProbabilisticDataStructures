@@ -1,7 +1,7 @@
 ﻿using System;
-using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
 
 namespace ProbabilisticDataStructures
 {
@@ -703,39 +703,29 @@ namespace ProbabilisticDataStructures
             var keyBytes = (long)cells * keySize;
             var wordBytes = (long)cells * sizeof(long);
 
-            // Counts and hash sums are unpacked into arrays of their own, each from its run,
-            // which in the large form can be longer than one array (#228): read in pieces,
-            // straight into the array, when the payload is not held, and copied out whole
-            // when it is. The key sums are the run as it is read. Each run is held to the
-            // shape as it comes, the ones still to come taken to be as the shape says.
-            var counted = reader.BeginWords();
+            // Counts and hash sums are arrays of their own, each read from its run, which in the
+            // large form can be longer than one array (#228). They are read straight into the
+            // array, a piece at a time through a buffer on the stack, whether the payload is held
+            // or not. Copied out of a held payload whole and then into the arrays, both were held,
+            // and charged, twice (#335). The key sums are the run as it is read. Each run is held
+            // to the shape as it comes, the ones still to come taken to be as the shape says.
+            var counted = reader.BeginWordsInPlace();
             CheckShape(cells, keySize, counted, keyBytes, wordBytes);
             budget.Charge(ReadBudget.ArrayOf(cells, sizeof(long)));
             var counts = new long[cells];
-            for (var cell = 0; cell < counts.Length;)
-            {
-                var piece = reader.ReadWords();
-                for (var at = 0; at < piece.Length; at += sizeof(long))
-                {
-                    counts[cell++] = BinaryPrimitives.ReadInt64LittleEndian(piece[at..]);
-                }
-            }
+
+            // A count is a signed word stored as its two's complement, so the counts are read as
+            // the unsigned words that share their bits.
+            reader.ReadWords(MemoryMarshal.Cast<long, ulong>(counts.AsSpan()));
 
             var keySums = reader.ReadBytes();
             CheckShape(cells, keySize, counted, keySums.LongLength, wordBytes);
 
-            var hashed = reader.BeginWords();
+            var hashed = reader.BeginWordsInPlace();
             CheckShape(cells, keySize, counted, keySums.LongLength, hashed);
             budget.Charge(ReadBudget.ArrayOf(cells, sizeof(ulong)));
             var hashSums = new ulong[cells];
-            for (var cell = 0; cell < hashSums.Length;)
-            {
-                var piece = reader.ReadWords();
-                for (var at = 0; at < piece.Length; at += sizeof(ulong))
-                {
-                    hashSums[cell++] = BinaryPrimitives.ReadUInt64LittleEndian(piece[at..]);
-                }
-            }
+            reader.ReadWords(hashSums);
 
             reader.ExpectEnd();
             return new InvertibleBloomLookupTable(
@@ -743,8 +733,9 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Prices what <see cref="Read"/> allocates beyond the envelope: the copies of the
-        /// three runs, and the counts and hash sums unpacked from theirs, each where
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the key sums, kept as the
+        /// array their run is read into, and the counts and hash sums read straight from theirs
+        /// into arrays of their own, each where
         /// <see cref="ReadPayload"/> charges it and after the checks it makes first. See
         /// <see cref="PayloadPrice"/>.
         /// </summary>
@@ -763,14 +754,16 @@ namespace ProbabilisticDataStructures
             var keyBytes = (long)cells * keySize;
             var wordBytes = (long)cells * sizeof(long);
 
-            var counted = reader.SkipWords();
+            var counted = reader.BeginWordsInPlace();
+            reader.Skip(counted);
             CheckShape(cells, keySize, counted, keyBytes, wordBytes);
             reader.Budget.Price(ReadBudget.ArrayOf(cells, sizeof(long)));
 
             var keySums = reader.SkipBytes();
             CheckShape(cells, keySize, counted, keySums, wordBytes);
 
-            var hashed = reader.SkipWords();
+            var hashed = reader.BeginWordsInPlace();
+            reader.Skip(hashed);
             CheckShape(cells, keySize, counted, keySums, hashed);
             reader.Budget.Price(ReadBudget.ArrayOf(cells, sizeof(ulong)));
 
