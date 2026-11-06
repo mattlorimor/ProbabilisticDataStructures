@@ -1034,9 +1034,14 @@ namespace ProbabilisticDataStructures
             var remainderBits = reader.ReadUInt32();
             ReadCount(ref reader, version);
             reader.Skip(reader.BeginWordsInPlace());
-            reader.ExpectEnd();
             var wrapped = CheckWidths(version, quotientBits, remainderBits);
+
+            // Priced where the reader charges it: once its run is held and the widths are
+            // checked, before the end is. Checked first, a byte left over stopped the price
+            // short of the table, and the read, admitted at the envelope alone, was refused for
+            // its budget when the reader charged the table (#343).
             reader.Budget.Price(TableCost(SlotsOf(quotientBits, wrapped), remainderBits));
+            reader.ExpectEnd();
         }
 
         /// <summary>The count of entries: a u64 from version 12, a u32 before it.</summary>
@@ -1045,12 +1050,11 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// The table a filter of these widths is built with, and the filter <see cref="Build"/>
-        /// makes, with the table of the one-item filter it starts as, which come to more than
-        /// two small objects allow for, so are charged as three (#336).
+        /// makes around it, whose fields come to more than one small object allows for, so it
+        /// is charged as two (#336, #343).
         /// </summary>
         internal static long TableCost(ulong slots, uint remainderBits) => ReadBudget.Sum(
             ReadBudget.ArrayOf((ulong)TableWords(slots, remainderBits), sizeof(ulong)),
-            ReadBudget.SmallObject,
             ReadBudget.SmallObject,
             ReadBudget.SmallObject);
 
@@ -1144,12 +1148,23 @@ namespace ProbabilisticDataStructures
         /// carries -- the constructor's item count and rate are only ever a way of
         /// arriving at them.
         /// </summary>
+        /// <remarks>
+        /// The table is made once, at those widths. This used to build the filter for one
+        /// item and then shape it again, so every read made that filter's table of two words
+        /// as well, and threw it away (#343).
+        /// </remarks>
         internal static QuotientFilter Build(
+            uint quotientBits, uint remainderBits, bool wrapped, Func<ReadOnlySpan<byte>, ulong> hash) =>
+            new(quotientBits, remainderBits, wrapped, hash);
+
+        /// <summary>
+        /// A filter of the two widths a payload carries, for <see cref="Build"/>.
+        /// </summary>
+        private QuotientFilter(
             uint quotientBits, uint remainderBits, bool wrapped, Func<ReadOnlySpan<byte>, ulong> hash)
         {
-            var filter = new QuotientFilter(1, 0.5, hash);
-            filter.Shape(quotientBits, remainderBits, wrapped);
-            return filter;
+            this.Shape(quotientBits, remainderBits, wrapped);
+            this.Hash = hash;
         }
 
         /// <summary>

@@ -598,23 +598,26 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// A read charges the filter it builds at least what building it allocates, and less
         /// than a small object past that (#336): its table, and beyond the table the filter,
-        /// with the table of the one-item filter it is built from before it is shaped, which
-        /// come to more than one small object allows for. The builds are counted in a no-GC
-        /// region.
+        /// which comes to more than one small object allows for. The builds are counted in a
+        /// no-GC region.
         /// </summary>
         /// <remarks>
         /// Probed on 6ce3fe1, the least of seven builds in a no-GC region, all seven agreeing,
         /// came to 136 bytes beyond the table at every shape here and at two more, 2^20 slots
         /// and a remainder of 29 bits in the one-slot table: the filter, 96 bytes, which is what
         /// the constructor alone allocates beyond its table at four shapes, and the 40-byte
-        /// table of two words that the constructor gives the one-item filter <c>Build</c> starts
+        /// table of two words that the constructor gave the one-item filter <c>Build</c> started
         /// from. The read charged them as <see cref="ReadBudget.SmallObject"/>, 64: 72 bytes a
-        /// read under what it allocated, which the slack of every read-budget sample hid. The
-        /// shapes are the narrowest table, where the filter is the largest share of what is
-        /// allocated, the widest remainder, the issue's filter for 100 items at 1%, a table of
-        /// 2^16 slots, and the one-slot table a payload of version 1 holds for 32 quotient
-        /// bits. The first build of each is not counted, so that what the runtime does once is
-        /// not taken for the filter.
+        /// read under what it allocated, which the slack of every read-budget sample hid, and
+        /// then as three, 192. Since <c>Build</c> makes the filter at the payload's widths
+        /// (#343), it allocates the filter alone beyond the table, 96 bytes, which
+        /// <see cref="TestBuildingTheFilterAReadMakesAllocatesOnlyTheFilterAndItsTable"/> holds it
+        /// to, and the read charges two small objects, 128: 32 past it, where three would be 96
+        /// and one 32 short. The shapes are the narrowest table, where the filter is the
+        /// largest share of what is allocated, the widest remainder, the issue's filter for 100
+        /// items at 1%, a table of 2^16 slots, and the one-slot table a payload of version 1
+        /// holds for 32 quotient bits. The first build of each is not counted, so that what the
+        /// runtime does once is not taken for the filter.
         /// </remarks>
         [TestMethod]
         public void TestAReadIsChargedWhatBuildingItsFilterAllocates()
@@ -633,6 +636,172 @@ namespace TestProbabilisticDataStructures
                     $"{shape} allocated {allocated:N0} bytes to build for a read, and a read is charged {charged:N0} for it");
                 Assert.IsLessThan(ReadBudget.SmallObject, charged - allocated,
                     $"{shape} is charged {charged:N0} bytes, {charged - allocated:N0} past the {allocated:N0} building it allocated");
+            }
+        }
+
+        /// <summary>
+        /// Building the filter a read makes allocates the filter and the table shaped to the
+        /// payload, and nothing else (#343): beyond that table, <c>Build</c> allocates exactly
+        /// what the constructor allocates beyond its own, which is the filter object. The
+        /// builds are counted in a no-GC region.
+        /// </summary>
+        /// <remarks>
+        /// <c>Build</c> went through <c>new QuotientFilter(1, 0.5, hash)</c>, whose table of two
+        /// words, 40 bytes, it threw away when it shaped the filter to the payload, so every
+        /// read made a table it never used: 136 bytes beyond the table, where the constructor
+        /// allocates 96 beyond its own (#336). The constructor's figure is measured here, at
+        /// the narrowest table and at one of 2^17 slots, rather than written down, so the test
+        /// holds <c>Build</c> to the filter object whatever size the runtime makes it, and the
+        /// two shapes have to agree, so that a table is not mistaken for the object. Exact
+        /// rather than bounded: a table of words costs exactly its header and its words, so
+        /// any difference is something else allocated. The slots each table should have are
+        /// worked out from the widths, not read back from the filter built. The shapes and
+        /// the warm-up are those of <see cref="TestAReadIsChargedWhatBuildingItsFilterAllocates"/>.
+        /// </remarks>
+        [TestMethod]
+        public void TestBuildingTheFilterAReadMakesAllocatesOnlyTheFilterAndItsTable()
+        {
+            var hash = Defaults.GetDefaultHashFunction();
+            static long TableOf(ulong slots, uint r) =>
+                ReadBudget.ArrayOf((ulong)QuotientFilter.TableWords(slots, r), sizeof(ulong));
+
+            var objects = new List<long>();
+            foreach (var (n, rate) in new (ulong, double)[] { (1, 0.5), (50_000, 0.001) })
+            {
+                var (q, r) = QuotientFilter.Split(n, rate);
+                _ = new QuotientFilter(n, rate, hash);
+                var built = NoGCRegion.Allocated(() => new QuotientFilter(n, rate, hash));
+                objects.Add(built - TableOf(1UL << (int)q, r));
+            }
+
+            var filter = objects[0];
+            Assert.AreEqual(filter, objects[1],
+                $"the constructor allocated {objects[0]:N0} bytes beyond its table at one shape and {objects[1]:N0} at another");
+            Assert.IsGreaterThan(0L, filter,
+                $"the constructor allocated {filter:N0} bytes beyond its table, so there is no filter object to hold a build to");
+
+            foreach (var (q, r, wrapped) in new (uint, uint, bool)[]
+            {
+                (1, 1, false), (2, 61, false), (8, 7, false), (16, 16, false), (32, 7, true),
+            })
+            {
+                var slots = wrapped ? 1UL : 1UL << (int)q;
+                Assert.AreEqual(slots, QuotientFilter.Build(q, r, wrapped, hash).SlotCount,
+                    $"a filter built from {q} quotient bits{(wrapped ? " at version 1" : "")} has the wrong slots");
+                var shape = $"a filter of {slots:N0} slots of {r}-bit remainders{(wrapped ? ", at version 1," : "")}";
+                var table = TableOf(slots, r);
+                var allocated = NoGCRegion.Allocated(() => QuotientFilter.Build(q, r, wrapped, hash));
+                Assert.AreEqual(table + filter, allocated,
+                    $"{shape} allocated {allocated:N0} bytes to build for a read: {allocated - table:N0} beyond its " +
+                    $"table of {table:N0}, where the filter the constructor makes is {filter:N0}");
+            }
+        }
+
+        /// <summary>
+        /// A payload of every version a quotient filter reads is priced at what its reader
+        /// charges (#343). Walked on its own, the price reads the count at the width its
+        /// version gives and prices the table and the filter the reader charges for, and the
+        /// read, refused under a budget of nothing, names that and the envelope, loads under
+        /// it, and is refused under a byte less.
+        /// </summary>
+        /// <remarks>
+        /// A price that read the count as a <c>u64</c> at every version passed the whole suite
+        /// before this test (#343). A payload of version 1 counts in a <c>u32</c>, so that price
+        /// read the run's length into the count and the table's first bytes as the run's length,
+        /// and refused the payload. A refused price is set aside: the read is admitted at what
+        /// was priced by then, the envelope alone, and its reader then charges the table. So
+        /// the one-slot table, refused under a budget of nothing, named 192 bytes, where its
+        /// read takes 360. Each half of the test fails on that price by itself. The payloads are
+        /// the three stored fixtures, two of version 1 and one of version 12, and a filter
+        /// written now, and the versions they cover are held to the ones a quotient filter
+        /// reads, so that a version added without a payload here fails.
+        /// </remarks>
+        [TestMethod]
+        public void TestAPayloadOfEveryVersionIsPricedAtWhatItsReaderCharges()
+        {
+            var now = new QuotientFilter(100, 0.01);
+            for (var i = 0; i < 50; i++) now.Add(Key($"k{i}"));
+            var payloads = new (string Name, byte[] Bytes)[]
+            {
+                ("one slot", QuotientFilterFixture("quotientfilter-q32-v1.bin")),
+                ("quotientfilter-v1.bin", QuotientFilterFixture("quotientfilter-v1.bin")),
+                ("quotientfilter-v12.bin", QuotientFilterFixture("quotientfilter-v12.bin")),
+                ("100 at 1%, half full, written now", now.ToByteArray()),
+            };
+
+            var versions = new HashSet<ushort>();
+            foreach (var (name, bytes) in payloads)
+            {
+                var version = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(4));
+                versions.Add(version);
+                var payload = bytes[14..^4];
+                var remainderBits = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(4));
+                var unlimited = Persistence.FromByteArray<QuotientFilter>(bytes);
+                var cost = QuotientFilter.TableCost(unlimited.SlotCount, remainderBits);
+                var what = $"{name}, at version {version}";
+
+                var budget = new ReadBudget(long.MaxValue, StructureId.QuotientFilter);
+                var reader = new PayloadReader(payload, budget);
+                try
+                {
+                    QuotientFilter.Price(ref reader, version);
+                }
+                catch (InvalidDataException e)
+                {
+                    Assert.Fail($"{what}: its price refused it, so it is set aside and the read admitted at less: {e.Message}");
+                }
+                Assert.AreEqual(cost, budget.Charged,
+                    $"{what}: its price priced {budget.Charged:N0} bytes, and its reader charges {cost:N0} for the table and the filter");
+
+                var total = ReadBudget.Sum(PersistenceFormat.EnvelopeCost((ulong)payload.Length), cost);
+                var nothing = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<QuotientFilter>(bytes, new ReadOptions(0)), $"{what} loaded under nothing");
+                Assert.IsInstanceOfType<ReadBudgetExceededException>(nothing.InnerException, $"{what}: {nothing.Message}");
+                Assert.AreEqual(total, ((ReadBudgetExceededException)nothing.InnerException).RequiredBytes,
+                    $"{what}, refused under a budget of nothing, named the wrong total");
+                CollectionAssert.AreEqual(unlimited.ToByteArray(),
+                    Persistence.FromByteArray<QuotientFilter>(bytes, new ReadOptions(total)).ToByteArray(),
+                    $"{what}, read under the {total:N0} bytes it named, is not the filter it reads as under no limit");
+                var under = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<QuotientFilter>(bytes, new ReadOptions(total - 1)), $"{what} loaded a byte under {total:N0}");
+                Assert.IsInstanceOfType<ReadBudgetExceededException>(under.InnerException, $"{what}: {under.Message}");
+            }
+
+            CollectionAssert.AreEquivalent(PersistenceFormat.ReadableVersions(StructureId.QuotientFilter).ToArray(), versions.ToArray(),
+                "the payloads' versions are not exactly the ones a quotient filter reads");
+        }
+
+        /// <summary>
+        /// A quotient filter's price prices its table before it checks that the payload ends
+        /// after it, as its reader charges the table before it checks, so a payload holding a
+        /// byte past the table is refused for that byte under exactly its own price, in either
+        /// envelope (#343).
+        /// </summary>
+        /// <remarks>
+        /// The table is the payload's last run, so a cut that holds it holds the payload whole,
+        /// and no cut of a sweep can tell where it is priced. A byte left over can: a price that
+        /// checked the end first would stop there having priced nothing for the table, the read
+        /// would be admitted at the envelope alone, and its reader, charging the table before it
+        /// finds the byte, would be refused for a budget its own price fits. Under a byte less
+        /// than that price it is refused for its budget, naming the price, so the budget the read
+        /// is held to has no room in it. The table is the smallest the constructor builds. An
+        /// invertible table is held to the same in
+        /// <c>TestAnInvertibleTableWithAByteLeftOverIsRefusedForItUnderItsOwnPrice</c>, and every
+        /// structure's read, though not its price, in <see cref="TestBytesLeftOver"/>.
+        /// </remarks>
+        [TestMethod]
+        public void TestAFilterWithAByteLeftOverIsRefusedForItUnderItsOwnPrice()
+        {
+            var filter = new QuotientFilter(1, 0.5);
+            filter.Add(Key("a"));
+            var ordinary = filter.ToByteArray();
+            var large = LargeForm.WriteLarge(filter);
+            Assert.IsFalse(LargeForm.IsLarge(ordinary), "premise: the filter was not written in the ordinary envelope");
+            Assert.IsTrue(LargeForm.IsLarge(large), "premise: the filter was not written in the large form");
+            foreach (var whole in new[] { ordinary, large })
+            {
+                TestBytesLeftOver.AssertRefusedForTheByteUnderItsOwnPrice(StructureId.QuotientFilter, QuotientFilter.Price,
+                    (bytes, options) => Persistence.FromByteArray<QuotientFilter>(bytes, options), whole);
             }
         }
 

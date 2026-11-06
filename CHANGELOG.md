@@ -764,15 +764,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which a charge, an upper bound, should not do. A segment is now charged as two small
   objects, by the reader and its price alike, so they still come to the same sum. (#329)
 
-- **A `QuotientFilter` read is charged for the filter it builds what building it
-  allocates.** Beside its table, a read charged the filter as one small object, 64 bytes,
-  and building it allocates 136, measured in a no-GC region, the same at tables from two
-  slots to 2^20 and at the one-slot table of version 1: the filter's own 96
-  bytes, and a table of two words, 40 bytes, that the constructor it is built through gives
-  the filter before the read shapes it to the payload. A read was charged 72 bytes less than
-  it allocated, which the budget's slack absorbed. The filter is now charged as three small
-  objects, by the reader and its price alike, so they still come to the same sum, and a
-  read is charged 128 bytes more than it was. (#336)
+- **A `QuotientFilter` read builds its filter at the payload's widths, with no table to
+  throw away, and is charged for it what building it allocates.** The reader made the
+  filter it fills for one item and then shaped it to the payload, so every read also made
+  the one-item filter's table of two words, 40 bytes, and dropped it, as 6.2.0's reader
+  did. The filter is now made at the payload's widths directly. Measured in a no-GC region,
+  building it allocates the filter's own 96 bytes beyond its table, the same at tables from
+  two slots to 2^16 and at the one-slot table of version 1, where 6.2.0's reader allocated
+  120 at those from two slots to 2^16: its filter, 80 bytes then, and the table it threw
+  away. A read charges the filter as two small objects, 128 bytes, beside its table, by the
+  reader and its price alike, so they still come to the same sum. (#336, #343)
+
+- **A `QuotientFilter` or `CountSketch` payload with bytes left over after its last run is
+  refused for them under any budget its price fits.** A read is priced before it allocates,
+  and a price that finds its payload malformed is set aside, with the read admitted at what
+  it had priced by then. Each price checked that the payload ended after its last run before
+  it priced what that run is read into, the filter's table or the sketch's rows, where its
+  reader charges them first and checks the end after. So such a payload was admitted at the
+  envelope alone, and its reader, charging the table or the rows, refused it for that budget,
+  naming a total under which it would only have been refused as malformed: a filter for one
+  item, one byte added, was refused under a budget of 200 bytes, naming 368, and in the
+  large form under 240, naming 408; a sketch at ε = δ = 0.5 under 208, naming 296, and in
+  the large form under 240, naming 328. Each price now prices them where its reader charges
+  them, before it checks the end, as an `InvertibleBloomLookupTable`'s does. Every other
+  structure already refused such a payload for the byte under its own price, in both
+  envelopes. A whole payload is priced and charged what it was, and nothing the library
+  wrote is refused. (#343)
 
 - **A `SublimeCountMinSketch` payload cut short inside its counters is refused for what it
   lacks before any of them are priced or allocated.** Its price and its reader checked the
