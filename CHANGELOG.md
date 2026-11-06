@@ -775,6 +775,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which a charge, an upper bound, should not do. A segment is now charged as two small
   objects, by the reader and its price alike, so they still come to the same sum. (#329)
 
+- **A `QuotientFilter` read is charged for the filter it builds what building it
+  allocates.** Beside its table, a read charged the filter as one small object, 64 bytes,
+  and building it allocates 136, measured in a no-GC region, the same at tables from two
+  slots to 2^20 and at the one-slot table of version 1: the filter's own 96
+  bytes, and a table of two words, 40 bytes, that the constructor it is built through gives
+  the filter before the read shapes it to the payload. A read was charged 72 bytes less than
+  it allocated, which the budget's slack absorbed. The filter is now charged as three small
+  objects, by the reader and its price alike, so they still come to the same sum, and a
+  read is charged 128 bytes more than it was. (#336)
+
 - **A `SublimeCountMinSketch` payload cut short inside its counters is refused for what it
   lacks before any of them are priced or allocated.** Its price and its reader checked the
   current rows' counters against the bytes after the sketch's shape, before its records of

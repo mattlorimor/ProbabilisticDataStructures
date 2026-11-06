@@ -1043,9 +1043,15 @@ namespace ProbabilisticDataStructures
         private static ulong ReadCount(ref PayloadReader reader, ushort version) =>
             version == PersistenceFormat.DefaultVersion ? reader.ReadUInt32() : reader.ReadUInt64();
 
-        /// <summary>The table a filter of these widths is built with, and the filter.</summary>
+        /// <summary>
+        /// The table a filter of these widths is built with, and the filter <see cref="Build"/>
+        /// makes, with the table of the one-item filter it starts as, which come to more than
+        /// two small objects allow for, so are charged as three (#336).
+        /// </summary>
         internal static long TableCost(ulong slots, uint remainderBits) => ReadBudget.Sum(
             ReadBudget.ArrayOf((ulong)TableWords(slots, remainderBits), sizeof(ulong)),
+            ReadBudget.SmallObject,
+            ReadBudget.SmallObject,
             ReadBudget.SmallObject);
 
         /// <summary>
