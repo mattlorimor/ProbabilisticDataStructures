@@ -23,8 +23,9 @@ namespace TestProbabilisticDataStructures
     /// these tests, which is the point.
     /// </para>
     /// <para>
-    /// The Cuckoo filter is the one exception and is still bounded rather than
-    /// zeroed; see its test for why.
+    /// The Cuckoo filter was bounded rather than zeroed while its fingerprint was a
+    /// byte array; since #88 it is a <c>ulong</c>, and its test is held to zero with the
+    /// rest.
     /// </para>
     /// </summary>
     [TestClass]
@@ -161,12 +162,11 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The Cuckoo filter is bounded separately and higher. Its GetComponents
-        /// computes the hash three times -- once directly and again inside each of two
-        /// ComputeHashSum32 calls -- and builds the fingerprint with a LINQ
-        /// Take(...).ToArray(). The digests now go into stack buffers, but the
-        /// fingerprint remains a real allocation because it is stored in a bucket, so
-        /// this filter is bounded rather than zeroed.
+        /// The Cuckoo filter allocates nothing either. This test used to allow it 32 B a
+        /// call, for the array its fingerprint was copied into before it was compared with
+        /// a bucket's. Since #88 its fingerprints are packed into 64-bit words at their
+        /// exact width, and a fingerprint is a <c>ulong</c> taken from the hash's bits, so
+        /// it never reaches the heap, and the bound is the other filters' bound.
         /// </summary>
         [TestMethod]
         public void TestCuckooFilterTestAllocation()
@@ -177,8 +177,8 @@ namespace TestProbabilisticDataStructures
 
             var bytes = BytesPerOperation(() => f.Test(data));
 
-            Assert.IsLessThanOrEqualTo(32, bytes,
-                $"CuckooBloomFilter.Test allocated {bytes} B per call, above the recorded 32 B.");
+            Assert.AreEqual(0, bytes,
+                $"CuckooBloomFilter.Test allocated {bytes} B per call; the hot path must not allocate.");
         }
     }
 }

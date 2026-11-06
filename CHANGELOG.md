@@ -731,6 +731,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An `InvertibleBloomLookupTable` payload cut short after its counts, or with bytes left
+  over after its hash sums, is refused as malformed under any budget its price fits.** A read
+  is priced before it allocates, and a price that finds its payload malformed is set aside,
+  with the read admitted at what it had priced by then. The table's price priced the counts
+  and hash sums it unpacks only once it had walked all three of its runs and found the
+  payload's end, where its reader charges each as soon as its run is held. So such a payload
+  was admitted at less than its reader then charged, and under a budget between the two it was
+  refused for that budget, naming a total under which it would only have been refused as
+  malformed: the sweep's table of 15,000 cells, cut to 135,700 bytes, was refused for a budget
+  of 255,888 bytes, naming 375,912. The price now prices each array where the reader charges
+  it, after the checks the reader makes first. A whole payload is priced and charged what it
+  was, and nothing the library wrote is refused.
+
 - **A `SublimeCountMinSketch` payload cut short inside its counters is refused for what it
   lacks before any of them are priced or allocated.** Its price and its reader checked the
   current rows' counters against the bytes after the sketch's shape, before its records of
