@@ -464,9 +464,14 @@ namespace ProbabilisticDataStructures
             var depth = reader.ReadUInt32();
             var stored = reader.BeginWordsInPlace();
             reader.Skip(stored);
-            reader.ExpectEnd();
             CheckCells(width, depth, stored);
+
+            // Priced where the reader charges them: once the cells are held and their shape
+            // checked, before the end is. Checked first, a byte left over stopped the price
+            // short of the rows, and the read, admitted at the envelope alone, was refused for
+            // its budget when the reader charged them (#343).
             reader.Budget.Price(RowsCost(width, depth));
+            reader.ExpectEnd();
         }
 
         /// <summary>
