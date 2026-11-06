@@ -760,6 +760,65 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The envelope of <paramref name="whole"/> with <paramref name="extra"/> bytes of nought
+        /// after its payload, its length and checksum made to match.
+        /// </summary>
+        private static byte[] Extended(byte[] whole, int extra)
+        {
+            var length = whole.Length - PayloadStart - ChecksumLength;
+            var bytes = new byte[whole.Length + extra];
+            whole.AsSpan(0, PayloadStart + length).CopyTo(bytes);
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(LengthOffset), (uint)(length + extra));
+            var crc = new Crc32();
+            crc.Append(bytes.AsSpan(4, bytes.Length - 8));
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(bytes.Length - ChecksumLength), crc.GetCurrentHashAsUInt32());
+            return bytes;
+        }
+
+        /// <summary>
+        /// An invertible table's price prices the hash sums it unpacks before it checks that the
+        /// payload ends after them, where its reader charges them, so a payload holding a byte
+        /// past the table is refused for that byte under exactly its own price.
+        /// </summary>
+        /// <remarks>
+        /// The hash sums are the table's last run, so a cut that holds them holds the payload
+        /// whole, and no cut the sweep reads can tell where their unpacking is priced. A byte left
+        /// over can: a price that checked the end first would stop there, having priced less than
+        /// the reader charges before it finds the byte, and the read would be refused for a budget
+        /// its own price fits. Under a byte less than that price it is refused for its budget,
+        /// naming the price, so the budget the read is held to has no room in it. The table is the
+        /// smallest the constructor builds: a charge of any size past the price is past the budget.
+        /// </remarks>
+        [TestMethod]
+        public void TestAnInvertibleTableWithAByteLeftOverIsRefusedForItUnderItsOwnPrice()
+        {
+            const StructureId Id = StructureId.InvertibleBloomLookupTable;
+            var table = new InvertibleBloomLookupTable(1, 1);
+            table.Add([7]);
+            var whole = table.ToByteArray();
+            var length = whole.Length - PayloadStart - ChecksumLength;
+            var longer = Extended(whole, 1);
+
+            var (priced, stoppedAt, why) = WalkPrice(Id, longer, length + 1);
+            Assert.AreEqual(length, stoppedAt, $"premise: the price walks the table to its end, and stops at the byte left over: {why}");
+            Assert.Contains("left over", why ?? "it walked to its end", "premise: the price stops for the byte left over");
+            var price = ReadBudget.Sum(PersistenceFormat.EnvelopeCost((ulong)(length + 1)), priced);
+
+            var refused = Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<InvertibleBloomLookupTable>(longer, new ReadOptions(price)));
+            Assert.IsFalse(refused.InnerException is ReadBudgetExceededException,
+                $"under exactly its own price of {price:N0}, it was refused for its budget rather than for the byte left over: {refused.Message}");
+            Assert.Contains("left over", refused.Message, "under exactly its own price, it was refused for another reason");
+
+            var under = Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<InvertibleBloomLookupTable>(longer, new ReadOptions(price - 1)));
+            Assert.IsInstanceOfType<ReadBudgetExceededException>(under.InnerException,
+                $"premise: under a byte less than its price of {price:N0}, it is refused for its budget: {under.Message}");
+            Assert.AreEqual(price, ((ReadBudgetExceededException)under.InnerException).RequiredBytes,
+                "premise: the price worked out here is the one the read is admitted at");
+        }
+
+        /// <summary>
         /// Each structure swept with another payload has a witness that its budget sample's cost
         /// is a parameter's: a valid payload holding nothing, which allocates past the bound.
         /// </summary>
