@@ -1044,7 +1044,7 @@ namespace ProbabilisticDataStructures
             version == PersistenceFormat.DefaultVersion ? reader.ReadUInt32() : reader.ReadUInt64();
 
         /// <summary>The table a filter of these widths is built with, and the filter.</summary>
-        private static long TableCost(ulong slots, uint remainderBits) => ReadBudget.Sum(
+        internal static long TableCost(ulong slots, uint remainderBits) => ReadBudget.Sum(
             ReadBudget.ArrayOf((ulong)TableWords(slots, remainderBits), sizeof(ulong)),
             ReadBudget.SmallObject);
 
@@ -1138,7 +1138,7 @@ namespace ProbabilisticDataStructures
         /// carries -- the constructor's item count and rate are only ever a way of
         /// arriving at them.
         /// </summary>
-        private static QuotientFilter Build(
+        internal static QuotientFilter Build(
             uint quotientBits, uint remainderBits, bool wrapped, Func<ReadOnlySpan<byte>, ulong> hash)
         {
             var filter = new QuotientFilter(1, 0.5, hash);
