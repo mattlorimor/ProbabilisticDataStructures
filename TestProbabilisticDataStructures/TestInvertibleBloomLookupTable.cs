@@ -953,5 +953,78 @@ namespace TestProbabilisticDataStructures
             StringAssert.Contains(ex.Message, "byte");
         }
 
+        /// <summary>
+        /// A read holds the counts and the hash sums once and is charged for them once (#335). In
+        /// the ordinary envelope, what it allocates and is charged beyond the payload it holds is
+        /// the table's three arrays, the counts and hash sums read into theirs and not first into
+        /// arrays of their own and copied, and the key sums the run they are read as; in the large
+        /// form, where the payload is not held, it is the three arrays alone, with no buffer on
+        /// the heap for the pieces the counts and hash sums are read in.
+        /// </summary>
+        /// <remarks>
+        /// A table for 10,000 differences, of more than 15,000 cells, so that its counts and its
+        /// hash sums are each longer than a piece of a run on the heap
+        /// (<see cref="PayloadSource.PieceLength"/>) and a buffer of one is a whole piece. The
+        /// slack, 4 KiB, is a twentieth of the piece and less of either run, so a copy of any one
+        /// of them fails it. Each figure is held from below too, to the payload and the three
+        /// arrays, so that a measurement of nothing cannot pass. The reads are counted in a no-GC
+        /// region (#293).
+        /// </remarks>
+        [TestMethod]
+        public void TestAReadHoldsItsCountsAndHashSumsOnce()
+        {
+            const long Slack = 4 * 1024;
+
+            var table = new InvertibleBloomLookupTable(10_000, 8);
+            for (var i = 0; i < 5_000; i++)
+            {
+                table.Add(Key(i));
+            }
+
+            var cells = table.Cells();
+            var bytes = table.ToByteArray();
+            long payload = bytes.Length - PersistenceFormat.EnvelopeLength;
+            var arrays = ReadBudget.Sum(
+                ReadBudget.ArrayOf(cells, sizeof(long)),
+                ReadBudget.ArrayOf((ulong)cells * (ulong)table.KeySize(), 1),
+                ReadBudget.ArrayOf(cells, sizeof(ulong)));
+            Assert.IsGreaterThan(PayloadSource.PieceLength + Slack, (long)cells * sizeof(long),
+                "premise: the counts are no longer than a piece on the heap");
+
+            InvertibleBloomLookupTable.ReadFrom(new MemoryStream(bytes, writable: false));
+            var ordinary = NoGCRegion.Allocated(() => InvertibleBloomLookupTable.ReadFrom(new MemoryStream(bytes, writable: false)));
+            var charged = CapacityModel.ChargeOf<InvertibleBloomLookupTable>(StructureId.InvertibleBloomLookupTable, bytes);
+
+            var large = LargeForm.WriteLarge(table);
+            Assert.IsTrue(LargeForm.IsLarge(large), "the table was not written in the large form");
+            InvertibleBloomLookupTable.ReadFrom(new MemoryStream(large, writable: false));
+            var streamed = NoGCRegion.Allocated(() => InvertibleBloomLookupTable.ReadFrom(new MemoryStream(large, writable: false)));
+            var budget = new ReadBudget(long.MaxValue, StructureId.InvertibleBloomLookupTable);
+            CollectionAssert.AreEqual(bytes,
+                InvertibleBloomLookupTable.ReadFrom(new MemoryStream(large, writable: false), new ReadOptions(budget)).ToByteArray(),
+                "the large form does not read back as the table");
+
+            Console.WriteLine(
+                $"[HOLDS ONCE] InvertibleBloomLookupTable: payload {payload:N0}, arrays {arrays:N0}; ordinary read {ordinary:N0}, " +
+                $"charged {charged:N0}; large-form read {streamed:N0}, charged {budget.Charged:N0}");
+
+            Assert.IsGreaterThanOrEqualTo(payload + arrays, ordinary,
+                $"the read allocated {ordinary:N0} bytes, less than the {payload:N0}-byte payload it holds and the {arrays:N0} bytes of arrays");
+            Assert.IsLessThanOrEqualTo(payload + arrays + Slack, ordinary,
+                $"the read allocated {ordinary:N0} bytes, {ordinary - payload - arrays:N0} more than its payload and its arrays");
+            Assert.IsGreaterThanOrEqualTo(payload + arrays, charged,
+                $"the read was charged {charged:N0} bytes, less than its payload and its arrays");
+            Assert.IsLessThanOrEqualTo(payload + arrays + Slack, charged,
+                $"the read was charged {charged:N0} bytes, {charged - payload - arrays:N0} more than its payload and its arrays");
+
+            Assert.IsGreaterThanOrEqualTo(arrays, streamed,
+                $"the read of the large form allocated {streamed:N0} bytes, less than the {arrays:N0} bytes of arrays");
+            Assert.IsLessThanOrEqualTo(arrays + Slack, streamed,
+                $"the read of the large form allocated {streamed:N0} bytes, {streamed - arrays:N0} more than its arrays");
+            Assert.IsGreaterThanOrEqualTo(arrays, budget.Charged,
+                $"the read of the large form was charged {budget.Charged:N0} bytes, less than its arrays");
+            Assert.IsLessThanOrEqualTo(arrays + Slack, budget.Charged,
+                $"the read of the large form was charged {budget.Charged:N0} bytes, {budget.Charged - arrays:N0} more than its arrays");
+        }
     }
 }

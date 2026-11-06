@@ -872,5 +872,76 @@ namespace TestProbabilisticDataStructures
                 return (long)(sum / 2);
             }
         }
+
+        /// <summary>
+        /// A read holds the counters once and is charged for them once (#335). In the ordinary
+        /// envelope, what it allocates and is charged beyond the payload it holds is the rows it
+        /// builds, the counters read into them and not first into an array of their own and
+        /// copied; in the large form, where the payload is not held, it is the rows alone, with
+        /// no buffer on the heap for the pieces the counters are read in.
+        /// </summary>
+        /// <remarks>
+        /// Three rows of 10,000 counters, 80,000 bytes a row and 240,000 in all, so that each row
+        /// is longer than a piece of a run on the heap (<see cref="PayloadSource.PieceLength"/>)
+        /// and a buffer of one is a whole piece. The slack, 4 KiB, is a twentieth of the piece
+        /// and less of the counters, so a copy of either fails it. Each figure is held from below
+        /// too, to the payload and the rows, so that a measurement of nothing cannot pass. The
+        /// reads are counted in a no-GC region (#293).
+        /// </remarks>
+        [TestMethod]
+        public void TestAReadHoldsItsCountersOnce()
+        {
+            const long Slack = 4 * 1024;
+
+            var sketch = new CountSketch(0.01, 0.05);
+            for (var i = 0; i < 30_000; i++)
+            {
+                sketch.Add(Key($"k{i}"), (i % 7) - 3);
+            }
+
+            Assert.AreEqual((10_000u, 3u), (sketch.Width(), sketch.Depth()), "premise: the sketch is not of three rows of 10,000");
+            var bytes = sketch.ToByteArray();
+            long payload = bytes.Length - PersistenceFormat.EnvelopeLength;
+            var rows = ReadBudget.Sum(
+                ReadBudget.ArrayOf(sketch.Depth(), sizeof(long)),
+                ReadBudget.Times(sketch.Depth(), ReadBudget.ArrayOf(sketch.Width(), sizeof(long))));
+            Assert.IsGreaterThan(PayloadSource.PieceLength + Slack, (long)sketch.Width() * sizeof(long),
+                "premise: a row is no longer than a piece on the heap");
+
+            CountSketch.ReadFrom(new MemoryStream(bytes, writable: false));
+            var ordinary = NoGCRegion.Allocated(() => CountSketch.ReadFrom(new MemoryStream(bytes, writable: false)));
+            var charged = CapacityModel.ChargeOf<CountSketch>(StructureId.CountSketch, bytes);
+
+            var large = LargeForm.WriteLarge(sketch);
+            Assert.IsTrue(LargeForm.IsLarge(large), "the sketch was not written in the large form");
+            CountSketch.ReadFrom(new MemoryStream(large, writable: false));
+            var streamed = NoGCRegion.Allocated(() => CountSketch.ReadFrom(new MemoryStream(large, writable: false)));
+            var budget = new ReadBudget(long.MaxValue, StructureId.CountSketch);
+            CollectionAssert.AreEqual(bytes,
+                CountSketch.ReadFrom(new MemoryStream(large, writable: false), new ReadOptions(budget)).ToByteArray(),
+                "the large form does not read back as the sketch");
+
+            Console.WriteLine(
+                $"[HOLDS ONCE] CountSketch: payload {payload:N0}, rows {rows:N0}; ordinary read {ordinary:N0}, " +
+                $"charged {charged:N0}; large-form read {streamed:N0}, charged {budget.Charged:N0}");
+
+            Assert.IsGreaterThanOrEqualTo(payload + rows, ordinary,
+                $"the read allocated {ordinary:N0} bytes, less than the {payload:N0}-byte payload it holds and the {rows:N0} bytes of rows");
+            Assert.IsLessThanOrEqualTo(payload + rows + Slack, ordinary,
+                $"the read allocated {ordinary:N0} bytes, {ordinary - payload - rows:N0} more than its payload and its rows");
+            Assert.IsGreaterThanOrEqualTo(payload + rows, charged,
+                $"the read was charged {charged:N0} bytes, less than its payload and its rows");
+            Assert.IsLessThanOrEqualTo(payload + rows + Slack, charged,
+                $"the read was charged {charged:N0} bytes, {charged - payload - rows:N0} more than its payload and its rows");
+
+            Assert.IsGreaterThanOrEqualTo(rows, streamed,
+                $"the read of the large form allocated {streamed:N0} bytes, less than the {rows:N0} bytes of rows");
+            Assert.IsLessThanOrEqualTo(rows + Slack, streamed,
+                $"the read of the large form allocated {streamed:N0} bytes, {streamed - rows:N0} more than its rows");
+            Assert.IsGreaterThanOrEqualTo(rows, budget.Charged,
+                $"the read of the large form was charged {budget.Charged:N0} bytes, less than its rows");
+            Assert.IsLessThanOrEqualTo(rows + Slack, budget.Charged,
+                $"the read of the large form was charged {budget.Charged:N0} bytes, {budget.Charged - rows:N0} more than its rows");
+        }
     }
 }

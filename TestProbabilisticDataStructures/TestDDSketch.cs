@@ -1205,5 +1205,95 @@ namespace TestProbabilisticDataStructures
                 "the median of one value each in buckets 1, 3 and 5 must be bucket " +
                 "3's midpoint.");
         }
+
+        /// <summary>
+        /// A read holds each store's buckets once and is charged for them once (#335). In the
+        /// ordinary envelope, what it allocates and is charged beyond the payload it holds is the
+        /// window each store is restored into, the counts read into it and not first into an
+        /// array of their own and copied; in the large form, where the payload is not held, it
+        /// is the two windows alone, with no buffer on the heap for the pieces the counts are
+        /// read in.
+        /// </summary>
+        /// <remarks>
+        /// A value in each of 20,000 positive buckets and 12,000 negative ones, so that each
+        /// store's run is longer than a piece of a run on the heap
+        /// (<see cref="PayloadSource.PieceLength"/>) and a buffer of one is a whole piece. A
+        /// window is as long as its store's span, which is what the reader sizes it from. The
+        /// slack, 4 KiB, is a twentieth of the piece and less of either run, so a copy of
+        /// either fails it. Each figure is held from below too, to the payload and the windows,
+        /// so that a measurement of nothing cannot pass. The reads are counted in a no-GC region
+        /// (#293).
+        /// </remarks>
+        [TestMethod]
+        public void TestAReadHoldsItsBucketsOnce()
+        {
+            const long Slack = 4 * 1024;
+
+            var sketch = new DDSketch(0.0005);
+            for (var i = 0; i < 20_000; i++)
+            {
+                sketch.Add(Math.Pow(1.001, i));
+            }
+
+            for (var i = 0; i < 12_000; i++)
+            {
+                sketch.Add(-Math.Pow(1.001, i));
+            }
+
+            static long SpanOf(DDSketch sketch, string sign)
+            {
+                var store = typeof(DDSketch)
+                    .GetField(sign, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .GetValue(sketch)!;
+                return (long)store.GetType()
+                    .GetProperty("Span", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                    .GetValue(store)!;
+            }
+
+            var positive = SpanOf(sketch, "positive");
+            var negative = SpanOf(sketch, "negative");
+            var bytes = sketch.ToByteArray();
+            long payload = bytes.Length - PersistenceFormat.EnvelopeLength;
+            var windows = ReadBudget.Sum(
+                ReadBudget.ArrayOf((ulong)positive, sizeof(ulong)),
+                ReadBudget.ArrayOf((ulong)negative, sizeof(ulong)));
+            Assert.IsGreaterThan(PayloadSource.PieceLength + Slack, Math.Min(positive, negative) * sizeof(ulong),
+                $"premise: a store's run is no longer than a piece on the heap: spans {positive:N0} and {negative:N0}");
+
+            DDSketch.ReadFrom(new MemoryStream(bytes, writable: false));
+            var ordinary = NoGCRegion.Allocated(() => DDSketch.ReadFrom(new MemoryStream(bytes, writable: false)));
+            var charged = CapacityModel.ChargeOf<DDSketch>(StructureId.DDSketch, bytes);
+
+            var large = LargeForm.WriteLarge(sketch);
+            Assert.IsTrue(LargeForm.IsLarge(large), "the sketch was not written in the large form");
+            DDSketch.ReadFrom(new MemoryStream(large, writable: false));
+            var streamed = NoGCRegion.Allocated(() => DDSketch.ReadFrom(new MemoryStream(large, writable: false)));
+            var budget = new ReadBudget(long.MaxValue, StructureId.DDSketch);
+            CollectionAssert.AreEqual(bytes,
+                DDSketch.ReadFrom(new MemoryStream(large, writable: false), new ReadOptions(budget)).ToByteArray(),
+                "the large form does not read back as the sketch");
+
+            Console.WriteLine(
+                $"[HOLDS ONCE] DDSketch: payload {payload:N0}, windows {windows:N0} (spans {positive:N0} and {negative:N0}); " +
+                $"ordinary read {ordinary:N0}, charged {charged:N0}; large-form read {streamed:N0}, charged {budget.Charged:N0}");
+
+            Assert.IsGreaterThanOrEqualTo(payload + windows, ordinary,
+                $"the read allocated {ordinary:N0} bytes, less than the {payload:N0}-byte payload it holds and the {windows:N0} bytes of windows");
+            Assert.IsLessThanOrEqualTo(payload + windows + Slack, ordinary,
+                $"the read allocated {ordinary:N0} bytes, {ordinary - payload - windows:N0} more than its payload and its windows");
+            Assert.IsGreaterThanOrEqualTo(payload + windows, charged,
+                $"the read was charged {charged:N0} bytes, less than its payload and its windows");
+            Assert.IsLessThanOrEqualTo(payload + windows + Slack, charged,
+                $"the read was charged {charged:N0} bytes, {charged - payload - windows:N0} more than its payload and its windows");
+
+            Assert.IsGreaterThanOrEqualTo(windows, streamed,
+                $"the read of the large form allocated {streamed:N0} bytes, less than the {windows:N0} bytes of windows");
+            Assert.IsLessThanOrEqualTo(windows + Slack, streamed,
+                $"the read of the large form allocated {streamed:N0} bytes, {streamed - windows:N0} more than its windows");
+            Assert.IsGreaterThanOrEqualTo(windows, budget.Charged,
+                $"the read of the large form was charged {budget.Charged:N0} bytes, less than its windows");
+            Assert.IsLessThanOrEqualTo(windows + Slack, budget.Charged,
+                $"the read of the large form was charged {budget.Charged:N0} bytes, {budget.Charged - windows:N0} more than its windows");
+        }
     }
 }
