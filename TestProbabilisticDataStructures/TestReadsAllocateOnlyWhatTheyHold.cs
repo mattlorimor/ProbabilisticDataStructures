@@ -938,10 +938,11 @@ namespace TestProbabilisticDataStructures
             Func<byte[], int> FieldAt, Func<byte[], int> CheckedAt, Func<byte[], uint> Most, uint Largest);
 
         /// <summary>
-        /// What the read of an edited claim may allocate past the read of a cut just before its
-        /// field, the envelope's difference aside: both are refused at once, and differ in their
-        /// messages. Measured, every one allocated less than that cut's read, by 56 to 696 bytes,
-        /// and a read of the most the bytes hold allocated at least 15,472 bytes more than it.
+        /// What the read of an edited claim may allocate past the read of the payload cut just after
+        /// its field, the envelope's difference aside: the same check refuses both, so they run the
+        /// same code, and differ only in the numbers their messages name. Measured, 32 to 96 bytes,
+        /// by claim, the same in every full run, and for Sublime in every state of the JIT probed;
+        /// and a read of the most the bytes hold allocated at least 4,632 bytes more than that cut's.
         /// </summary>
         private const long Refusing = 1 << 10;
 
@@ -1021,10 +1022,28 @@ namespace TestProbabilisticDataStructures
         /// edited here, as #332's was, in the sample the sweep cuts, its checksum resealed. The price
         /// of each edited claim stops where the check refuses it, having priced exactly what a cut
         /// just before the field does, and its read is refused for what it lacks under no budget,
-        /// under the default one and under exactly its own price, having allocated no more than the
-        /// read of that cut, the envelope's difference and <see cref="Refusing"/>. The most the bytes
-        /// hold is the control: its price walks past the check and prices more, and its read
-        /// allocates past that bound, so the bound can see what the check stops.
+        /// under the default one and under exactly its own price. It allocates no more than the read,
+        /// under the same budget, of the payload cut just after the field, which the check refuses
+        /// at its writer's claim, with the envelope's difference and <see cref="Refusing"/>.
+        /// The most the bytes hold is the control: its price walks past the check and prices more,
+        /// and its read allocates past that bound, so the bound can see what the check stops.
+        /// <para>
+        /// The cut is the one after the field, not the one before it, and it is read just before and
+        /// just after each read it bounds, in one region, because what a read allocates depends on
+        /// the code the JIT has made of it so far. Optimised code allocates hundreds of bytes less
+        /// than the first code a method runs, and with dynamic PGO on, the code in between came out
+        /// higher than either; and that changes as the run goes on and as other tests make the
+        /// code they share hot. A cut just before the field is refused on another path than the
+        /// claim's, for the bytes it lacks, so the two are optimised apart. Read after every other
+        /// structure's cuts, with the Sublime cut's path made hot, a Sublime claim's read came out
+        /// 1,080 bytes past that cut's where 1,024 were allowed, the figures of a full run that
+        /// failed (#345). Measured from cold to hot, with tiering, dynamic PGO or stack allocation
+        /// off, and under the segments collector, that difference ran from -672 to 1,080 bytes. A
+        /// cut the same check refuses runs the same code as the claim, and differs from it only in
+        /// the numbers its messages name: measured the same ways, it came out at 48 bytes for
+        /// Sublime in every state, and in full runs at 48 for Sublime and 32 to 96, by claim, for
+        /// the element counts, every time.
+        /// </para>
         /// </remarks>
         [TestMethod]
         [DynamicData(nameof(EditedClaimCases))]
@@ -1042,32 +1061,52 @@ namespace TestProbabilisticDataStructures
             var envelope = PersistenceFormat.EnvelopeCost((ulong)length);
             Assert.IsGreaterThan(most, claim.Largest, $"premise: {checks}: the largest claim, {claim.Largest:N0}, is past the most the bytes hold, {most:N0}");
 
-            InvalidDataException Refusal(byte[] payload, ReadOptions options, out long allocated)
+            var after = Cut(bytes, checkedAt);
+
+            // What payload allocates read under options, and the larger of what the payload cut
+            // just after the field allocates read under the same options just before it and just
+            // after it, all three in one region. The cut is refused by the same check, at its
+            // writer's claim, so it runs the code the edited read does, and the JIT can change that
+            // code between any two reads, so the cut is read beside it rather than once beforehand.
+            // A budget changes a read only by refusing it, and the cut is charged no more than its
+            // own price, within every budget the edited read is given; each read of the cut is
+            // held to that, refused by the check for what it lacks, which no budget's refusal says.
+            (InvalidDataException Refused, long Allocated, long Beside) Measure(byte[] payload, ReadOptions options)
             {
-                InvalidDataException refused = null;
-                allocated = NoGCRegion.Allocated(() =>
+                var refusals = new InvalidDataException[3];
+                Func<object> Reading(int i, byte[] what) => () =>
                 {
-                    refused = null;
                     try
                     {
-                        read(payload, options);
+                        read(what, options);
                     }
                     catch (InvalidDataException e)
                     {
-                        refused = e;
+                        refusals[i] = e;
                     }
 
-                    return refused;
-                });
-                return refused;
+                    return null;
+                };
+                var counts = NoGCRegion.AllocatedEach([Reading(0, after), Reading(1, payload), Reading(2, after)]);
+                foreach (var cut in new[] { refusals[0], refusals[2] })
+                {
+                    Assert.IsTrue(
+                        cut is not null && cut.Message.Contains(lacks, StringComparison.Ordinal),
+                        $"premise: {checks}: the cut just after the field, read beside the read it bounds, is refused by the check " +
+                        $"for what it lacks: {cut?.Message ?? "it was read"}");
+                }
+
+                return (refusals[1], counts[1], Math.Max(counts[0], counts[2]));
             }
 
             var before = WalkPrice(claim.Id, bytes, at);
             Assert.AreEqual(at, before.StoppedAt,
                 $"premise: {checks}: a cut just before the field at {at:N0} is past every earlier check, and its price stops there: {before.Why}");
-            var cut = Refusal(Cut(bytes, at), ReadOptions.Unlimited, out var cutAllocated);
-            Assert.IsNotNull(cut, $"premise: {checks}: a cut just before the field was read");
-            var bound = cutAllocated - PersistenceFormat.EnvelopeCost((ulong)at) + envelope + Refusing;
+            var same = WalkPrice(claim.Id, bytes, checkedAt);
+            Assert.IsTrue(same.Priced == before.Priced && same.StoppedAt == checkedAt && (same.Why?.Contains(lacks, StringComparison.Ordinal) ?? false),
+                $"premise: {checks}: a cut just after the field is refused by the check, at its writer's claim, having priced what a cut " +
+                $"before it does: it priced {same.Priced - before.Priced:N0} more and stopped at {same.StoppedAt:N0}: {same.Why}");
+            var shift = envelope - PersistenceFormat.EnvelopeCost((ulong)checkedAt);
 
             var fits = Edited(bytes, at, most);
             var taken = WalkPrice(claim.Id, fits, length);
@@ -1075,10 +1114,10 @@ namespace TestProbabilisticDataStructures
                 $"{checks}: with its {claim.Field} at {most:N0}, the most the bytes hold, it was refused where the check refuses: {taken.Why}");
             Assert.IsGreaterThan(before.Priced, taken.Priced,
                 $"{checks}: with its {claim.Field} at {most:N0}, the most the bytes hold, it priced no more than a cut before the field: {taken.Why}");
-            Refusal(fits, ReadOptions.Unlimited, out var readInto);
-            Assert.IsGreaterThan(bound, readInto,
+            var (_, readInto, beside) = Measure(fits, ReadOptions.Unlimited);
+            Assert.IsGreaterThan(beside + shift + Refusing, readInto,
                 $"{checks}: a read with its {claim.Field} at {most:N0}, the most the bytes hold, allocated {readInto:N0} bytes, within the " +
-                $"{bound:N0} a refused claim is held to, so that bound does not show the check stopped anything");
+                $"{beside + shift + Refusing:N0} a refused claim is held to, so that bound does not show the check stopped anything");
 
             var problems = new List<string>();
             foreach (var value in new[] { most + 1, claim.Largest })
@@ -1109,7 +1148,8 @@ namespace TestProbabilisticDataStructures
                 ];
                 foreach (var (budget, options) in budgets)
                 {
-                    var refused = Refusal(edited, options, out var allocated);
+                    var (refused, allocated, around) = Measure(edited, options);
+                    var bound = around + shift + Refusing;
                     var problem = refused is null
                         ? $"with its {claim.Field} at {value:N0}, it was read under {budget}"
                         : refused.InnerException is ReadBudgetExceededException
@@ -1118,7 +1158,8 @@ namespace TestProbabilisticDataStructures
                                 ? $"with its {claim.Field} at {value:N0}, it was refused under {budget} for something else: {refused.Message}"
                                 : allocated > bound
                                     ? $"with its {claim.Field} at {value:N0}, it allocated {allocated:N0} bytes under {budget} before it " +
-                                      $"was refused, past the {bound:N0} a cut before the field, its envelope and {Refusing:N0} allow"
+                                      $"was refused, past the {bound:N0} that a cut just after the field, read beside it, its envelope and " +
+                                      $"{Refusing:N0} allow"
                                     : null;
                     if (problem is not null)
                     {
