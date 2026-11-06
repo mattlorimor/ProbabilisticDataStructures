@@ -815,7 +815,7 @@ namespace ProbabilisticDataStructures
         /// <summary>
         /// Begins a run of eight-byte words that its structure unpacks into storage of its
         /// own, rather than keeping the run as the array it is read into, and returns the
-        /// run's length; <see cref="ReadWords"/> then hands it back a piece at a time.
+        /// run's length; <see cref="ReadWords()"/> then hands it back a piece at a time.
         /// </summary>
         /// <remarks>
         /// A run past one array, which the large form allows (#228), cannot be read into one,
@@ -881,6 +881,24 @@ namespace ProbabilisticDataStructures
             return count;
         }
 
+        /// <summary>
+        /// Begins a run of eight-byte words that its structure reads straight into storage of
+        /// its own with <see cref="ReadWords(Span{ulong})"/>, after the checks
+        /// <see cref="BeginWords"/> makes of its length, and leaves the reader at the start of
+        /// the run, pricing and charging nothing: the storage is all a read of the run
+        /// allocates, and is its structure's to charge. Returns its length.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="BeginWords"/> copies such a run out of a held payload whole, and reads it
+        /// from a stream through a buffer of a piece on the heap, so a structure that then
+        /// unpacked it into storage of its own held the run twice, or held a piece besides
+        /// (#328). Begun here, it is read a piece at a time through a buffer on the stack. Its
+        /// length is held to one array where the read holds the payload, as
+        /// <see cref="BeginWords"/> holds it, and to what the payload has left where the read
+        /// holds none, which in the large form can be more than one array (#228).
+        /// </remarks>
+        internal long BeginWordsInPlace() => this.streamed ? ReadHeldRunLength() : BeginRun();
+
         /// <summary>The buffer a run of <paramref name="count"/> bytes is read through in pieces.</summary>
         private static int PieceFor(long count) => (int)Math.Min(count, PayloadSource.PieceBytes);
 
@@ -899,7 +917,7 @@ namespace ProbabilisticDataStructures
         /// it from one that is not.
         /// </summary>
         /// <remarks>
-        /// As <see cref="ReadWords"/> is for a run, with nothing allocated: the piece is the
+        /// As <see cref="ReadWords()"/> is for a run, with nothing allocated: the piece is the
         /// caller's, on its stack, no longer than <see cref="BlockPieceFor"/> says. So a block read
         /// this way allocates, and is charged, what it did read a word at a time, and each piece
         /// is held to what the payload has left as each word was.
@@ -914,6 +932,29 @@ namespace ProbabilisticDataStructures
 
             RequireAhead(piece.Length);
             this.source.ReadPiece(piece);
+        }
+
+        /// <summary>
+        /// Reads as many eight-byte words as <paramref name="into"/> holds straight into it, a
+        /// piece at a time through a buffer on the stack (<see cref="ReadBlock"/>): copied from a
+        /// held payload, and read from the stream from one that is not. Nothing is allocated for
+        /// them, so the storage a structure reads its words into is not held twice.
+        /// </summary>
+        internal void ReadWords(Span<ulong> into)
+        {
+            var left = (long)into.Length * sizeof(ulong);
+            Span<byte> piece = stackalloc byte[BlockPieceFor(left)];
+            var at = 0;
+            while (left > 0)
+            {
+                var bytes = piece[..(int)Math.Min(left, piece.Length)];
+                ReadBlock(bytes);
+                left -= bytes.Length;
+                for (var i = 0; i < bytes.Length; i += sizeof(ulong))
+                {
+                    into[at++] = BinaryPrimitives.ReadUInt64LittleEndian(bytes[i..]);
+                }
+            }
         }
 
         /// <summary>

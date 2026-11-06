@@ -998,15 +998,19 @@ namespace TestProbabilisticDataStructures
         /// be read through one, and a structure that keeps its run in words, or in more than
         /// one array, can hold one: a quotient filter's table, a count sketch's cells, a
         /// DDSketch's buckets, and an invertible table's counts and hash sums, which #228
-        /// names. With the piece lowered, such a structure makes more array reads than with the
-        /// piece as it ships, each a piece or the rest of its run, one after another to the
-        /// run's end, which its <c>u64</c> prefix gives. A run read whole at either piece is
-        /// read into the one array its structure keeps, and claimed a byte past one array at
-        /// its prefix it is refused as more than one array holds; a run read in pieces is not,
-        /// since no array of its length is made, and is refused for the bytes the stream lacks.
-        /// A structure that reads in pieces allocates, beyond what streaming adds, at least its
-        /// payload and those runs less than the ordinary envelope's read, which holds the
-        /// payload and copies each run.
+        /// names. The quotient filter's table is read through the stream's span overload, from
+        /// a buffer on the stack, straight into the table (#328), so it makes no array reads to
+        /// count here, and
+        /// <see cref="TestAQuotientFiltersTableIsReadFromTheLargeFormInPiecesStraightIntoItsTable"/>
+        /// holds it instead. With the piece lowered, such a structure makes more array reads
+        /// than with the piece as it ships, each a piece or the rest of its run, one after
+        /// another to the run's end, which its <c>u64</c> prefix gives. A run read whole at
+        /// either piece is read into the one array its structure keeps, and claimed a byte past
+        /// one array at its prefix it is refused as more than one array holds; a run read in
+        /// pieces is not, since no array of its length is made, and is refused for the bytes the
+        /// stream lacks. A structure that reads in pieces allocates, beyond what streaming adds,
+        /// at least its payload and those runs less than the ordinary envelope's read, which
+        /// holds the payload and copies each run.
         /// </remarks>
         [TestMethod]
         public void TestARunItsStructureKeepsInStorageOfItsOwnIsReadInPiecesIntoIt()
@@ -1062,10 +1066,13 @@ namespace TestProbabilisticDataStructures
                 }
             }
 
-            // The structures #228 names: a run of each can pass one array.
+            // The structures #228 names: a run of each can pass one array. The quotient filter
+            // reads its table through the span overload (#328), and is held by a test of its own.
+            Assert.IsFalse(pieced.ContainsKey(StructureId.QuotientFilter) || whole.Any(w => w.Id == StructureId.QuotientFilter),
+                "QuotientFilter read its table through the stream's array overload, which it reads straight into the table (#328)");
             foreach (var capped in new[]
             {
-                StructureId.QuotientFilter, StructureId.CountSketch, StructureId.DDSketch, StructureId.InvertibleBloomLookupTable,
+                StructureId.CountSketch, StructureId.DDSketch, StructureId.InvertibleBloomLookupTable,
             })
             {
                 Assert.IsTrue(pieced.TryGetValue(capped, out var runs) && runs.Count > 0,
