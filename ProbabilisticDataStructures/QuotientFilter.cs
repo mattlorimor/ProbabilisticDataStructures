@@ -1034,9 +1034,14 @@ namespace ProbabilisticDataStructures
             var remainderBits = reader.ReadUInt32();
             ReadCount(ref reader, version);
             reader.Skip(reader.BeginWordsInPlace());
-            reader.ExpectEnd();
             var wrapped = CheckWidths(version, quotientBits, remainderBits);
+
+            // Priced where the reader charges it: once its run is held and the widths are
+            // checked, before the end is. Checked first, a byte left over stopped the price
+            // short of the table, and the read, admitted at the envelope alone, was refused for
+            // its budget when the reader charged the table (#343).
             reader.Budget.Price(TableCost(SlotsOf(quotientBits, wrapped), remainderBits));
+            reader.ExpectEnd();
         }
 
         /// <summary>The count of entries: a u64 from version 12, a u32 before it.</summary>

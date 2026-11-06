@@ -784,6 +784,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its price alike, so they still come to the same sum: a read allocates 40 bytes less and
   is charged 64 less. (#343)
 
+- **A `QuotientFilter` payload with bytes left over after its table is refused for them
+  under any budget its price fits.** A read is priced before it allocates, and a price that
+  finds its payload malformed is set aside, with the read admitted at what it had priced by
+  then. The filter's price checked that the payload ended after the table before it priced
+  the table, where its reader charges the table first and checks the end after. So such a
+  payload was admitted at the envelope alone, and its reader, charging the table, refused it
+  for that budget, naming a total under which it would only have been refused as malformed:
+  a filter for one item, one byte added, was refused under a budget of 200 bytes, naming
+  368, and in the large form under 240, naming 408. The price now prices the table where
+  its reader charges it, before it checks the end, as an `InvertibleBloomLookupTable`'s
+  does. A whole payload is priced and charged what it was, and nothing the library wrote is
+  refused. (#343)
+
 - **A `SublimeCountMinSketch` payload cut short inside its counters is refused for what it
   lacks before any of them are priced or allocated.** Its price and its reader checked the
   current rows' counters against the bytes after the sketch's shape, before its records of
