@@ -720,20 +720,29 @@ namespace ProbabilisticDataStructures
             var count = ReadArrayRunLength();
 
             // Bounds-checked first, so a run the payload does not hold is refused as
-            // truncated; then the array is charged before it is made.
+            // truncated; then the array is charged before it is made. An empty run is the
+            // one empty array the runtime keeps, read from a held payload or from a stream,
+            // and is charged nothing, since nothing is allocated for it (#329).
             if (this.source is null)
             {
                 var run = Take(count);
-                this.Budget.Charge(ReadBudget.ArrayOf((ulong)count, 1));
+                this.Budget.Charge(CostOfBytes(count));
                 return run.ToArray();
             }
 
             RequireAhead(count);
-            this.Budget.Charge(ReadBudget.ArrayOf((ulong)count, 1));
-            var bytes = new byte[count];
+            this.Budget.Charge(CostOfBytes(count));
+            var bytes = count == 0 ? Array.Empty<byte>() : new byte[count];
             this.source.ReadRun(bytes);
             return bytes;
         }
+
+        /// <summary>
+        /// What <see cref="ReadBytes"/> allocates for a run of <paramref name="count"/> bytes:
+        /// an array of them, or nothing for an empty run, which is the one empty array the
+        /// runtime keeps.
+        /// </summary>
+        private static long CostOfBytes(int count) => count == 0 ? 0 : ReadBudget.ArrayOf((ulong)count, 1);
 
         /// <summary>
         /// Reads a run's length prefix: the one place a run's length is read, by a read and
@@ -789,7 +798,7 @@ namespace ProbabilisticDataStructures
         internal int PriceBytes()
         {
             var count = BeginRun();
-            this.Budget.Price(ReadBudget.ArrayOf((ulong)count, 1));
+            this.Budget.Price(CostOfBytes(count));
             return count;
         }
 
@@ -802,8 +811,8 @@ namespace ProbabilisticDataStructures
         /// For a run that its structure's shape says holds nothing, which a reader then takes
         /// as the one empty array the runtime keeps and allocates nothing for, and refuses
         /// unless its length is nought; its price walks the run the same way. Read whole by
-        /// <see cref="ReadBytes"/>, an empty run is charged as the array it is read into, which
-        /// from a held payload is that same empty array (#315).
+        /// <see cref="ReadBytes"/>, an empty run is that same empty array, and is charged
+        /// nothing as well (#329).
         /// </remarks>
         internal int BeginRun()
         {

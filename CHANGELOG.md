@@ -744,6 +744,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, after the checks the reader makes first. A whole payload is priced and charged what it
   was, and nothing the library wrote is refused.
 
+- **An empty run read whole is charged nothing, and from a stream allocates nothing.** A
+  read charged an array's header, 24 bytes, for every empty run it read into an array of
+  its own: an empty key a `TopK` or `HeavyKeeper` holds, an empty item in a `VarOpt`, an
+  empty store of `DDSketch` buckets. From a held payload it allocated nothing for one,
+  since an empty run copied out is the one empty array the runtime keeps, and from a stream
+  it allocated an array of nothing. Both now read an empty run as that one array and charge
+  nothing for it, and its price is nothing too, so price and charge still come to the same
+  sum. Measured, a `VarOpt` holding one empty item is charged 816 bytes to read, not 840,
+  and from the large form allocates 1,008, not 1,032; a new `DDSketch` is charged 216, not
+  264. A run of words read from the large form in pieces is not read this way, and is
+  charged as it was. (#329)
+
+- **An `InfiniFilter` read is charged for each table's segment what the segment
+  allocates.** Beside each table's words, a read charged the segment that holds them as
+  one small object, 64 bytes, and a segment is 80, measured in a no-GC region: a read was
+  charged 16 bytes a table less than it allocated, which the budget's slack absorbed but
+  which a charge, an upper bound, should not do. A segment is now charged as two small
+  objects, by the reader and its price alike, so they still come to the same sum. (#329)
+
 - **A `SublimeCountMinSketch` payload cut short inside its counters is refused for what it
   lacks before any of them are priced or allocated.** Its price and its reader checked the
   current rows' counters against the bytes after the sketch's shape, before its records of

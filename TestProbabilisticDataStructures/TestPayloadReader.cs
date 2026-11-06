@@ -230,6 +230,74 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// An empty run is read as the one empty array the runtime keeps, and is charged and
+        /// priced nothing, from a held payload and from a stream alike (#329); a run of one
+        /// byte is an array of its own, and is charged, priced and allocated as one. The reads
+        /// are counted in a no-GC region.
+        /// </summary>
+        /// <remarks>
+        /// From a held payload an empty run was already that array, since an empty span copied
+        /// out is it, but was charged an array's header for it, 24 bytes; from a stream it was a
+        /// new array of nothing, allocated and charged at 24. The run of one byte is the other
+        /// direction, so that a cost of nothing for every run fails.
+        /// </remarks>
+        [TestMethod]
+        public void TestAnEmptyRunIsTheEmptyArrayAndCostsNothing()
+        {
+            foreach (var length in new[] { 0, 1 })
+            {
+                var cost = length == 0 ? 0 : ReadBudget.ArrayOf(1, 1);
+                var payload = Payload(0, (uint)length, length + 3);
+                foreach (var fromStream in new[] { false, true })
+                {
+                    var how = $"a run of {length} read from {(fromStream ? "a stream" : "a held payload")}";
+                    PayloadSource source = null;
+                    ReadBudget budget = null;
+                    byte[] run = null;
+                    var allocated = NoGCRegion.Allocated(
+                        () => run = ReadRunFrom(payload, source, budget),
+                        first: () =>
+                        {
+                            budget = Unlimited();
+                            source = fromStream ? new PayloadSource(new MemoryStream(payload, writable: false)) : null;
+                        });
+
+                    Assert.HasCount(length, run, $"{how} came back {run.Length} bytes long");
+                    Assert.AreEqual(length == 0, ReferenceEquals(Array.Empty<byte>(), run),
+                        $"{how} {(length == 0 ? "was not" : "was")} the runtime's empty array");
+                    Assert.AreEqual(cost, budget.Charged, $"{how} was charged {budget.Charged} bytes");
+                    Assert.AreEqual(cost, allocated, $"{how} allocated {allocated} bytes");
+
+                    var priced = Unlimited();
+                    Assert.AreEqual(length, PriceRunFrom(payload, fromStream, priced));
+                    Assert.AreEqual(cost, priced.Charged, $"the price of {how} was {priced.Charged} bytes");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Reads the run at the start of <paramref name="payload"/>: from
+        /// <paramref name="source"/>, a stream over it, or from the payload held when that is
+        /// null.
+        /// </summary>
+        private static byte[] ReadRunFrom(byte[] payload, PayloadSource source, ReadBudget budget)
+        {
+            var reader = source is null
+                ? new PayloadReader(payload, budget)
+                : new PayloadReader(source, payload.Length, budget);
+            return reader.ReadBytes();
+        }
+
+        /// <summary>Prices the run at the start of <paramref name="payload"/>, held or from a stream over it.</summary>
+        private static int PriceRunFrom(byte[] payload, bool fromStream, ReadBudget budget)
+        {
+            var reader = fromStream
+                ? new PayloadReader(new PayloadSource(new MemoryStream(payload, writable: false)), payload.Length, budget)
+                : new PayloadReader(payload, budget);
+            return reader.PriceBytes();
+        }
+
+        /// <summary>
         /// Every structure that writes a run refuses one that claims more than its payload
         /// holds, at the claims either side of where the offset arithmetic wrapped: as the
         /// payload ending, or, for a claim past one array, as more than one holds.

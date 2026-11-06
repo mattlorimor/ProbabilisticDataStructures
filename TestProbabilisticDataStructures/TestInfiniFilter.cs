@@ -531,6 +531,36 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A read charges each segment at least what restoring it allocates, and less than a
+        /// small object past that (#329): its table, and the segment, whose fields are more than
+        /// one small object allows for. The restores are counted in a no-GC region.
+        /// </summary>
+        /// <remarks>
+        /// Probed on 05a5669, a segment came to 80 bytes beyond its table, and was charged
+        /// <see cref="ReadBudget.SmallObject"/>, 64: 16 bytes a segment under what the read
+        /// allocated, which the slack of every read-budget sample hid. The shapes are the
+        /// narrowest table, where the segment is the largest share of what is allocated, the
+        /// widest fingerprint, and two between. The first restore of each is not counted, so that
+        /// what the runtime does once is not taken for the segment.
+        /// </remarks>
+        [TestMethod]
+        public void TestASegmentIsChargedWhatRestoringItAllocates()
+        {
+            foreach (var (q, f) in new[] { (2, 2), (2, 32), (10, 8), (16, 16) })
+            {
+                var charged = InfiniFilter.SegmentCost((ulong)InfiniSegment.Words(q, f));
+                InfiniSegment.Restore(q, f, 1);
+                var allocated = NoGCRegion.Allocated(() => InfiniSegment.Restore(q, f, 1));
+                Assert.IsLessThanOrEqualTo(charged, allocated,
+                    $"a segment of 2^{q} slots of {f}-bit fingerprints allocated {allocated:N0} bytes to restore, " +
+                    $"and a read is charged {charged:N0} for it");
+                Assert.IsLessThan(ReadBudget.SmallObject, charged - allocated,
+                    $"a segment of 2^{q} slots of {f}-bit fingerprints is charged {charged:N0} bytes, " +
+                    $"{charged - allocated:N0} past the {allocated:N0} restoring it allocated");
+            }
+        }
+
+        /// <summary>
         /// Reset returns the filter to the size it was built at, not merely to empty.
         /// </summary>
         [TestMethod]
