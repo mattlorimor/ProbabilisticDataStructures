@@ -624,12 +624,6 @@ namespace ProbabilisticDataStructures
         private readonly bool wide;
         private readonly bool streamed;
 
-        // The run of words begun and not yet read to its end: the bytes left of it, and,
-        // from a held payload, the copy of it, or from a stream, the buffer a piece is read
-        // into.
-        private long wordsLeft;
-        private byte[]? words;
-
         internal PayloadReader(ReadOnlySpan<byte> payload, ReadBudget budget, bool wide = false)
         {
             this.payload = payload;
@@ -639,8 +633,6 @@ namespace ProbabilisticDataStructures
             this.end = 0;
             this.wide = wide;
             this.streamed = false;
-            this.wordsLeft = 0;
-            this.words = null;
             this.Budget = budget;
         }
 
@@ -667,8 +659,6 @@ namespace ProbabilisticDataStructures
             this.end = source.Position + length;
             this.wide = wide;
             this.streamed = streamed;
-            this.wordsLeft = 0;
-            this.words = null;
             this.Budget = budget;
         }
 
@@ -760,7 +750,8 @@ namespace ProbabilisticDataStructures
         /// payload could never hold the run, so the bounds check refused it; a payload read
         /// from its stream can, and the run would then have passed both checks and asked
         /// for an array no runtime makes. A run its structure keeps in storage of its own is
-        /// not read into one array, and is not held to one (<see cref="BeginWords"/>).
+        /// not read into one array, and is not held to one where the read holds no payload
+        /// (<see cref="BeginWordsInPlace"/>).
         /// </remarks>
         private int ReadArrayRunLength()
         {
@@ -822,99 +813,28 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Begins a run of eight-byte words that its structure unpacks into storage of its
-        /// own, rather than keeping the run as the array it is read into, and returns the
-        /// run's length; <see cref="ReadWords()"/> then hands it back a piece at a time.
+        /// Begins a run of eight-byte words that its structure reads straight into storage of
+        /// its own with <see cref="ReadWords(Span{ulong})"/>, rather than keeping the run as the
+        /// array it is read into, and leaves the reader at the start of the run, pricing and
+        /// charging nothing: the storage is all a read of the run allocates, and is its
+        /// structure's to charge. Returns its length.
         /// </summary>
         /// <remarks>
         /// A run past one array, which the large form allows (#228), cannot be read into one,
         /// and a structure that keeps its run in words, or in more arrays than one, can hold
-        /// it. So a read that holds no payload takes such a run from the stream in pieces of
-        /// at most <see cref="PayloadSource.PieceBytes"/>, through one buffer of that length or
-        /// the run's, whichever is shorter, charged here. From a held payload the run is
-        /// copied out whole, as <see cref="ReadBytes"/> copies a run, and handed back as one
-        /// piece, so that the ordinary envelope's read allocates and is charged what it always
-        /// was; a run there is never past one array.
-        /// </remarks>
-        internal long BeginWords()
-        {
-            if (!this.streamed)
-            {
-                this.words = ReadBytes();
-                this.wordsLeft = this.words.Length;
-                return this.wordsLeft;
-            }
-
-            var count = ReadHeldRunLength();
-            var piece = PieceFor(count);
-            this.Budget.Charge(ReadBudget.ArrayOf((ulong)piece, 1));
-            this.words = piece == 0 ? Array.Empty<byte>() : new byte[piece];
-            this.wordsLeft = count;
-            return count;
-        }
-
-        /// <summary>
-        /// The next piece of the run <see cref="BeginWords"/> began, a whole number of words
-        /// when the run is, until it has all been handed back; valid until the next call.
-        /// </summary>
-        internal ReadOnlySpan<byte> ReadWords()
-        {
-            var words = this.words!;
-            if (!this.streamed)
-            {
-                var held = words.AsSpan(words.Length - (int)this.wordsLeft);
-                this.wordsLeft = 0;
-                return held;
-            }
-
-            var count = (int)Math.Min(this.wordsLeft, words.Length);
-            this.source!.ReadPiece(words, count);
-            this.wordsLeft -= count;
-            return words.AsSpan(0, count);
-        }
-
-        /// <summary>
-        /// Prices what <see cref="BeginWords"/> allocates for the run that comes next, after
-        /// the same checks, and skips it. Returns its length.
-        /// </summary>
-        internal long SkipWords()
-        {
-            if (!this.streamed)
-            {
-                return SkipBytes();
-            }
-
-            var count = ReadHeldRunLength();
-            this.Budget.Price(ReadBudget.ArrayOf((ulong)PieceFor(count), 1));
-            Skip(count);
-            return count;
-        }
-
-        /// <summary>
-        /// Begins a run of eight-byte words that its structure reads straight into storage of
-        /// its own with <see cref="ReadWords(Span{ulong})"/>, after the checks
-        /// <see cref="BeginWords"/> makes of its length, and leaves the reader at the start of
-        /// the run, pricing and charging nothing: the storage is all a read of the run
-        /// allocates, and is its structure's to charge. Returns its length.
-        /// </summary>
-        /// <remarks>
-        /// <see cref="BeginWords"/> copies such a run out of a held payload whole, and reads it
-        /// from a stream through a buffer of a piece on the heap, so a structure that then
-        /// unpacked it into storage of its own held the run twice, or held a piece besides
-        /// (#328). Begun here, it is read a piece at a time through a buffer on the stack. Its
-        /// length is held to one array where the read holds the payload, as
-        /// <see cref="BeginWords"/> holds it, and to what the payload has left where the read
-        /// holds none, which in the large form can be more than one array (#228).
+        /// it. So its length is held to one array where the read holds the payload, whose runs
+        /// are never past one, and to what the payload has left where the read holds none.
+        /// Such a run was once copied out of a held payload whole, and read from a stream
+        /// through a buffer of a piece on the heap, so a structure that then unpacked it into
+        /// storage of its own held the run twice, or held a piece besides (#328, #335). Begun
+        /// here, it is read a piece at a time through a buffer on the stack.
         /// </remarks>
         internal long BeginWordsInPlace() => this.streamed ? ReadHeldRunLength() : BeginRun();
-
-        /// <summary>The buffer a run of <paramref name="count"/> bytes is read through in pieces.</summary>
-        private static int PieceFor(long count) => (int)Math.Min(count, PayloadSource.PieceBytes);
 
         /// <summary>
         /// The buffer, on its caller's stack, a block (<see cref="ReadBlock"/>) of
         /// <paramref name="count"/> bytes is read through in pieces: no longer than the block,
-        /// as a run's is no longer than the run, and no longer than
+        /// so that a short block takes a short buffer, and no longer than
         /// <see cref="PayloadSource.BlockPieceBytes"/>.
         /// </summary>
         internal static int BlockPieceFor(long count) => (int)Math.Min(count, PayloadSource.BlockPieceBytes);
@@ -926,8 +846,8 @@ namespace ProbabilisticDataStructures
         /// it from one that is not.
         /// </summary>
         /// <remarks>
-        /// As <see cref="ReadWords()"/> is for a run, with nothing allocated: the piece is the
-        /// caller's, on its stack, no longer than <see cref="BlockPieceFor"/> says. So a block read
+        /// Nothing is allocated: the piece is the caller's, on its stack, no longer than
+        /// <see cref="BlockPieceFor"/> says. So a block read
         /// this way allocates, and is charged, what it did read a word at a time, and each piece
         /// is held to what the payload has left as each word was.
         /// </remarks>
@@ -1198,9 +1118,12 @@ namespace ProbabilisticDataStructures
         internal const int WidestField = 16;
 
         /// <summary>
-        /// The most of a run a reader that unpacks it into storage of its own takes from the
-        /// stream at a time (#228): a whole number of eight-byte words, and under the 85,000
-        /// bytes from which an array goes on the large object heap.
+        /// The piece a run its structure unpacks into storage of its own was taken from the
+        /// stream in, through a buffer on the heap (#228): a whole number of eight-byte words,
+        /// and under the 85,000 bytes from which an array goes on the large object heap. Such a
+        /// run is now read through a buffer on the stack no longer than
+        /// <see cref="BlockPieceBytes"/> (#328, #335), so as it ships this bounds nothing, and
+        /// lowered (<see cref="LoweredPieceLength"/>) it lowers that buffer.
         /// </summary>
         internal const int PieceLength = 64 * 1024;
 
@@ -1213,9 +1136,9 @@ namespace ProbabilisticDataStructures
         internal static int? LoweredPieceLength;
 
         /// <summary>
-        /// The longest piece a run is read in on this thread: <see cref="PieceLength"/>, unless
-        /// lowered. Either is a whole number of words, so that no word is cut between two
-        /// pieces.
+        /// <see cref="PieceLength"/> on this thread, unless lowered, and the most
+        /// <see cref="BlockPieceBytes"/> can be. Either is a whole number of words, so that no
+        /// word is cut between two pieces.
         /// </summary>
         internal static int PieceBytes => LoweredPieceLength ?? PieceLength;
 
@@ -1313,31 +1236,10 @@ namespace ProbabilisticDataStructures
         internal void EndChecksum() => this.nested = this.nested!.Outer;
 
         /// <summary>
-        /// Reads the next <paramref name="count"/> bytes into the start of
-        /// <paramref name="piece"/>, through the stream's array overload of <c>Read</c>: a
-        /// piece of a run its structure unpacks into storage of its own.
-        /// </summary>
-        /// <exception cref="InvalidDataException">The stream ends first.</exception>
-        internal void ReadPiece(byte[] piece, int count)
-        {
-            for (var read = 0; read < count;)
-            {
-                var n = this.stream.Read(piece, read, count - read);
-                if (n == 0)
-                {
-                    throw Truncated();
-                }
-                read += n;
-            }
-
-            this.Taken(piece.AsSpan(0, count));
-        }
-
-        /// <summary>
         /// Reads the next <c>piece.Length</c> bytes into <paramref name="piece"/>, a buffer on
         /// its reader's stack, through the stream's span overload of <c>Read</c>: a piece of a
-        /// block of words with no length before it, which its structure unpacks into storage of
-        /// its own (#289).
+        /// block of words with no length before it (#289), or of a run of them (#328, #335),
+        /// which its structure unpacks into storage of its own.
         /// </summary>
         /// <exception cref="InvalidDataException">The stream ends first.</exception>
         /// <remarks>
