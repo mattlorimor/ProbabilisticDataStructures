@@ -754,7 +754,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sum. Measured, a `VarOpt` holding one empty item is charged 816 bytes to read, not 840,
   and from the large form allocates 1,008, not 1,032; a new `DDSketch` is charged 216, not
   264. A run of words read from the large form in pieces is not read this way, and is
-  charged as it was. (#329)
+  charged by the same rule since #336. (#329)
+
+- **An empty run of words read from the large form is charged and priced nothing, as it
+  allocates nothing.** A run of words that a structure unpacks into storage of its own is
+  read from the large form in pieces, through a buffer of a piece or of the run, whichever
+  is shorter. For an empty run that buffer was already the one empty array the runtime
+  keeps, and it was charged an array's header for it, 24 bytes, and priced the same. It is
+  now charged and priced nothing, so price and charge still come to the same sum. The only
+  such empty run the library writes is an empty store of `DDSketch` buckets: measured, a new
+  `DDSketch` read from the large form is charged 240 bytes, not 288, and one holding values
+  of one sign only is charged 24 bytes less than it was, with what either allocates
+  unchanged. Every payload a `CountSketch` or an `InvertibleBloomLookupTable` reads holds a
+  word in each of its runs, so theirs are charged what they were. (#336)
 
 - **An `InfiniFilter` read is charged for each table's segment what the segment
   allocates.** Beside each table's words, a read charged the segment that holds them as
@@ -762,6 +774,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   charged 16 bytes a table less than it allocated, which the budget's slack absorbed but
   which a charge, an upper bound, should not do. A segment is now charged as two small
   objects, by the reader and its price alike, so they still come to the same sum. (#329)
+
+- **A `QuotientFilter` read is charged for the filter it builds what building it
+  allocates.** Beside its table, a read charged the filter as one small object, 64 bytes,
+  and building it allocates 136, measured in a no-GC region, the same at tables from two
+  slots to 2^20 and at the one-slot table of version 1: the filter's own 96
+  bytes, and a table of two words, 40 bytes, that the constructor it is built through gives
+  the filter before the read shapes it to the payload. A read was charged 72 bytes less than
+  it allocated, which the budget's slack absorbed. The filter is now charged as three small
+  objects, by the reader and its price alike, so they still come to the same sum, and a
+  read is charged 128 bytes more than it was. (#336)
 
 - **A `SublimeCountMinSketch` payload cut short inside its counters is refused for what it
   lacks before any of them are priced or allocated.** Its price and its reader checked the

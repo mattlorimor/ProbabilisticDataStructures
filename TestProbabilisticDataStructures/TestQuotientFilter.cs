@@ -595,6 +595,47 @@ namespace TestProbabilisticDataStructures
                 $"the read of the large form was charged {budget.Charged:N0} bytes, {budget.Charged - table:N0} more than its table");
         }
 
+        /// <summary>
+        /// A read charges the filter it builds at least what building it allocates, and less
+        /// than a small object past that (#336): its table, and beyond the table the filter,
+        /// with the table of the one-item filter it is built from before it is shaped, which
+        /// come to more than one small object allows for. The builds are counted in a no-GC
+        /// region.
+        /// </summary>
+        /// <remarks>
+        /// Probed on 6ce3fe1, the least of seven builds in a no-GC region, all seven agreeing,
+        /// came to 136 bytes beyond the table at every shape here and at two more, 2^20 slots
+        /// and a remainder of 29 bits in the one-slot table: the filter, 96 bytes, which is what
+        /// the constructor alone allocates beyond its table at four shapes, and the 40-byte
+        /// table of two words that the constructor gives the one-item filter <c>Build</c> starts
+        /// from. The read charged them as <see cref="ReadBudget.SmallObject"/>, 64: 72 bytes a
+        /// read under what it allocated, which the slack of every read-budget sample hid. The
+        /// shapes are the narrowest table, where the filter is the largest share of what is
+        /// allocated, the widest remainder, the issue's filter for 100 items at 1%, a table of
+        /// 2^16 slots, and the one-slot table a payload of version 1 holds for 32 quotient
+        /// bits. The first build of each is not counted, so that what the runtime does once is
+        /// not taken for the filter.
+        /// </remarks>
+        [TestMethod]
+        public void TestAReadIsChargedWhatBuildingItsFilterAllocates()
+        {
+            var hash = Defaults.GetDefaultHashFunction();
+            foreach (var (q, r, wrapped) in new (uint, uint, bool)[]
+            {
+                (1, 1, false), (2, 61, false), (8, 7, false), (16, 16, false), (32, 7, true),
+            })
+            {
+                var slots = QuotientFilter.Build(q, r, wrapped, hash).SlotCount;
+                var shape = $"a filter of {slots:N0} slots of {r}-bit remainders{(wrapped ? ", at version 1," : "")}";
+                var charged = QuotientFilter.TableCost(slots, r);
+                var allocated = NoGCRegion.Allocated(() => QuotientFilter.Build(q, r, wrapped, hash));
+                Assert.IsLessThanOrEqualTo(charged, allocated,
+                    $"{shape} allocated {allocated:N0} bytes to build for a read, and a read is charged {charged:N0} for it");
+                Assert.IsLessThan(ReadBudget.SmallObject, charged - allocated,
+                    $"{shape} is charged {charged:N0} bytes, {charged - allocated:N0} past the {allocated:N0} building it allocated");
+            }
+        }
+
         [TestMethod]
         public void TestTheHashIsSettledOnceAnythingIsAdded()
         {
