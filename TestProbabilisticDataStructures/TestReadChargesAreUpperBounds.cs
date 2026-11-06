@@ -1,4 +1,6 @@
 using System;
+using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Hashing;
@@ -105,29 +107,40 @@ namespace TestProbabilisticDataStructures
         /// envelope and the large form, as a byte array and from a stream made before the read,
         /// with what the read returned.
         /// </summary>
-        private static IEnumerable<(string Read, long Charged, long Allocated, object Structure)> Measured(TestReadBudget.Sample sample)
+        private static IEnumerable<(string Read, bool Large, bool Streamed, long Charged, long Allocated, object Structure)> Measured(
+            TestReadBudget.Sample sample)
         {
-            foreach (var form in new[] { sample, TestReadBudget.InTheLargeForm(sample) })
+            foreach (var (form, large) in new[] { (sample, false), (TestReadBudget.InTheLargeForm(sample), true) })
             {
                 var bytes = form.Bytes;
                 var structure = form.Read(bytes, ReadOptions.Unlimited);
                 var charged = Charged(form);
 
                 MemoryStream stream = null;
-                (string How, Func<object> Read, Action First)[] reads =
+                (string How, bool Streamed, Func<object> Read, Action First)[] reads =
                 [
-                    ("as a byte array", () => form.Read(bytes, ReadOptions.Unlimited), null),
-                    ("from a stream", () => form.ReadStream(stream, ReadOptions.Unlimited),
+                    ("as a byte array", false, () => form.Read(bytes, ReadOptions.Unlimited), null),
+                    ("from a stream", true, () => form.ReadStream(stream, ReadOptions.Unlimited),
                         () => stream = new MemoryStream(bytes, writable: false)),
                 ];
-                foreach (var (how, read, first) in reads)
+                foreach (var (how, streamed, read, first) in reads)
                 {
                     var allocated = TestReadBudget.LeastAllocated(read, Repeats, first);
                     Console.WriteLine($"[UPPER-BOUND] {form.Name} {how}: charged {charged:N0}, allocated {allocated:N0}, over by {charged - allocated:N0}");
-                    yield return ($"{form.Name} read {how}", charged, allocated, structure);
+                    yield return ($"{form.Name} read {how}", large, streamed, charged, allocated, structure);
                 }
             }
         }
+
+        private static readonly ConcurrentDictionary<StructureId, (string Read, bool Large, bool Streamed, long Charged, long Allocated, object Structure)[]>
+            MeasuredSamples = new();
+
+        /// <summary>
+        /// What <see cref="Measured"/> finds for <paramref name="id"/>'s sample, measured once for
+        /// the tests that each look at every structure's.
+        /// </summary>
+        private static (string Read, bool Large, bool Streamed, long Charged, long Allocated, object Structure)[] MeasuredOnce(StructureId id) =>
+            MeasuredSamples.GetOrAdd(id, _ => Measured(TestReadBudget.Samples.Value[id]).ToArray());
 
         /// <summary>
         /// Every structure's read is charged at least what it allocates, in the ordinary
@@ -143,7 +156,7 @@ namespace TestProbabilisticDataStructures
             var allowed = Allowances.TryGetValue(id, out var allowance);
             var problems = new List<string>();
 
-            foreach (var (read, charged, allocated, restored) in Measured(TestReadBudget.Samples.Value[id]))
+            foreach (var (read, _, _, charged, allocated, restored) in MeasuredOnce(id))
             {
                 var over = charged - allocated;
                 var most = Over + (allowed ? allowance.Allowance(restored) : 0);
@@ -182,7 +195,7 @@ namespace TestProbabilisticDataStructures
             var problems = new List<string>();
             foreach (var (_, more) in TestReadBudget.Further.Value.Values.SelectMany(samples => samples))
             {
-                foreach (var (read, charged, allocated, _) in Measured(more))
+                foreach (var (read, _, _, charged, allocated, _) in Measured(more))
                 {
                     if (allocated > charged)
                     {
@@ -192,6 +205,198 @@ namespace TestProbabilisticDataStructures
             }
 
             Assert.IsEmpty(problems, $"at {problems.Count} checks: " + string.Join(" | ", problems));
+        }
+
+        /// <summary>
+        /// What every read shares is charged with no slack beyond what the JIT can take away:
+        /// the envelope around its structure, in either form, and the objects the read itself
+        /// makes. In each form the read charged least past what it allocates is charged nothing
+        /// past it as a byte array, and from a stream only the stream it did not make, or past
+        /// either by no more than a checksum's state.
+        /// </summary>
+        /// <remarks>
+        /// Every read's charge holds what every read shares, so a charge there past what it
+        /// allocates would put every read in that form over by at least as much, inside
+        /// <see cref="Over"/>, where nothing else would see it. A checksum's state charged as a
+        /// small object, 40 bytes past its size, was that (#346).
+        /// <see cref="TestWhatEveryReadMakesOnceIsChargedWhatItAllocates"/> holds each object the
+        /// read makes to its size; this holds what the envelope's price makes of them.
+        /// <para>
+        /// The checksum's state is the margin because a read can allocate less than it did
+        /// when it was cold. Run in the whole suite, after it had run reads many times, every
+        /// read in the ordinary envelope as a byte array was charged at least 24 bytes past
+        /// what it allocated, where run alone the least was nothing; with
+        /// <c>DOTNET_JitObjectStackAllocation=0</c> the whole suite met the exact bound. So once
+        /// a read is compiled hot, the JIT keeps an object of every read on the stack, taken to
+        /// be the checksum: of what every read makes it is the one of that size, and it does not
+        /// leave the read. How many reads are hot when they are counted varies from run to run.
+        /// </para>
+        /// </remarks>
+        [TestMethod]
+        public void TestWhatEveryReadSharesIsChargedWithoutSlack()
+        {
+            var least = new Dictionary<(bool Large, bool Streamed), (long Over, string Read)>();
+            foreach (var id in Enum.GetValues<StructureId>())
+            {
+                foreach (var (read, large, streamed, charged, allocated, _) in MeasuredOnce(id))
+                {
+                    var over = charged - allocated;
+                    if (!least.TryGetValue((large, streamed), out var was) || over < was.Over)
+                    {
+                        least[(large, streamed)] = (over, read);
+                    }
+                }
+            }
+
+            Assert.HasCount(4, least, "premise: reads were measured in both forms, as a byte array and from a stream");
+            foreach (var ((large, streamed), (over, read)) in least)
+            {
+                var expected = streamed ? PersistenceFormat.ByteArrayStreamCost : 0;
+                var what = $"{(large ? "the large form" : "the ordinary envelope")} {(streamed ? "from a stream" : "as a byte array")}";
+                Assert.IsGreaterThanOrEqualTo(expected, over,
+                    $"a read in {what}, {read}, was charged {over:N0} bytes past what it allocates, less than {expected:N0}");
+                Assert.IsLessThanOrEqualTo(expected + PersistenceFormat.ChecksumStateCost, over,
+                    $"every read in {what} was charged at least {over:N0} bytes past what it allocates, the least {read}, " +
+                    $"where {expected:N0} is what every read shares and a checksum's state what the JIT may keep off the heap");
+            }
+        }
+
+        /// <summary>
+        /// <paramref name="ordinary"/>, an ordinary envelope, with every envelope a run of its
+        /// payload holds written again in the large form, by the library, and itself kept
+        /// ordinary: <paramref name="nested"/> is how many were.
+        /// </summary>
+        /// <remarks>
+        /// A run that holds an envelope is found as a length followed by that many bytes that
+        /// are one whole ordinary envelope, and the envelopes those hold go with it.
+        /// </remarks>
+        private static byte[] HoldingLargeEnvelopes(byte[] ordinary, out int nested)
+        {
+            const int header = 14, prefix = sizeof(uint);
+            var end = ordinary.Length - sizeof(uint);
+            var payload = new MemoryStream();
+            var field = new byte[prefix];
+            var copied = header;
+            nested = 0;
+            for (var at = header; at + prefix + PersistenceFormat.EnvelopeLength <= end; at++)
+            {
+                var length = BinaryPrimitives.ReadUInt32LittleEndian(ordinary.AsSpan(at));
+                if (length > end - at - prefix || !LargeForm.IsEnvelope(ordinary.AsSpan(at + prefix, (int)length)))
+                {
+                    continue;
+                }
+
+                var held = ordinary.AsSpan(at + prefix, (int)length).ToArray();
+                var structure = TestReadBudget.Samples.Value[LargeForm.StructureOf(held)].Read(held, ReadOptions.Unlimited);
+                var large = LargeForm.Below(0, () => PersistenceFormat.ToByteArray((IPayloadBody)structure));
+                Assert.IsTrue(LargeForm.IsLarge(large), "premise: an envelope written below a threshold of nothing is in the large form");
+
+                payload.Write(ordinary, copied, at - copied);
+                BinaryPrimitives.WriteUInt32LittleEndian(field, (uint)large.Length);
+                payload.Write(field);
+                payload.Write(large);
+                nested++;
+                copied = at + prefix + (int)length;
+                at = copied - 1;
+            }
+
+            payload.Write(ordinary, copied, end - copied);
+            var bytes = new byte[PersistenceFormat.EnvelopeLength + payload.Length];
+            ordinary.AsSpan(0, header).CopyTo(bytes);
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(10), (uint)payload.Length);
+            payload.ToArray().CopyTo(bytes, header);
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(bytes.Length - sizeof(uint)),
+                Crc32.HashToUInt32(bytes.AsSpan(4, bytes.Length - 4 - sizeof(uint))));
+            return bytes;
+        }
+
+        /// <summary>
+        /// A structure in the ordinary envelope that holds envelopes in the large form is
+        /// charged its price, and at least what it allocates: each envelope it holds is read as a
+        /// read nested in it, from the run it was copied from, and is charged no budget or
+        /// stream of its own, which the read around it has (#346).
+        /// </summary>
+        /// <remarks>
+        /// No writer makes this: an envelope is in the large form when its payload is past the
+        /// threshold, and the payload around it is longer. A reader takes it, since a nested
+        /// structure is in whichever form its own payload calls for, whatever form the payload
+        /// around it is in (FORMAT.md, The large form), and it is the one read in the large form
+        /// that is both nested and held, so the one way to reach what such a read is charged. The
+        /// roster is the samples that hold an envelope.
+        /// </remarks>
+        [TestMethod]
+        public void TestALargeEnvelopeHeldByAnOrdinaryOneIsChargedAsANestedRead()
+        {
+            var holding = new List<StructureId>();
+            var problems = new List<string>();
+
+            foreach (var (id, sample) in TestReadBudget.Samples.Value)
+            {
+                var bytes = HoldingLargeEnvelopes(sample.Bytes, out var nested);
+                if (nested == 0)
+                {
+                    continue;
+                }
+
+                holding.Add(id);
+                var mixed = sample with { Name = $"{sample.Name} holding what it holds in the large form ({nested:N0} envelopes)", Bytes = bytes };
+                var total = Charged(mixed);
+
+                var unlimited = new ReadBudget(long.MaxValue, id);
+                mixed.Read(bytes, new ReadOptions(unlimited));
+                if (unlimited.Spent != unlimited.Charged)
+                {
+                    problems.Add($"{mixed.Name} was priced at {unlimited.Charged:N0} bytes and charged {unlimited.Spent:N0}");
+                }
+
+                try
+                {
+                    mixed.Read(bytes, new ReadOptions(total));
+                }
+                catch (InvalidDataException e)
+                {
+                    problems.Add($"{mixed.Name} named {total:N0} bytes and was refused under them: {e.Message}");
+                }
+
+                MemoryStream stream = null;
+                foreach (var (how, read, first) in new (string, Func<object>, Action)[]
+                {
+                    ("as a byte array", () => mixed.Read(bytes, ReadOptions.Unlimited), null),
+                    ("from a stream", () => mixed.ReadStream(stream, ReadOptions.Unlimited),
+                        () => stream = new MemoryStream(bytes, writable: false)),
+                })
+                {
+                    var allocated = TestReadBudget.LeastAllocated(read, Repeats, first);
+                    Console.WriteLine($"[HELD-LARGE] {mixed.Name} {how}: charged {total:N0}, allocated {allocated:N0}");
+                    if (allocated > total)
+                    {
+                        problems.Add($"{mixed.Name} read {how} allocated {allocated:N0} bytes and was charged {total:N0}, " +
+                            $"{allocated - total:N0} short");
+                    }
+                }
+            }
+
+            Assert.IsNotEmpty(holding, "premise: no sample holds an envelope, so none was read holding one in the large form");
+            Assert.IsEmpty(problems, $"at {problems.Count} checks: " + string.Join(" | ", problems));
+        }
+
+        /// <summary>
+        /// An object a read makes is charged its measured size, or a small object, the general
+        /// bound for one, where that is larger, as <c>ReadBudget.Object</c> says.
+        /// </summary>
+        /// <remarks>
+        /// The sweep cannot see the floor: an object charged its own size is charged what it
+        /// allocates, so it is the bound a size measured on one runtime keeps on another.
+        /// </remarks>
+        [TestMethod]
+        public void TestAnObjectIsChargedItsSizeOrASmallObjectWhicheverIsLarger()
+        {
+            Assert.AreEqual(ReadBudget.SmallObject, ReadBudget.Object(ReadBudget.SmallObject - 8),
+                "an object smaller than a small object was charged less than one");
+            Assert.AreEqual(ReadBudget.SmallObject, ReadBudget.Object(ReadBudget.SmallObject),
+                "an object the size of a small object was charged other than that");
+            Assert.AreEqual(ReadBudget.SmallObject + 8, ReadBudget.Object(ReadBudget.SmallObject + 8),
+                "an object larger than a small object was charged other than its size");
         }
 
         /// <summary>Every allowance says why its structure's price can only bound its read.</summary>
