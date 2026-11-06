@@ -697,6 +697,80 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// A payload of every version a quotient filter reads is priced at what its reader
+        /// charges (#343). Walked on its own, the price reads the count at the width its
+        /// version gives and prices the table and the filter the reader charges for, and the
+        /// read, refused under a budget of nothing, names that and the envelope, loads under
+        /// it, and is refused under a byte less.
+        /// </summary>
+        /// <remarks>
+        /// A price that read the count as a <c>u64</c> at every version passed the whole suite
+        /// before this test (#343). A payload of version 1 counts in a <c>u32</c>, so that price
+        /// read the run's length into the count and the table's first bytes as the run's length,
+        /// and refused the payload. A refused price is set aside: the read is admitted at what
+        /// was priced by then, the envelope alone, and its reader then charges the table. So
+        /// the one-slot table, refused under a budget of nothing, named 192 bytes, where its
+        /// read takes 360. Each half of the test fails on that price by itself. The payloads are
+        /// the three stored fixtures, two of version 1 and one of version 12, and a filter
+        /// written now, and the versions they cover are held to the ones a quotient filter
+        /// reads, so that a version added without a payload here fails.
+        /// </remarks>
+        [TestMethod]
+        public void TestAPayloadOfEveryVersionIsPricedAtWhatItsReaderCharges()
+        {
+            var now = new QuotientFilter(100, 0.01);
+            for (var i = 0; i < 50; i++) now.Add(Key($"k{i}"));
+            var payloads = new (string Name, byte[] Bytes)[]
+            {
+                ("one slot", QuotientFilterFixture("quotientfilter-q32-v1.bin")),
+                ("quotientfilter-v1.bin", QuotientFilterFixture("quotientfilter-v1.bin")),
+                ("quotientfilter-v12.bin", QuotientFilterFixture("quotientfilter-v12.bin")),
+                ("100 at 1%, half full, written now", now.ToByteArray()),
+            };
+
+            var versions = new HashSet<ushort>();
+            foreach (var (name, bytes) in payloads)
+            {
+                var version = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(4));
+                versions.Add(version);
+                var payload = bytes[14..^4];
+                var remainderBits = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(4));
+                var unlimited = Persistence.FromByteArray<QuotientFilter>(bytes);
+                var cost = QuotientFilter.TableCost(unlimited.SlotCount, remainderBits);
+                var what = $"{name}, at version {version}";
+
+                var budget = new ReadBudget(long.MaxValue, StructureId.QuotientFilter);
+                var reader = new PayloadReader(payload, budget);
+                try
+                {
+                    QuotientFilter.Price(ref reader, version);
+                }
+                catch (InvalidDataException e)
+                {
+                    Assert.Fail($"{what}: its price refused it, so it is set aside and the read admitted at less: {e.Message}");
+                }
+                Assert.AreEqual(cost, budget.Charged,
+                    $"{what}: its price priced {budget.Charged:N0} bytes, and its reader charges {cost:N0} for the table and the filter");
+
+                var total = ReadBudget.Sum(PersistenceFormat.EnvelopeCost((ulong)payload.Length), cost);
+                var nothing = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<QuotientFilter>(bytes, new ReadOptions(0)), $"{what} loaded under nothing");
+                Assert.IsInstanceOfType<ReadBudgetExceededException>(nothing.InnerException, $"{what}: {nothing.Message}");
+                Assert.AreEqual(total, ((ReadBudgetExceededException)nothing.InnerException).RequiredBytes,
+                    $"{what}, refused under a budget of nothing, named the wrong total");
+                CollectionAssert.AreEqual(unlimited.ToByteArray(),
+                    Persistence.FromByteArray<QuotientFilter>(bytes, new ReadOptions(total)).ToByteArray(),
+                    $"{what}, read under the {total:N0} bytes it named, is not the filter it reads as under no limit");
+                var under = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<QuotientFilter>(bytes, new ReadOptions(total - 1)), $"{what} loaded a byte under {total:N0}");
+                Assert.IsInstanceOfType<ReadBudgetExceededException>(under.InnerException, $"{what}: {under.Message}");
+            }
+
+            CollectionAssert.AreEquivalent(PersistenceFormat.ReadableVersions(StructureId.QuotientFilter).ToArray(), versions.ToArray(),
+                "the payloads' versions are not exactly the ones a quotient filter reads");
+        }
+
         [TestMethod]
         public void TestTheHashIsSettledOnceAnythingIsAdded()
         {
