@@ -526,6 +526,75 @@ namespace TestProbabilisticDataStructures
             Assert.IsFalse(restored.Test(Key("k9")));
         }
 
+        /// <summary>
+        /// A read holds the table once and is charged for it once (#328). In the ordinary
+        /// envelope, what it allocates and is charged beyond the payload it holds is the table
+        /// it builds, its words read into it and not first into an array of their own and
+        /// copied; in the large form, where the payload is not held, it is the table alone,
+        /// with no buffer on the heap for the pieces the words are read in.
+        /// </summary>
+        /// <remarks>
+        /// A table of 2^16 slots at 1%, 81,936 bytes of words, longer than a piece of a run on
+        /// the heap (<see cref="PayloadSource.PieceLength"/>), so that a buffer of one is a
+        /// whole piece. The slack, 4 KiB, is a twentieth of the table and of the piece, so a
+        /// copy of either fails it. Each figure is held from below too, to the payload and the
+        /// table, so that a measurement of nothing cannot pass. The reads are counted in a
+        /// no-GC region (#293).
+        /// </remarks>
+        [TestMethod]
+        public void TestAReadHoldsItsTableOnce()
+        {
+            const long Slack = 4 * 1024;
+
+            var filter = new QuotientFilter(40_000, 0.01);
+            for (var i = 0; i < 30_000; i++)
+            {
+                filter.Add(Key($"k{i}"));
+            }
+
+            Assert.AreEqual(1UL << 16, filter.Capacity(), "premise: the table is not of 2^16 slots");
+            var bytes = filter.ToByteArray();
+            long payload = bytes.Length - PersistenceFormat.EnvelopeLength;
+            var table = ReadBudget.ArrayOf(
+                (ulong)QuotientFilter.TableWords(filter.Capacity(), QuotientFilter.Split(40_000, 0.01).RemainderBits), sizeof(ulong));
+            Assert.IsGreaterThan(PayloadSource.PieceLength + Slack, table, "premise: the table is no longer than a piece on the heap");
+
+            QuotientFilter.ReadFrom(new MemoryStream(bytes, writable: false));
+            var ordinary = NoGCRegion.Allocated(() => QuotientFilter.ReadFrom(new MemoryStream(bytes, writable: false)));
+            var charged = CapacityModel.ChargeOf<QuotientFilter>(StructureId.QuotientFilter, bytes);
+
+            var large = LargeForm.WriteLarge(filter);
+            Assert.IsTrue(LargeForm.IsLarge(large), "the filter was not written in the large form");
+            QuotientFilter.ReadFrom(new MemoryStream(large, writable: false));
+            var streamed = NoGCRegion.Allocated(() => QuotientFilter.ReadFrom(new MemoryStream(large, writable: false)));
+            var budget = new ReadBudget(long.MaxValue, StructureId.QuotientFilter);
+            CollectionAssert.AreEqual(bytes,
+                QuotientFilter.ReadFrom(new MemoryStream(large, writable: false), new ReadOptions(budget)).ToByteArray(),
+                "the large form does not read back as the filter");
+
+            Console.WriteLine(
+                $"[HOLDS ONCE] QuotientFilter: payload {payload:N0}, table {table:N0}; ordinary read {ordinary:N0}, " +
+                $"charged {charged:N0}; large-form read {streamed:N0}, charged {budget.Charged:N0}");
+
+            Assert.IsGreaterThanOrEqualTo(payload + table, ordinary,
+                $"the read allocated {ordinary:N0} bytes, less than the {payload:N0}-byte payload it holds and the {table:N0}-byte table");
+            Assert.IsLessThanOrEqualTo(payload + table + Slack, ordinary,
+                $"the read allocated {ordinary:N0} bytes, {ordinary - payload - table:N0} more than its payload and its table");
+            Assert.IsGreaterThanOrEqualTo(payload + table, charged,
+                $"the read was charged {charged:N0} bytes, less than its payload and its table");
+            Assert.IsLessThanOrEqualTo(payload + table + Slack, charged,
+                $"the read was charged {charged:N0} bytes, {charged - payload - table:N0} more than its payload and its table");
+
+            Assert.IsGreaterThanOrEqualTo(table, streamed,
+                $"the read of the large form allocated {streamed:N0} bytes, less than the {table:N0}-byte table");
+            Assert.IsLessThanOrEqualTo(table + Slack, streamed,
+                $"the read of the large form allocated {streamed:N0} bytes, {streamed - table:N0} more than its table");
+            Assert.IsGreaterThanOrEqualTo(table, budget.Charged,
+                $"the read of the large form was charged {budget.Charged:N0} bytes, less than its table");
+            Assert.IsLessThanOrEqualTo(table + Slack, budget.Charged,
+                $"the read of the large form was charged {budget.Charged:N0} bytes, {budget.Charged - table:N0} more than its table");
+        }
+
         [TestMethod]
         public void TestTheHashIsSettledOnceAnythingIsAdded()
         {

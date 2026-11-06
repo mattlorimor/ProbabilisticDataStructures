@@ -890,6 +890,24 @@ namespace ProbabilisticDataStructures
             return count;
         }
 
+        /// <summary>
+        /// Begins a run of eight-byte words that its structure reads straight into storage of
+        /// its own with <see cref="ReadWords(Span{ulong})"/>, after the checks
+        /// <see cref="BeginWords"/> makes of its length, and leaves the reader at the start of
+        /// the run, pricing and charging nothing: the storage is all a read of the run
+        /// allocates, and is its structure's to charge. Returns its length.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="BeginWords"/> copies such a run out of a held payload whole, and reads it
+        /// from a stream through a buffer of a piece on the heap, so a structure that then
+        /// unpacked it into storage of its own held the run twice, or held a piece besides
+        /// (#328). Begun here, it is read a piece at a time through a buffer on the stack. Its
+        /// length is held to one array where the read holds the payload, as
+        /// <see cref="BeginWords"/> holds it, and to what the payload has left where the read
+        /// holds none, which in the large form can be more than one array (#228).
+        /// </remarks>
+        internal long BeginWordsInPlace() => this.streamed ? ReadHeldRunLength() : BeginRun();
+
         /// <summary>The buffer a run of <paramref name="count"/> bytes is read through in pieces.</summary>
         private static int PieceFor(long count) => (int)Math.Min(count, PayloadSource.PieceBytes);
 

@@ -602,7 +602,7 @@ gigabytes, and loads only with a budget raised to match. What each read is charg
 | `CountingBloomFilter`, `DeletableBloomFilter`, `StableBloomFilter` | a scratch buffer of eight bytes per hash function |
 | `PartitionedBloomFilter`, `ScalableBloomFilter` | a slot per partition or contained filter; a contained filter is charged as a read of its own |
 | `CuckooBloomFilter` | the whole table, `m` × `b` fingerprints of `f` bits, and a bit per entry, whatever the payload holds |
-| `QuotientFilter` | the whole table, 2^`q` slots of `r` + 3 bits |
+| `QuotientFilter` | the whole table, 2^`q` slots of `r` + 3 bits, its words read straight into it |
 | `VarOpt` | five regions of `k` + 1 slots, eight bytes each |
 | `InverseBloomFilter` | a slot of eight bytes per unit of capacity |
 | `CountMinSketch`, `CountSketch`, `PrivateCountMinSketch`, `SublimeCountMinSketch` | every row, before it is read; Sublime also its packed rows |

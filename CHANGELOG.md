@@ -731,6 +731,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An `InvertibleBloomLookupTable` payload cut short after its counts, or with bytes left
+  over after its hash sums, is refused as malformed under any budget its price fits.** A read
+  is priced before it allocates, and a price that finds its payload malformed is set aside,
+  with the read admitted at what it had priced by then. The table's price priced the counts
+  and hash sums it unpacks only once it had walked all three of its runs and found the
+  payload's end, where its reader charges each as soon as its run is held. So such a payload
+  was admitted at less than its reader then charged, and under a budget between the two it was
+  refused for that budget, naming a total under which it would only have been refused as
+  malformed: the sweep's table of 15,000 cells, cut to 135,700 bytes, was refused for a budget
+  of 255,888 bytes, naming 375,912. The price now prices each array where the reader charges
+  it, after the checks the reader makes first. A whole payload is priced and charged what it
+  was, and nothing the library wrote is refused.
+
 - **An empty run read whole is charged nothing, and from a stream allocates nothing.** A
   read charged an array's header, 24 bytes, for every empty run it read into an array of
   its own: an empty key a `TopK` or `HeavyKeeper` holds, an empty item in a `VarOpt`, an
@@ -805,6 +818,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   113,448 and now 57,128. So the default budget now reads a filter of 8-bit fingerprints
   up to a table of 2^28 slots, 201,326,592 items, where it stopped at 2^27; at 16 bits it
   still stops at 2^27. (#313)
+
+- **A `QuotientFilter` read holds its table once, and is charged for it once.** Its reader
+  copied the run of the table's words out of a held payload whole and then unpacked the
+  copy into the table it builds, so a read held, and was charged for, the table twice
+  besides the payload: three times in all. From the large form, where the payload is not
+  held, it read the run through a 64 KiB buffer on the heap. The words are now read
+  straight into the table, in pieces through a 16 KiB buffer on the stack, as an
+  `InfiniFilter`'s tables are, and the price and the charges are the table and the filter
+  alone, so they still come to the same sum. Measured in a no-GC region, a filter of 2^16
+  slots at 1%, whose table is 81,936 bytes, allocated 246,248 bytes to read and now
+  allocates 164,288, and in the large form 147,968 and now 82,408. So the default budget
+  now reads a filter at 0.1% up to a table of 2^28 slots, 201,326,592 items, where it
+  stopped at 2^27; at 1% it still stops at 2^28. (#328)
 
 - **An `InfiniFilter` or `MementoFilter` payload claiming more expansions than its first
   table can have had is refused.** A first table starts with at least two bits of address

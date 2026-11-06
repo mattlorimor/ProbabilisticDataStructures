@@ -210,7 +210,7 @@ building at the scale it describes, which is the measurement as of commit 426348
 | `CuckooBloomFilter` | n, fp 1% | 8,160,437,862 | 255,013,683 | 1,020,054,732 |
 | `CuckooBloomFilter` | n, fp 0.1% | 8,160,437,862 | 255,013,683 | 1,020,054,732 |
 | `QuotientFilter` | n, fp 1% | 6,442,450,944 | 201,326,592 | 805,306,368 |
-| `QuotientFilter` | n, fp 0.1% | 6,442,450,944 | 100,663,296 | 805,306,368 |
+| `QuotientFilter` | n, fp 0.1% | 6,442,450,944 | 201,326,592 | 805,306,368 |
 | `BinaryFuseFilter` | keys, 8-bit fingerprints | 1,908,641,337 | ≈ 476.99 million | ≈ 1.91 billion |
 | `BinaryFuseFilter` | keys, 16-bit fingerprints | 954,204,160 | ≈ 238.38 million | ≈ 954.20 million |
 | `BloomierFilter` | keys, 8-bit values | 954,204,160 | ≈ 238.38 million | ≈ 954.20 million |

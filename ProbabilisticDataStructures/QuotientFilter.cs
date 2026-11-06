@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -986,9 +985,11 @@ namespace ProbabilisticDataStructures
             var count = ReadCount(ref reader, version);
 
             // The table's words are one run, which in the large form can be longer than one
-            // array (#228): read in pieces, straight into the table, when the payload is not
-            // held, and copied out whole when it is.
-            var stored = reader.BeginWords();
+            // array (#228). They are read straight into the table, a piece at a time through a
+            // buffer on the stack, whether the payload is held or not. Copied out of a held
+            // payload whole and then into the table, every table was held, and charged, twice
+            // (#328).
+            var stored = reader.BeginWordsInPlace();
             var wrapped = CheckWidths(version, quotientBits, remainderBits);
             var slots = SlotsOf(quotientBits, wrapped);
             var words = TableWords(slots, remainderBits);
@@ -1012,16 +1013,7 @@ namespace ProbabilisticDataStructures
             }
 
             var filter = Build(quotientBits, remainderBits, wrapped, PersistenceFormat.ResolveOrThrow(hashId, hash));
-
-            for (var word = 0; word < filter.data.Length;)
-            {
-                var piece = reader.ReadWords();
-                for (var at = 0; at < piece.Length; at += sizeof(ulong))
-                {
-                    filter.data[word++] = BinaryPrimitives.ReadUInt64LittleEndian(piece[at..]);
-                }
-            }
-
+            reader.ReadWords(filter.data);
             reader.ExpectEnd();
 
             // Every walk of the table rests on its metadata being consistent, and on the count
@@ -1032,9 +1024,8 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Prices what <see cref="Read"/> allocates beyond the envelope: the copy of the
-        /// stored table, or the piece it is read in from a payload that is not held, and the
-        /// table it is unpacked into, sized by the two widths alone. See
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the table its words
+        /// are read straight into, sized by the two widths alone. See
         /// <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
@@ -1042,7 +1033,7 @@ namespace ProbabilisticDataStructures
             var quotientBits = reader.ReadUInt32();
             var remainderBits = reader.ReadUInt32();
             ReadCount(ref reader, version);
-            reader.SkipWords();
+            reader.Skip(reader.BeginWordsInPlace());
             reader.ExpectEnd();
             var wrapped = CheckWidths(version, quotientBits, remainderBits);
             reader.Budget.Price(TableCost(SlotsOf(quotientBits, wrapped), remainderBits));
