@@ -484,3 +484,4 @@ $RECYCLE.BIN/
 # Stryker mutation-testing output
 **/StrykerOutput/
 **/.stryker-tmp/
+crash-hunt/
