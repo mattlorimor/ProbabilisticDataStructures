@@ -1641,10 +1641,10 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// A count sketch's, a DDSketch's and an invertible table's price takes a run of words
         /// past one array, which the large form allows and each structure can hold (#228), as
-        /// its reader does: it prices exactly the storage the reader reads the words into, and the
-        /// objects it makes (#346), and does not refuse the run as more than one array holds (#335). Each payload claims runs
-        /// of more than 2^31 bytes, their lengths where FORMAT.md lays them out and zeros
-        /// everywhere else, on a stream that claims them all.
+        /// its reader does: it prices exactly the storage the reader reads the words into, and
+        /// the objects it makes (#346), and does not refuse the run as more than one array holds
+        /// (#335). Each payload claims runs of more than 2^31 bytes, their lengths where
+        /// FORMAT.md lays them out and zeros everywhere else, on a stream that claims them all.
         /// </summary>
         /// <remarks>
         /// A price that refused such a run would not show in a read of a payload this library
