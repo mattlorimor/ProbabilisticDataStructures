@@ -242,6 +242,77 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A read holds each table once and is charged for it once (#327), as an
+        /// <see cref="InfiniFilter"/> read is (#313). In the ordinary envelope, what it allocates
+        /// and is charged beyond the payload it holds is the tables it builds, read into them and
+        /// not first into arrays of their own and copied; in the large form, where the payload is
+        /// not held, it is the tables alone.
+        /// </summary>
+        /// <remarks>
+        /// Two-bit fingerprints are the narrowest, and an entry's runs out after the fewest
+        /// expansions, so a filter built for 2,048 keys and given 48,000 keeps a table behind the
+        /// first, of the size it had when they ran out. The slack, 4 KiB, is short of the first
+        /// table and of the second, which a premise checks, so a second copy of either fails it,
+        /// as one of every table does. Each figure is held from below too, to the payload and the tables,
+        /// so that a measurement of nothing cannot pass. The reads are counted in a no-GC region
+        /// (#293).
+        /// </remarks>
+        [TestMethod]
+        public void TestAReadHoldsEachTableOnce()
+        {
+            const long Slack = 4 * 1024;
+
+            var filter = new MementoFilter(64, 2, initialCapacity: 2048);
+            for (ulong i = 0; i < 48_000; i++)
+            {
+                filter.Add(i * 7919);
+            }
+
+            long TableBytes(MementoSegment segment) => ReadBudget.ArrayOf((ulong)segment.Data.Length, sizeof(ulong));
+            var tables = filter.Segments.Sum(TableBytes);
+            Assert.IsGreaterThan(1, filter.Segments.Count, "premise: the chain does not hold tables behind the first");
+            Assert.IsGreaterThan(Slack, TableBytes(filter.Segments[1]),
+                $"premise: a copy of the second table could hide in the slack: tables of {string.Join(", ", filter.Segments.Select(TableBytes))} bytes");
+
+            var bytes = filter.ToByteArray();
+            long payload = bytes.Length - PersistenceFormat.EnvelopeLength;
+            MementoFilter.ReadFrom(new MemoryStream(bytes, writable: false));
+            var ordinary = NoGCRegion.Allocated(() => MementoFilter.ReadFrom(new MemoryStream(bytes, writable: false)));
+            var charged = CapacityModel.ChargeOf<MementoFilter>(StructureId.MementoFilter, bytes);
+
+            var large = LargeForm.WriteLarge(filter);
+            Assert.IsTrue(LargeForm.IsLarge(large), "the filter was not written in the large form");
+            MementoFilter.ReadFrom(new MemoryStream(large, writable: false));
+            var streamed = NoGCRegion.Allocated(() => MementoFilter.ReadFrom(new MemoryStream(large, writable: false)));
+            var budget = new ReadBudget(long.MaxValue, StructureId.MementoFilter);
+            CollectionAssert.AreEqual(bytes,
+                MementoFilter.ReadFrom(new MemoryStream(large, writable: false), new ReadOptions(budget)).ToByteArray(),
+                "the large form does not read back as the filter");
+
+            Console.WriteLine(
+                $"[HOLDS ONCE] MementoFilter: tables of {string.Join(", ", filter.Segments.Select(TableBytes))} bytes, {tables:N0} in all, payload {payload:N0}; " +
+                $"ordinary read {ordinary:N0}, charged {charged:N0}; large-form read {streamed:N0}, charged {budget.Charged:N0}");
+
+            Assert.IsGreaterThanOrEqualTo(payload + tables, ordinary,
+                $"the read allocated {ordinary:N0} bytes, less than the {payload:N0}-byte payload it holds and the {tables:N0} bytes of its tables");
+            Assert.IsLessThanOrEqualTo(payload + tables + Slack, ordinary,
+                $"the read allocated {ordinary:N0} bytes, {ordinary - payload - tables:N0} more than its payload and its tables");
+            Assert.IsGreaterThanOrEqualTo(payload + tables, charged,
+                $"the read was charged {charged:N0} bytes, less than its payload and its tables");
+            Assert.IsLessThanOrEqualTo(payload + tables + Slack, charged,
+                $"the read was charged {charged:N0} bytes, {charged - payload - tables:N0} more than its payload and its tables");
+
+            Assert.IsGreaterThanOrEqualTo(tables, streamed,
+                $"the read of the large form allocated {streamed:N0} bytes, less than the {tables:N0} bytes of its tables");
+            Assert.IsLessThanOrEqualTo(tables + Slack, streamed,
+                $"the read of the large form allocated {streamed:N0} bytes, {streamed - tables:N0} more than its tables");
+            Assert.IsGreaterThanOrEqualTo(tables, budget.Charged,
+                $"the read of the large form was charged {budget.Charged:N0} bytes, less than its tables");
+            Assert.IsLessThanOrEqualTo(tables + Slack, budget.Charged,
+                $"the read of the large form was charged {budget.Charged:N0} bytes, {budget.Charged - tables:N0} more than its tables");
+        }
+
+        /// <summary>
         /// The filter grows rather than filling up, and keys added before a growth
         /// survive it.
         /// </summary>
