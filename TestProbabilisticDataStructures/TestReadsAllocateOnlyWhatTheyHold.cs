@@ -847,6 +847,90 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The envelope of <paramref name="whole"/> with the <c>u32</c> at offset
+        /// <paramref name="at"/> of its payload set to <paramref name="value"/>, its checksum
+        /// made to match.
+        /// </summary>
+        private static byte[] Edited(byte[] whole, int at, uint value)
+        {
+            var bytes = (byte[])whole.Clone();
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(PayloadStart + at), value);
+            var crc = new Crc32();
+            crc.Append(bytes.AsSpan(4, bytes.Length - 8));
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(bytes.Length - ChecksumLength), crc.GetCurrentHashAsUInt32());
+            return bytes;
+        }
+
+        /// <summary>
+        /// An invertible table's price refuses a run that disagrees with the table's shape where
+        /// its reader does, with the reader's refusal, having priced exactly what the reader
+        /// charged before refusing it: counts, key sums or hash sums.
+        /// </summary>
+        /// <remarks>
+        /// No cut makes such a run, since every run a cut holds is the one its writer wrote, so
+        /// each is made by one field, the checksum resealed: the cell count, a cell more, so that
+        /// the counts disagree; the key size, a byte more, so that the key sums do; and the hash
+        /// sums' own length, a word short, so that they do and a word is left over. The reader
+        /// checks each run against the shape as it reads it, and charges the array it unpacks
+        /// from the run after that check. A price that checked a run later than its reader would
+        /// price what comes after, which the reader never charges, and admit the read at more
+        /// than it takes. The table is the smallest the constructor builds, so that any array
+        /// priced past the reader's charges is a difference of some bytes in a few hundred.
+        /// </remarks>
+        [TestMethod]
+        public void TestAnInvertibleTablesPriceRefusesARunWhereItsReaderDoes()
+        {
+            const StructureId Id = StructureId.InvertibleBloomLookupTable;
+            var table = new InvertibleBloomLookupTable(1, 1);
+            table.Add([7]);
+            var whole = table.ToByteArray();
+            var length = whole.Length - PayloadStart - ChecksumLength;
+            var payload = whole.AsSpan(PayloadStart, length);
+
+            // u32 cells and u32 key size; then the counts, key sums and hash sums, each a run
+            // whose u32 length comes before it.
+            var cells = BinaryPrimitives.ReadUInt32LittleEndian(payload);
+            var keySize = BinaryPrimitives.ReadUInt32LittleEndian(payload[4..]);
+            var hashesAt = 2 * sizeof(uint) + sizeof(uint) + (int)cells * sizeof(long) + sizeof(uint) + (int)(cells * keySize);
+            Assert.AreEqual((uint)(cells * sizeof(ulong)), BinaryPrimitives.ReadUInt32LittleEndian(payload[hashesAt..]),
+                "premise: the walk of FORMAT.md's layout finds the hash sums' length");
+            Assert.AreEqual(length, hashesAt + sizeof(uint) + (int)cells * sizeof(ulong),
+                "premise: the hash sums end where the payload does");
+
+            (string Run, int At, uint Value)[] cases =
+            [
+                ("the counts", 0, cells + 1),
+                ("the key sums", 4, keySize + 1),
+                ("the hash sums", hashesAt, (uint)((cells - 1) * sizeof(ulong))),
+            ];
+            var problems = new List<string>();
+            foreach (var (run, at, value) in cases)
+            {
+                var edited = Edited(whole, at, value);
+                var (priced, _, priceRefused) = WalkPrice(Id, edited, length);
+                var readRefused = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<InvertibleBloomLookupTable>(edited, ReadOptions.Unlimited),
+                    $"{run}: the payload whose {run} disagree with its shape was read").Message;
+                Assert.Contains("do not come to the byte counts", readRefused, $"premise: {run}: the reader refuses the run for the shape");
+                if (priceRefused != readRefused)
+                {
+                    problems.Add($"{run}: its price refused it with \"{priceRefused ?? "nothing"}\", and its reader with \"{readRefused}\"");
+                }
+
+                var price = ReadBudget.Sum(PersistenceFormat.EnvelopeCost((ulong)length), priced);
+                var exactly = new ReadBudget(price, Id);
+                Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<InvertibleBloomLookupTable>(edited, new ReadOptions(exactly)));
+                if (exactly.Spent != price)
+                {
+                    problems.Add($"{run}: priced {price:N0}, its reader charged {exactly.Spent:N0} before refusing it");
+                }
+            }
+
+            Assert.IsEmpty(problems, $"{problems.Count} problems over the {cases.Length} runs: " + string.Join(" | ", problems));
+        }
+
+        /// <summary>
         /// Each structure swept with another payload has a witness that its budget sample's cost
         /// is a parameter's: a valid payload holding nothing, which allocates past the bound.
         /// </summary>
