@@ -771,6 +771,100 @@ namespace TestProbabilisticDataStructures
                 "the payloads' versions are not exactly the ones a quotient filter reads");
         }
 
+        /// <summary>
+        /// A quotient filter's price prices its table before it checks that the payload ends
+        /// after it, as its reader charges the table before it checks, so a payload holding a
+        /// byte past the table is refused for that byte under exactly its own price, in either
+        /// envelope (#343).
+        /// </summary>
+        /// <remarks>
+        /// The table is the payload's last run, so a cut that holds it holds the payload whole,
+        /// and no cut of a sweep can tell where it is priced. A byte left over can: a price that
+        /// checked the end first would stop there having priced nothing for the table, the read
+        /// would be admitted at the envelope alone, and its reader, charging the table before it
+        /// finds the byte, would be refused for a budget its own price fits. Under a byte less
+        /// than that price it is refused for its budget, naming the price, so the budget the read
+        /// is held to has no room in it. The table is the smallest the constructor builds. An
+        /// invertible table is held to the same in
+        /// <c>TestAnInvertibleTableWithAByteLeftOverIsRefusedForItUnderItsOwnPrice</c>.
+        /// </remarks>
+        [TestMethod]
+        public void TestAFilterWithAByteLeftOverIsRefusedForItUnderItsOwnPrice()
+        {
+            var filter = new QuotientFilter(1, 0.5);
+            filter.Add(Key("a"));
+            foreach (var large in new[] { false, true })
+            {
+                var whole = large ? LargeForm.WriteLarge(filter) : filter.ToByteArray();
+                var form = large ? "in the large form" : "in the ordinary envelope";
+                Assert.AreEqual(large, LargeForm.IsLarge(whole), $"premise: the filter was not written {form}");
+                var (longer, start, length) = WithAByteLeftOver(whole);
+
+                var budget = new ReadBudget(long.MaxValue, StructureId.QuotientFilter);
+                var reader = new PayloadReader(longer.AsSpan(start, length + 1), budget, wide: large);
+                string why = null;
+                try
+                {
+                    QuotientFilter.Price(ref reader, LargeForm.Layout(longer));
+                }
+                catch (InvalidDataException e)
+                {
+                    why = e.Message;
+                }
+                Assert.AreEqual(length, length + 1 - reader.Remaining,
+                    $"premise {form}: the price walks the filter to its end, and stops at the byte left over: {why}");
+                Assert.Contains("left over", why ?? "it walked to its end", $"premise {form}: the price stops for the byte left over");
+                var envelope = large ? PersistenceFormat.LargeEnvelopeCost : PersistenceFormat.EnvelopeCost((ulong)(length + 1));
+                var price = ReadBudget.Sum(envelope, budget.Charged);
+
+                var refused = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<QuotientFilter>(longer, new ReadOptions(price)));
+                Assert.IsFalse(refused.InnerException is ReadBudgetExceededException,
+                    $"{form}, under exactly its own price of {price:N0}, it was refused for its budget rather than for the byte left over: {refused.Message}");
+                Assert.Contains("left over", refused.Message, $"{form}, under exactly its own price, it was refused for another reason");
+
+                var under = Assert.ThrowsExactly<InvalidDataException>(
+                    () => Persistence.FromByteArray<QuotientFilter>(longer, new ReadOptions(price - 1)));
+                Assert.IsInstanceOfType<ReadBudgetExceededException>(under.InnerException,
+                    $"premise {form}: under a byte less than its price of {price:N0}, it is refused for its budget: {under.Message}");
+                Assert.AreEqual(price, ((ReadBudgetExceededException)under.InnerException).RequiredBytes,
+                    $"premise {form}: the price worked out here is the one the read is admitted at");
+            }
+        }
+
+        /// <summary>
+        /// <paramref name="whole"/>, in either envelope, with one byte added after its payload
+        /// and its length and checksums made to match, so that the byte is the only fault: the
+        /// envelope, where its payload starts, and the payload's length before the byte.
+        /// </summary>
+        internal static (byte[] Bytes, int Start, int Length) WithAByteLeftOver(byte[] whole)
+        {
+            var large = LargeForm.IsLarge(whole);
+            var start = large ? PersistenceFormat.LargeHeaderLength : 14;
+            var length = whole.Length - (large ? PersistenceFormat.LargeEnvelopeLength : PersistenceFormat.EnvelopeLength);
+            var bytes = new byte[whole.Length + 1];
+            whole.AsSpan(0, start + length).CopyTo(bytes);
+
+            const int fieldsStart = 4;
+            var fieldsEnd = large ? LargeForm.HeaderFieldsEnd : start;
+            var crc = new System.IO.Hashing.Crc32();
+            if (large)
+            {
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(10), (ulong)length + 1);
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(fieldsEnd),
+                    System.IO.Hashing.Crc32.HashToUInt32(bytes.AsSpan(fieldsStart, fieldsEnd - fieldsStart)));
+            }
+            else
+            {
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(10), (uint)length + 1);
+            }
+
+            crc.Append(bytes.AsSpan(fieldsStart, fieldsEnd - fieldsStart));
+            crc.Append(bytes.AsSpan(start, length + 1));
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(bytes.Length - 4), crc.GetCurrentHashAsUInt32());
+            return (bytes, start, length);
+        }
+
         [TestMethod]
         public void TestTheHashIsSettledOnceAnythingIsAdded()
         {
