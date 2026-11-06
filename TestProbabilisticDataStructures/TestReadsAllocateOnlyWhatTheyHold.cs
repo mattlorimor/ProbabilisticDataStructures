@@ -5,6 +5,7 @@ using System.IO;
 using System.IO.Hashing;
 using System.Linq;
 using System.Reflection;
+using System.Reflection.Emit;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 
@@ -923,6 +924,531 @@ namespace TestProbabilisticDataStructures
 
             Assert.IsEmpty(problems, $"at {problems.Count} checks; " + string.Join(" | ", problems));
         }
+
+        /// <summary>
+        /// A check that holds a claim to the bytes after it, which no cut of a payload this library
+        /// writes can see, with the claim edited past what those bytes hold: the checks it is, as
+        /// <see cref="HoldsChecks"/> names them, what they count, as their refusal names it, the
+        /// field edited, why no cut sees them, the payload, where the field is and where the check
+        /// refuses it, both from FORMAT.md, the most the bytes after that point can hold, and the
+        /// largest claim the field can make past the structure's other checks.
+        /// </summary>
+        internal sealed record EditedClaim(
+            StructureId Id, string[] Checks, string Counts, string Field, string Why, Func<byte[]> Sample,
+            Func<byte[], int> FieldAt, Func<byte[], int> CheckedAt, Func<byte[], uint> Most, uint Largest);
+
+        /// <summary>
+        /// What the read of an edited claim may allocate past the read of a cut just before its
+        /// field, the envelope's difference aside: both are refused at once, and differ in their
+        /// messages. Measured, every one allocated less than that cut's read, by 56 to 696 bytes,
+        /// and a read of the most the bytes hold allocated at least 15,472 bytes more than it.
+        /// </summary>
+        private const long Refusing = 1 << 10;
+
+        private static int PayloadLength(byte[] envelope) => envelope.Length - PayloadStart - ChecksumLength;
+
+        private static uint PayloadUInt32(byte[] envelope, int at) =>
+            BinaryPrimitives.ReadUInt32LittleEndian(envelope.AsSpan(PayloadStart + at));
+
+        /// <summary>
+        /// FORMAT.md: u32 k, width and depth, the placement byte from version 9, the f64 decay base
+        /// and the u64 generator state and items added, then a u16 fingerprint and a u64 counter for
+        /// each of depth × width buckets, and then the u32 element count.
+        /// </summary>
+        private static int HeavyKeeperElementCountAt(byte[] envelope)
+        {
+            var version = BinaryPrimitives.ReadUInt16LittleEndian(envelope.AsSpan(4));
+            var placement = version >= PersistenceFormat.ColumnPlacementVersion ? 1 : 0;
+            var buckets = (long)PayloadUInt32(envelope, 4) * PayloadUInt32(envelope, 8);
+            return (int)(3 * sizeof(uint) + placement + sizeof(double) + 2 * sizeof(ulong) + buckets * (sizeof(ushort) + sizeof(ulong)));
+        }
+
+        /// <summary>FORMAT.md: u32 k and items added, the nested sketch as a run whose u32 length is at 8, then the u32 element count.</summary>
+        private static int TopKElementCountAt(byte[] envelope) => 3 * sizeof(uint) + (int)PayloadUInt32(envelope, 2 * sizeof(uint));
+
+        /// <summary>An element is its data's u32 length, the data, and its u64 frequency, so no fewer bytes than those.</summary>
+        private const int ElementBytes = sizeof(uint) + sizeof(ulong);
+
+        /// <summary>The budget sample with k raised as far as the heap goes, so that a count of elements is held only to the bytes.</summary>
+        private static byte[] RoomFor(StructureId id) =>
+            Edited(TestReadBudget.Samples.Value[id].Bytes, 0, (uint)ElementHeap.MaxCapacity);
+
+        private static readonly EditedClaim[] EditedClaims =
+        [
+            new(StructureId.HeavyKeeper, ["HeavyKeeper.ReadElementCount"], "elements", "element count",
+                "its count of elements is at most k, a few hundred in its budget sample, and the only cuts that hold the " +
+                "count come after its buckets, where the bound has room for a heap of k elements on top of them",
+                () => RoomFor(StructureId.HeavyKeeper),
+                HeavyKeeperElementCountAt, b => HeavyKeeperElementCountAt(b) + sizeof(uint),
+                b => (uint)((PayloadLength(b) - HeavyKeeperElementCountAt(b) - sizeof(uint)) / ElementBytes),
+                (uint)ElementHeap.MaxCapacity),
+            new(StructureId.TopK, ["TopK.ReadElementCount"], "elements", "element count",
+                "its count of elements is at most k, a thousand in its budget sample, and the only cuts that hold the " +
+                "count come after its nested sketch, where the bound has room for a heap of k elements on top of it",
+                () => RoomFor(StructureId.TopK),
+                TopKElementCountAt, b => TopKElementCountAt(b) + sizeof(uint),
+                b => (uint)((PayloadLength(b) - TopKElementCountAt(b) - sizeof(uint)) / ElementBytes),
+                (uint)ElementHeap.MaxCapacity),
+
+            // FORMAT.md: f64 delta, growth exponent and size factor, then u32 depth at 24 and width
+            // at 28, which the shape check holds the current rows' counters to.
+            new(StructureId.SublimeCountMinSketch, ["SublimeCountMinSketch.CheckShape"], "counters", "depth",
+                "its shape check holds the current rows to the bytes after the shape, and every block of counters, the " +
+                "current rows' among them, is held again where it begins, to fewer bytes, so a cut the shape check refuses " +
+                "is refused at the latest at the current rows, having read only blocks it holds; a depth edited past what " +
+                "the current rows can have can still be held by the records' blocks, which are read at it unless the shape " +
+                "check refuses it first",
+                () => TestReadBudget.Samples.Value[StructureId.SublimeCountMinSketch].Bytes,
+                _ => 3 * sizeof(double), _ => 3 * sizeof(double) + 2 * sizeof(uint),
+                b => (uint)((PayloadLength(b) - 3 * sizeof(double) - 2 * sizeof(uint)) / ((long)sizeof(ulong) * PayloadUInt32(b, 28))),
+                (uint)SublimeCountMinSketch.MaxDepth),
+        ];
+
+        public static IEnumerable<object[]> EditedClaimCases =>
+            EditedClaims.Select(claim => new object[] { string.Join(", ", claim.Checks) });
+
+        /// <summary>
+        /// A check whose claim no cut makes large refuses that claim, edited one past what the bytes
+        /// after it hold and to the largest the field can make, before it prices or allocates
+        /// anything for it, and lets through the most those bytes hold.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="TestEveryPriceRefusesWhatItsPayloadDoesNotHoldBeforePricingIt"/> and its reader's
+        /// twin see a check only by what dropping it costs, and a cut keeps its writer's claim. Where
+        /// that claim stays small, what a price and a read that skipped the check would add fits in
+        /// the bound at the only cuts that hold it, which come after everything before it and are
+        /// bounded by all of that (#344, after #332). So the claim is
+        /// edited here, as #332's was, in the sample the sweep cuts, its checksum resealed. The price
+        /// of each edited claim stops where the check refuses it, having priced exactly what a cut
+        /// just before the field does, and its read is refused for what it lacks under no budget,
+        /// under the default one and under exactly its own price, having allocated no more than the
+        /// read of that cut, the envelope's difference and <see cref="Refusing"/>. The most the bytes
+        /// hold is the control: its price walks past the check and prices more, and its read
+        /// allocates past that bound, so the bound can see what the check stops.
+        /// </remarks>
+        [TestMethod]
+        [DynamicData(nameof(EditedClaimCases))]
+        public void TestAClaimNoCutCanSeeIsRefusedBeforeItIsPricedOrAllocatedWhenEdited(string checks)
+        {
+            var claim = EditedClaims.Single(c => string.Join(", ", c.Checks) == checks);
+            var read = TestReadBudget.Samples.Value[claim.Id].Read;
+            Assert.IsFalse(string.IsNullOrWhiteSpace(claim.Why), $"{checks} is held by an edited claim without saying why no cut sees it");
+            var lacks = claim.Counts + ", beyond what it can hold";
+            var bytes = claim.Sample();
+            var length = PayloadLength(bytes);
+            var at = claim.FieldAt(bytes);
+            var checkedAt = claim.CheckedAt(bytes);
+            var most = claim.Most(bytes);
+            var envelope = PersistenceFormat.EnvelopeCost((ulong)length);
+            Assert.IsGreaterThan(most, claim.Largest, $"premise: {checks}: the largest claim, {claim.Largest:N0}, is past the most the bytes hold, {most:N0}");
+
+            InvalidDataException Refusal(byte[] payload, ReadOptions options, out long allocated)
+            {
+                InvalidDataException refused = null;
+                allocated = NoGCRegion.Allocated(() =>
+                {
+                    refused = null;
+                    try
+                    {
+                        read(payload, options);
+                    }
+                    catch (InvalidDataException e)
+                    {
+                        refused = e;
+                    }
+
+                    return refused;
+                });
+                return refused;
+            }
+
+            var before = WalkPrice(claim.Id, bytes, at);
+            Assert.AreEqual(at, before.StoppedAt,
+                $"premise: {checks}: a cut just before the field at {at:N0} is past every earlier check, and its price stops there: {before.Why}");
+            var cut = Refusal(Cut(bytes, at), ReadOptions.Unlimited, out var cutAllocated);
+            Assert.IsNotNull(cut, $"premise: {checks}: a cut just before the field was read");
+            var bound = cutAllocated - PersistenceFormat.EnvelopeCost((ulong)at) + envelope + Refusing;
+
+            var fits = Edited(bytes, at, most);
+            var taken = WalkPrice(claim.Id, fits, length);
+            Assert.IsGreaterThan(checkedAt, taken.StoppedAt,
+                $"{checks}: with its {claim.Field} at {most:N0}, the most the bytes hold, it was refused where the check refuses: {taken.Why}");
+            Assert.IsGreaterThan(before.Priced, taken.Priced,
+                $"{checks}: with its {claim.Field} at {most:N0}, the most the bytes hold, it priced no more than a cut before the field: {taken.Why}");
+            Refusal(fits, ReadOptions.Unlimited, out var readInto);
+            Assert.IsGreaterThan(bound, readInto,
+                $"{checks}: a read with its {claim.Field} at {most:N0}, the most the bytes hold, allocated {readInto:N0} bytes, within the " +
+                $"{bound:N0} a refused claim is held to, so that bound does not show the check stopped anything");
+
+            var problems = new List<string>();
+            foreach (var value in new[] { most + 1, claim.Largest })
+            {
+                var edited = Edited(bytes, at, value);
+                var (priced, stoppedAt, why) = WalkPrice(claim.Id, edited, length);
+                if (priced != before.Priced || stoppedAt != checkedAt)
+                {
+                    problems.Add($"with its {claim.Field} at {value:N0}, the price priced {priced - before.Priced:N0} bytes past what a cut " +
+                        $"before the field does and stopped at {stoppedAt:N0}, not {checkedAt:N0}: {why}");
+                    continue;
+                }
+
+                if (why is null || !why.Contains(lacks, StringComparison.Ordinal))
+                {
+                    problems.Add($"with its {claim.Field} at {value:N0}, the price stopped at the check for another reason: {why}");
+                    continue;
+                }
+
+                // The tightest budget first, and no more reads of a claim once one shows a problem:
+                // a reader that charged for a claim of billions before checking it would be refused
+                // for a budget, and is not then read under none, where it would allocate them.
+                (string Name, ReadOptions Options)[] budgets =
+                [
+                    ("a budget of its own price", new ReadOptions(envelope + priced)),
+                    ("the default budget", ReadOptions.Default),
+                    ("no budget", ReadOptions.Unlimited),
+                ];
+                foreach (var (budget, options) in budgets)
+                {
+                    var refused = Refusal(edited, options, out var allocated);
+                    var problem = refused is null
+                        ? $"with its {claim.Field} at {value:N0}, it was read under {budget}"
+                        : refused.InnerException is ReadBudgetExceededException
+                            ? $"with its {claim.Field} at {value:N0}, it was refused for {budget}: {refused.Message}"
+                            : !refused.Message.Contains(lacks, StringComparison.Ordinal)
+                                ? $"with its {claim.Field} at {value:N0}, it was refused under {budget} for something else: {refused.Message}"
+                                : allocated > bound
+                                    ? $"with its {claim.Field} at {value:N0}, it allocated {allocated:N0} bytes under {budget} before it " +
+                                      $"was refused, past the {bound:N0} a cut before the field, its envelope and {Refusing:N0} allow"
+                                    : null;
+                    if (problem is not null)
+                    {
+                        problems.Add(problem);
+                        break;
+                    }
+                }
+            }
+
+            Assert.IsEmpty(problems, $"{checks}, at {problems.Count} checks: " + string.Join(" | ", problems));
+        }
+
+        /// <summary>
+        /// A nested envelope claiming a payload longer than the run it is stored in is refused as
+        /// data, by its outer price and its outer read, under no budget and under the default one,
+        /// and a claim the run holds is not refused for that.
+        /// </summary>
+        /// <remarks>
+        /// The outer reader holds the run whole before the nested reader sees any of it, so the
+        /// nested envelope's length is the one claim inside a run that no cut can make disagree with
+        /// the run, and the price is what holds it to the run, by the run's own reader slicing that
+        /// length from it. Unchecked there, a held payload's slice throws
+        /// <see cref="ArgumentOutOfRangeException"/>, where every payload the library will not read
+        /// is an <see cref="InvalidDataException"/>. The claim is the least the run cannot hold:
+        /// the run holds the header, the payload and the checksum's four bytes, so a payload four
+        /// bytes longer than its writer's still fits, taking the checksum's bytes, and is refused
+        /// by the nested read for its checksum, and one five bytes longer is refused by the price.
+        /// The roster is every structure whose price prices a nested one (<see cref="NestsOf"/>).
+        /// </remarks>
+        [TestMethod]
+        public void TestANestedEnvelopeClaimingMoreThanItsRunIsRefusedAsData()
+        {
+            // FORMAT.md: the nested envelope is a run, its u32 length first, and its own header
+            // carries its payload's u32 length at 10.
+            (StructureId Id, int RunAt)[] cases =
+            [
+                (StructureId.TopK, 2 * sizeof(uint)),
+
+                // f64 r, fp and p, the u64 hint and the u32 growth factor at version 14, then the
+                // u32 count of filters, then the first filter.
+                (StructureId.ScalableBloomFilter, 3 * sizeof(double) + sizeof(ulong) + 2 * sizeof(uint)),
+            ];
+            CollectionAssert.AreEquivalent(NestsOf().ToArray(), cases.Select(c => c.Id.ToString()).ToArray(),
+                "the structures whose price prices a nested one are not the ones this test edits");
+
+            var problems = new List<string>();
+            foreach (var (id, runAt) in cases)
+            {
+                var sample = TestReadBudget.Samples.Value[id];
+                var bytes = sample.Bytes;
+                var length = PayloadLength(bytes);
+                var run = PayloadUInt32(bytes, runAt);
+                var lengthAt = runAt + sizeof(uint) + LengthOffset;
+                Assert.AreEqual(run - (uint)(PayloadStart + ChecksumLength), PayloadUInt32(bytes, lengthAt),
+                    $"premise: {id}: the walk of FORMAT.md's layout finds the nested envelope's length, its run less its header and checksum");
+
+                // The run holds the header and run - 14 bytes after it.
+                var held = run - (uint)PayloadStart;
+                foreach (var claim in new[] { held, held + 1 })
+                {
+                    var edited = Edited(bytes, lengthAt, claim);
+                    var ended = $"while reading {claim} more at offset {PayloadStart}";
+                    string why;
+                    try
+                    {
+                        why = WalkPrice(id, edited, length).Why;
+                    }
+                    catch (Exception e)
+                    {
+                        problems.Add($"{id}: a nested envelope claiming {claim:N0} bytes was refused by the price with " +
+                            $"{e.GetType().Name}: {e.Message}");
+                        continue;
+                    }
+
+                    if (claim > held && (why is null || !why.Contains(ended, StringComparison.Ordinal)))
+                    {
+                        problems.Add($"{id}: a nested envelope claiming {claim:N0} bytes in a run that holds {held:N0} after its header " +
+                            $"was not refused by the price for them: {why ?? "it walked to its end"}");
+                    }
+                    else if (claim == held && why is not null && why.Contains(ended, StringComparison.Ordinal))
+                    {
+                        problems.Add($"{id}: a nested envelope claiming the {claim:N0} bytes its run holds after its header was refused " +
+                            $"by the price for them: {why}");
+                    }
+
+                    foreach (var (budget, options) in new[] { ("no budget", ReadOptions.Unlimited), ("the default budget", ReadOptions.Default) })
+                    {
+                        try
+                        {
+                            sample.Read(edited, options);
+                            problems.Add($"{id}: a nested envelope claiming {claim:N0} bytes was read under {budget}");
+                        }
+                        catch (InvalidDataException e) when (e.InnerException is ReadBudgetExceededException)
+                        {
+                            problems.Add($"{id}: a nested envelope claiming {claim:N0} bytes was refused for {budget}: {e.Message}");
+                        }
+                        catch (InvalidDataException)
+                        {
+                        }
+                        catch (Exception e)
+                        {
+                            problems.Add($"{id}: a nested envelope claiming {claim:N0} bytes, under {budget}, was refused with " +
+                                $"{e.GetType().Name}: {e.Message}");
+                        }
+                    }
+                }
+            }
+
+            Assert.IsEmpty(problems, $"{problems.Count} problems: " + string.Join(" | ", problems));
+        }
+
+        /// <summary>The structures whose price prices a nested one, from the library's IL.</summary>
+        private static IEnumerable<string> NestsOf()
+        {
+            var nested = typeof(PersistenceFormat).GetMethod("PriceNested", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.IsNotNull(nested, "PersistenceFormat has no PriceNested to look for");
+            return LibraryCalls().Where(c => nested.Equals(c.Called) && c.Caller.Name == "Price")
+                .Select(c => Outermost(c.Caller.DeclaringType).Name).Distinct();
+        }
+
+        /// <summary>
+        /// Checks held by a test of their own rather than by an edited claim here, each with the
+        /// test that kills the mutant dropping it and why that test sees it.
+        /// </summary>
+        private static readonly Dictionary<string, (string Test, string Why)> HeldElsewhere = new()
+        {
+            ["CountMinSketch.CheckMatrix: counters"] = ("TestReadBudget.TestACountMinSketchClaimingCountersItDoesNotHoldIsRefusedForThat",
+                "it edits the width to rows of megabytes, under a budget the unedited payload would fail"),
+            ["CuckooBloomFilter.RequireTable: words of table and generator state"] = (
+                "TestCuckooDenseLayout.TestADenseTablePastTheOldCeilingIsRefusedOnlyForTheBytesItLacks",
+                "it edits the bucket count to a table past the old ceiling, and asks for the refusal to be for the bytes"),
+            ["DpswSketch.Price: substreams"] = ("TestReadsAllocateOnlyWhatTheyHold.TestADpswSubstreamCountItDoesNotHoldIsRefusedBeforeItIsPricedOrAllocated",
+                "it edits the substream count, as this test edits its claims (#332)"),
+            ["DpswSketch.ReadPayload: substreams"] = ("TestReadsAllocateOnlyWhatTheyHold.TestADpswSubstreamCountItDoesNotHoldIsRefusedBeforeItIsPricedOrAllocated",
+                "it edits the substream count, as this test edits its claims (#332)"),
+            ["Grafite.ReadHighWords: words of high bits"] = (
+                "TestPersistenceHostilePayloads.TestGrafiteAtTheMostBitsOfHighPartsIsRefusedOnlyForTheWordsItLacks",
+                "it raises the bits of high parts to the most there are, and asks for the refusal to be for the words"),
+            ["Grafite.ReadLowWords: words of low bits"] = ("TestLoadWhatItBuilds.TestGrafiteReaderTakesLowWordsPastTheOldCeiling",
+                "it raises the low words' count past the old ceiling, and asks for the refusal to be for the bytes"),
+            ["HeavyKeeper.CheckShape: buckets"] = ("TestPersistenceHostilePayloads.TestHeavyKeeperClaimingAbsurdWidthIsRefused",
+                "it edits the width to one no payload of its length holds"),
+            ["HyperLogLogPlus.Price: stored hashes"] = ("TestReadBudget.TestAHyperLogLogPlusSparseCountItDoesNotHoldIsRefusedForThat",
+                "it edits the count of hashes to megabytes of them, under a budget the claim would pass"),
+            ["HyperLogLogPlus.ReadPayload: stored hashes"] = ("TestReadBudget.TestAHyperLogLogPlusSparseCountItDoesNotHoldIsRefusedForThat",
+                "it edits the count of hashes to megabytes of them, and under no budget"),
+            ["InfiniFilter.Price: words"] = ("TestExpandingTableLimits.TestATableAtTheLimitIsRefusedForTheWordsItLacksNotForItsSize",
+                "it claims a table at its limit without its words, and asks for the refusal to be for the words"),
+            ["InfiniFilter.ReadPayload: words"] = ("TestExpandingTableLimits.TestATableAtTheLimitIsRefusedForTheWordsItLacksNotForItsSize",
+                "it claims a table at its limit without its words, and asks for the refusal to be for the words"),
+            ["MementoFilter.Price: words"] = ("TestExpandingTableLimits.TestATableAtTheLimitIsRefusedForTheWordsItLacksNotForItsSize",
+                "it claims a table at its limit without its words, and asks for the refusal to be for the words"),
+            ["MementoFilter.ReadPayload: words"] = ("TestExpandingTableLimits.TestATableAtTheLimitIsRefusedForTheWordsItLacksNotForItsSize",
+                "it claims a table at its limit without its words, and asks for the refusal to be for the words"),
+            ["MinHashSignature.Price: values"] = ("TestLoadWhatItBuilds.TestMinHashSignatureLimitIsShared",
+                "it raises the length to the limit, and asks for the refusal to be for the bytes"),
+            ["MinHashSignature.ReadPayload: values"] = ("TestLoadWhatItBuilds.TestMinHashSignatureLimitIsShared",
+                "it raises the length to the limit, and asks for the refusal to be for the bytes"),
+            ["PersistenceFormat.PriceBuckets64: arrays of buckets"] = ("TestReadBudget.TestABloomFilter64ArrayCountItDoesNotHoldIsRefusedForThat",
+                "it edits the array count to a million, under a budget the claim would pass"),
+            ["PersistenceFormat.ReadBuckets64: arrays of buckets"] = ("TestReadBudget.TestABloomFilter64ArrayCountItDoesNotHoldIsRefusedForThat",
+                "it edits the array count to a million, and under no budget"),
+            ["PrivateCountMinSketch.CheckShape: counters"] = ("TestReadBudget.TestAPrivateSketchClaimingCountersItDoesNotHoldIsRefusedForThat",
+                "it edits the width to rows of megabytes, alone and in a window, under a budget the unedited payload would fail"),
+            ["ScalableBloomFilter.ReadFilterCount: contained filters"] = ("TestPersistenceHostilePayloads.TestAbsurdContainedFilterCountIsRefused",
+                "it edits the count of filters to one no payload of its length holds"),
+            ["SetSketch.Price: registers"] = ("TestLoadWhatItBuilds.TestSetSketchLimitIsShared",
+                "it raises the registers to the limit, and asks for the refusal to be for the bytes"),
+            ["SetSketch.ReadPayload: registers"] = ("TestLoadWhatItBuilds.TestSetSketchReaderTakesARegisterCountPastTheOldCeiling",
+                "it raises the registers past the old ceiling, and asks for the refusal to be for the bytes"),
+            ["SublimeCountMinSketch.RequireCounts: counters"] = (
+                "TestReadsAllocateOnlyWhatTheyHold.TestASublimeBlockOfCountersCutShortIsRefusedBeforeItIsPricedOrAllocated",
+                "it cuts the payload a byte short of each block and asks for the price to stop at the block"),
+
+            // Seen by the cut sweep alone, because the budget sample's claim is large: its values,
+            // keys or items, read or priced unchecked, come to more than the bound at the cuts that
+            // hold their count. A sample that came to hold few would leave these unseen.
+            ["ThetaSketch.Price: values"] = ("TestReadsAllocateOnlyWhatTheyHold.TestEveryPriceRefusesWhatItsPayloadDoesNotHoldBeforePricingIt",
+                "its budget sample holds thousands of values, and their buffer is past the bound at every cut that holds the count"),
+            ["ThetaSketch.ReadPayload: values"] = ("TestReadsAllocateOnlyWhatTheyHold.TestEveryReaderRefusesWhatItDoesNotHoldBeforeAllocatingForIt",
+                "its budget sample holds thousands of values, and their buffer is past the bound at every cut that holds the count"),
+            ["TupleSketch.Price: keys"] = ("TestReadsAllocateOnlyWhatTheyHold.TestEveryPriceRefusesWhatItsPayloadDoesNotHoldBeforePricingIt",
+                "its budget sample holds thousands of keys, and their buffers are past the bound at every cut that holds the count"),
+            ["TupleSketch.ReadPayload: keys"] = ("TestReadsAllocateOnlyWhatTheyHold.TestEveryReaderRefusesWhatItDoesNotHoldBeforeAllocatingForIt",
+                "its budget sample holds thousands of keys, and their buffers are past the bound at every cut that holds the count"),
+            ["VarOpt.Price: items"] = ("TestReadsAllocateOnlyWhatTheyHold.TestEveryPriceRefusesWhatItsPayloadDoesNotHoldBeforePricingIt",
+                "its budget sample's reservoir holds thousands of items, and its regions are past the bound at every cut that holds the count"),
+            ["VarOpt.ReadPayload: items"] = ("TestReadsAllocateOnlyWhatTheyHold.TestEveryReaderRefusesWhatItDoesNotHoldBeforeAllocatingForIt",
+                "its budget sample's reservoir holds thousands of items, and its regions are past the bound at every cut that holds the count"),
+        };
+
+        /// <summary>
+        /// Every check in the library that holds a claimed count to the bytes after it, by
+        /// <c>PayloadReader.RequireHolds</c>, named for its structure and method and for what it
+        /// counts as its refusal names it, from the library's IL.
+        /// </summary>
+        private static List<string> HoldsChecks()
+        {
+            var holds = typeof(PayloadReader).GetMethod("RequireHolds", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(holds, "PayloadReader has no RequireHolds to look for");
+            return LibraryCalls().Where(c => holds.Equals(c.Called))
+                .Select(c => $"{Outermost(c.Caller.DeclaringType).Name}.{c.Caller.Name}: {c.LastString}")
+                .Distinct().OrderBy(name => name, StringComparer.Ordinal).ToList();
+        }
+
+        /// <summary>
+        /// Every check in the library that holds a claim to the bytes after it is held by an edited
+        /// claim (<see cref="EditedClaims"/>) or names the test that holds it
+        /// (<see cref="HeldElsewhere"/>), and every entry in either names a check the library has.
+        /// </summary>
+        /// <remarks>
+        /// The roster is the library's IL: every call of <c>PayloadReader.RequireHolds</c>, with the
+        /// string it counts, which is the last pushed before the call. A check added to any
+        /// structure fails here until something says what holds it: a cut sees a check only when
+        /// its writer's claim is large, and nothing else sees it unless a test edits the claim
+        /// (#344). Each test named must be a test, so that a rename cannot leave an entry vouching
+        /// for nothing, and the scan has to find the edited claims' checks, so that a decoder
+        /// finding nothing cannot pass.
+        /// </remarks>
+        [TestMethod]
+        public void TestEveryHoldsCheckIsHeldByAnEditedClaimOrNamesTheTestThatHoldsIt()
+        {
+            var found = HoldsChecks();
+            var edited = EditedClaims.SelectMany(c => c.Checks.Select(check => $"{check}: {c.Counts}")).ToList();
+            foreach (var check in edited)
+            {
+                Assert.Contains(check, found, $"the IL scan did not find {check}, which an edited claim holds, so it finds nothing it shows");
+            }
+
+            var unheld = found.Where(check => !edited.Contains(check) && !HeldElsewhere.ContainsKey(check)).ToList();
+            Assert.IsEmpty(unheld,
+                "these checks are held by no edited claim here and name no test that holds them; a cut sees one only when its " +
+                "writer's claim is large, so edit the claim (EditedClaims) or name the test that kills the mutant dropping it " +
+                "(HeldElsewhere): " + string.Join(", ", unheld));
+
+            var stale = HeldElsewhere.Keys.Where(check => !found.Contains(check)).Concat(edited.Where(e => HeldElsewhere.ContainsKey(e))).ToList();
+            Assert.IsEmpty(stale, "these entries name no check the library has, or are held twice: " + string.Join(", ", stale));
+
+            var tests = typeof(TestReadsAllocateOnlyWhatTheyHold).Assembly.GetTypes()
+                .SelectMany(t => t.GetMethods().Where(m => m.GetCustomAttributes(typeof(TestMethodAttribute), true).Length > 0)
+                    .Select(m => $"{t.Name}.{m.Name}"))
+                .ToHashSet();
+            foreach (var (check, (test, why)) in HeldElsewhere)
+            {
+                Assert.IsFalse(string.IsNullOrWhiteSpace(why), $"{check} names {test} without saying why it sees the check");
+                Assert.Contains(test, tests, $"{check} names {test}, which is not a test");
+            }
+        }
+
+        private static Type Outermost(Type type)
+        {
+            while (type.DeclaringType is not null)
+            {
+                type = type.DeclaringType;
+            }
+
+            return type;
+        }
+
+        /// <summary>
+        /// Every call the library's IL makes, with the method making it and the last string it
+        /// pushed before it, decoded an instruction at a time.
+        /// </summary>
+        private static IEnumerable<(MethodBase Caller, MethodBase Called, string LastString)> LibraryCalls()
+        {
+            const BindingFlags all = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance |
+                                     BindingFlags.Static | BindingFlags.DeclaredOnly;
+            foreach (var type in typeof(PersistenceFormat).Assembly.GetTypes())
+            {
+                foreach (var method in type.GetMethods(all).Cast<MethodBase>().Concat(type.GetConstructors(all)))
+                {
+                    var il = method.GetMethodBody()?.GetILAsByteArray();
+                    if (il is null)
+                    {
+                        continue;
+                    }
+
+                    string last = null;
+                    for (var at = 0; at < il.Length;)
+                    {
+                        var value = (short)il[at++];
+                        if (value == 0xFE)
+                        {
+                            value = unchecked((short)(0xFE00 | il[at++]));
+                        }
+
+                        var op = Instructions.Value[value];
+                        if (op.OperandType == OperandType.InlineString)
+                        {
+                            last = method.Module.ResolveString(BitConverter.ToInt32(il, at));
+                        }
+                        else if (op.OperandType == OperandType.InlineMethod)
+                        {
+                            MethodBase called = null;
+                            try
+                            {
+                                called = method.Module.ResolveMethod(
+                                    BitConverter.ToInt32(il, at),
+                                    method.DeclaringType is { IsGenericType: true } owner ? owner.GetGenericArguments() : null,
+                                    method.IsGenericMethod ? method.GetGenericArguments() : null);
+                            }
+                            catch (ArgumentException)
+                            {
+                                // Generic over a context this one cannot give; never a check, which is not generic.
+                            }
+
+                            if (called is not null)
+                            {
+                                yield return (method, called, last);
+                            }
+                        }
+
+                        at += op.OperandType switch
+                        {
+                            OperandType.InlineNone => 0,
+                            OperandType.ShortInlineBrTarget or OperandType.ShortInlineI or OperandType.ShortInlineVar => 1,
+                            OperandType.InlineVar => 2,
+                            OperandType.InlineI8 or OperandType.InlineR => 8,
+                            OperandType.InlineSwitch => 4 + 4 * BitConverter.ToInt32(il, at),
+                            _ => 4,
+                        };
+                    }
+                }
+            }
+        }
+
+        private static readonly Lazy<Dictionary<short, OpCode>> Instructions = new(() =>
+            typeof(OpCodes).GetFields(BindingFlags.Public | BindingFlags.Static)
+                .Select(field => (OpCode)field.GetValue(null))
+                .ToDictionary(op => op.Value));
 
         /// <summary>
         /// The envelope of <paramref name="whole"/> with <paramref name="extra"/> bytes of nought
