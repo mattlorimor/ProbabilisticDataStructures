@@ -334,7 +334,9 @@ namespace TestProbabilisticDataStructures
         /// checksum's four taken from them, as an unsigned number, wrap to more than any length
         /// can claim, so that a check that only compared the two would let every claim through.
         /// The cuts are at nothing after the header, where a header alone is all there is, and at
-        /// a byte short of the checksum.
+        /// a byte short of the checksum. The control is the cut at the checksum's four: an empty
+        /// payload and its checksum, resealed, which holds what it claims and so is not refused
+        /// for lacking it.
         /// </remarks>
         [TestMethod]
         [DynamicData(nameof(Structures))]
@@ -369,6 +371,17 @@ namespace TestProbabilisticDataStructures
                             new[] { 0UL, length }.Select(claim =>
                                 (claim, (Func<ReadOptions, Func<object>>)(options => read(CutAfterHeader(bytes, after, claim, large), options)), 0L)),
                             bound, problems);
+                    }
+
+                    // The control: with room for the checksum and nothing else, an empty payload
+                    // is held whole, so the read gets past the envelope, and is refused, if it
+                    // is, by its structure's reader, not for the bytes it lacks.
+                    var empty = CutAfterHeader(bytes, ChecksumLength, 0, large);
+                    var refused = Refusal(read(large ? LargeForm.Reseal(empty) : Resealed(empty), ReadOptions.Unlimited), out _);
+                    if (refused?.Message.Contains(TooFew, StringComparison.Ordinal) == true)
+                    {
+                        problems.Add($"{what}, cut to its header and the {ChecksumLength} bytes of its checksum and " +
+                            $"claiming nothing, was refused as short of its checksum: {refused.Message}");
                     }
                 }
             }
