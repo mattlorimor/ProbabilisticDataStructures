@@ -1240,16 +1240,6 @@ namespace TestProbabilisticDataStructures
                 sketch.Add(-Math.Pow(1.001, i));
             }
 
-            static long SpanOf(DDSketch sketch, string sign)
-            {
-                var store = typeof(DDSketch)
-                    .GetField(sign, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .GetValue(sketch)!;
-                return (long)store.GetType()
-                    .GetProperty("Span", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                    .GetValue(store)!;
-            }
-
             var positive = SpanOf(sketch, "positive");
             var negative = SpanOf(sketch, "negative");
             var bytes = sketch.ToByteArray();
@@ -1294,6 +1284,82 @@ namespace TestProbabilisticDataStructures
                 $"the read of the large form was charged {budget.Charged:N0} bytes, less than its windows");
             Assert.IsLessThanOrEqualTo(windows + Slack, budget.Charged,
                 $"the read of the large form was charged {budget.Charged:N0} bytes, {budget.Charged - windows:N0} more than its windows");
+        }
+
+        /// <summary>
+        /// A store holding no buckets, whose run of words is empty, costs a read nothing (#336,
+        /// #335). A sketch holding values of one sign is charged, and allocates, exactly its
+        /// other store's window more than a sketch holding none, from a held payload and from
+        /// the large form. Where the read holds the payload, it also costs the bytes its
+        /// payload grows by. The reads are counted in a no-GC region.
+        /// </summary>
+        /// <remarks>
+        /// An empty store's run is the only empty run of words the library writes. A read that
+        /// charged one an array's header, 24 bytes, as the large form's once did (#336), would
+        /// charge a sketch holding nothing twice that and one of one sign once, so the
+        /// difference would fall 24 short of the window. A read that charged nothing for the
+        /// window would leave only the payload's growth, the other direction. The two sketches
+        /// are compared rather than either pinned, so that what a sketch's objects and its
+        /// envelope cost is not written down here.
+        /// </remarks>
+        [TestMethod]
+        public void TestAStoreHoldingNoBucketsCostsAReadNothing()
+        {
+            var none = new DDSketch(0.01);
+            var oneSign = new DDSketch(0.01);
+            for (var i = 1; i <= 100; i++)
+            {
+                oneSign.Add(i);
+            }
+
+            Assert.AreEqual(0L, SpanOf(oneSign, "negative"), "premise: the sketch holds values of both signs");
+            var window = ReadBudget.ArrayOf((ulong)SpanOf(oneSign, "positive"), sizeof(ulong));
+
+            foreach (var large in new[] { false, true })
+            {
+                var form = large ? "from the large form" : "from a held payload";
+                byte[] Bytes(DDSketch sketch) => large ? LargeForm.WriteLarge(sketch) : sketch.ToByteArray();
+                long Charged(byte[] bytes)
+                {
+                    var budget = new ReadBudget(long.MaxValue, StructureId.DDSketch);
+                    DDSketch.ReadFrom(new MemoryStream(bytes, writable: false), new ReadOptions(budget));
+                    return budget.Charged;
+                }
+
+                long Allocated(byte[] bytes)
+                {
+                    DDSketch.ReadFrom(new MemoryStream(bytes, writable: false));
+                    return NoGCRegion.Allocated(() => DDSketch.ReadFrom(new MemoryStream(bytes, writable: false)));
+                }
+
+                var (noneBytes, oneBytes) = (Bytes(none), Bytes(oneSign));
+                Assert.AreEqual(large, LargeForm.IsLarge(oneBytes), $"the sketch was not read {form}");
+                var grown = large ? 0 : ReadBudget.ArrayOf((ulong)(oneBytes.Length - PersistenceFormat.EnvelopeLength), 1)
+                    - ReadBudget.ArrayOf((ulong)(noneBytes.Length - PersistenceFormat.EnvelopeLength), 1);
+                var (chargedNone, chargedOne) = (Charged(noneBytes), Charged(oneBytes));
+                var (allocatedNone, allocatedOne) = (Allocated(noneBytes), Allocated(oneBytes));
+
+                Console.WriteLine(
+                    $"[EMPTY STORE] {form}: window {window:N0}, payload grown {grown:N0}; holding none charged {chargedNone:N0}, " +
+                    $"allocated {allocatedNone:N0}; one sign charged {chargedOne:N0}, allocated {allocatedOne:N0}");
+                Assert.AreEqual(window + grown, chargedOne - chargedNone,
+                    $"{form}, a sketch of one sign was charged {chargedOne - chargedNone:N0} bytes more than one holding none, " +
+                    $"and its window and payload are {window + grown:N0} more");
+                Assert.AreEqual(window + grown, allocatedOne - allocatedNone,
+                    $"{form}, a sketch of one sign allocated {allocatedOne - allocatedNone:N0} bytes more than one holding none, " +
+                    $"and its window and payload are {window + grown:N0} more");
+            }
+        }
+
+        /// <summary>How many buckets a sketch's store of one sign spans, read from the store itself.</summary>
+        private static long SpanOf(DDSketch sketch, string sign)
+        {
+            var store = typeof(DDSketch)
+                .GetField(sign, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(sketch)!;
+            return (long)store.GetType()
+                .GetProperty("Span", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(store)!;
         }
     }
 }
