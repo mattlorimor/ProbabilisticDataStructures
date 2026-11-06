@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Hashing;
 using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
@@ -201,6 +202,36 @@ namespace TestProbabilisticDataStructures
             {
                 Assert.IsTrue(Enum.IsDefined(id), $"an allowance is for {(ushort)id}, which is no structure");
                 Assert.IsFalse(string.IsNullOrWhiteSpace(why), $"{id} has an allowance without a reason");
+            }
+        }
+
+        /// <summary>
+        /// What every read makes once, whatever it holds, is charged what it allocates: a
+        /// checksum's state, the read's own budget, and the stream a byte array is read through.
+        /// </summary>
+        /// <remarks>
+        /// Each is a constant measured on a 64-bit runtime, and each is in every read's charge, so
+        /// a runtime that makes one larger fails here by name, as well as in the sweep. A checksum
+        /// was charged as a small object, 64 bytes, and the budget and the stream not at all
+        /// (#346). The first of each is made before any is counted, so that what the runtime does
+        /// once is not taken for it.
+        /// </remarks>
+        [TestMethod]
+        public void TestWhatEveryReadMakesOnceIsChargedWhatItAllocates()
+        {
+            var bytes = new byte[16];
+            (string What, long Charged, Func<object> Make)[] made =
+            [
+                ("a checksum's state", PersistenceFormat.ChecksumStateCost, () => new Crc32()),
+                ("a read's budget", PersistenceFormat.ReadBudgetCost, () => ReadBudget.For(ReadOptions.Unlimited, StructureId.BloomFilter)),
+                ("the stream a byte array is read through", PersistenceFormat.ByteArrayStreamCost, () => new MemoryStream(bytes, writable: false)),
+            ];
+
+            foreach (var (what, charged, make) in made)
+            {
+                make();
+                Assert.AreEqual(charged, TestReadBudget.LeastAllocated(make, Repeats, null),
+                    $"{what} is charged {charged:N0} bytes, and that is not what one allocates");
             }
         }
     }
