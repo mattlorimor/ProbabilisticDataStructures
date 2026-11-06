@@ -781,10 +781,11 @@ namespace ProbabilisticDataStructures
 
                 // Length-prefixed, so a payload cannot claim more buckets than it
                 // carries: the read fails before anything is allocated for them. The run
-                // can be longer than one array in the large form (#228), so it is read in
-                // pieces, straight into the window, when the payload is not held, and
-                // copied out whole when it is.
-                var length = reader.BeginWords();
+                // can be longer than one array in the large form (#228). It is read straight
+                // into the window, a piece at a time through a buffer on the stack, whether
+                // the payload is held or not. Copied out of a held payload whole and then
+                // into the window, every store's buckets were held, and charged, twice (#335).
+                var length = reader.BeginWordsInPlace();
 
                 var span = SpanOf(minIndex, length, which);
                 var store = new Store();
@@ -800,43 +801,56 @@ namespace ProbabilisticDataStructures
                 // run's size in allocations for a dense one.
                 reader.Budget.Charge(ReadBudget.ArrayOf((ulong)span, sizeof(ulong)));
                 store.Reserve(minIndex, span);
-
-                for (var i = 0; i < span;)
-                {
-                    var piece = reader.ReadWords();
-                    for (var at = 0; at < piece.Length; at += sizeof(ulong), i++)
-                    {
-                        var amount = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(piece[at..]);
-
-                        if (amount != 0)
-                        {
-                            // A run whose counts pass what one count holds wraps the store's
-                            // total, and a store whose total wrapped to zero reports itself
-                            // empty with its bounds and counts still set.
-                            if (amount > ulong.MaxValue - store.Total)
-                            {
-                                throw new InvalidDataException(
-                                    $"The {which} buckets hold more than {ulong.MaxValue} " +
-                                    "values on their own, which is more than a sketch can count.");
-                            }
-
-                            store.Add(minIndex + i, amount);
-                        }
-                    }
-                }
-
+                reader.ReadWords(store.counts);
+                store.Restore(minIndex, which);
                 return store;
             }
 
             /// <summary>
-            /// Prices what <see cref="ReadFrom"/> allocates: the copy of the run, or the
-            /// piece it is read in from a payload that is not held, and the window it is
-            /// restored into.
+            /// Takes the counts just read into the window <see cref="Reserve"/> sized, from
+            /// <paramref name="lowest"/> upward, as this store's buckets: its total, and its
+            /// bounds at the lowest and highest bucket that hold a count, as <see cref="Add"/>
+            /// would leave them given each count in turn.
+            /// </summary>
+            private void Restore(int lowest, string which)
+            {
+                for (var i = 0; i < this.counts.Length; i++)
+                {
+                    var amount = this.counts[i];
+                    if (amount == 0)
+                    {
+                        continue;
+                    }
+
+                    // A run whose counts pass what one count holds wraps the store's total, and
+                    // a store whose total wrapped to zero reports itself empty with its bounds
+                    // and counts still set.
+                    if (amount > ulong.MaxValue - this.Total)
+                    {
+                        throw new InvalidDataException(
+                            $"The {which} buckets hold more than {ulong.MaxValue} " +
+                            "values on their own, which is more than a sketch can count.");
+                    }
+
+                    // The buckets come in order, so the first that holds a count is the lowest
+                    // and the last is the highest. The window ends at an index no higher than
+                    // int.MaxValue (SpanOf), so the sum does not wrap.
+                    this.Total += amount;
+                    this.MinIndex = Math.Min(this.MinIndex, lowest + i);
+                    this.MaxIndex = lowest + i;
+                }
+            }
+
+            /// <summary>
+            /// Prices what <see cref="ReadFrom"/> allocates: the window its run is read
+            /// straight into.
             /// </summary>
             internal static void Price(ref PayloadReader reader, string which)
             {
                 var minIndex = unchecked((int)reader.ReadUInt32());
-                var span = SpanOf(minIndex, reader.SkipWords(), which);
+                var length = reader.BeginWordsInPlace();
+                reader.Skip(length);
+                var span = SpanOf(minIndex, length, which);
                 if (span > 0)
                 {
                     reader.Budget.Price(ReadBudget.ArrayOf((ulong)span, sizeof(ulong)));

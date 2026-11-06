@@ -832,6 +832,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now reads a filter at 0.1% up to a table of 2^28 slots, 201,326,592 items, where it
   stopped at 2^27; at 1% it still stops at 2^28. (#328)
 
+- **A `CountSketch`, `InvertibleBloomLookupTable` or `DDSketch` read holds its runs of
+  words once, and is charged for them once.** Each reader copied a run of words out of a
+  held payload whole and then unpacked the copy into storage of its own: a count sketch's
+  cells into its rows, an invertible table's counts and hash sums into their arrays, and
+  each DDSketch store's buckets into its window. So a read held, and was charged for, each
+  such run twice besides the payload, three times in all. From the large form, where the
+  payload is not held, it read each run through a buffer of up to 64 KiB on the heap. The
+  words are now read straight into the storage, in pieces through a buffer of up to 16 KiB
+  on the stack, as a `QuotientFilter`'s table is. The price and the charges are the
+  storage alone, so they still come to the same sum. Measured in a no-GC region, a count
+  sketch of three rows of 10,000 counters allocated 720,520 bytes to read and now
+  allocates 480,496; in the large form it allocated 306,120 and now 240,560. An invertible
+  table of 15,000 cells of 8-byte keys went from 960,432 to 720,384, and from 491,560 to
+  360,440 in the large form. A DDSketch of 19,991 positive buckets and 11,995 negative ones
+  went from 768,328 to 512,392, and from 387,648 to 256,528. So the default budget now
+  reads a count sketch of 5 rows up to a width of about 13.42 million, where it stopped at
+  about 8.95 million. It reads an invertible table up to about 14.91 million differences of
+  8-byte keys, from 11.18 million, and 7.46 million of 32-byte keys, from 6.39 million. It
+  reads a DDSketch up to a span of about 67.11 million buckets a sign, from 44.74 million.
+  An empty run of words, which a DDSketch store holding no buckets writes, costs nothing
+  and allocates nothing, from a held payload and from the large form. (#335)
+
 - **An `InfiniFilter` or `MementoFilter` payload claiming more expansions than its first
   table can have had is refused.** A first table starts with at least two bits of address
   and gains one with each expansion, and `Reset` builds the table the filter started with

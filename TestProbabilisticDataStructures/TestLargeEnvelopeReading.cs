@@ -962,11 +962,15 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// The array reads the second pass makes of a sample's payload in the large form, with
-        /// the piece at <paramref name="piece"/>, or as it ships; the sample has to read back.
+        /// The array reads among what a second pass (<see cref="SecondPass"/>) asked of the
+        /// stream a payload in the large form, <paramref name="large"/>, is read from, before its
+        /// end checksum.
         /// </summary>
-        private static List<Asked> ArrayReads(TestReadBudget.Sample sample, byte[] large, int? piece) =>
-            SecondPass(sample, large, piece).Where(a => !a.IsMove && a.Array && a.From < large.Length - 4).ToList();
+        private static List<Asked> ArrayReads(List<Asked> pass, byte[] large) =>
+            pass.Where(a => !a.IsMove && a.Array && a.From < large.Length - 4).ToList();
+
+        /// <summary>How many of the reads a second pass asked for were through the span overload.</summary>
+        private static int SpanReads(List<Asked> pass) => pass.Count(a => !a.IsMove && !a.Array);
 
         /// <summary>
         /// Everything the second pass asks of the stream a sample's payload in the large form is
@@ -986,118 +990,65 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A run its structure keeps in storage of its own, rather than as the array it is read
-        /// into, is read from the large form in pieces, each no longer than a piece, straight
-        /// into that storage and never through one array: shown with the piece lowered to
-        /// eight words, below the runs of the samples. Which runs those are is found, not
-        /// listed, and each finding is checked by a second behaviour. The roster is
-        /// <see cref="StructureId"/>, through the budget samples.
+        /// No run is read from the large form in pieces through the stream's array overload, into
+        /// a buffer on the heap: a run read through it is read whole, into the one array its
+        /// structure keeps, and claimed a byte past one array at its prefix it is refused as more
+        /// than one array holds. Shown with the piece lowered to eight words, below the runs of
+        /// the samples, where a run read in pieces through the array overload makes more array
+        /// reads than with the piece as it ships. The roster is <see cref="StructureId"/>, through
+        /// the budget samples.
         /// </summary>
         /// <remarks>
         /// A run past one array, which the large form's <c>u64</c> lengths allow (#228), cannot
         /// be read through one, and a structure that keeps its run in words, or in more than
         /// one array, can hold one: a quotient filter's table, a count sketch's cells, a
         /// DDSketch's buckets, and an invertible table's counts and hash sums, which #228
-        /// names. The quotient filter's table is read through the stream's span overload, from
-        /// a buffer on the stack, straight into the table (#328), so it makes no array reads to
-        /// count here, and
+        /// names. Each was read in pieces through the array overload, into a buffer of a piece
+        /// on the heap, and each is now read through the span overload, from a buffer on the
+        /// stack, straight into its storage (#328, #335):
         /// <see cref="TestAQuotientFiltersTableIsReadFromTheLargeFormInPiecesStraightIntoItsTable"/>
-        /// holds it instead. With the piece lowered, such a structure makes more array reads
-        /// than with the piece as it ships, each a piece or the rest of its run, one after
-        /// another to the run's end, which its <c>u64</c> prefix gives. A run read whole at
-        /// either piece is read into the one array its structure keeps, and claimed a byte past
-        /// one array at its prefix it is refused as more than one array holds; a run read in
-        /// pieces is not, since no array of its length is made, and is refused for the bytes the
-        /// stream lacks. A structure that reads in pieces allocates, beyond what streaming adds,
-        /// at least its payload and those runs less than the ordinary envelope's read, which
-        /// holds the payload and copies each run.
+        /// and <see cref="TestARunOfWordsIsReadFromTheLargeFormInPiecesStraightIntoItsStorage"/>
+        /// hold their pieces. So a run read in pieces through the array overload is one that has
+        /// gone back to a buffer on the heap, in one of them or a structure added since. The
+        /// lowered piece is seen to take effect: some sample makes more span reads with it than
+        /// with the piece as it ships, so that a piece that was never lowered cannot pass the
+        /// sweep by showing no array read change.
         /// </remarks>
         [TestMethod]
-        public void TestARunItsStructureKeepsInStorageOfItsOwnIsReadInPiecesIntoIt()
+        public void TestNoRunIsReadFromTheLargeFormInPiecesThroughTheArrayOverload()
         {
             var samples = TestReadBudget.Samples.Value;
-            var pieced = new Dictionary<StructureId, List<(long Prefix, long Length)>>();
+            var pieced = new List<string>();
             var whole = new List<(StructureId Id, byte[] Large, long Prefix)>();
-            var larges = new Dictionary<StructureId, byte[]>();
-            var longest = new Dictionary<StructureId, long>();
+            var lowersSpanReads = new List<StructureId>();
 
             foreach (var (id, sample) in samples)
             {
                 var large = TestReadBudget.InTheLargeForm(sample).Bytes;
-                larges[id] = large;
-                var shipped = ArrayReads(sample, large, null);
-                var lowered = ArrayReads(sample, large, Piece);
-                longest[id] = lowered.Count == 0 ? 0 : lowered.Max(a => a.Count);
-
-                if (lowered.Count == shipped.Count)
+                var shipped = SecondPass(sample, large, null);
+                var lowered = SecondPass(sample, large, Piece);
+                if (SpanReads(lowered) > SpanReads(shipped))
                 {
-                    whole.AddRange(lowered.Where(a => a.Count > Piece).Select(a => (id, large, a.From - 8)));
+                    lowersSpanReads.Add(id);
+                }
+
+                var shippedArrays = ArrayReads(shipped, large);
+                var loweredArrays = ArrayReads(lowered, large);
+                if (loweredArrays.Count != shippedArrays.Count)
+                {
+                    pieced.Add($"{id}, in {loweredArrays.Count:N0} array reads with the piece lowered and {shippedArrays.Count:N0} " +
+                        $"as it ships, the shortest {loweredArrays.Min(a => a.Count):N0} bytes");
                     continue;
                 }
 
-                // Each run from its u64 prefix to its end: in one read, or in pieces of it.
-                var runs = pieced[id] = new List<(long, long)>();
-                for (var i = 0; i < lowered.Count;)
-                {
-                    var prefix = lowered[i].From - 8;
-                    var length = (long)BinaryPrimitives.ReadUInt64LittleEndian(large.AsSpan((int)prefix));
-                    var end = prefix + 8 + length;
-                    var reads = new List<Asked>();
-                    do
-                    {
-                        Assert.IsLessThan(lowered.Count, i, $"{id}'s run at {prefix + 8} of {length:N0} bytes was left unread");
-                        Assert.AreEqual(reads.Count == 0 ? prefix + 8 : reads[^1].To, lowered[i].From,
-                            $"{id}'s run at {prefix + 8} was read out of turn at {lowered[i].From}");
-                        reads.Add(lowered[i++]);
-                    }
-                    while (reads[^1].To < end);
-                    Assert.AreEqual(end, reads[^1].To, $"{id}'s run at {prefix + 8} was read past its {length:N0} bytes");
-
-                    if (reads.Count > 1)
-                    {
-                        Assert.IsTrue(reads.All(r => r.Count <= Piece),
-                            $"{id}'s run at {prefix + 8} was read in pieces longer than {Piece} bytes: {string.Join(", ", reads.Select(r => r.Count))}");
-                        runs.Add((prefix, length));
-                    }
-                    else if (length > Piece)
-                    {
-                        whole.Add((id, large, prefix));
-                    }
-                }
+                whole.AddRange(loweredArrays.Where(a => a.Count > Piece).Select(a => (id, large, a.From - 8)));
             }
 
-            // The structures #228 names: a run of each can pass one array. The quotient filter
-            // reads its table through the span overload (#328), and is held by a test of its own.
-            Assert.IsFalse(pieced.ContainsKey(StructureId.QuotientFilter) || whole.Any(w => w.Id == StructureId.QuotientFilter),
-                "QuotientFilter read its table through the stream's array overload, which it reads straight into the table (#328)");
-            foreach (var capped in new[]
-            {
-                StructureId.CountSketch, StructureId.DDSketch, StructureId.InvertibleBloomLookupTable,
-            })
-            {
-                Assert.IsTrue(pieced.TryGetValue(capped, out var runs) && runs.Count > 0,
-                    $"{capped} did not read a run in pieces of {Piece} bytes: its longest array read was {longest[capped]:N0} bytes");
-            }
-
-            foreach (var (id, runs) in pieced)
-            {
-                foreach (var (prefix, _) in runs)
-                {
-                    var refused = ClaimedPastOneArray(samples[id], larges[id], prefix);
-                    Assert.DoesNotContain("single array", refused.Message,
-                        $"{id}'s run at {prefix + 8}, read in pieces, was refused past one array as if read into one: {refused.Message}");
-                }
-
-                var sample = samples[id];
-                var payload = (long)sample.Bytes.Length - PersistenceFormat.EnvelopeLength;
-                var inPieces = runs.Sum(r => r.Length);
-                var held = TestReadBudget.Allocated(() => sample.Read(sample.Bytes, ReadOptions.Unlimited));
-                var streamed = WithPieces(Piece, () => TestReadBudget.Allocated(() => sample.Read(larges[id], ReadOptions.Unlimited)));
-                Console.WriteLine($"[PIECES] {id}: payload {payload:N0}, in pieces {inPieces:N0}, ordinary read {held:N0}, large {streamed:N0}");
-                Assert.IsGreaterThanOrEqualTo(payload + inPieces - StreamedOverhead, held - streamed,
-                    $"{id} read in pieces allocated {streamed:N0} bytes, and its ordinary read {held:N0}: a run of " +
-                    $"{inPieces:N0} bytes in all was read through an array");
-            }
+            Assert.IsEmpty(pieced,
+                "a run was read in pieces through the stream's array overload, into a buffer on the heap, where a run its structure " +
+                $"keeps in storage of its own is read straight into it (#328, #335): {string.Join("; ", pieced)}");
+            Assert.IsNotEmpty(lowersSpanReads,
+                $"no sample made more span reads with the piece lowered to {Piece} bytes than as it ships, so the piece was not lowered");
 
             Assert.IsNotEmpty(whole, "no run longer than a piece was read whole, so none was shown kept as one array");
             foreach (var (id, large, prefix) in whole)
@@ -1620,8 +1571,9 @@ namespace TestProbabilisticDataStructures
         /// A sketch of one value, in the large form, its positive store's run claiming a count
         /// past one array and its header the payload that makes, on a stream that claims as
         /// much and holds zeros past the run's length. Read unlimited, so unpriced, the run is
-        /// begun, with the piece it would be read through, and refused before the store's
-        /// window is made, so the read allocates that piece and a refusal. Without the check
+        /// begun, with nothing allocated for it, since its words would be read straight into the
+        /// window (#335), and refused before the window is made; before #335 a heap piece was
+        /// allocated for it too. Without the check
         /// the span passes the store's index check, and the read goes on to make a window of
         /// that many counts, which no array holds. The edges are the span itself, worked out
         /// by the store's own reckoning, since a run of as many counts as an array holds is

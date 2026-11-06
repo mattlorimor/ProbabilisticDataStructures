@@ -605,9 +605,9 @@ gigabytes, and loads only with a budget raised to match. What each read is charg
 | `QuotientFilter` | the whole table, 2^`q` slots of `r` + 3 bits, its words read straight into it |
 | `VarOpt` | five regions of `k` + 1 slots, eight bytes each |
 | `InverseBloomFilter` | a slot of eight bytes per unit of capacity |
-| `CountMinSketch`, `CountSketch`, `PrivateCountMinSketch`, `SublimeCountMinSketch` | every row, before it is read; Sublime also its packed rows |
+| `CountMinSketch`, `CountSketch`, `PrivateCountMinSketch`, `SublimeCountMinSketch` | every row, before it is read; CountSketch's cells read straight into its rows; Sublime also its packed rows |
 | `TopK`, `HeavyKeeper` | a heap sized by the elements held, not by `k`; HeavyKeeper also its bucket arrays |
-| `ThetaSketch`, `TupleSketch`, `MinHashSignature`, `Grafite`, `SetSketch`, `InvertibleBloomLookupTable`, `DDSketch`, `HyperLogLogPlus` (sparse) | arrays sized by the values the payload carries |
+| `ThetaSketch`, `TupleSketch`, `MinHashSignature`, `Grafite`, `SetSketch`, `InvertibleBloomLookupTable`, `DDSketch`, `HyperLogLogPlus` (sparse) | arrays sized by the values the payload carries; the invertible table's counts and hash sums, and DDSketch's buckets, read straight into theirs |
 | `InfiniFilter`, `MementoFilter` | each table, its words read straight into the segment |
 | `DpswSketch` | its checkpoints, rebuilt from the substream size, and a list of segments per substream; each segment's sketch as above |
 
