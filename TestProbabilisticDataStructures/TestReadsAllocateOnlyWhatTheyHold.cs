@@ -712,6 +712,143 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A DPSW window's price and its reader hold its count of substreams to the bytes after
+        /// it, at the least a substream takes, before they price, charge or allocate anything for
+        /// the substreams. A count one more than those bytes could hold is refused for that, with
+        /// nothing priced for it, and the count they could hold is priced and read past the
+        /// check, so the check is neither missing nor stricter than the bytes.
+        /// </summary>
+        /// <remarks>
+        /// No cut shows this (#332). A cut that ends inside the substreams keeps the writer's
+        /// count, the few substreams a window spans, and what a price that skipped the check adds
+        /// for it, the list of them and the first one's segment list, is well inside
+        /// <see cref="Fixed"/>, so the sweep passes either way. So the count is edited here, in the
+        /// sample the sweep cuts, with the checksum resealed: to one more than the bytes after it
+        /// could hold, and to the most a u32 can claim. The price of each stops at the count,
+        /// having priced what a cut just before the count does. Each is refused for the
+        /// substreams it lacks under no budget, under the default one, and under a budget of
+        /// exactly its own price, which a reader that charged for the list before checking it
+        /// would overrun. It allocates no more than its envelope's cost and <see cref="Fixed"/>
+        /// before it is refused, where a sketch of one substream costs more than that. The
+        /// count the bytes could hold is the control: it is priced at least the list it claims,
+        /// and its read gets past the check and allocates every substream the payload holds before
+        /// it finds the rest missing.
+        /// </remarks>
+        [TestMethod]
+        public void TestADpswSubstreamCountItDoesNotHoldIsRefusedBeforeItIsPricedOrAllocated()
+        {
+            const StructureId Id = StructureId.DpswSketch;
+            const string Lacks = "substreams, beyond what it can hold";
+            var bytes = TestReadBudget.Samples.Value[Id].Bytes;
+            var length = bytes.Length - PayloadStart - ChecksumLength;
+            var envelope = PersistenceFormat.EnvelopeCost((ulong)length);
+
+            // FORMAT.md: the window's u64, two f64, three u32 and the u64 of items seen, then the
+            // u32 count of substreams. Each substream is its u64 start and u32 count of items
+            // before its sketches, so no fewer bytes than those.
+            const int CountAt = 3 * sizeof(ulong) + 3 * sizeof(uint) + sizeof(ulong);
+            const int AtLeast = sizeof(ulong) + sizeof(uint);
+            var most = (uint)((length - CountAt - sizeof(uint)) / AtLeast);
+
+            byte[] Claiming(uint count)
+            {
+                var edited = (byte[])bytes.Clone();
+                BinaryPrimitives.WriteUInt32LittleEndian(edited.AsSpan(PayloadStart + CountAt), count);
+
+                // Cut to its whole length, which reseals its checksum.
+                return Cut(edited, length);
+            }
+
+            InvalidDataException Refusal(byte[] payload, ReadOptions options, out long allocated)
+            {
+                InvalidDataException refused = null;
+                allocated = NoGCRegion.Allocated(() =>
+                {
+                    refused = null;
+                    try
+                    {
+                        Persistence.FromByteArray<DpswSketch>(payload, options);
+                    }
+                    catch (InvalidDataException e)
+                    {
+                        refused = e;
+                    }
+
+                    return refused;
+                });
+                return refused;
+            }
+
+            var before = WalkPrice(Id, bytes, CountAt);
+            Assert.AreEqual(CountAt, before.StoppedAt,
+                $"premise: a cut just before the count is past the shape check, and its price stops at the count: {before.Why}");
+
+            var fits = Claiming(most);
+            var taken = WalkPrice(Id, fits, length);
+            Assert.IsGreaterThanOrEqualTo(before.Priced + ReadBudget.ListOf(most, sizeof(long)), taken.Priced,
+                $"the {most:N0} substreams the bytes after the count could hold were not priced, and the price stopped: {taken.Why}");
+            Assert.IsFalse(taken.Why?.Contains(Lacks, StringComparison.Ordinal) ?? false,
+                $"the {most:N0} substreams the bytes after the count could hold were refused as more than they hold: {taken.Why}");
+            var read = Refusal(fits, ReadOptions.Unlimited, out var readInto);
+            Assert.IsNotNull(read, $"a window claiming {most:N0} substreams, of which it holds the writer's few, was read");
+            Assert.IsFalse(read.Message.Contains(Lacks, StringComparison.Ordinal),
+                $"the {most:N0} substreams the bytes after the count could hold were refused by the reader as more than they hold: {read.Message}");
+            Assert.IsGreaterThan(envelope + Fixed, readInto,
+                $"a read past the count allocated {readInto:N0} bytes, within its envelope and {Fixed:N0}, so that bound does not " +
+                "show a refused read allocated no substream");
+
+            var problems = new List<string>();
+            foreach (var claim in new[] { most + 1, uint.MaxValue })
+            {
+                var edited = Claiming(claim);
+                var (priced, stoppedAt, why) = WalkPrice(Id, edited, length);
+                if (priced != before.Priced || stoppedAt != CountAt + sizeof(uint))
+                {
+                    problems.Add($"claiming {claim:N0} substreams, the price priced {priced - before.Priced:N0} bytes past what a cut " +
+                        $"before the count does and stopped at {stoppedAt:N0}: {why}");
+                }
+                else if (why is null || !why.Contains(Lacks, StringComparison.Ordinal))
+                {
+                    problems.Add($"claiming {claim:N0} substreams, the price stopped at the count for another reason: {why}");
+                }
+
+                (string Name, ReadOptions Options)[] budgets =
+                [
+                    ("no budget", ReadOptions.Unlimited),
+                    ("the default budget", ReadOptions.Default),
+                    ("a budget of its own price", new ReadOptions(envelope + priced)),
+                ];
+                foreach (var (budget, options) in budgets)
+                {
+                    var refused = Refusal(edited, options, out var allocated);
+                    if (refused is null)
+                    {
+                        problems.Add($"claiming {claim:N0} substreams, the window was read under {budget}");
+                        continue;
+                    }
+
+                    if (refused.InnerException is ReadBudgetExceededException)
+                    {
+                        problems.Add($"claiming {claim:N0} substreams, the window was refused for {budget}: {refused.Message}");
+                    }
+                    else if (!refused.Message.Contains(Lacks, StringComparison.Ordinal))
+                    {
+                        problems.Add($"claiming {claim:N0} substreams, the window was read into under {budget} and refused " +
+                            $"for something else: {refused.Message}");
+                    }
+
+                    if (allocated > envelope + Fixed)
+                    {
+                        problems.Add($"claiming {claim:N0} substreams, the window allocated {allocated:N0} bytes under {budget} " +
+                            $"before it was refused, past its envelope's {envelope:N0} and {Fixed:N0}");
+                    }
+                }
+            }
+
+            Assert.IsEmpty(problems, $"at {problems.Count} checks; " + string.Join(" | ", problems));
+        }
+
+        /// <summary>
         /// Each structure swept with another payload has a witness that its budget sample's cost
         /// is a parameter's: a valid payload holding nothing, which allocates past the bound.
         /// </summary>
