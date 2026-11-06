@@ -728,9 +728,13 @@ namespace ProbabilisticDataStructures
             reader.ReadWords(hashSums);
 
             reader.ExpectEnd();
+            budget.Charge(ObjectCost);
             return new InvertibleBloomLookupTable(
                 keySize, PersistenceFormat.ResolveOrThrow(hashId, hash), cells, keySums, counts, hashSums);
         }
+
+        /// <summary>What a read charges for the table itself, measured at 56 bytes (#346).</summary>
+        internal static long ObjectCost => ReadBudget.Object(56);
 
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the key sums, kept as the
@@ -768,6 +772,7 @@ namespace ProbabilisticDataStructures
             reader.Budget.Price(ReadBudget.ArrayOf(cells, sizeof(ulong)));
 
             reader.ExpectEnd();
+            reader.Budget.Price(ObjectCost);
         }
 
         private static void CheckShape(uint cells, int keySize, long counts, long keySums, long hashes)

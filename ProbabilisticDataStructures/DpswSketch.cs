@@ -820,6 +820,7 @@ namespace ProbabilisticDataStructures
 
             // Restoring rebuilds the checkpoints from the substream size the payload names.
             budget.Charge(CheckpointsCost(substreamSize, alpha));
+            budget.Charge(ObjectCost);
             var sketch = new DpswSketch(
                 window, rho, alpha, substreamSize, width, depth, resolved)
             {
@@ -887,6 +888,7 @@ namespace ProbabilisticDataStructures
             var substreamSize = CheckShape(window, rho, alpha, claimedSubstream, width, depth, position);
 
             reader.Budget.Price(CheckpointsCost(substreamSize, alpha));
+            reader.Budget.Price(ObjectCost);
             var checkpoints = CheckpointCount(substreamSize, alpha);
             CheckLeanest(checkpoints, window, rho, alpha, depth);
 
@@ -1155,6 +1157,9 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal static long CheckpointsCost(int substreamSize, double alpha) =>
             ReadBudget.ArrayOf((ulong)CheckpointCount(substreamSize, alpha), sizeof(int));
+
+        /// <summary>What a read charges for the window itself, measured at 104 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(104);
 
         /// <summary>
         /// What a plan of <paramref name="segments"/> segments allocates: the list, grown

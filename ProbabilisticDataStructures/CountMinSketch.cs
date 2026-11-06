@@ -548,6 +548,7 @@ namespace ProbabilisticDataStructures
 
             reader.ExpectEnd();
 
+            budget.Charge(ObjectCost);
             return new CountMinSketch
             {
                 Matrix = matrix,
@@ -562,8 +563,8 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Prices what <see cref="Read"/> allocates beyond the envelope: the matrix. See
-        /// <see cref="PayloadPrice"/>.
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the matrix, and the
+        /// sketch. See <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
@@ -575,7 +576,11 @@ namespace ProbabilisticDataStructures
             reader.ReadUInt64();
             CheckMatrix(ref reader, width, depth);
             reader.Budget.Price(RowsCost(width, depth));
+            reader.Budget.Price(ObjectCost);
         }
+
+        /// <summary>What a read charges for the sketch itself, measured at 72 bytes (#346).</summary>
+        internal static long ObjectCost => ReadBudget.Object(72);
 
         /// <summary>
         /// Checks the matrix a payload claims, as both the read and its price do, before

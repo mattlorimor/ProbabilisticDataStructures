@@ -619,6 +619,12 @@ gigabytes, and loads only with a budget raised to match. What each read is charg
 | `InfiniFilter`, `MementoFilter` | each table, its words read straight into the segment |
 | `DpswSketch` | its checkpoints, rebuilt from the substream size, and a list of segments per substream; each segment's sketch as above |
 
+Beside these, a read is charged the objects it makes: the structure and those it holds, a
+checksum's state, and, once for a read and not again for one nested in it, the read's own
+budget and the stream a byte array is read through, which a read from a stream is charged
+too, since the two cannot be told apart. Each is charged its size measured on a 64-bit
+runtime, or a small object of 64 bytes where that is larger.
+
 ## Payloads
 
 ### `BloomFilter` (id 1)

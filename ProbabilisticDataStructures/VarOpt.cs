@@ -907,6 +907,7 @@ namespace ProbabilisticDataStructures
             // Its five regions, k + 1 slots each, whatever the payload holds: the
             // sample's arithmetic assumes their size.
             budget.Charge(RegionsCost(k));
+            budget.Charge(ObjectCost);
             var restored = new VarOpt(k, randomState)
             {
                 N = n,
@@ -972,6 +973,9 @@ namespace ProbabilisticDataStructures
             }
         }
 
+        /// <summary>What a read charges for the sample itself, measured at 104 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(104);
+
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the five regions,
         /// and the copy of each item. See <see cref="PayloadPrice"/>.
@@ -988,6 +992,7 @@ namespace ProbabilisticDataStructures
             reader.RequireHolds(heavyCount + (ulong)lightCount, sizeof(uint), "items");
 
             reader.Budget.Price(RegionsCost(k));
+            reader.Budget.Price(ObjectCost);
             for (uint i = 0; i < heavyCount; i++)
             {
                 reader.SkipBytes();
