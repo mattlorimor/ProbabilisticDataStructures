@@ -598,23 +598,26 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// A read charges the filter it builds at least what building it allocates, and less
         /// than a small object past that (#336): its table, and beyond the table the filter,
-        /// with the table of the one-item filter it is built from before it is shaped, which
-        /// come to more than one small object allows for. The builds are counted in a no-GC
-        /// region.
+        /// which comes to more than one small object allows for. The builds are counted in a
+        /// no-GC region.
         /// </summary>
         /// <remarks>
         /// Probed on 6ce3fe1, the least of seven builds in a no-GC region, all seven agreeing,
         /// came to 136 bytes beyond the table at every shape here and at two more, 2^20 slots
         /// and a remainder of 29 bits in the one-slot table: the filter, 96 bytes, which is what
         /// the constructor alone allocates beyond its table at four shapes, and the 40-byte
-        /// table of two words that the constructor gives the one-item filter <c>Build</c> starts
+        /// table of two words that the constructor gave the one-item filter <c>Build</c> started
         /// from. The read charged them as <see cref="ReadBudget.SmallObject"/>, 64: 72 bytes a
-        /// read under what it allocated, which the slack of every read-budget sample hid. The
-        /// shapes are the narrowest table, where the filter is the largest share of what is
-        /// allocated, the widest remainder, the issue's filter for 100 items at 1%, a table of
-        /// 2^16 slots, and the one-slot table a payload of version 1 holds for 32 quotient
-        /// bits. The first build of each is not counted, so that what the runtime does once is
-        /// not taken for the filter.
+        /// read under what it allocated, which the slack of every read-budget sample hid, and
+        /// then as three, 192. Since <c>Build</c> makes the filter at the payload's widths
+        /// (#343), it allocates the filter alone beyond the table, 96 bytes, which
+        /// <see cref="TestBuildingTheFilterAReadMakesAllocatesOnlyTheFilterAndItsTable"/> holds it
+        /// to, and the read charges two small objects, 128: 32 past it, where three would be 96
+        /// and one 32 short. The shapes are the narrowest table, where the filter is the
+        /// largest share of what is allocated, the widest remainder, the issue's filter for 100
+        /// items at 1%, a table of 2^16 slots, and the one-slot table a payload of version 1
+        /// holds for 32 quotient bits. The first build of each is not counted, so that what the
+        /// runtime does once is not taken for the filter.
         /// </remarks>
         [TestMethod]
         public void TestAReadIsChargedWhatBuildingItsFilterAllocates()

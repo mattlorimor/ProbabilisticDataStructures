@@ -774,6 +774,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   objects, by the reader and its price alike, so they still come to the same sum, and a
   read is charged 128 bytes more than it was. (#336)
 
+- **A `QuotientFilter` read no longer makes a table it throws away, and is charged for the
+  filter it builds as two small objects.** The filter a read fills was made for one item
+  and then shaped to the payload, so every read also made the one-item filter's table of
+  two words, 40 bytes, and dropped it. The filter is now made at the payload's widths, and
+  building it allocates its own 96 bytes beyond the table, measured in a no-GC region at
+  tables from two slots to 2^16 and at the one-slot table of version 1. It is charged as
+  two small objects, 128 bytes, where it was charged as three (#336), by the reader and
+  its price alike, so they still come to the same sum: a read allocates 40 bytes less and
+  is charged 64 less. (#343)
+
 - **A `SublimeCountMinSketch` payload cut short inside its counters is refused for what it
   lacks before any of them are priced or allocated.** Its price and its reader checked the
   current rows' counters against the bytes after the sketch's shape, before its records of
