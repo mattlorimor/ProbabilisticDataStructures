@@ -1,5 +1,4 @@
 using System;
-using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 
@@ -693,7 +692,7 @@ namespace ProbabilisticDataStructures
                 // check holds the words to what one array holds.
                 budget.Charge(SegmentCost(words));
                 var segment = InfiniSegment.Restore(quotientBits, fingerprintBits, count);
-                ReadWords(ref reader, segment.Data);
+                reader.ReadWords(segment.Data);
 
                 // Every walk of a table rests on its metadata being consistent, and the
                 // expansion on its count being its entries.
@@ -749,29 +748,6 @@ namespace ProbabilisticDataStructures
             ReadBudget.ArrayOf(words, sizeof(ulong)),
             ReadBudget.SmallObject,
             ReadBudget.SmallObject);
-
-        /// <summary>
-        /// Reads as many words as <paramref name="into"/> holds, which have no length before
-        /// them, straight into it, a piece at a time through a buffer on the stack (#289):
-        /// copied from a held payload, and read from the stream from one that is not. Nothing
-        /// is allocated for them, so a table is not held twice (#313).
-        /// </summary>
-        private static void ReadWords(ref PayloadReader reader, Span<ulong> into)
-        {
-            var left = (long)into.Length * sizeof(ulong);
-            Span<byte> piece = stackalloc byte[PayloadReader.BlockPieceFor(left)];
-            var at = 0;
-            while (left > 0)
-            {
-                var bytes = piece[..(int)Math.Min(left, piece.Length)];
-                reader.ReadBlock(bytes);
-                left -= bytes.Length;
-                for (var i = 0; i < bytes.Length; i += sizeof(ulong))
-                {
-                    into[at++] = BinaryPrimitives.ReadUInt64LittleEndian(bytes[i..]);
-                }
-            }
-        }
 
         private static void CheckChain(uint segmentCount)
         {
