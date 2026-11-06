@@ -636,6 +636,64 @@ namespace TestProbabilisticDataStructures
             }
         }
 
+        /// <summary>
+        /// Building the filter a read makes allocates the filter and the table shaped to the
+        /// payload, and nothing else (#343): beyond that table, <c>Build</c> allocates exactly
+        /// what the constructor allocates beyond its own, which is the filter object. The
+        /// builds are counted in a no-GC region.
+        /// </summary>
+        /// <remarks>
+        /// <c>Build</c> went through <c>new QuotientFilter(1, 0.5, hash)</c>, whose table of two
+        /// words, 40 bytes, it threw away when it shaped the filter to the payload, so every
+        /// read made a table it never used: 136 bytes beyond the table, where the constructor
+        /// allocates 96 beyond its own (#336). The constructor's figure is measured here, at
+        /// the narrowest table and at one of 2^17 slots, rather than written down, so the test
+        /// holds <c>Build</c> to the filter object whatever size the runtime makes it, and the
+        /// two shapes have to agree, so that a table is not mistaken for the object. Exact
+        /// rather than bounded: a table of words costs exactly its header and its words, so
+        /// any difference is something else allocated. The slots each table should have are
+        /// worked out from the widths, not read back from the filter built. The shapes and
+        /// the warm-up are those of <see cref="TestAReadIsChargedWhatBuildingItsFilterAllocates"/>.
+        /// </remarks>
+        [TestMethod]
+        public void TestBuildingTheFilterAReadMakesAllocatesOnlyTheFilterAndItsTable()
+        {
+            var hash = Defaults.GetDefaultHashFunction();
+            static long TableOf(ulong slots, uint r) =>
+                ReadBudget.ArrayOf((ulong)QuotientFilter.TableWords(slots, r), sizeof(ulong));
+
+            var objects = new List<long>();
+            foreach (var (n, rate) in new (ulong, double)[] { (1, 0.5), (50_000, 0.001) })
+            {
+                var (q, r) = QuotientFilter.Split(n, rate);
+                _ = new QuotientFilter(n, rate, hash);
+                var built = NoGCRegion.Allocated(() => new QuotientFilter(n, rate, hash));
+                objects.Add(built - TableOf(1UL << (int)q, r));
+            }
+
+            var filter = objects[0];
+            Assert.AreEqual(filter, objects[1],
+                $"the constructor allocated {objects[0]:N0} bytes beyond its table at one shape and {objects[1]:N0} at another");
+            Assert.IsGreaterThan(0L, filter,
+                $"the constructor allocated {filter:N0} bytes beyond its table, so there is no filter object to hold a build to");
+
+            foreach (var (q, r, wrapped) in new (uint, uint, bool)[]
+            {
+                (1, 1, false), (2, 61, false), (8, 7, false), (16, 16, false), (32, 7, true),
+            })
+            {
+                var slots = wrapped ? 1UL : 1UL << (int)q;
+                Assert.AreEqual(slots, QuotientFilter.Build(q, r, wrapped, hash).SlotCount,
+                    $"a filter built from {q} quotient bits{(wrapped ? " at version 1" : "")} has the wrong slots");
+                var shape = $"a filter of {slots:N0} slots of {r}-bit remainders{(wrapped ? ", at version 1," : "")}";
+                var table = TableOf(slots, r);
+                var allocated = NoGCRegion.Allocated(() => QuotientFilter.Build(q, r, wrapped, hash));
+                Assert.AreEqual(table + filter, allocated,
+                    $"{shape} allocated {allocated:N0} bytes to build for a read: {allocated - table:N0} beyond its " +
+                    $"table of {table:N0}, where the filter the constructor makes is {filter:N0}");
+            }
+        }
+
         [TestMethod]
         public void TestTheHashIsSettledOnceAnythingIsAdded()
         {
