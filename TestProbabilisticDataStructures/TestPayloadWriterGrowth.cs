@@ -129,8 +129,10 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// A length of exactly the largest array is not too large to read into one: it gets
-        /// as far as the memory it would cost, which the default budget refuses before
-        /// anything is allocated. Past it, above, is refused for its size.
+        /// past the check of its size. From a stream that cannot seek, which does not say how
+        /// much it holds, it gets as far as the memory it would cost, which the default budget
+        /// refuses before anything is allocated; held, it is refused for the bytes it lacks
+        /// first (#347). Past it, above, is refused for its size.
         /// </summary>
         [TestMethod]
         public void TestALengthOfExactlyTheLargestArrayIsRefusedForItsCostNotItsSize()
@@ -139,9 +141,15 @@ namespace TestProbabilisticDataStructures
             BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(10), (uint)Array.MaxLength);
 
             var ex = Assert.ThrowsExactly<InvalidDataException>(
-                () => Persistence.FromByteArray<BloomFilter>(bytes));
+                () => BloomFilter.ReadFrom(new TestHeldEnvelopeLengths.OneWay(bytes)));
             Assert.IsInstanceOfType<ReadBudgetExceededException>(ex.InnerException,
                 $"the length should have reached the budget: {ex.Message}");
+
+            var held = Assert.ThrowsExactly<InvalidDataException>(
+                () => Persistence.FromByteArray<BloomFilter>(bytes));
+            Assert.IsNull(held.InnerException, $"held, the length was refused for its budget: {held.Message}");
+            Assert.Contains("too few for the", held.Message,
+                $"held, the length should have got past its size to the bytes it lacks: {held.Message}");
         }
 
         /// <summary>

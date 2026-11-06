@@ -731,6 +731,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An envelope claiming more than the bytes held is refused as truncated under any budget,
+  before anything is priced or allocated for the claim, and so is a nested envelope claiming
+  more than its run holds.** The ordinary envelope's length was held by the read budget
+  alone. A 128,827-byte `TopK` payload whose header claimed 2,147,483,591 bytes was refused
+  for its budget, naming 2,147,963,080 bytes as what reading it took, which told its caller
+  to raise the budget rather than that the payload was short; under no budget the read made
+  an array of whatever the header claimed before finding the stream short, as one claiming a
+  byte more than it held did, allocating 130,736 bytes. A nested envelope was priced for its
+  length before its run was checked to hold it, so a `TopK`'s sketch claiming 2,147,483,591
+  bytes priced the read at over two gigabytes. Now an ordinary envelope's length is held to
+  what its stream holds after the header, with the checksum, where the stream can seek, as
+  the large form's already was, and a nested envelope's price holds its length to its run in
+  the same way; both are checked before anything is priced. A stream that cannot seek does
+  not say what it holds, so from one of those the budget still holds the length, as FORMAT.md
+  now says. Nothing the library wrote is refused. (#347)
+
 - **An `InvertibleBloomLookupTable` payload cut short after its counts, or with bytes left
   over after its hash sums, is refused as malformed under any budget its price fits.** A read
   is priced before it allocates, and a price that finds its payload malformed is set aside,
