@@ -1638,12 +1638,12 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A count sketch's, a DDSketch's and an invertible table's price takes a run of words
-        /// past one array, which the large form allows and each structure can hold (#228), as
-        /// its reader does: it prices exactly the storage the reader reads the words into, and
-        /// does not refuse the run as more than one array holds (#335). Each payload claims runs
-        /// of more than 2^31 bytes, their lengths where FORMAT.md lays them out and zeros
-        /// everywhere else, on a stream that claims them all.
+        /// A count sketch's, a DDSketch's, an invertible table's and a quotient filter's price
+        /// takes a run of words past one array, which the large form allows and each structure
+        /// can hold (#228), as its reader does: it prices exactly the storage the reader reads
+        /// the words into, and does not refuse the run as more than one array holds (#335,
+        /// #343). Each payload claims runs of more than 2^31 bytes, their lengths where
+        /// FORMAT.md lays them out and zeros everywhere else, on a stream that claims them all.
         /// </summary>
         /// <remarks>
         /// A price that refused such a run would not show in a read of a payload this library
@@ -1651,13 +1651,16 @@ namespace TestProbabilisticDataStructures
         /// what had been priced by then. Its reader then charges the rest, so a budget too small
         /// for the whole is refused by the reader instead of by the price, naming the same total,
         /// after the payload's fields are read a second time. An invertible table's reader would
-        /// first allocate its counts and key sums, gigabytes, before reaching the hash sums. So
-        /// the price is walked here on its own, over a reader of the large form.
+        /// first allocate its counts and key sums, gigabytes, before reaching the hash sums, and
+        /// a quotient filter's its table. So the price is walked here on its own, over a reader
+        /// of the large form. A quotient filter's reader charges its table and the filter around
+        /// it as one cost, which its price calls too, so that is the storage here.
         /// </remarks>
         [TestMethod]
         [DataRow(nameof(StructureId.CountSketch))]
         [DataRow(nameof(StructureId.DDSketch))]
         [DataRow(nameof(StructureId.InvertibleBloomLookupTable))]
+        [DataRow(nameof(StructureId.QuotientFilter))]
         public void TestAPriceTakesARunOfWordsPastOneArrayAsItsReaderDoes(string structure)
         {
             var id = Enum.Parse<StructureId>(structure);
@@ -1720,6 +1723,23 @@ namespace TestProbabilisticDataStructures
                     storage = ReadBudget.Sum(
                         ReadBudget.ArrayOf(cells, sizeof(long)), ReadBudget.ArrayOf(cells, 1), ReadBudget.ArrayOf(cells, sizeof(ulong)));
                     price = InvertibleBloomLookupTable.Price;
+                    break;
+                }
+
+                case StructureId.QuotientFilter:
+                {
+                    // u32 quotient bits, u32 remainder bits, the count of entries, and the
+                    // table: 2^31 slots of 5-bit remainders, a table the constructor builds,
+                    // 2^28 + 2 words, which are 2 GiB and 16 bytes (#343).
+                    const uint quotientBits = 31, remainderBits = 5;
+                    const ulong slots = 1UL << (int)quotientBits;
+                    longest = QuotientFilter.BytesOf(QuotientFilter.TableWords(slots, remainderBits));
+                    Field(0, quotientBits, 4);
+                    Field(4, remainderBits, 4);
+                    Field(16, (ulong)longest, 8);
+                    length = 24 + longest;
+                    storage = QuotientFilter.TableCost(slots, remainderBits);
+                    price = QuotientFilter.Price;
                     break;
                 }
 
