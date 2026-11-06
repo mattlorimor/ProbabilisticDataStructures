@@ -42,11 +42,8 @@ jobs:
         #
         # The arm64 labels name an image version because there is no -latest form of
         # them, so they need bumping by hand when an image is retired.
+        # DIAGNOSTIC BRANCH ONLY (#350's intermittent test host crash): macOS alone.
         os:
-          - ubuntu-latest      # x64 Linux
-          - ubuntu-24.04-arm   # arm64 Linux
-          - windows-latest     # x64 Windows
-          - windows-11-arm     # arm64 Windows
           - macos-latest       # arm64 macOS
 
     steps:
@@ -65,9 +62,19 @@ jobs:
         run: dotnet build --configuration Release --no-restore -warnaserror
 
       - name: Test
+        # DIAGNOSTIC BRANCH ONLY: the runtime writes a dump and a crash report if the
+        # test host dies, and the runner keeps its diagnostic log, all under test-results.
+        env:
+          DOTNET_DbgEnableMiniDump: "1"
+          DOTNET_DbgMiniDumpType: "1"
+          DOTNET_EnableCrashReport: "1"
+          DOTNET_DbgMiniDumpName: ${{ github.workspace }}/test-results/core.%p
         run: >-
+          mkdir -p ${{ github.workspace }}/test-results &&
           dotnet test --configuration Release --no-build
           --logger "trx;LogFileName=test-results.trx"
+          --logger "console;verbosity=normal"
+          --diag ${{ github.workspace }}/test-results/diag.txt
           --results-directory ${{ github.workspace }}/test-results
 
       - name: Upload test results
