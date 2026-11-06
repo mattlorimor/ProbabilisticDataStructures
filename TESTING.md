@@ -940,7 +940,12 @@ rest of a message survives, as it should, and one that deletes the guard does no
   counters once, at its shape, against bytes its records share, and then priced each block
   of them before skipping it. That was the rule broken, not a lower bound. Each block is now
   checked where it begins, by the price and the reader, and the price is held to the bound
-  every structure is.
+  every structure is. The other allowance a price had was a defect too, 64-bit tables
+  pricing each empty array at 24 bytes (#315), so prices have none now and are held to the
+  bounds their reads are. A price that needs one again should take it as the reads take
+  theirs: a reason stated beside it, and a check that some cut costs that much, which fails
+  once none does, because an allowance nothing needs is room for a defect to grow into
+  unseen.
 - **An exemption names the test that checks its reason.** The same sweep exempts the
   structures whose readers cap nothing their constructors can reach, and each exemption
   points at a test asserting why -- the cap is unreachable, or the reader caps nothing.

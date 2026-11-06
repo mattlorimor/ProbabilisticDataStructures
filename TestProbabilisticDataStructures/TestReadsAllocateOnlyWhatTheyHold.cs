@@ -107,8 +107,7 @@ namespace TestProbabilisticDataStructures
         /// </summary>
         internal sealed record Swept(
             string Name, byte[] Bytes, Func<byte[], ReadOptions, object> Read,
-            string SmallBecause = null, long Allowance = PerByte, string CostlyBecause = null, int? ArrayBits = null,
-            long PriceAllowance = 0, string PricedBecause = null);
+            string SmallBecause = null, long Allowance = PerByte, string CostlyBecause = null, int? ArrayBits = null);
 
         private static Swept Of<T>(string name, T structure) where T : IBinaryPersistable<T> =>
             new(name, structure.ToByteArray(), (bytes, options) => Persistence.FromByteArray<T>(bytes, options));
@@ -138,7 +137,7 @@ namespace TestProbabilisticDataStructures
         /// <paramref name="allowance"/> a byte because <paramref name="costlyBecause"/>.
         /// </summary>
         private static Swept ManyArrays<T>(
-            string name, Func<T> build, long allowance = PerByte, string costlyBecause = null, long priceAllowance = 0, string pricedBecause = null)
+            string name, Func<T> build, long allowance = PerByte, string costlyBecause = null)
             where T : IBinaryPersistable<T>
         {
             Buckets64.LoweredArrayBits = LoweredArrayBits;
@@ -159,9 +158,7 @@ namespace TestProbabilisticDataStructures
                 },
                 Allowance: allowance,
                 CostlyBecause: costlyBecause,
-                ArrayBits: LoweredArrayBits,
-                PriceAllowance: priceAllowance,
-                PricedBecause: pricedBecause);
+                ArrayBits: LoweredArrayBits);
             }
             finally
             {
@@ -476,25 +473,27 @@ namespace TestProbabilisticDataStructures
         /// under any budget that holds it, and is never refused for a budget it was priced past
         /// on bytes it does not have.
         /// </summary>
+        /// <remarks>
+        /// The bound is the one the sample's read is held to, and a price has no allowance of its
+        /// own. The prices that were allowed more were defects, and were fixed rather than kept:
+        /// Sublime's priced each block of counters before checking the payload held it, and the
+        /// 64-bit tables' priced each empty array at 24 bytes, which a read of a held payload
+        /// never allocated (#315).
+        /// A price that needs an allowance again needs it as the reads have theirs: a stated
+        /// reason, and a check that some cut costs that much, which fails once none does.
+        /// </remarks>
         [TestMethod]
         [DynamicData(nameof(Structures))]
         public void TestEveryPriceRefusesWhatItsPayloadDoesNotHoldBeforePricingIt(string structure)
         {
             var id = Enum.Parse<StructureId>(structure);
             var price = PriceOf(id);
-            PriceAllowances.TryGetValue(id, out var priced);
-            Assert.IsTrue(priced.Why is null || !string.IsNullOrWhiteSpace(priced.Why), $"{id}'s price is allowed more without a reason");
-            var first = true;
             foreach (var sample in SweptFor(id))
             {
-                Assert.AreEqual(sample.PriceAllowance == 0, sample.PricedBecause is null,
-                    $"{sample.Name}'s price is allowed {sample.PriceAllowance} bytes a byte, and a reason only for an allowance");
-                var allowance = Math.Max(Math.Max(sample.Allowance, sample.PriceAllowance), priced.Allowance);
                 var version = BinaryPrimitives.ReadUInt16LittleEndian(sample.Bytes.AsSpan(4));
                 var length = sample.Bytes.Length - PayloadStart - ChecksumLength;
                 var problems = new List<string>();
                 var walked = 0;
-                var costliest = long.MinValue;
                 Buckets64.LoweredArrayBits = sample.ArrayBits;
                 try
                 {
@@ -514,8 +513,7 @@ namespace TestProbabilisticDataStructures
 
                         walked++;
                         var held = PayloadStart + cut + ChecksumLength;
-                        var bound = BoundFor(held, allowance);
-                        costliest = Math.Max(costliest, budget.Charged - BoundFor(held, sample.Allowance));
+                        var bound = BoundFor(held, sample.Allowance);
                         if (budget.Charged > bound)
                         {
                             problems.Add($"cut to {cut:N0} bytes, it priced {budget.Charged:N0}, past the {bound:N0} the bytes " +
@@ -530,33 +528,8 @@ namespace TestProbabilisticDataStructures
 
                 Assert.IsEmpty(problems,
                     $"{sample.Name}'s price, at {problems.Count} of {walked} cuts; the first: " + string.Join(" | ", problems.Take(3)));
-                if (priced.Why is not null && first)
-                {
-                    Assert.IsGreaterThan(0, costliest,
-                        $"{id}'s price is allowed {priced.Allowance} bytes a byte because {priced.Why}, and no cut of " +
-                        $"{sample.Name} was priced past what its read is allowed, so the allowance is out of date");
-                }
-
-                if (sample.PricedBecause is not null)
-                {
-                    Assert.IsGreaterThan(0, costliest,
-                        $"{sample.Name}'s price is allowed {sample.PriceAllowance} bytes a byte because {sample.PricedBecause}, " +
-                        "and no cut of it was priced past what its read is allowed, so the allowance is out of date");
-                }
-
-                first = false;
             }
         }
-
-        /// <summary>
-        /// Structures whose price, of a cut of their budget sample, may come to more than what
-        /// their read of it is allowed, with what it may come to and why. A price of a claim is
-        /// what reading it costs whole, so where a check made before pricing is a necessary
-        /// condition rather than the bytes themselves, the claim it lets through is priced whole.
-        /// </summary>
-        private static readonly Dictionary<StructureId, (long Allowance, string Why)> PriceAllowances = new()
-        {
-        };
 
         /// <summary>The structure's own price, the walk its read is priced by.</summary>
         private static PayloadPrice PriceOf(StructureId id)
