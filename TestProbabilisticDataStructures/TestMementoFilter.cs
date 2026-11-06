@@ -313,6 +313,37 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A read charges each segment at least what restoring it allocates, and less than a
+        /// small object past that: its table, and the segment with its codec, which come to more
+        /// than one small object allows for. The restores are counted in a no-GC region.
+        /// </summary>
+        /// <remarks>
+        /// Probed on 5752769, a segment and its codec came to 120 bytes beyond the table, at
+        /// tables of 2^2, 2^8 and 2^12 slots, and were charged
+        /// <see cref="ReadBudget.SmallObject"/>, 64, beside two tables. Charged one table (#327),
+        /// they would be 56 bytes a segment under what the read allocates. The shapes are the
+        /// narrowest table, where the segment is the largest share of what is allocated, the
+        /// widest fingerprint, and two between. The first restore of each is not counted, so that
+        /// what the runtime does once is not taken for the segment.
+        /// </remarks>
+        [TestMethod]
+        public void TestASegmentIsChargedWhatRestoringItAllocates()
+        {
+            foreach (var (q, f, m) in new[] { (2, 2, 1), (2, 32, 8), (8, 8, 3), (12, 16, 3) })
+            {
+                var words = (uint)MementoSegment.Restore(q, f, m, 1).Data.Length;
+                var charged = MementoFilter.SegmentCost(words);
+                var allocated = NoGCRegion.Allocated(() => MementoSegment.Restore(q, f, m, 1));
+                Assert.IsLessThanOrEqualTo(charged, allocated,
+                    $"a segment of 2^{q} slots, {f}-bit fingerprints and {m}-bit mementos allocated {allocated:N0} bytes " +
+                    $"to restore, and a read is charged {charged:N0} for it");
+                Assert.IsLessThan(ReadBudget.SmallObject, charged - allocated,
+                    $"a segment of 2^{q} slots, {f}-bit fingerprints and {m}-bit mementos is charged {charged:N0} bytes, " +
+                    $"{charged - allocated:N0} past the {allocated:N0} restoring it allocated");
+            }
+        }
+
+        /// <summary>
         /// The filter grows rather than filling up, and keys added before a growth
         /// survive it.
         /// </summary>

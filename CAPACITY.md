@@ -401,9 +401,10 @@ of 2^27.
 The same table, with each slot also holding the memento that lets it answer a range
 query: `F + 1 + m + 3` bits for a range up to 2^m wide, so a wider range costs more per
 slot. The items counted are entries, one for each block of `range` consecutive keys, so
-keys that fall in blocks already present add nothing. A range of 256 reads back a table of
-2^27 slots, and a range of 65,536 only 2^26. A slot is held in a 64-bit word, so the
-constructor refuses a fingerprint and a range that make it wider.
+keys that fall in blocks already present add nothing. A read holds each table twice, in the
+payload and in the table its words are read straight into, so the default budget reads back
+a table of 2^27 slots at a range of 256 and at a range of 65,536. A slot is held in a 64-bit
+word, so the constructor refuses a fingerprint and a range that make it wider.
 
 ## Retains k
 

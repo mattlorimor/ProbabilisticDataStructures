@@ -608,8 +608,7 @@ gigabytes, and loads only with a budget raised to match. What each read is charg
 | `CountMinSketch`, `CountSketch`, `PrivateCountMinSketch`, `SublimeCountMinSketch` | every row, before it is read; Sublime also its packed rows |
 | `TopK`, `HeavyKeeper` | a heap sized by the elements held, not by `k`; HeavyKeeper also its bucket arrays |
 | `ThetaSketch`, `TupleSketch`, `MinHashSignature`, `Grafite`, `SetSketch`, `InvertibleBloomLookupTable`, `DDSketch`, `HyperLogLogPlus` (sparse) | arrays sized by the values the payload carries |
-| `InfiniFilter` | each table, its words read straight into the segment |
-| `MementoFilter` | each table twice: as read, and as the segment built from it |
+| `InfiniFilter`, `MementoFilter` | each table, its words read straight into the segment |
 | `DpswSketch` | its checkpoints, rebuilt from the substream size, and a list of segments per substream; each segment's sketch as above |
 
 ## Payloads
