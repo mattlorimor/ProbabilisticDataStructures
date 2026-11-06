@@ -960,9 +960,11 @@ rest of a message survives, as it should, and one that deletes the guard does no
   that price. A budget sees a reader charge past its price and not a price past its reader,
   which admits a read at more than it takes, so the sweep also reads each cut through a budget
   whose charges can be read back, and the reader has to have charged the whole price before
-  it refused the cut. Every structure does, at every cut. A cut cannot show where the last
-  run is priced, since a cut holding it is the whole payload; a byte left over after it can,
-  and the table has a test of its own for that.
+  it refused the cut. Every structure does, at every cut. Two things no cut can show: where
+  the last run is priced, since a cut holding it is the whole payload, and where a run that
+  disagrees with the structure's shape is refused, since every run a cut holds is the one
+  its writer wrote. A byte left over after the last run shows the first, and one field
+  edited shows the second, and the invertible table has a test of its own for each.
 - **An exemption names the test that checks its reason.** The same sweep exempts the
   structures whose readers cap nothing their constructors can reach, and each exemption
   points at a test asserting why -- the cap is unreachable, or the reader caps nothing.
