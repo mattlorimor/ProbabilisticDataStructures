@@ -336,7 +336,7 @@ namespace TestProbabilisticDataStructures
         /// see: each is there so that one charge in particular is larger than the slack,
         /// and says which.
         /// </summary>
-        private static readonly Lazy<Dictionary<StructureId, (string Why, Sample Sample)[]>> Further = new(() =>
+        internal static readonly Lazy<Dictionary<StructureId, (string Why, Sample Sample)[]>> Further = new(() =>
             new Dictionary<StructureId, (string, Sample)[]>
             {
                 [StructureId.HyperLogLogPlus] = new[]
