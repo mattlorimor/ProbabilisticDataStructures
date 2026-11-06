@@ -303,6 +303,80 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The first <paramref name="after"/> bytes of <paramref name="whole"/>'s payload behind
+        /// its header, which claims <paramref name="claim"/> bytes, the large header's own
+        /// checksum made to match; there is no room for the checksum after the payload.
+        /// </summary>
+        private static byte[] CutAfterHeader(byte[] whole, int after, ulong claim, bool large)
+        {
+            var header = large ? PersistenceFormat.LargeHeaderLength : HeaderLength;
+            var bytes = whole.AsSpan(0, header + after).ToArray();
+            if (!large)
+            {
+                BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(LengthOffset), (uint)claim);
+                return bytes;
+            }
+
+            BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(LengthOffset), claim);
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(LargeForm.HeaderFieldsEnd),
+                Crc32.HashToUInt32(bytes.AsSpan(4, LargeForm.HeaderFieldsEnd - 4)));
+            return bytes;
+        }
+
+        /// <summary>
+        /// Every structure's payload, in either form, cut to its header and fewer bytes after it
+        /// than its checksum takes, is refused for the bytes it lacks before anything is priced
+        /// or allocated, under any budget, whatever the header claims: its writer's length, or
+        /// none.
+        /// </summary>
+        /// <remarks>
+        /// Fewer bytes than the checksum's four leave no room for even an empty payload, and the
+        /// checksum's four taken from them, as an unsigned number, wrap to more than any length
+        /// can claim, so that a check that only compared the two would let every claim through.
+        /// The cuts are at nothing after the header, where a header alone is all there is, and at
+        /// a byte short of the checksum.
+        /// </remarks>
+        [TestMethod]
+        [DynamicData(nameof(Structures))]
+        public void TestEveryPayloadCutShortOfItsChecksumIsRefusedBeforeItIsPriced(string structure)
+        {
+            var id = Enum.Parse<StructureId>(structure);
+            var ordinary = TestReadBudget.Samples.Value[id];
+            var problems = new List<string>();
+
+            foreach (var (form, sample, large) in new[]
+            {
+                ("the ordinary envelope", ordinary, false),
+                ("the large form", TestReadBudget.InTheLargeForm(ordinary), true),
+            })
+            {
+                var bytes = sample.Bytes;
+                var header = large ? PersistenceFormat.LargeHeaderLength : HeaderLength;
+                var length = (ulong)(bytes.Length - header - ChecksumLength);
+
+                foreach (var (how, read) in HeldReads(sample))
+                {
+                    var what = $"{id}'s payload in {form} read {how}";
+                    var field = large ? ClaimingLarge(bytes, (ulong)long.MaxValue + 1) : Claiming(bytes, (uint)Array.MaxLength + 1);
+                    var past = Refusal(read(field, ReadOptions.Unlimited), out var pastTheField);
+                    Assert.Contains(large ? PastTheLargeField : PastTheOrdinaryField, past?.Message ?? "it was read",
+                        $"premise: {what}, claiming more than its field may, is refused for that");
+                    var bound = pastTheField + Refusing;
+
+                    foreach (var after in new[] { 0, ChecksumLength - 1 })
+                    {
+                        ReadEach($"{what}, cut to {after} bytes after its header,",
+                            new[] { 0UL, length }.Select(claim =>
+                                (claim, (Func<ReadOptions, Func<object>>)(options => read(CutAfterHeader(bytes, after, claim, large), options)), 0L)),
+                            bound, problems);
+                    }
+                }
+            }
+
+            Assert.IsEmpty(problems, $"{id}, at {problems.Count} checks: " + string.Join(" | ", problems));
+        }
+
+        /// <summary>
         /// A stream that can only be read forward, as a network stream or a pipe is, which does
         /// not say how much it holds.
         /// </summary>
