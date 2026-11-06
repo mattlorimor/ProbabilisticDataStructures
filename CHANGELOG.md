@@ -743,6 +743,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   264. A run of words read from the large form in pieces is not read this way, and is
   charged as it was. (#329)
 
+- **An `InfiniFilter` read is charged for each table's segment what the segment
+  allocates.** Beside each table's words, a read charged the segment that holds them as
+  one small object, 64 bytes, and a segment is 80, measured in a no-GC region: a read was
+  charged 16 bytes a table less than it allocated, which the budget's slack absorbed but
+  which a charge, an upper bound, should not do. A segment is now charged as two small
+  objects, by the reader and its price alike, so they still come to the same sum. (#329)
+
 - **A `SublimeCountMinSketch` payload cut short inside its counters is refused for what it
   lacks before any of them are priced or allocated.** Its price and its reader checked the
   current rows' counters against the bytes after the sketch's shape, before its records of

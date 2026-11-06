@@ -741,9 +741,13 @@ namespace ProbabilisticDataStructures
                 ? (reader.ReadUInt64(), reader.ReadUInt64())
                 : (reader.ReadUInt32(), reader.ReadUInt32());
 
-        /// <summary>One table, its words read straight into it, and the segment that holds it.</summary>
+        /// <summary>
+        /// One table, its words read straight into it, and the segment that holds it, whose
+        /// fields are more than one small object allows for, so it is charged as two (#329).
+        /// </summary>
         internal static long SegmentCost(ulong words) => ReadBudget.Sum(
             ReadBudget.ArrayOf(words, sizeof(ulong)),
+            ReadBudget.SmallObject,
             ReadBudget.SmallObject);
 
         /// <summary>
