@@ -1561,6 +1561,16 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// The most a DDSketch's refusal of a run past one array may allocate: 8 KiB. The
+        /// refusal, its message and the reader's own objects took 3,432 bytes, measured on Linux
+        /// x64 in a no-GC region under both collectors, so this is a little more than twice
+        /// that. It is an eighth of the heap piece a run was once read through (64 KiB), and
+        /// half the buffer a run is read through on the stack (16 KiB), so a buffer of either
+        /// on the heap fails it.
+        /// </summary>
+        private const long RefusalRoom = 8 * 1024;
+
+        /// <summary>
         /// A DDSketch keeps each store's counts in one array, so a run of more counts than an
         /// array holds, which the large form's <c>u64</c> length lets a payload claim (#228), is
         /// refused as that, by name, with nothing its size allocated; a run of exactly as many
@@ -1572,8 +1582,9 @@ namespace TestProbabilisticDataStructures
         /// past one array and its header the payload that makes, on a stream that claims as
         /// much and holds zeros past the run's length. Read unlimited, so unpriced, the run is
         /// begun, with nothing allocated for it, since its words would be read straight into the
-        /// window (#335), and refused before the window is made; before #335 a heap piece was
-        /// allocated for it too. Without the check
+        /// window (#335), and refused before the window is made. So the read allocates the
+        /// refusal and its reader's own objects, and no buffer: <see cref="RefusalRoom"/>.
+        /// Before #335 a heap piece was allocated for the run too, 64 KiB. Without the check
         /// the span passes the store's index check, and the read goes on to make a window of
         /// that many counts, which no array holds. The edges are the span itself, worked out
         /// by the store's own reckoning, since a run of as many counts as an array holds is
@@ -1607,7 +1618,9 @@ namespace TestProbabilisticDataStructures
                 () => DDSketch.ReadFrom(new Sparse(head, PersistenceFormat.LargeEnvelopeLength + payload), ReadOptions.Unlimited),
                 $"a DDSketch whose store claims {counts:N0} counts was read"));
             StringAssert.Contains(refused.Message, $"are {counts} counts, more than the one array", refused.Message);
-            Assert.IsLessThan(PayloadSource.PieceLength + 64L * 1024, allocated, $"the refusal allocated {allocated:N0} bytes");
+            Console.WriteLine($"[PAST ONE ARRAY] DDSketch: the refusal allocated {allocated:N0} bytes");
+            Assert.IsLessThan(RefusalRoom, allocated,
+                $"the refusal allocated {allocated:N0} bytes, more than a refusal and its reader take: a buffer for the run's words");
 
             var spanOf = typeof(DDSketch).GetNestedType("Store", System.Reflection.BindingFlags.NonPublic)!
                 .GetMethod("SpanOf", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
