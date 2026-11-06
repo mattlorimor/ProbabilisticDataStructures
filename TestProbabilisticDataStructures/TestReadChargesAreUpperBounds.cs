@@ -52,9 +52,13 @@ namespace TestProbabilisticDataStructures
         /// makes, 64 bytes it did not allocate, since nothing tells the two reads apart; an
         /// object charged at <see cref="ReadBudget.SmallObject"/>, the general bound, is charged
         /// up to 40 bytes past its size, a few such objects a read; and a nested read is charged
-        /// a margin over its stream and options (<c>PersistenceFormat.NestedReadCost</c>). The
-        /// most any read was over when this was set, its allowance aside, was 256 bytes, a
-        /// scalable filter's from a stream.
+        /// a margin over its stream and options (<c>PersistenceFormat.NestedReadCost</c>); and a
+        /// read compiled hot allocates less than it is charged, by a checksum's state for each
+        /// ordinary envelope it reads, which the JIT keeps on the stack
+        /// (<see cref="TestWhatEveryReadSharesIsChargedWithoutSlack"/>). The most any read was
+        /// over when this was set, its allowance aside, was a scalable filter's from a stream:
+        /// 256 bytes with this class run alone, and 400 in the whole suite, 144 more, the 24 of
+        /// its own checksum and of each it holds.
         /// </remarks>
         private const long Over = 512;
 
