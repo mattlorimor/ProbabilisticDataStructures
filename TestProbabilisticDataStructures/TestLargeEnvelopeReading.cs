@@ -1378,6 +1378,136 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A count sketch's counters, a DDSketch's buckets, and an invertible table's counts and
+        /// hash sums, each one run of words, are read from the large form in pieces straight into
+        /// the storage their structure keeps (#335), as a quotient filter's table is: through the
+        /// stream's span overload, one piece after another from the run's first byte to its last,
+        /// every piece as long as a piece but the last, and nothing else read among them. A count
+        /// sketch's run is read into its rows one row at a time, so its pieces start again at
+        /// each row. Shown with the piece as it ships and lowered to eight words. Claimed a byte
+        /// past one array at its <c>u64</c> prefix, each run is refused for the bytes the stream
+        /// lacks, not as more than one array holds, since no array of its length is made.
+        /// </summary>
+        /// <remarks>
+        /// Before #335 each run was read through the stream's array overload, into a buffer on
+        /// the heap as long as a piece of a run (64 KiB) or as the run, whichever was shorter. The
+        /// runs are found where FORMAT.md lays them out, and the layout checks itself: each run
+        /// is as long as its <c>u64</c> prefix says, and the last ends where the payload does. An
+        /// invertible table's key sums lie between its two runs of words, and are kept as the
+        /// array they are read into, so they are not among the runs here. The budget samples' runs
+        /// that hold anything, and a count sketch's rows, are longer than a piece as it ships, so
+        /// each is read in more than one at either length; the DDSketch sample's negative store is
+        /// empty, and is read as nothing.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(nameof(StructureId.CountSketch))]
+        [DataRow(nameof(StructureId.DDSketch))]
+        [DataRow(nameof(StructureId.InvertibleBloomLookupTable))]
+        public void TestARunOfWordsIsReadFromTheLargeFormInPiecesStraightIntoItsStorage(string structure)
+        {
+            var id = Enum.Parse<StructureId>(structure);
+            var sample = TestReadBudget.Samples.Value[id];
+            var large = TestReadBudget.InTheLargeForm(sample).Bytes;
+            var payloadEnd = (long)large.Length - (PersistenceFormat.LargeEnvelopeLength - PersistenceFormat.LargeHeaderLength);
+            const long Header = PersistenceFormat.LargeHeaderLength;
+
+            long LengthAt(long prefix) => (long)BinaryPrimitives.ReadUInt64LittleEndian(large.AsSpan((int)prefix));
+
+            // Each run of words: where its u64 prefix is, and the lengths it is read into storage
+            // in, one after another.
+            var runs = new List<(long Prefix, long[] Reads)>();
+            long last;
+            switch (sample.Read(sample.Bytes, ReadOptions.Unlimited))
+            {
+                case CountSketch sketch:
+                {
+                    // u32 width, u32 depth, then the cells, row by row.
+                    var row = (long)sketch.Width() * sizeof(long);
+                    runs.Add((Header + 8, Enumerable.Repeat(row, (int)sketch.Depth()).ToArray()));
+                    last = Header + 16 + LengthAt(Header + 8);
+                    break;
+                }
+
+                case DDSketch:
+                {
+                    // Five eight-byte fields, then each store: an i32 index and its run.
+                    var positive = Header + 40 + 4;
+                    var negative = positive + 8 + LengthAt(positive) + 4;
+                    runs.Add((positive, [LengthAt(positive)]));
+                    runs.Add((negative, [LengthAt(negative)]));
+                    last = negative + 8 + LengthAt(negative);
+                    break;
+                }
+
+                case InvertibleBloomLookupTable table:
+                {
+                    // u32 cells, u32 key size, then the counts, the key sums and the hash sums.
+                    var words = (long)table.Cells() * sizeof(long);
+                    var keys = Header + 16 + words;
+                    var hashes = keys + 8 + LengthAt(keys);
+                    Assert.AreEqual((long)table.Cells() * table.KeySize(), LengthAt(keys), "the key sums are not where FORMAT.md lays them");
+                    runs.Add((Header + 8, [words]));
+                    runs.Add((hashes, [words]));
+                    last = hashes + 8 + LengthAt(hashes);
+                    break;
+                }
+
+                default:
+                    throw new AssertFailedException($"{structure} is not one of the structures this test reads");
+            }
+
+            Assert.AreEqual(payloadEnd, last, $"{structure}'s runs do not end where its payload does, so are not where FORMAT.md lays them");
+            var read = 0;
+            foreach (var (prefix, lengths) in runs)
+            {
+                Assert.AreEqual(lengths.Sum(), LengthAt(prefix), $"{structure}'s run at {prefix + 8:N0} is not as long as its prefix says");
+                if (lengths.Sum() == 0)
+                {
+                    continue;
+                }
+
+                read++;
+                Assert.IsGreaterThan((long)ShippedBlockPiece, lengths.Min(),
+                    $"{structure}'s run at {prefix + 8:N0} is read into storage {lengths.Min():N0} bytes at a time, no longer than a piece as it ships");
+                var start = prefix + 8;
+                var end = start + lengths.Sum();
+
+                foreach (var piece in new int?[] { null, Piece })
+                {
+                    var length = (long)(piece ?? ShippedBlockPiece);
+                    var reads = SecondPass(sample, large, piece).Where(a => a.From < end && start < a.To).ToList();
+                    var expected = new List<Asked>();
+                    var into = start;
+                    foreach (var part in lengths)
+                    {
+                        for (var from = into; from < into + part; from += length)
+                        {
+                            expected.Add(new Asked(false, from, Math.Min(from + length, into + part), false));
+                        }
+
+                        into += part;
+                    }
+
+                    Console.WriteLine(
+                        $"[WORDS] {structure}: {lengths.Sum():N0} bytes at {start:N0}, piece {length:N0}: " +
+                        $"{reads.Count:N0} reads, the first {reads[0].Count:N0} bytes");
+                    CollectionAssert.AreEqual(expected, reads,
+                        $"{structure}'s run of {lengths.Sum():N0} bytes at {start:N0}, with the piece at {length:N0}, was read in " +
+                        $"{reads.Count:N0} reads, the first of {reads[0].Count:N0} bytes through the " +
+                        $"{(reads[0].Array ? "array" : "span")} overload, and not in {expected.Count:N0} pieces through the span overload");
+                }
+
+                var refused = ClaimedPastOneArray(sample, large, prefix);
+                Assert.DoesNotContain("single array", refused.Message,
+                    $"{structure}'s run at {start:N0}, read in pieces, was refused past one array as if read into one: {refused.Message}");
+                StringAssert.Contains(refused.Message, $"while reading {(long)Array.MaxLength + 1} more at offset",
+                    $"{structure}'s run at {start:N0} claiming a byte past one array was not refused for the bytes the stream lacks: {refused.Message}");
+            }
+
+            Assert.IsGreaterThan(0, read, $"{structure}'s sample holds no run of words to read");
+        }
+
+        /// <summary>
         /// Reading a count-min sketch's counters in pieces (#289) charges what reading them a
         /// counter at a time did, and reads back the sketch that writes the same bytes: in the
         /// ordinary envelope and in the large form, with the piece as it ships and lowered to
