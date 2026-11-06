@@ -1625,6 +1625,159 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A count sketch's, a DDSketch's and an invertible table's price takes a run of words
+        /// past one array, which the large form allows and each structure can hold (#228), as
+        /// its reader does: it prices exactly the storage the reader reads the words into, and
+        /// does not refuse the run as more than one array holds (#335). Each payload claims runs
+        /// of more than 2^31 bytes, their lengths where FORMAT.md lays them out and zeros
+        /// everywhere else, on a stream that claims them all.
+        /// </summary>
+        /// <remarks>
+        /// A price that refused such a run would not show in a read of a payload this library
+        /// writes, or in its refusal. A refused price is set aside, and the read is admitted at
+        /// what had been priced by then. Its reader then charges the rest, so a budget too small
+        /// for the whole is refused by the reader instead of by the price, naming the same total,
+        /// after the payload's fields are read a second time. An invertible table's reader would
+        /// first allocate its counts and key sums, gigabytes, before reaching the hash sums. So
+        /// the price is walked here on its own, over a reader of the large form.
+        /// </remarks>
+        [TestMethod]
+        [DataRow(nameof(StructureId.CountSketch))]
+        [DataRow(nameof(StructureId.DDSketch))]
+        [DataRow(nameof(StructureId.InvertibleBloomLookupTable))]
+        public void TestAPriceTakesARunOfWordsPastOneArrayAsItsReaderDoes(string structure)
+        {
+            var id = Enum.Parse<StructureId>(structure);
+            var held = new List<(long At, byte[] Bytes)>();
+            void Field(long at, ulong value, int width)
+            {
+                var bytes = new byte[8];
+                BinaryPrimitives.WriteUInt64LittleEndian(bytes, value);
+                held.Add((at, bytes[..width]));
+            }
+
+            long length;
+            long longest;
+            long storage;
+            PayloadPrice price;
+            switch (id)
+            {
+                case StructureId.CountSketch:
+                {
+                    // u32 width, u32 depth, and the cells: three rows of 2^27 counters, 3 GiB.
+                    const uint width = 1u << 27, depth = 3;
+                    longest = (long)width * depth * sizeof(long);
+                    Field(0, width, 4);
+                    Field(4, depth, 4);
+                    Field(8, (ulong)longest, 8);
+                    length = 16 + longest;
+                    storage = ReadBudget.Sum(
+                        ReadBudget.ArrayOf(depth, sizeof(long)), ReadBudget.Times(depth, ReadBudget.ArrayOf(width, sizeof(long))));
+                    price = CountSketch.Price;
+                    break;
+                }
+
+                case StructureId.DDSketch:
+                {
+                    // Five eight-byte fields, a positive store of 3 x 10^8 buckets from index 0,
+                    // 2.4 GB, and an empty negative store.
+                    const long counts = 300_000_000;
+                    longest = counts * sizeof(ulong);
+                    Field(44, (ulong)longest, 8);
+                    length = 52 + longest + 12;
+                    storage = ReadBudget.ArrayOf((ulong)counts, sizeof(ulong));
+                    price = DDSketch.Price;
+                    break;
+                }
+
+                case StructureId.InvertibleBloomLookupTable:
+                {
+                    // u32 cells, u32 key size, then the counts, the key sums and the hash sums:
+                    // 3 x 10^8 cells of one-byte keys, 2.4 GB each of counts and of hash sums.
+                    const uint cells = 300_000_000;
+                    longest = (long)cells * sizeof(long);
+                    var keys = 16 + longest;
+                    var hashes = keys + 8 + cells;
+                    Field(0, cells, 4);
+                    Field(4, 1, 4);
+                    Field(8, (ulong)longest, 8);
+                    Field(keys, cells, 8);
+                    Field(hashes, (ulong)longest, 8);
+                    length = hashes + 8 + longest;
+                    storage = ReadBudget.Sum(
+                        ReadBudget.ArrayOf(cells, sizeof(long)), ReadBudget.ArrayOf(cells, 1), ReadBudget.ArrayOf(cells, sizeof(ulong)));
+                    price = InvertibleBloomLookupTable.Price;
+                    break;
+                }
+
+                default:
+                    throw new AssertFailedException($"{structure} is not one of the structures this test prices");
+            }
+
+            Assert.IsGreaterThan((long)Array.MaxLength, longest, $"premise: {structure}'s run is not past one array");
+            var budget = new ReadBudget(long.MaxValue, id);
+            var reader = new PayloadReader(new PayloadSource(new Patched(length, held)), length, budget, wide: true, streamed: true);
+            price(ref reader, PersistenceFormat.ReadableVersions(id).Max());
+            Assert.AreEqual(storage, budget.Charged,
+                $"{structure}'s price priced {budget.Charged:N0} bytes, and its reader charges {storage:N0} for the storage it reads the words into");
+        }
+
+        /// <summary>
+        /// A stream that can seek and claims <paramref name="length"/> bytes: zeros, never held,
+        /// but for the bytes <paramref name="held"/> gives at each offset. So a payload whose runs
+        /// are longer than the suite can build has each run's length where its layout puts it.
+        /// </summary>
+        private sealed class Patched(long length, IReadOnlyList<(long At, byte[] Bytes)> held) : Stream
+        {
+            private long position;
+
+            public override bool CanRead => true;
+            public override bool CanSeek => true;
+            public override bool CanWrite => false;
+            public override long Length => length;
+            public override long Position
+            {
+                get => this.position;
+                set => this.position = value;
+            }
+
+            public override int Read(byte[] buffer, int offset, int count) => this.Read(buffer.AsSpan(offset, count));
+
+            public override int Read(Span<byte> buffer)
+            {
+                var read = buffer[..(int)Math.Min(buffer.Length, Math.Max(0, length - this.position))];
+                read.Clear();
+                foreach (var (at, bytes) in held)
+                {
+                    var from = Math.Max(at, this.position);
+                    var to = Math.Min(at + bytes.Length, this.position + read.Length);
+                    if (from < to)
+                    {
+                        bytes.AsSpan((int)(from - at), (int)(to - from)).CopyTo(read[(int)(from - this.position)..]);
+                    }
+                }
+
+                this.position += read.Length;
+                return read.Length;
+            }
+
+            public override long Seek(long offset, SeekOrigin origin)
+            {
+                this.position = origin switch
+                {
+                    SeekOrigin.Begin => offset,
+                    SeekOrigin.Current => this.position + offset,
+                    _ => length + offset,
+                };
+                return this.position;
+            }
+
+            public override void Flush() { }
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        }
+
+        /// <summary>
         /// A run shorter than a piece is read through a buffer of its own length, not of a
         /// piece's: a small one of each structure #228 names, read from the large form,
         /// allocates less than one piece in all.
