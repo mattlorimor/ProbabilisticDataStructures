@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 
@@ -494,13 +495,16 @@ namespace ProbabilisticDataStructures
         /// from a payload answers every query without the codec's backstop firing.
         /// </summary>
         /// <remarks>
-        /// One pass: every occupied quotient's run is read, as a query reads it, into one list
-        /// kept for the walk, and checked by the codec without its boxes being built. So the
-        /// walk allocates the longest run's slots once and nothing for each key.
+        /// One pass: every occupied quotient's run is checked by the codec where it lies in the
+        /// table, through one view of its slots kept for the walk, without its boxes being
+        /// built. So the walk allocates the view and nothing for each run or key, which its
+        /// reader charges with the table. Each run was read into a list, as a query reads it,
+        /// and the list grew to the longest run in the table, which nothing charged and no
+        /// price could know without reading the table (#346).
         /// </remarks>
         internal void CheckRuns(int table)
         {
-            var fields = new List<ulong>();
+            var run = new RunFields(this);
             for (var quotient = 0u; quotient < this.Slots; quotient++)
             {
                 if (!IsOccupied(quotient))
@@ -508,10 +512,10 @@ namespace ProbabilisticDataStructures
                     continue;
                 }
 
-                ReadRun(quotient, fields);
+                run.Begin(quotient);
                 try
                 {
-                    this.Codec.Check(fields);
+                    this.Codec.Check(run);
                 }
                 catch (InvalidDataException e)
                 {
@@ -520,6 +524,48 @@ namespace ProbabilisticDataStructures
                         "damaged or was not written by this library.", e);
                 }
             }
+        }
+
+        /// <summary>
+        /// The fields of one run of a table, in order, read from the table where they lie: what
+        /// <see cref="ReadRun(uint)"/> copies into a list, without the copy.
+        /// </summary>
+        private sealed class RunFields(MementoSegment segment) : IReadOnlyList<ulong>
+        {
+            private uint start;
+            private int count;
+
+            /// <summary>Moves the view to the run of <paramref name="quotient"/>, which is occupied.</summary>
+            internal void Begin(uint quotient)
+            {
+                this.start = segment.FindRunStart(quotient);
+                var slot = this.start;
+                var length = 0;
+                do
+                {
+                    length++;
+                    slot = segment.Next(slot);
+                }
+                while (segment.IsContinuation(slot));
+
+                this.count = length;
+            }
+
+            public ulong this[int index] => (uint)index < (uint)this.count
+                ? segment.ReadField((this.start + (uint)index) & segment.slotMaskIndex)
+                : throw new ArgumentOutOfRangeException(nameof(index));
+
+            public int Count => this.count;
+
+            public IEnumerator<ulong> GetEnumerator()
+            {
+                for (var i = 0; i < this.count; i++)
+                {
+                    yield return this[i];
+                }
+            }
+
+            IEnumerator IEnumerable.GetEnumerator() => this.GetEnumerator();
         }
 
         /// <summary>

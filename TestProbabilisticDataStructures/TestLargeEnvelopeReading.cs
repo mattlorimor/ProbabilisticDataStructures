@@ -1497,7 +1497,8 @@ namespace TestProbabilisticDataStructures
                 var sketch = CountMinSketch.ReadFrom(new MemoryStream(bytes), ReadOptions.Unlimited);
                 var rows = ReadBudget.Sum(
                     ReadBudget.ArrayOf(sketch.Depth, sizeof(long)),
-                    ReadBudget.Times(sketch.Depth, ReadBudget.ArrayOf(sketch.Width, sizeof(ulong))));
+                    ReadBudget.Times(sketch.Depth, ReadBudget.ArrayOf(sketch.Width, sizeof(ulong))),
+                    CountMinSketch.ObjectCost);
 
                 var ordinary = bytes;
                 var large = LargeForm.WriteLarge(sketch);
@@ -1640,8 +1641,8 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// A count sketch's, a DDSketch's and an invertible table's price takes a run of words
         /// past one array, which the large form allows and each structure can hold (#228), as
-        /// its reader does: it prices exactly the storage the reader reads the words into, and
-        /// does not refuse the run as more than one array holds (#335). Each payload claims runs
+        /// its reader does: it prices exactly the storage the reader reads the words into, and the
+        /// objects it makes (#346), and does not refuse the run as more than one array holds (#335). Each payload claims runs
         /// of more than 2^31 bytes, their lengths where FORMAT.md lays them out and zeros
         /// everywhere else, on a stream that claims them all.
         /// </summary>
@@ -1685,7 +1686,8 @@ namespace TestProbabilisticDataStructures
                     Field(8, (ulong)longest, 8);
                     length = 16 + longest;
                     storage = ReadBudget.Sum(
-                        ReadBudget.ArrayOf(depth, sizeof(long)), ReadBudget.Times(depth, ReadBudget.ArrayOf(width, sizeof(long))));
+                        ReadBudget.ArrayOf(depth, sizeof(long)), ReadBudget.Times(depth, ReadBudget.ArrayOf(width, sizeof(long))),
+                        CountSketch.ObjectCost);
                     price = CountSketch.Price;
                     break;
                 }
@@ -1698,7 +1700,7 @@ namespace TestProbabilisticDataStructures
                     longest = counts * sizeof(ulong);
                     Field(44, (ulong)longest, 8);
                     length = 52 + longest + 12;
-                    storage = ReadBudget.ArrayOf((ulong)counts, sizeof(ulong));
+                    storage = ReadBudget.Sum(ReadBudget.ArrayOf((ulong)counts, sizeof(ulong)), DDSketch.ObjectsCost);
                     price = DDSketch.Price;
                     break;
                 }
@@ -1718,7 +1720,8 @@ namespace TestProbabilisticDataStructures
                     Field(hashes, (ulong)longest, 8);
                     length = hashes + 8 + longest;
                     storage = ReadBudget.Sum(
-                        ReadBudget.ArrayOf(cells, sizeof(long)), ReadBudget.ArrayOf(cells, 1), ReadBudget.ArrayOf(cells, sizeof(ulong)));
+                        ReadBudget.ArrayOf(cells, sizeof(long)), ReadBudget.ArrayOf(cells, 1), ReadBudget.ArrayOf(cells, sizeof(ulong)),
+                        InvertibleBloomLookupTable.ObjectCost);
                     price = InvertibleBloomLookupTable.Price;
                     break;
                 }

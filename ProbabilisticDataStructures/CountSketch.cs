@@ -432,26 +432,35 @@ namespace ProbabilisticDataStructures
             // charged, twice (#335).
             var stored = reader.BeginWordsInPlace();
             CheckCells(width, depth, stored);
-
-            var sketch = new CountSketch(0.5, 0.5)
-            {
-                width = width,
-                depth = depth,
-                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
-            };
+            var resolved = PersistenceFormat.ResolveOrThrow(hashId, hash);
 
             // A cell is a signed word stored as its two's complement, so a row is read as the
-            // unsigned words that share its bits.
+            // unsigned words that share its bits. The sketch is made from the rows once they
+            // are read. It was made first, as the coarsest sketch the constructor builds, and
+            // given them, and that sketch's own row, made and discarded, was charged nowhere
+            // (#346).
             budget.Charge(RowsCost(width, depth));
-            sketch.table = new long[depth][];
+            var table = new long[depth][];
             for (var row = 0; row < depth; row++)
             {
-                sketch.table[row] = new long[width];
-                reader.ReadWords(MemoryMarshal.Cast<long, ulong>(sketch.table[row].AsSpan()));
+                table[row] = new long[width];
+                reader.ReadWords(MemoryMarshal.Cast<long, ulong>(table[row].AsSpan()));
             }
 
             reader.ExpectEnd();
-            return sketch;
+            return new CountSketch(width, depth, resolved, table);
+        }
+
+        /// <summary>
+        /// A sketch read back by <see cref="ReadPayload"/>: its shape, the hash it is read with,
+        /// and its rows, already read.
+        /// </summary>
+        private CountSketch(uint width, uint depth, Func<ReadOnlySpan<byte>, ulong> hash, long[][] table)
+        {
+            this.width = width;
+            this.depth = depth;
+            this.Hash = hash;
+            this.table = table;
         }
 
         /// <summary>
@@ -528,10 +537,17 @@ namespace ProbabilisticDataStructures
             }
         }
 
-        /// <summary>A table of <paramref name="depth"/> rows of <paramref name="width"/> cells.</summary>
+        /// <summary>
+        /// A table of <paramref name="depth"/> rows of <paramref name="width"/> cells, and the
+        /// sketch that keeps it (#346).
+        /// </summary>
         private static long RowsCost(uint width, uint depth) => ReadBudget.Sum(
             ReadBudget.ArrayOf(depth, sizeof(long)),
-            ReadBudget.Times(depth, ReadBudget.ArrayOf(width, sizeof(long))));
+            ReadBudget.Times(depth, ReadBudget.ArrayOf(width, sizeof(long))),
+            ObjectCost);
+
+        /// <summary>What a read charges for the sketch itself, measured at 40 bytes (#346).</summary>
+        internal static long ObjectCost => ReadBudget.Object(40);
 
         /// <summary>The number of cells in each row.</summary>
         public uint Width() => this.width;

@@ -988,6 +988,7 @@ namespace ProbabilisticDataStructures
             var layout = CheckFields(
                 r, c1, c2, keyCount, lowBits, codeCount, highBitCount, firstCode, lastCode);
 
+            budget.Charge(ObjectCost);
             var filter = new Grafite
             {
                 R = r,
@@ -1085,6 +1086,9 @@ namespace ProbabilisticDataStructures
             }
         }
 
+        /// <summary>What a read charges for the filter itself, measured at 112 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(112);
+
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the words of low
         /// bits, the words of high bits, and the select index over them. See
@@ -1104,6 +1108,7 @@ namespace ProbabilisticDataStructures
             var lastCode = reader.ReadUInt64();
             var layout = CheckFields(
                 r, c1, c2, keyCount, lowBits, codeCount, highBitCount, firstCode, lastCode);
+            reader.Budget.Price(ObjectCost);
 
             var lowWords = ReadLowWords(ref reader, layout.LowWords);
             reader.Budget.Price(LowsCost(lowWords));

@@ -559,6 +559,7 @@ namespace ProbabilisticDataStructures
 
             // The scratch buffer below is sized by the hash count the payload claims.
             budget.Charge(ScratchCost(k));
+            budget.Charge(ObjectCost);
 
             return new StableBloomFilter
             {
@@ -580,7 +581,7 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the cells and the
-        /// scratch buffer. See <see cref="PayloadPrice"/>.
+        /// scratch buffer, and the filter. See <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
@@ -604,7 +605,11 @@ namespace ProbabilisticDataStructures
             reader.ExpectEnd();
             CheckShape(m, k, cells);
             reader.Budget.Price(ScratchCost(k));
+            reader.Budget.Price(ObjectCost);
         }
+
+        /// <summary>What a read charges for the filter itself, measured at 96 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(96);
 
         private static void CheckShape(ulong m, uint k, ulong cells)
         {

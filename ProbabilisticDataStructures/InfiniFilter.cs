@@ -666,6 +666,7 @@ namespace ProbabilisticDataStructures
             var segmentCount = reader.ReadUInt32();
             CheckChain(segmentCount);
 
+            budget.Charge(FilterCost(segmentCount));
             var filter = new InfiniFilter(true)
             {
                 Added = added,
@@ -717,6 +718,7 @@ namespace ProbabilisticDataStructures
             reader.ReadUInt32();
             var segmentCount = reader.ReadUInt32();
             CheckChain(segmentCount);
+            reader.Budget.Price(FilterCost(segmentCount));
 
             for (var i = 0; i < segmentCount; i++)
             {
@@ -739,6 +741,15 @@ namespace ProbabilisticDataStructures
             version >= PersistenceFormat.InfiniWideVersion
                 ? (reader.ReadUInt64(), reader.ReadUInt64())
                 : (reader.ReadUInt32(), reader.ReadUInt32());
+
+        /// <summary>
+        /// The filter, measured at 56 bytes, and its list of <paramref name="segmentCount"/>
+        /// segments, made before any is read (#346).
+        /// </summary>
+        internal static long FilterCost(uint segmentCount) => ReadBudget.Sum(
+            ReadBudget.Object(56),
+            ReadBudget.SmallObject,
+            ReadBudget.ArrayOf(segmentCount, sizeof(long)));
 
         /// <summary>
         /// One table, its words read straight into it, and the segment that holds it, whose

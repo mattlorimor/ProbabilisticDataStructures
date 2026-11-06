@@ -752,11 +752,15 @@ namespace ProbabilisticDataStructures
             reader.ExpectEnd();
 
             budget.Charge(ReadBudget.ArrayOf(1UL << (int)precision, 1));
+            budget.Charge(ObjectCost);
             var restored = new UltraLogLog(precision,
                 PersistenceFormat.ResolveOrThrow(hashId, hash));
             registers.CopyTo(restored.Registers, 0);
             return restored;
         }
+
+        /// <summary>What a read charges for the sketch itself, measured at 40 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(40);
 
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the copy of the
@@ -769,6 +773,7 @@ namespace ProbabilisticDataStructures
             CheckRegisters(precision, reader.SkipBytes());
             reader.ExpectEnd();
             reader.Budget.Price(ReadBudget.ArrayOf(1UL << (int)precision, 1));
+            reader.Budget.Price(ObjectCost);
         }
 
         private static void CheckPrecision(uint precision)

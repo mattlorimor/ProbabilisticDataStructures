@@ -313,9 +313,10 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
-        /// A read charges each segment at least what restoring it allocates, and less than a
-        /// small object past that: its table, and the segment with its codec, which come to more
-        /// than one small object allows for. The restores are counted in a no-GC region.
+        /// A read charges each segment at least what restoring it and checking its runs
+        /// allocates, and less than a small object past that: its table, the segment with its
+        /// codec, which come to more than one small object allows for, and the view its runs are
+        /// checked through (#346). The restores are counted in a no-GC region.
         /// </summary>
         /// <remarks>
         /// Probed on 5752769, a segment and its codec came to 120 bytes beyond the table, at
@@ -331,9 +332,16 @@ namespace TestProbabilisticDataStructures
         {
             foreach (var (q, f, m) in new[] { (2, 2, 1), (2, 32, 8), (8, 8, 3), (12, 16, 3) })
             {
-                var words = (uint)MementoSegment.Restore(q, f, m, 1).Data.Length;
+                var first = MementoSegment.Restore(q, f, m, 1);
+                first.CheckRuns(0);
+                var words = (uint)first.Data.Length;
                 var charged = MementoFilter.SegmentCost(words);
-                var allocated = NoGCRegion.Allocated(() => MementoSegment.Restore(q, f, m, 1));
+                var allocated = NoGCRegion.Allocated(() =>
+                {
+                    var segment = MementoSegment.Restore(q, f, m, 1);
+                    segment.CheckRuns(0);
+                    return segment;
+                });
                 Assert.IsLessThanOrEqualTo(charged, allocated,
                     $"a segment of 2^{q} slots, {f}-bit fingerprints and {m}-bit mementos allocated {allocated:N0} bytes " +
                     $"to restore, and a read is charged {charged:N0} for it");

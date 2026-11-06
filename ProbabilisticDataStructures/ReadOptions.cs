@@ -220,6 +220,13 @@ namespace ProbabilisticDataStructures
         /// </summary>
         internal const long SmallObject = 64;
 
+        /// <summary>
+        /// What a reader is charged for an object that is not an array, where it makes it: the
+        /// general bound, <see cref="SmallObject"/>, or <paramref name="measured"/>, what the
+        /// object was measured at on a 64-bit runtime, where that is more (#346).
+        /// </summary>
+        internal static long Object(long measured) => Math.Max(measured, SmallObject);
+
         // Named only in a refusal. An enum's names are kept in a cache the runtime holds
         // weakly, and naming the structure as every budget was made built them again after
         // any collection that had reclaimed them, so what a read allocated depended on when

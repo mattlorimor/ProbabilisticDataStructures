@@ -345,6 +345,7 @@ namespace ProbabilisticDataStructures
             // it is used.
             var elementCount = ReadElementCount(ref reader, k);
             budget.Charge(ElementHeap.RestoreCost(elementCount));
+            budget.Charge(ObjectCost);
             var heap = new ElementHeap((int)elementCount);
             for (uint i = 0; i < elementCount; i++)
             {
@@ -384,12 +385,16 @@ namespace ProbabilisticDataStructures
 
             var elementCount = ReadElementCount(ref reader, k);
             reader.Budget.Price(ElementHeap.RestoreCost(elementCount));
+            reader.Budget.Price(ObjectCost);
             for (uint i = 0; i < elementCount; i++)
             {
                 reader.SkipBytes();
                 reader.ReadUInt64();
             }
         }
+
+        /// <summary>What a read charges for the structure itself, measured at 40 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(40);
 
         /// <summary>
         /// Reads how many elements are held, checked against the room for them and the

@@ -40,8 +40,8 @@ namespace ProbabilisticDataStructures
         private double min = double.PositiveInfinity;
         private double max = double.NegativeInfinity;
 
-        private Store positive = new Store();
-        private Store negative = new Store();
+        private Store positive;
+        private Store negative;
 
         /// <summary>
         /// Creates a sketch whose answers are within the given relative accuracy of the
@@ -75,6 +75,26 @@ namespace ProbabilisticDataStructures
         /// buckets, which is anything below about 5.6e-17.
         /// </exception>
         public DDSketch(double relativeAccuracy)
+            : this(Validated(relativeAccuracy), new Store(), new Store())
+        {
+        }
+
+        /// <summary>
+        /// A sketch at an accuracy already checked, holding <paramref name="positive"/> and
+        /// <paramref name="negative"/>: empty stores for a new sketch, and the stores a read
+        /// has just restored, so that a read makes no stores to throw away (#346).
+        /// </summary>
+        private DDSketch(double relativeAccuracy, Store positive, Store negative)
+        {
+            this.relativeAccuracy = relativeAccuracy;
+            this.gamma = (1 + relativeAccuracy) / (1 - relativeAccuracy);
+            this.logGamma = Math.Log(this.gamma);
+            this.positive = positive;
+            this.negative = negative;
+        }
+
+        /// <summary>Refuses an accuracy the constructor does not build at, and returns it.</summary>
+        private static double Validated(double relativeAccuracy)
         {
             Guard.ValidRelativeAccuracy(relativeAccuracy, nameof(relativeAccuracy));
 
@@ -89,9 +109,7 @@ namespace ProbabilisticDataStructures
                     "5.6e-17, and a sketch that fine can only bucket values very near 1.");
             }
 
-            this.relativeAccuracy = relativeAccuracy;
-            this.gamma = (1 + relativeAccuracy) / (1 - relativeAccuracy);
-            this.logGamma = Math.Log(this.gamma);
+            return relativeAccuracy;
         }
 
         /// <summary>
@@ -557,14 +575,13 @@ namespace ProbabilisticDataStructures
                     $"Sketch has a smallest value of {min} above its largest of {max}.");
             }
 
-            return new DDSketch(accuracy)
+            reader.Budget.Charge(ObjectCost);
+            return new DDSketch(accuracy, positive, negative)
             {
                 count = count,
                 zeroCount = zeroCount,
                 min = min,
                 max = max,
-                positive = positive,
-                negative = negative,
             };
         }
 
@@ -603,7 +620,14 @@ namespace ProbabilisticDataStructures
             reader.ReadDouble();
             Store.Price(ref reader, "positive");
             Store.Price(ref reader, "negative");
+            reader.Budget.Price(ObjectCost);
         }
+
+        /// <summary>What a read charges for the sketch itself, measured at 88 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(88);
+
+        /// <summary>What a read charges for the objects it makes: the sketch and its two stores.</summary>
+        internal static long ObjectsCost => ReadBudget.Sum(ObjectCost, Store.ObjectCost, Store.ObjectCost);
 
         /// <summary>
         /// Which bucket a positive value falls in, refusing a value whose bucket is not a
@@ -775,6 +799,9 @@ namespace ProbabilisticDataStructures
                 }
             }
 
+            /// <summary>What a read charges for a store itself, measured at 48 bytes (#346).</summary>
+            internal static long ObjectCost => ReadBudget.Object(48);
+
             internal static Store ReadFrom(ref PayloadReader reader, string which)
             {
                 var minIndex = unchecked((int)reader.ReadUInt32());
@@ -788,6 +815,7 @@ namespace ProbabilisticDataStructures
                 var length = reader.BeginWordsInPlace();
 
                 var span = SpanOf(minIndex, length, which);
+                reader.Budget.Charge(ObjectCost);
                 var store = new Store();
 
                 if (span == 0)
@@ -842,8 +870,8 @@ namespace ProbabilisticDataStructures
             }
 
             /// <summary>
-            /// Prices what <see cref="ReadFrom"/> allocates: the window its run is read
-            /// straight into.
+            /// Prices what <see cref="ReadFrom"/> allocates: the store, and the window its run
+            /// is read straight into.
             /// </summary>
             internal static void Price(ref PayloadReader reader, string which)
             {
@@ -851,6 +879,7 @@ namespace ProbabilisticDataStructures
                 var length = reader.BeginWordsInPlace();
                 reader.Skip(length);
                 var span = SpanOf(minIndex, length, which);
+                reader.Budget.Price(ObjectCost);
                 if (span > 0)
                 {
                     reader.Budget.Price(ReadBudget.ArrayOf((ulong)span, sizeof(ulong)));
