@@ -977,6 +977,31 @@ rest of a message survives, as it should, and one that deletes the guard does no
   disagrees with the structure's shape is refused, since every run a cut holds is the one
   its writer wrote. A byte left over after the last run shows the first, and one field
   edited shows the second, and the invertible table has a test of its own for each.
+- **The cut sweep can't see a check on a count the writer keeps small, so such a check
+  needs an edited claim.** A cut keeps its writer's claims, so the sweep sees a check only
+  by what dropping it would cost at a cut that holds the claim and not what it counts, and
+  that is what the claim costs. A `DpswSketch` window holds a few substreams, and a price
+  that skipped their check cost at most a couple of kilobytes more, well inside the
+  sweep's slack (#332). Dropping each check that holds a claim to the bytes after it, one
+  at a time, found the same in others (#344). A top-k's and a heavy keeper's elements are
+  at most their k, and only cuts that hold the count come after the sketch or buckets
+  before it, where the bound has room for a heap of k elements on top of them. Sublime's
+  shape check holds the current rows to the bytes after the shape, and every block is held
+  again where it begins, so every cut it refuses is refused at the current rows at the
+  latest, having read only blocks it holds. And a nested envelope's length is the one
+  claim no cut can make disagree with its run: the outer price's slice of that length is
+  what refuses one longer, and with that check gone the refusal was an
+  `ArgumentOutOfRangeException`. Each now has a test that edits the claim, its checksum
+  resealed, to one past what the bytes hold and to the largest the field can make. Each
+  edited claim is priced exactly what a cut just before the field is, and refused for what
+  it lacks under every budget, having allocated no more than that cut's read. The most the
+  bytes hold is the control, and its read allocates past that, so the bound can see what
+  the check stops. That bound is the cut's own read, not the sweep's slack, which is what
+  let #332's check pass unseen.
+  `TestEveryHoldsCheckIsHeldByAnEditedClaimOrNamesTheTestThatHoldsIt` takes its roster
+  from the library's IL, every call of `RequireHolds` with what it counts. So a check
+  added anywhere fails it until an edited claim holds the check or the check names the
+  test that kills the mutant dropping it.
 - **An exemption names the test that checks its reason.** The same sweep exempts the
   structures whose readers cap nothing their constructors can reach, and each exemption
   points at a test asserting why -- the cap is unreachable, or the reader caps nothing.

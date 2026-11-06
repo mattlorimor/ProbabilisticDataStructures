@@ -943,5 +943,38 @@ namespace TestProbabilisticDataStructures
             Assert.IsLessThanOrEqualTo(rows + Slack, budget.Charged,
                 $"the read of the large form was charged {budget.Charged:N0} bytes, {budget.Charged - rows:N0} more than its rows");
         }
+
+        /// <summary>
+        /// A count sketch's price prices its rows before it checks that the payload ends after
+        /// its cells, as its reader charges the rows before it checks, so a payload holding a
+        /// byte past the cells is refused for that byte under exactly its own price, in either
+        /// envelope (#343).
+        /// </summary>
+        /// <remarks>
+        /// The cells are the payload's last run, so a cut that holds them holds the payload
+        /// whole, and no cut of a sweep can tell where the rows are priced. A byte left over can:
+        /// a price that checked the end first would stop there having priced nothing for the
+        /// rows, the read would be admitted at the envelope alone, and its reader, charging the
+        /// rows before it finds the byte, would be refused for a budget its own price fits. The
+        /// sketch is the coarsest the constructor builds, at ε = δ = 0.5. A quotient filter is
+        /// held to the same in
+        /// <see cref="TestQuotientFilter.TestAFilterWithAByteLeftOverIsRefusedForItUnderItsOwnPrice"/>,
+        /// and every structure's read, though not its price, in <see cref="TestBytesLeftOver"/>.
+        /// </remarks>
+        [TestMethod]
+        public void TestASketchWithAByteLeftOverIsRefusedForItUnderItsOwnPrice()
+        {
+            var sketch = new CountSketch(0.5, 0.5);
+            sketch.Add(Key("a"), 1);
+            var ordinary = sketch.ToByteArray();
+            var large = LargeForm.WriteLarge(sketch);
+            Assert.IsFalse(LargeForm.IsLarge(ordinary), "premise: the sketch was not written in the ordinary envelope");
+            Assert.IsTrue(LargeForm.IsLarge(large), "premise: the sketch was not written in the large form");
+            foreach (var whole in new[] { ordinary, large })
+            {
+                TestBytesLeftOver.AssertRefusedForTheByteUnderItsOwnPrice(StructureId.CountSketch, CountSketch.Price,
+                    (bytes, options) => Persistence.FromByteArray<CountSketch>(bytes, options), whole);
+            }
+        }
     }
 }
