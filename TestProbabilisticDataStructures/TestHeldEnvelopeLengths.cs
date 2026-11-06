@@ -306,7 +306,7 @@ namespace TestProbabilisticDataStructures
         /// A stream that can only be read forward, as a network stream or a pipe is, which does
         /// not say how much it holds.
         /// </summary>
-        private sealed class OneWay(byte[] bytes) : Stream
+        internal sealed class OneWay(byte[] bytes) : Stream
         {
             private readonly MemoryStream inner = new(bytes, writable: false);
 

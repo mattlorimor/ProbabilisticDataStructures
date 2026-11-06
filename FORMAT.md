@@ -542,8 +542,13 @@ form. A reader refuses an ordinary envelope's length field, or a run's, above
 2,147,483,591, what one array holds, before allocating for it. In the large form it refuses
 a run longer than the payload has left, and one longer than one array where the run is read
 into one array; a run its structure unpacks into storage of its own is read in pieces into
-that, and one longer than that storage holds is refused by its structure. It refuses the
-large form's length past what its stream holds.
+that, and one longer than that storage holds is refused by its structure. It refuses an
+envelope's length past what its stream holds after the header, with the checksum, in either
+form, where the stream can seek and so says what it holds, and a nested envelope's length past
+what the run holding it has after its header: as truncated, before anything is priced or
+allocated for the length, under any budget. A stream that cannot seek does not say what it
+holds, so from one of those an ordinary envelope's length is held by the read budget instead
+(below), and the large form is not read at all.
 
 ### Read budget
 
@@ -562,7 +567,10 @@ budget of it reads the payload.
 A payload in the ordinary envelope that fits the budget is read and its checksum checked
 before it is priced, so a corrupted one is refused as corrupted. One whose length alone is
 more than the budget is never held: its fields are read from the stream and its runs
-skipped, to name the total, before its checksum could be checked. One in the large form is
+skipped, to name the total, before its checksum could be checked. From a stream that can
+seek, its length has been held to what the stream holds first, so that payload is there; from
+one that cannot, a length claiming more than the budget is refused for the budget on that
+claim, whether or not the bytes follow it. One in the large form is
 never held either. It is priced in a first pass over its stream, which reads the fields
 the structure's price depends on and seeks over the rest, and then read in a second, so it
 is priced before its checksum is reached, which follows it, and a refusal of it says so. A

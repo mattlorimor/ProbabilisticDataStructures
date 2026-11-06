@@ -912,14 +912,7 @@ namespace ProbabilisticDataStructures
             checkHash(hash, supplied);
 
             var start = stream.Position;
-            var held = stream.Length - start;
-            if (held < ChecksumLength || (ulong)(held - ChecksumLength) < length)
-            {
-                throw new InvalidDataException(
-                    $"The stream ended {Math.Max(held, 0):N0} bytes after the large form's header, " +
-                    $"too few for the {length:N0}-byte payload it claims and the checksum after " +
-                    "it. The data has been truncated.");
-            }
+            RequireHeld(stream.Length - start, length, large: true);
 
             var envelope = LargeEnvelopeCost;
             var crc = new Crc32();
@@ -1004,7 +997,9 @@ namespace ProbabilisticDataStructures
         /// fits the budget it is read and its checksum checked first, so a corrupted
         /// payload is refused as corrupted, and priced from memory. When the payload
         /// alone is more than the budget it is never held: it is priced from the stream, a
-        /// field at a time, its runs skipped, and refused.
+        /// field at a time, its runs skipped, and refused. Before any of that, a length past
+        /// what a stream that can seek holds is refused as truncated; from a stream that
+        /// cannot seek, which does not say what it holds, the budget is what holds it.
         /// <para>
         /// The hash the header names is checked against <paramref name="supplied"/>, by
         /// <paramref name="checkHash"/>, before anything is priced: once the checksum has
@@ -1022,16 +1017,29 @@ namespace ProbabilisticDataStructures
             ReadBudget budget, PayloadPrice price, Func<ReadOnlySpan<byte>, ulong>? supplied, HashCheck checkHash)
         {
             var length = CheckHeader(header, expected, out version, out hash);
+
+            // A stream that can seek says how much it holds, so a length past that is refused
+            // for the bytes that are not there before anything is priced or allocated for it,
+            // as the large form's is. Priced first, a held payload's header claiming a
+            // gigabyte was refused for its budget, and read into an array of a gigabyte under
+            // none (#347). A stream that cannot seek does not say, and from one of those the
+            // budget is what holds the length. A nested envelope's stream is one over the run
+            // that holds it, and its price holds it to that run the same way (PriceNested).
+            if (stream.CanSeek)
+            {
+                RequireHeld(stream.Length - stream.Position, length, large: false);
+            }
+
             var envelope = EnvelopeCost(length);
 
             var pricing = !budget.IsSettled;
             if (pricing)
             {
                 // The payload is the first thing a header's claim allocates, and it is
-                // priced before it is: a header claiming two gigabytes is refused on that
-                // claim, and on everything else the payload claims, before the read has
-                // made room for any of it. The header and checksum buffers and the
-                // checksum's state come with it.
+                // priced before it is, with everything else the payload claims, before the
+                // read has made room for any of it: from a stream that cannot seek, a header
+                // claiming two gigabytes is refused on that claim, for its budget. The header
+                // and checksum buffers and the checksum's state come with it.
                 budget.Price(envelope);
                 if (budget.Charged > budget.Limit)
                 {
@@ -1171,6 +1179,25 @@ namespace ProbabilisticDataStructures
             }
 
             return length;
+        }
+
+        /// <summary>
+        /// Refuses an envelope's length that the bytes after its header do not hold, with the
+        /// checksum after them: <paramref name="held"/> is what a stream that can seek has left
+        /// after the header, or what a nested envelope's run has left after its own. Made
+        /// before anything is priced or allocated for the length, by a read in either form and
+        /// by the price of a nested envelope, so that a claim of more than is there is refused
+        /// as truncated under any budget rather than for the budget it would take (#347).
+        /// </summary>
+        private static void RequireHeld(long held, ulong length, bool large)
+        {
+            if (held < ChecksumLength || (ulong)(held - ChecksumLength) < length)
+            {
+                throw new InvalidDataException(
+                    $"The stream ended {Math.Max(held, 0):N0} bytes after the {(large ? "large form's " : "")}header, " +
+                    $"too few for the {length:N0}-byte payload it claims and the checksum after " +
+                    "it. The data has been truncated.");
+            }
         }
 
         /// <summary>
@@ -1802,7 +1829,9 @@ namespace ProbabilisticDataStructures
         /// this one, its runs as wide as its own form makes them -- the same sums that the
         /// nested read charges. Its header is checked as its reader checks it, in either
         /// form, so a nested envelope that is not the structure it should be stops the price
-        /// where the read will stop.
+        /// where the read will stop. From a held payload its length is held to the run before
+        /// it is priced, as the read holds it to the stream over the run, so one claiming more
+        /// than the run holds stops the price there as well.
         /// </remarks>
         internal static void PriceNested(ref PayloadReader reader, StructureId nested, PayloadPrice price)
         {
@@ -1824,6 +1853,10 @@ namespace ProbabilisticDataStructures
             var (length, version, _, large) = ReadNestedHeader(ref envelope, header, nested);
             if (!streamed)
             {
+                // Held to the run before it is priced, as the nested read holds it to the
+                // stream over the run: priced first, a claim of a gigabyte was priced at that
+                // and admitted under no budget (#347).
+                RequireHeld(envelope.Remaining, length, large);
                 envelope.Budget.Price(large ? LargeEnvelopeCost : EnvelopeCost(length));
             }
 
