@@ -738,9 +738,9 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// What <see cref="ReadBytes"/> allocates for a run of <paramref name="count"/> bytes:
-        /// an array of them, or nothing for an empty run, which is the one empty array the
-        /// runtime keeps.
+        /// What <see cref="ReadBytes"/> allocates for a run of <paramref name="count"/> bytes,
+        /// and <see cref="BeginWords"/> for a buffer of that many: an array of them, or nothing
+        /// for an empty one, which is the one empty array the runtime keeps.
         /// </summary>
         private static long CostOfBytes(int count) => count == 0 ? 0 : ReadBudget.ArrayOf((ulong)count, 1);
 
@@ -831,10 +831,12 @@ namespace ProbabilisticDataStructures
         /// and a structure that keeps its run in words, or in more arrays than one, can hold
         /// it. So a read that holds no payload takes such a run from the stream in pieces of
         /// at most <see cref="PayloadSource.PieceBytes"/>, through one buffer of that length or
-        /// the run's, whichever is shorter, charged here. From a held payload the run is
-        /// copied out whole, as <see cref="ReadBytes"/> copies a run, and handed back as one
-        /// piece, so that the ordinary envelope's read allocates and is charged what it always
-        /// was; a run there is never past one array.
+        /// the run's, whichever is shorter, charged here. An empty run's buffer is the one empty
+        /// array the runtime keeps, and is charged nothing, as <see cref="ReadBytes"/> charges
+        /// an empty run (#336). From a held payload the run is copied out whole, as
+        /// <see cref="ReadBytes"/> copies a run, and handed back as one piece, so that the
+        /// ordinary envelope's read allocates and is charged what it always was; a run there is
+        /// never past one array.
         /// </remarks>
         internal long BeginWords()
         {
@@ -847,7 +849,7 @@ namespace ProbabilisticDataStructures
 
             var count = ReadHeldRunLength();
             var piece = PieceFor(count);
-            this.Budget.Charge(ReadBudget.ArrayOf((ulong)piece, 1));
+            this.Budget.Charge(CostOfBytes(piece));
             this.words = piece == 0 ? Array.Empty<byte>() : new byte[piece];
             this.wordsLeft = count;
             return count;
@@ -885,7 +887,7 @@ namespace ProbabilisticDataStructures
             }
 
             var count = ReadHeldRunLength();
-            this.Budget.Price(ReadBudget.ArrayOf((ulong)PieceFor(count), 1));
+            this.Budget.Price(CostOfBytes(PieceFor(count)));
             Skip(count);
             return count;
         }
