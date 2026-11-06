@@ -581,8 +581,8 @@ namespace ProbabilisticDataStructures
             if (whole)
             {
                 // Read straight into the table, a piece at a time, as it was written.
-                ReadWords(ref reader, fingerprints.AsSpan(0, (int)PackedWords(entries, bits)));
-                ReadWords(ref reader, occupancy);
+                reader.ReadWords(fingerprints.AsSpan(0, (int)PackedWords(entries, bits)));
+                reader.ReadWords(occupancy);
                 CheckTable(fingerprints, occupancy, entries, bits);
                 filled = CountOccupied(occupancy);
             }
@@ -662,29 +662,6 @@ namespace ProbabilisticDataStructures
         private static void RequireTable(ref PayloadReader reader, ulong entries, uint bits) =>
             reader.RequireHolds(PackedWords(entries, bits) + MapWords(entries) + 2, sizeof(ulong),
                 "words of table and generator state");
-
-        /// <summary>
-        /// Reads as many words as <paramref name="into"/> holds, which have no length before
-        /// them, straight into it, a piece at a time through a buffer on the stack (#289):
-        /// copied from a held payload, and read from the stream from one that is not. Nothing
-        /// is allocated for them, so the table is not held twice (#230).
-        /// </summary>
-        private static void ReadWords(ref PayloadReader reader, Span<ulong> into)
-        {
-            var left = (long)into.Length * sizeof(ulong);
-            Span<byte> piece = stackalloc byte[PayloadReader.BlockPieceFor(left)];
-            var at = 0;
-            while (left > 0)
-            {
-                var bytes = piece[..(int)Math.Min(left, piece.Length)];
-                reader.ReadBlock(bytes);
-                left -= bytes.Length;
-                for (var i = 0; i < bytes.Length; i += sizeof(ulong))
-                {
-                    into[at++] = BinaryPrimitives.ReadUInt64LittleEndian(bytes[i..]);
-                }
-            }
-        }
 
         /// <summary>
         /// Checks a table read whole holds only what the writer leaves in one: nothing past

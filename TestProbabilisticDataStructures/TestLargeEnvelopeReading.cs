@@ -998,15 +998,19 @@ namespace TestProbabilisticDataStructures
         /// be read through one, and a structure that keeps its run in words, or in more than
         /// one array, can hold one: a quotient filter's table, a count sketch's cells, a
         /// DDSketch's buckets, and an invertible table's counts and hash sums, which #228
-        /// names. With the piece lowered, such a structure makes more array reads than with the
-        /// piece as it ships, each a piece or the rest of its run, one after another to the
-        /// run's end, which its <c>u64</c> prefix gives. A run read whole at either piece is
-        /// read into the one array its structure keeps, and claimed a byte past one array at
-        /// its prefix it is refused as more than one array holds; a run read in pieces is not,
-        /// since no array of its length is made, and is refused for the bytes the stream lacks.
-        /// A structure that reads in pieces allocates, beyond what streaming adds, at least its
-        /// payload and those runs less than the ordinary envelope's read, which holds the
-        /// payload and copies each run.
+        /// names. The quotient filter's table is read through the stream's span overload, from
+        /// a buffer on the stack, straight into the table (#328), so it makes no array reads to
+        /// count here, and
+        /// <see cref="TestAQuotientFiltersTableIsReadFromTheLargeFormInPiecesStraightIntoItsTable"/>
+        /// holds it instead. With the piece lowered, such a structure makes more array reads
+        /// than with the piece as it ships, each a piece or the rest of its run, one after
+        /// another to the run's end, which its <c>u64</c> prefix gives. A run read whole at
+        /// either piece is read into the one array its structure keeps, and claimed a byte past
+        /// one array at its prefix it is refused as more than one array holds; a run read in
+        /// pieces is not, since no array of its length is made, and is refused for the bytes the
+        /// stream lacks. A structure that reads in pieces allocates, beyond what streaming adds,
+        /// at least its payload and those runs less than the ordinary envelope's read, which
+        /// holds the payload and copies each run.
         /// </remarks>
         [TestMethod]
         public void TestARunItsStructureKeepsInStorageOfItsOwnIsReadInPiecesIntoIt()
@@ -1062,10 +1066,13 @@ namespace TestProbabilisticDataStructures
                 }
             }
 
-            // The structures #228 names: a run of each can pass one array.
+            // The structures #228 names: a run of each can pass one array. The quotient filter
+            // reads its table through the span overload (#328), and is held by a test of its own.
+            Assert.IsFalse(pieced.ContainsKey(StructureId.QuotientFilter) || whole.Any(w => w.Id == StructureId.QuotientFilter),
+                "QuotientFilter read its table through the stream's array overload, which it reads straight into the table (#328)");
             foreach (var capped in new[]
             {
-                StructureId.QuotientFilter, StructureId.CountSketch, StructureId.DDSketch, StructureId.InvertibleBloomLookupTable,
+                StructureId.CountSketch, StructureId.DDSketch, StructureId.InvertibleBloomLookupTable,
             })
             {
                 Assert.IsTrue(pieced.TryGetValue(capped, out var runs) && runs.Count > 0,
@@ -1191,6 +1198,62 @@ namespace TestProbabilisticDataStructures
         }
 
         /// <summary>
+        /// A <see cref="MementoFilter"/>'s table, whose words have no length before them, is read
+        /// from the large form in pieces straight into its segment's table (#327), as an Infini
+        /// filter's is (#313): through the stream's span overload, every piece as long as a piece
+        /// but the last, one after another from the table's first byte to its last, and nothing
+        /// else read among them. Shown with the piece as it ships and lowered to eight words.
+        /// </summary>
+        /// <remarks>
+        /// Before #327 the words were read a word at a time into an array of their own, eight
+        /// bytes asked of the stream and appended to the checksum for each, and then copied into
+        /// the table. The table is found as the bytes its words are written as, which nothing
+        /// else in the payload repeats; the budget sample is one table longer than a piece as it
+        /// ships, so it is read in more than one at either length.
+        /// </remarks>
+        [TestMethod]
+        public void TestAMementoFiltersTableIsReadFromTheLargeFormInPiecesStraightIntoItsSegment()
+        {
+            var sample = TestReadBudget.Samples.Value[StructureId.MementoFilter];
+            var large = TestReadBudget.InTheLargeForm(sample).Bytes;
+            var filter = (MementoFilter)sample.Read(sample.Bytes, ReadOptions.Unlimited);
+            Assert.HasCount(1, filter.Segments, "premise: the sample is not one table");
+
+            var words = filter.Segments[0].Data;
+            var table = new byte[words.Length * sizeof(ulong)];
+            for (var w = 0; w < words.Length; w++)
+            {
+                BinaryPrimitives.WriteUInt64LittleEndian(table.AsSpan(w * sizeof(ulong)), words[w]);
+            }
+
+            long at = large.AsSpan().IndexOf(table);
+            Assert.IsGreaterThanOrEqualTo(0L, at, "the table is not in the payload in the large form");
+            Assert.AreEqual(at, (long)large.AsSpan().LastIndexOf(table), "the table appears in the payload twice");
+            Assert.IsGreaterThan((long)ShippedBlockPiece, (long)table.Length,
+                $"the table's {table.Length:N0} bytes are no longer than a piece as it ships");
+            var end = at + table.Length;
+
+            foreach (var piece in new int?[] { null, Piece })
+            {
+                var length = (long)(piece ?? ShippedBlockPiece);
+                var reads = SecondPass(sample, large, piece).Where(a => a.From < end && at < a.To).ToList();
+                var expected = new List<Asked>();
+                for (var from = at; from < end; from += length)
+                {
+                    expected.Add(new Asked(false, from, Math.Min(from + length, end), false));
+                }
+
+                Console.WriteLine(
+                    $"[TABLE] MementoFilter: {table.Length:N0} bytes at {at:N0}, piece {length:N0}: " +
+                    $"{reads.Count:N0} reads, the first {reads[0].Count:N0} bytes");
+                CollectionAssert.AreEqual(expected, reads,
+                    $"the table's {table.Length:N0} bytes at {at:N0}, with the piece at {length:N0}, were read in " +
+                    $"{reads.Count:N0} reads, the first of {reads[0].Count:N0} bytes through the " +
+                    $"{(reads[0].Array ? "array" : "span")} overload, and not in {expected.Count:N0} pieces through the span overload");
+            }
+        }
+
+        /// <summary>
         /// An <see cref="InfiniFilter"/>'s table, whose words have no length before them, is read
         /// from the large form in pieces straight into its segment's table (#313), as a count-min
         /// sketch's counters are: through the stream's span overload, every piece as long as a
@@ -1244,6 +1307,74 @@ namespace TestProbabilisticDataStructures
                     $"{reads.Count:N0} reads, the first of {reads[0].Count:N0} bytes through the " +
                     $"{(reads[0].Array ? "array" : "span")} overload, and not in {expected.Count:N0} pieces through the span overload");
             }
+        }
+
+        /// <summary>
+        /// A <see cref="QuotientFilter"/>'s table, one run of words, is read from the large form
+        /// in pieces straight into the table (#328), as an Infini filter's tables and a count-min
+        /// sketch's counters are: through the stream's span overload, every piece as long as a
+        /// piece but the last, one after another from the table's first byte to its last, and
+        /// nothing else read among them. Shown with the piece as it ships and lowered to eight
+        /// words. Claimed a byte past one array at its <c>u64</c> prefix, the run is refused for
+        /// the bytes the stream lacks, not as more than one array holds, since no array of its
+        /// length is made.
+        /// </summary>
+        /// <remarks>
+        /// Before #328 the run was read through the stream's array overload, into a buffer on the
+        /// heap as long as a piece of a run (64 KiB) or as the run, whichever was shorter. The
+        /// table is found as the bytes its words are written as, which nothing else in the payload
+        /// repeats, with the run's length just before them; the budget sample's table is longer
+        /// than a piece as it ships, so it is read in more than one at either length.
+        /// </remarks>
+        [TestMethod]
+        public void TestAQuotientFiltersTableIsReadFromTheLargeFormInPiecesStraightIntoItsTable()
+        {
+            var sample = TestReadBudget.Samples.Value[StructureId.QuotientFilter];
+            var large = TestReadBudget.InTheLargeForm(sample).Bytes;
+            var filter = (QuotientFilter)sample.Read(sample.Bytes, ReadOptions.Unlimited);
+
+            var words = (ulong[])typeof(QuotientFilter)
+                .GetField("data", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(filter)!;
+            var table = new byte[words.Length * sizeof(ulong)];
+            for (var w = 0; w < words.Length; w++)
+            {
+                BinaryPrimitives.WriteUInt64LittleEndian(table.AsSpan(w * sizeof(ulong)), words[w]);
+            }
+
+            long at = large.AsSpan().IndexOf(table);
+            Assert.IsGreaterThanOrEqualTo(0L, at, "the table is not in the payload in the large form");
+            Assert.AreEqual(at, (long)large.AsSpan().LastIndexOf(table), "the table appears in the payload twice");
+            Assert.AreEqual((ulong)table.Length, BinaryPrimitives.ReadUInt64LittleEndian(large.AsSpan((int)at - 8)),
+                "the table is not the run whose u64 length is just before it");
+            Assert.IsGreaterThan((long)ShippedBlockPiece, (long)table.Length,
+                $"the table's {table.Length:N0} bytes are no longer than a piece as it ships");
+            var end = at + table.Length;
+
+            foreach (var piece in new int?[] { null, Piece })
+            {
+                var length = (long)(piece ?? ShippedBlockPiece);
+                var reads = SecondPass(sample, large, piece).Where(a => a.From < end && at < a.To).ToList();
+                var expected = new List<Asked>();
+                for (var from = at; from < end; from += length)
+                {
+                    expected.Add(new Asked(false, from, Math.Min(from + length, end), false));
+                }
+
+                Console.WriteLine(
+                    $"[TABLE] QuotientFilter: {table.Length:N0} bytes at {at:N0}, piece {length:N0}: " +
+                    $"{reads.Count:N0} reads, the first {reads[0].Count:N0} bytes");
+                CollectionAssert.AreEqual(expected, reads,
+                    $"the table's {table.Length:N0} bytes at {at:N0}, with the piece at {length:N0}, were read in " +
+                    $"{reads.Count:N0} reads, the first of {reads[0].Count:N0} bytes through the " +
+                    $"{(reads[0].Array ? "array" : "span")} overload, and not in {expected.Count:N0} pieces through the span overload");
+            }
+
+            var refused = ClaimedPastOneArray(sample, large, at - 8);
+            Assert.DoesNotContain("single array", refused.Message,
+                $"the table's run, read in pieces, was refused past one array as if read into one: {refused.Message}");
+            StringAssert.Contains(refused.Message, $"while reading {(long)Array.MaxLength + 1} more at offset",
+                $"the table's run claiming a byte past one array was not refused for the bytes the stream lacks: {refused.Message}");
         }
 
         /// <summary>

@@ -744,19 +744,37 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the copies of the
-        /// three runs, and the counts and hash sums unpacked from theirs. See
+        /// three runs, and the counts and hash sums unpacked from theirs, each where
+        /// <see cref="ReadPayload"/> charges it and after the checks it makes first. See
         /// <see cref="PayloadPrice"/>.
         /// </summary>
+        /// <remarks>
+        /// Where as well as how much. A price that finds its payload ending early is set
+        /// aside, and the read admitted at what it had priced by then, so an array the reader
+        /// charges before the price reaches it is drawn on a budget nothing priced. Both were
+        /// priced once all three runs had been walked and the payload's end found, and a
+        /// payload cut short in the key sums or the hash sums, or with bytes left over after
+        /// them, was then refused for a budget its own price fitted, rather than as malformed.
+        /// </remarks>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
             var cells = reader.ReadUInt32();
             var keySize = (int)reader.ReadUInt32();
-            var counts = reader.SkipWords();
+            var keyBytes = (long)cells * keySize;
+            var wordBytes = (long)cells * sizeof(long);
+
+            var counted = reader.SkipWords();
+            CheckShape(cells, keySize, counted, keyBytes, wordBytes);
+            reader.Budget.Price(ReadBudget.ArrayOf(cells, sizeof(long)));
+
             var keySums = reader.SkipBytes();
-            var hashes = reader.SkipWords();
+            CheckShape(cells, keySize, counted, keySums, wordBytes);
+
+            var hashed = reader.SkipWords();
+            CheckShape(cells, keySize, counted, keySums, hashed);
+            reader.Budget.Price(ReadBudget.ArrayOf(cells, sizeof(ulong)));
+
             reader.ExpectEnd();
-            CheckShape(cells, keySize, counts, keySums, hashes);
-            reader.Budget.Price(UnpackedCost(cells));
         }
 
         private static void CheckShape(uint cells, int keySize, long counts, long keySums, long hashes)
@@ -783,10 +801,6 @@ namespace ProbabilisticDataStructures
                     "keys and hashes do not come to the byte counts that implies.");
             }
         }
-
-        /// <summary>The counts and hash sums of <paramref name="cells"/> cells, unpacked.</summary>
-        private static long UnpackedCost(uint cells) =>
-            ReadBudget.Times(2, ReadBudget.ArrayOf(cells, sizeof(long)));
 
         /// <summary>The number of cells the table holds.</summary>
         public uint Cells() => this.cells;

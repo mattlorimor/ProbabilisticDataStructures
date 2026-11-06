@@ -129,19 +129,12 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Restores a segment from stored fields without rebuilding its table.
+        /// A segment of a stored shape and count, its table allocated and every word of it
+        /// nought, for the reader to read the stored words straight into (#327), and then to
+        /// check its metadata and its runs.
         /// </summary>
-        internal static MementoSegment Restore(
-            int quotientBits, int fingerprintBits, int mementoBits, uint count,
-            ulong[] data)
-        {
-            var segment = new MementoSegment(quotientBits, fingerprintBits, mementoBits)
-            {
-                Count = count,
-            };
-            data.CopyTo(segment.Data, 0);
-            return segment;
-        }
+        internal static MementoSegment Restore(int quotientBits, int fingerprintBits, int mementoBits, uint count) =>
+            new(quotientBits, fingerprintBits, mementoBits) { Count = count };
 
         /// <summary>
         /// Empties the table where it is, leaving it as a new one of its shape would be: no

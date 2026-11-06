@@ -940,7 +940,31 @@ rest of a message survives, as it should, and one that deletes the guard does no
   counters once, at its shape, against bytes its records share, and then priced each block
   of them before skipping it. That was the rule broken, not a lower bound. Each block is now
   checked where it begins, by the price and the reader, and the price is held to the bound
-  every structure is.
+  every structure is. The other allowance a price had was a defect too, 64-bit tables
+  pricing each empty array at 24 bytes (#315), so prices have none now and are held to the
+  bounds their reads are. A price that needs one again should take it as the reads take
+  theirs: a reason stated beside it, and a check that some cut costs that much, which fails
+  once none does, because an allowance nothing needs is room for a defect to grow into
+  unseen.
+- **A price prices each array where its reader charges it.** A read admitted at what a price
+  that stopped early had priced has to refuse its payload within that, and a price walks the
+  payload apart from its reader, so it can come to the right sum in the wrong order.
+  `InvertibleBloomLookupTable`'s priced the counts it unpacks after walking all three of its
+  runs, where its reader charges them as soon as their run is held, so a payload cut short in
+  the later runs was admitted at the counts' size less than its reader charged, and under a
+  budget of exactly its price was refused for that budget. Every sum `TestReadBudget`
+  compares was right, because it reads payloads whole, and every budget the sweep read cuts
+  under had room for the difference. So the sweep reads every cut under exactly its own
+  price as well, and checks first that the price it works out is the one the read is
+  admitted at: under a byte less, every cut is refused for its budget, and the refusal names
+  that price. A budget sees a reader charge past its price and not a price past its reader,
+  which admits a read at more than it takes, so the sweep also reads each cut through a budget
+  whose charges can be read back, and the reader has to have charged the whole price before
+  it refused the cut. Every structure does, at every cut. Two things no cut can show: where
+  the last run is priced, since a cut holding it is the whole payload, and where a run that
+  disagrees with the structure's shape is refused, since every run a cut holds is the one
+  its writer wrote. A byte left over after the last run shows the first, and one field
+  edited shows the second, and the invertible table has a test of its own for each.
 - **An exemption names the test that checks its reason.** The same sweep exempts the
   structures whose readers cap nothing their constructors can reach, and each exemption
   points at a test asserting why -- the cap is unreachable, or the reader caps nothing.
