@@ -436,11 +436,15 @@ namespace TestProbabilisticDataStructures
                 ("the stream a byte array is read through", PersistenceFormat.ByteArrayStreamCost, () => new MemoryStream(bytes, writable: false)),
             ];
 
+            // The checksum's state is a System.IO.Hashing object, whose size is the package's
+            // and not the runtime's, so a failure says which one was loaded.
+            var hashing = typeof(Crc32).Assembly.GetName().Version;
             foreach (var (what, charged, make) in made)
             {
                 make();
                 Assert.AreEqual(charged, TestReadBudget.LeastAllocated(make, Repeats, null),
-                    $"{what} is charged {charged:N0} bytes, and that is not what one allocates");
+                    $"{what} is charged {charged:N0} bytes, and that is not what one allocates " +
+                    $"(System.IO.Hashing {hashing} loaded, on .NET {Environment.Version})");
             }
         }
     }
