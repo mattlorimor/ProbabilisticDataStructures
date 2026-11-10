@@ -679,9 +679,12 @@ namespace ProbabilisticDataStructures
             return filterCount;
         }
 
-        /// <summary>The list holding <paramref name="filterCount"/> contained filters.</summary>
+        /// <summary>
+        /// The list holding <paramref name="filterCount"/> contained filters, and the filter
+        /// holding the list, measured at 72 bytes (#346).
+        /// </summary>
         private static long FiltersCost(uint filterCount) => ReadBudget.Sum(
-            ReadBudget.ArrayOf(filterCount, sizeof(long)), ReadBudget.SmallObject);
+            ReadBudget.ArrayOf(filterCount, sizeof(long)), ReadBudget.SmallObject, ReadBudget.Object(72));
 
         /// <summary>
         /// Used only by <see cref="Read"/>, which sets every field itself.

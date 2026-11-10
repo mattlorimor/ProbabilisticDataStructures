@@ -471,9 +471,12 @@ namespace TestProbabilisticDataStructures
             {
                 problems.Add($"2^31 slots of 64 bits: the price was not refused for its shape, and stopped: {price.Stopped?.Message ?? "at its end"}");
             }
-            if (price.Priced != 0)
+            // The filter and its list are made before any table is read, and priced there
+            // (#346); nothing past them is.
+            if (price.Priced != MementoFilter.FilterCost(1))
             {
-                problems.Add($"2^31 slots of 64 bits: the price priced {price.Priced:N0} bytes for a table no array holds");
+                problems.Add($"2^31 slots of 64 bits: the price priced {price.Priced - MementoFilter.FilterCost(1):N0} bytes " +
+                    "past the filter and its list for a table no array holds");
             }
 
             foreach (var (name, options) in new[] { ("no budget", ReadOptions.Unlimited), ("the default budget", ReadOptions.Default) })
@@ -804,9 +807,10 @@ namespace TestProbabilisticDataStructures
                 Assert.AreEqual(ex.Message, read.Message, $"2^{q} slots of {f}-bit fingerprints: the read refuses it for another reason");
 
                 // The table is twice its words and more, read into one array and copied into the
-                // table; none of it is priced for a payload that does not hold the words.
-                Assert.AreEqual(0L, budget.Charged,
-                    $"2^{q} slots of {f}-bit fingerprints: the walk priced words the payload does not hold");
+                // table; none of it is priced for a payload that does not hold the words. The
+                // filter and its list are made before any table is read, and priced there (#346).
+                Assert.AreEqual(InfiniFilter.FilterCost(1), budget.Charged,
+                    $"2^{q} slots of {f}-bit fingerprints: the walk priced words the payload does not hold, or not the filter");
             }
         }
 

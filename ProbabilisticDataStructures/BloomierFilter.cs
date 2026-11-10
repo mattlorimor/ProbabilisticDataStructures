@@ -865,6 +865,7 @@ namespace ProbabilisticDataStructures
                     $"carries {cells.LongLength}.");
             }
 
+            reader.Budget.Charge(ObjectCost);
             return new BloomierFilter
             {
                 size = size,
@@ -885,7 +886,7 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the copy of the
-        /// cells, which the map keeps. See <see cref="PayloadPrice"/>.
+        /// cells, which the map keeps, and the map. See <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
@@ -895,7 +896,11 @@ namespace ProbabilisticDataStructures
             reader.ReadUInt64();
             reader.ReadUInt32();
             reader.SkipBytes();
+            reader.Budget.Price(ObjectCost);
         }
+
+        /// <summary>What a read charges for the map itself, measured at 96 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(96);
 
         /// <summary>The number of distinct keys the map was built from.</summary>
         public uint Count() => this.size;

@@ -873,7 +873,19 @@ rest of a message survives, as it should, and one that deletes the guard does no
   running beside a read can add a few kilobytes to it, so each of the five repeats a
   measurement takes the least of is counted where none can run (below); and the first
   undercharge found was in the accounting itself, a `params` array allocated by every
-  call that summed the charges.
+  call that summed the charges. The slack was then found to hide what it was meant to
+  catch: every structure's read allocated more than it was charged, by 16 to 440 bytes
+  as a byte array, all of it inside the four kilobytes (#346). So
+  `TestReadChargesAreUpperBounds` holds every read to its charges with no slack in that
+  direction, and to a small stated bound the other way, which a structure whose price can
+  only bound its read exceeds by an allowance it states and its sample has to need. A read
+  compiled hot can allocate less than it did cold: run in the whole suite, reads in the
+  ordinary envelope came out 24 bytes under what they allocated run alone, taken to be a
+  checksum's state the JIT kept on the stack, the one object of that size every read makes
+  that does not leave the read, and in one run none of them was charged within 24
+  bytes of what it allocated, where run alone several were charged exactly that; with
+  `DOTNET_JitObjectStackAllocation=0` the whole suite met the exact bound. So a bound
+  that holds a read to what it allocates exactly fails in one run and passes the next.
 - **What a read allocates does not depend on when the last collection ran.** The least of
   five removes noise that comes and goes, not an allocation a read makes only sometimes.
   Every read named its structure with `ToString` as its budget was made, and the runtime

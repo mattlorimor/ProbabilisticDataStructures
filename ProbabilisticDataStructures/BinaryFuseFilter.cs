@@ -838,6 +838,7 @@ namespace ProbabilisticDataStructures
                     $"of fingerprints, and carries {fingerprints.LongLength}.");
             }
 
+            reader.Budget.Charge(ObjectCost);
             return new BinaryFuseFilter
             {
                 size = size,
@@ -855,7 +856,7 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the copy of the
-        /// fingerprints, which the filter keeps. See <see cref="PayloadPrice"/>.
+        /// fingerprints, which the filter keeps, and the filter. See <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
@@ -865,7 +866,11 @@ namespace ProbabilisticDataStructures
             reader.ReadUInt64();
             reader.ReadByte();
             reader.SkipBytes();
+            reader.Budget.Price(ObjectCost);
         }
+
+        /// <summary>What a read charges for the filter itself, measured at 72 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(72);
 
         /// <summary>
         /// The number of distinct keys the filter was built from.

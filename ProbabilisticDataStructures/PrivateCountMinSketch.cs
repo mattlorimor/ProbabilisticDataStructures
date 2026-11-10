@@ -561,11 +561,15 @@ namespace ProbabilisticDataStructures
             reader.RequireHolds((ulong)width * depth, sizeof(double), "counters");
         }
 
-        /// <summary>A matrix of <paramref name="depth"/> rows of <paramref name="width"/> counters, and the sketch.</summary>
+        /// <summary>
+        /// A matrix of <paramref name="depth"/> rows of <paramref name="width"/> counters, and
+        /// the sketch, measured at 72 bytes, more than the general bound it was charged at
+        /// (#346).
+        /// </summary>
         private static long MatrixCost(uint width, uint depth) => ReadBudget.Sum(
             ReadBudget.ArrayOf(depth, sizeof(long)),
             ReadBudget.Times(depth, ReadBudget.ArrayOf(width, sizeof(double))),
-            ReadBudget.SmallObject);
+            ReadBudget.Object(72));
 
         /// <summary>
         /// Reads the body of a sketch from a payload already positioned at one, laid out as
