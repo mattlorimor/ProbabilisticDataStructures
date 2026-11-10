@@ -580,7 +580,9 @@ file `--out` gets Stryker's JSON and HTML reports, its log, the tests it ran, an
 `summary.txt`: the mutants by verdict, then every Survived, Timeout and NoCoverage one
 with its line and mutation. `--jobs` sets how many tests run at once while it finds
 them, and options after `--` go to Stryker. The settings are `stryker-config.json`'s;
-the script adds the scope and the test filter.
+the script adds the scope, the test filter and the framework. A sweep is of one
+framework's build, net10.0 unless `--framework` names the other: Stryker picks one at
+random for a project that targets several, and every sweep recorded here ran on net10.0.
 
 Scope every run. Stryker is not part of any build, the whole library generates more
 than twelve thousand mutants (12,512 at master 7e339df), and the output needs human
@@ -697,9 +699,14 @@ Stryker mutator does, so they stay as #179 records them, held by probes at scale
 the suite; the fourth, `Allocate` without its size check, Stryker does make, and the test
 #179 added for it kills it.
 
-`mutate.sh` reports a run whose test host crashed as SURVIVED with no count after it,
-where a real survivor reads "SURVIVED (all N passed)". Read that as the crash it is,
-which is a detection, and confirm it by running the suite with the mutant in.
+`mutate.sh` reads the summary of every target framework, since a mutant can fail one
+framework's suite and pass the other's, and the last line is whichever finished last. A
+mutant either fails is killed, and the verdict says where: "killed (10 tests on net11.0;
+all 131 on net10.0 passed)". A real survivor reads "SURVIVED (all N on net10.0, all N on
+net11.0 passed)". A run that failed with no failing summary, from a test host that crashed
+or a runtime that is not installed, reads "SURVIVED (no failing summary, but dotnet test
+exited N; summaries from: ...)". Read a crash as the detection it is, and confirm it by
+running the suite with the mutant in.
 
 **Before 5.0.0, Stryker and this suite's parallelism did not mix.** The test assembly
 declares `[assembly: Parallelize(Scope = ExecutionScope.MethodLevel)]`, and Stryker
@@ -912,9 +919,11 @@ rest of a message survives, as it should, and one that deletes the guard does no
   room. One that a collection ended is measured again, so measured work must be
   repeatable and rebuild what it changes before each attempt, and work that cannot get
   a region fails saying so rather than being counted without one. A room must be one
-  every runner gives: macOS collects on segments, which refuse a region of more than
-  255,637,165 bytes there, where the regions Linux and Windows collect on refuse none
-  that size, so `NoGCRegion` refuses a larger room on every runner and not only on macOS.
+  every runner gives under each framework. Under .NET 10 macOS collects on segments, which
+  refuse a region of more than 255,637,165 bytes there; under .NET 11 it collects on
+  regions (dotnet/runtime#125416), as Linux and Windows do under both, and regions refuse
+  none that size. So `NoGCRegion` refuses a larger room on every runner and framework, not
+  only on macOS under .NET 10: what segments give one region is a room both collectors give.
   `TestAReadIsMeasuredExactlyWithABackgroundCollectionRunning` starts a background
   collection before each repeat of that read and asks for the quiet figure, and its
   guard needs the same read, counted without a region, to come out high, so that a
@@ -1050,6 +1059,12 @@ dotnet test                              # full suite
 dotnet test -c Release                   # what CI runs, -warnaserror
 dotnet run -c Release --project Benchmarks -- study <name> <args>   # accuracy studies
 ```
+
+The suite runs once for each target framework, net10.0 on the .NET 10 runtime and net11.0
+on .NET 11, so both runtimes have to be installed; `--framework net10.0` runs one. Either
+failing fails the run. A framework whose runtime is missing fails it too, with the host's
+"You must install or update .NET", and only the exit code says so: the other framework's
+summary still reads `Passed!`.
 
 **A clean build is the only build that verifies.** Analyzers do not run on a project
 MSBuild considers up to date, so a `-warnaserror` build after a small edit can report

@@ -25,7 +25,7 @@ about: Something behaves differently from what is documented
 
 **Versions**
 - `MattLorimor.ProbabilisticDataStructures`:
-- Target framework (e.g. net10.0):
+- Target framework (e.g. net11.0):
 - OS:
 
 **Which structure?**

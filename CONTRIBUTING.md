@@ -53,6 +53,12 @@ MSBuild thinks is up to date, so an incremental `-warnaserror` build can report 
 on code that will not compile from scratch — which is exactly how a real defect got
 through several green checks in a row.
 
+The library and the suite target net10.0 and net11.0. Building takes the .NET 11 SDK that
+`global.json` names, and testing takes the .NET 10 runtime as well, since the suite runs
+once on each. In a tree last restored for other target frameworks, such as one from before
+net11.0 was added, `dotnet clean` fails with NETSDK1005 until a restore has run, and the
+`&&` above then skips the build: run `dotnet restore` first.
+
 New structures follow the pattern of the existing ones: a class with the same shape of
 API, span overloads beside the array ones, persistence with a golden fixture, an entry
 in the README's decision table, a row in its table of how much each one holds and a note

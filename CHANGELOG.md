@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A build for .NET 11 beside the one for .NET 10.** The package carries `lib/net10.0` and
+  `lib/net11.0`, built from the same source with the same API, and the suite runs on both
+  frameworks, each on its own runtime, on every CI runner: Linux and Windows on x64 and
+  arm64, and macOS on arm64. .NET 10 is an LTS release and .NET 11 an STS one, and both
+  are supported until 2028-11-14, so neither build is dropped for the other.
+  <br><br>
+  Each build depends on the `System.IO.Hashing` released with its own .NET: 10.0.15 for
+  net10.0, and 11.0.0 for net11.0. An application on .NET 10 keeps a dependency on the
+  10.0 line, where 6.2.0 had 10.0.11.
+
 - **`ReadOptions`, a memory budget for reading.** Every structure gains
   `ReadFrom(Stream, ReadOptions)` and `ReadFrom(Stream, Func<ReadOnlySpan<byte>, ulong>,
   ReadOptions)`, and `Persistence.FromByteArray<T>` the same two. The budget is the most
@@ -752,14 +762,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by 16 to 440 bytes read as a byte array, measured in a no-GC region; the four kilobytes
   of slack the read-budget tests allowed had absorbed all of it. The stream
   `FromByteArray` reads through, 64 bytes, and the read's own budget, 48, were charged
-  nowhere, and a checksum's state was charged as a small object of 64 bytes where it is 24.
+  nowhere, and a checksum's state was charged as a small object of 64 bytes where it is 24
+  with System.IO.Hashing 10.
   Most readers made objects they did not charge, their structure's own among them; some
   made objects only to replace them, and a `MementoFilter` read gathered each run into a
   list that grew to the longest run in the table. Now a read is charged the stream and the
   budget once, and a read nested in it neither; a checksum's state is charged what it
-  allocates; and each reader charges each object it makes where it makes it, at its size
-  measured on a 64-bit runtime or as a small object where that is larger, with its price
-  pricing the same charge, so the two still come to the same sum. The objects made only to
+  allocates with the System.IO.Hashing loaded, 24 bytes with 10 and 32 with 11, whose
+  `Crc32` holds one field more; and each reader charges each object it makes where it
+  makes it, at its size measured on a 64-bit runtime or as a small object where that is
+  larger, with its price pricing the same charge, so the two still come to the same sum. The objects made only to
   be replaced are no longer made, and a `MementoFilter` run is checked through one view of
   the table's slots. A read from a stream is charged the stream it did not make, 64 bytes
   past what it allocates, since nothing tells the two reads apart. Measured as a byte

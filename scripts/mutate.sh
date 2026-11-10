@@ -193,24 +193,51 @@ open(path, "w", encoding="utf-8").write(src.replace(old, new))
         return 0
     fi
 
-    local output
+    local output rc
     if [ -n "$MUTATION_FILTER" ]; then
-        output="$(dotnet test -c "$MUTATION_CONFIG" --no-build --filter "$MUTATION_FILTER" 2>&1 | tail -1)"
+        output="$(dotnet test -c "$MUTATION_CONFIG" --no-build --filter "$MUTATION_FILTER" 2>&1)"
     else
-        output="$(dotnet test -c "$MUTATION_CONFIG" --no-build 2>&1 | tail -1)"
+        output="$(dotnet test -c "$MUTATION_CONFIG" --no-build 2>&1)"
     fi
+    rc=$?
 
-    local counts
-    counts="$(echo "$output" | sed -n 's/.*Failed: *\([0-9]*\), Passed: *\([0-9]*\).*/\1 of \1+\2/p')"
-    if echo "$output" | grep -q "^Failed!"; then
-        printf '  %-38s killed   %s\n' "$name" \
-            "$(echo "$output" | sed -n 's/.*Failed: *\([0-9]*\),.*/(\1 tests)/p')"
-        MUTATION_KILLED=$((MUTATION_KILLED + 1))
-    else
-        printf '  %-38s SURVIVED %s\n' "$name" \
-            "$(echo "$output" | sed -n 's/.*Total: *\([0-9]*\).*/(all \1 passed)/p')"
-        MUTATION_SURVIVED=$((MUTATION_SURVIVED + 1))
-    fi
+    # dotnet test prints a summary for each target framework, "Passed!" or "Failed!"
+    # and ending in the framework's name, in the order the frameworks finish. Reading
+    # only the last line called a mutant that one framework's suite catches a survivor
+    # whenever the other framework finished last. So every summary is read: a mutant is
+    # killed when any framework's suite fails it, as it fails CI, and survives only when
+    # the run exited cleanly with every summary a pass. A run that failed with no
+    # failing summary -- a test host that crashed, a runtime that is not installed -- is
+    # still counted as surviving, as it always was, but says so, with the exit code and
+    # the frameworks that did report, so that it cannot be read as a survivor.
+    local verdict
+    verdict="$(printf '%s\n' "$output" | awk -v rc="$rc" '
+        /^(Passed|Failed)!/ {
+            tfm = $NF; gsub(/[()]/, "", tfm)
+            failed = $0; sub(/.*Failed: */, "", failed); sub(/,.*/, "", failed)
+            total = $0; sub(/.*Total: */, "", total); sub(/,.*/, "", total)
+            if ($1 == "Failed!") {
+                killed = killed (killed == "" ? "" : ", ") failed " tests on " tfm
+            } else {
+                passed = passed (passed == "" ? "" : ", ") "all " total " on " tfm
+            }
+            seen = seen (seen == "" ? "" : ", ") tfm
+        }
+        END {
+            if (killed != "") {
+                print "killed   (" killed (passed == "" ? "" : "; " passed " passed") ")"
+            } else if (rc == 0 && passed != "") {
+                print "SURVIVED (" passed " passed)"
+            } else {
+                print "SURVIVED (no failing summary, but dotnet test exited " rc \
+                    "; summaries from: " (seen == "" ? "none" : seen) ")"
+            }
+        }')"
+    printf '  %-38s %s\n' "$name" "$verdict"
+    case "$verdict" in
+        killed*) MUTATION_KILLED=$((MUTATION_KILLED + 1)) ;;
+        *) MUTATION_SURVIVED=$((MUTATION_SURVIVED + 1)) ;;
+    esac
 }
 
 mutation_done() {
