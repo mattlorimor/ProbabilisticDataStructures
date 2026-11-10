@@ -699,9 +699,14 @@ Stryker mutator does, so they stay as #179 records them, held by probes at scale
 the suite; the fourth, `Allocate` without its size check, Stryker does make, and the test
 #179 added for it kills it.
 
-`mutate.sh` reports a run whose test host crashed as SURVIVED with no count after it,
-where a real survivor reads "SURVIVED (all N passed)". Read that as the crash it is,
-which is a detection, and confirm it by running the suite with the mutant in.
+`mutate.sh` reads the summary of every target framework, since a mutant can fail one
+framework's suite and pass the other's, and the last line is whichever finished last. A
+mutant either fails is killed, and the verdict says where: "killed (10 tests on net11.0;
+all 131 on net10.0 passed)". A real survivor reads "SURVIVED (all N on net10.0, all N on
+net11.0 passed)". A run that failed with no failing summary, from a test host that crashed
+or a runtime that is not installed, reads "SURVIVED (no failing summary, but dotnet test
+exited N; summaries from: ...)". Read a crash as the detection it is, and confirm it by
+running the suite with the mutant in.
 
 **Before 5.0.0, Stryker and this suite's parallelism did not mix.** The test assembly
 declares `[assembly: Parallelize(Scope = ExecutionScope.MethodLevel)]`, and Stryker
