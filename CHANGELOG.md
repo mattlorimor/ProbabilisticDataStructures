@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A build for .NET 11 beside the one for .NET 10.** The package carries `lib/net10.0` and
+  `lib/net11.0`, built from the same source with the same API, and the suite runs on both
+  frameworks, each on its own runtime, on every CI runner: Linux and Windows on x64 and
+  arm64, and macOS on arm64. .NET 10 is an LTS release and .NET 11 an STS one, and both
+  are supported until 2028-11-14, so neither build is dropped for the other.
+  <br><br>
+  Each build depends on the `System.IO.Hashing` released with its own .NET: 10.0.15 for
+  net10.0, and 11.0.0 for net11.0. An application on .NET 10 keeps a dependency on the
+  10.0 line, where 6.2.0 had 10.0.11.
+
 - **`ReadOptions`, a memory budget for reading.** Every structure gains
   `ReadFrom(Stream, ReadOptions)` and `ReadFrom(Stream, Func<ReadOnlySpan<byte>, ulong>,
   ReadOptions)`, and `Persistence.FromByteArray<T>` the same two. The budget is the most

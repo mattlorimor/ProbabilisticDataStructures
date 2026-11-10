@@ -54,15 +54,23 @@ namespace TestProbabilisticDataStructures
 
         /// <summary>
         /// The largest room every runner the suite runs on gives one region: what a 64-bit
-        /// workstation collector on segments, the one macOS runs, allows on 16 KiB pages.
+        /// workstation collector on segments, the one macOS runs under .NET 10, allows on
+        /// 16 KiB pages.
         /// </summary>
         /// <remarks>
-        /// macOS builds of the runtime collect on segments rather than regions: gcpriv.h
-        /// defines <c>USE_REGIONS</c> only for a 64-bit host that is not <c>__APPLE__</c> or
-        /// <c>__sun</c>, and not for a standalone collector (dotnet/runtime v10.0.14). On
-        /// segments, <c>gc_heap::prepare_for_no_gc_region</c> (gc.cpp) refuses as too large a
-        /// room past <c>(soh_segment_size - segment_info_size - eph_gen_starts_size) / 1.05</c>.
-        /// A workstation collector's segment is <c>INITIAL_ALLOC</c>, 256 MiB on a 64-bit host
+        /// Under .NET 10, macOS builds of the runtime collect on segments rather than regions:
+        /// gcpriv.h defines <c>USE_REGIONS</c> only for a 64-bit host that is not
+        /// <c>__APPLE__</c> or <c>__sun</c>, and not for a standalone collector (dotnet/runtime
+        /// v10.0.14). Under .NET 11 macOS collects on regions, as Linux and Windows do: the
+        /// guard admits <c>HOST_OSX</c> and still excludes the other Apple platforms (gcpriv.h at
+        /// v11.0.0, from dotnet/runtime#125416, first shipped in 11.0.0-preview.3). The suite
+        /// runs on both, so the room is the one segments give. That holds under .NET 11 too,
+        /// where every runner is on regions, and
+        /// <c>TestTheLargestRoomEveryRunnerGivesIsGiven</c> enters a region of exactly this
+        /// room on every runner under each framework. On segments,
+        /// <c>gc_heap::prepare_for_no_gc_region</c> (gc.cpp) refuses as too large a room past
+        /// <c>(soh_segment_size - segment_info_size - eph_gen_starts_size) / 1.05</c>. A
+        /// workstation collector's segment is <c>INITIAL_ALLOC</c>, 256 MiB on a 64-bit host
         /// whatever its processors or memory, unless a hard limit or <c>GCSegmentSize</c> sets
         /// another (<c>get_valid_segment_size</c>); the segment's own information takes one OS
         /// page, 16 KiB on Apple silicon; and the generations' starts take two of the smallest

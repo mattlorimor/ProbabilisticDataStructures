@@ -158,7 +158,9 @@ namespace TestProbabilisticDataStructures
         /// <summary>
         /// The largest room is given: work is counted in a region of exactly
         /// <see cref="NoGCRegion.Largest"/>, so the bound refuses no room a runner gives. On
-        /// macOS, whose collector refuses a room past it, this checks its derivation.
+        /// macOS under .NET 10, whose collector refuses a room past it, this checks its
+        /// derivation; under .NET 11, where macOS collects on regions, it checks the bound still
+        /// holds there.
         /// </summary>
         [TestMethod]
         public void TestTheLargestRoomEveryRunnerGivesIsGiven()
@@ -176,7 +178,7 @@ namespace TestProbabilisticDataStructures
         {
             Assert.IsLessThanOrEqualTo(NoGCRegion.Largest, NoGCRegion.Room,
                 $"the default room, {NoGCRegion.Room:N0} bytes, is more than the {NoGCRegion.Largest:N0} " +
-                "macOS gives one region, so every measurement that takes it is refused there");
+                "macOS gives one region under .NET 10, so every measurement that takes it is refused there");
         }
 
         /// <summary>
