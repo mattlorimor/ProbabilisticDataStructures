@@ -279,7 +279,7 @@ building at the scale it describes, which is the measurement as of commit 426348
 dotnet add package MattLorimor.ProbabilisticDataStructures
 ```
 
-Requires .NET 10 or later. See [CHANGELOG.md](CHANGELOG.md) for what changed in each
+Requires .NET 11 or later. See [CHANGELOG.md](CHANGELOG.md) for what changed in each
 release.
 
 The package ID carries a prefix, but the assembly and namespace do not:
