@@ -1941,10 +1941,32 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// What a checksum's state allocates: a <see cref="Crc32"/>, which holds its running
-        /// value, measured at 24 bytes on a 64-bit runtime. It was charged as a small object
-        /// of 64, 40 more than it takes (#346).
+        /// value, measured on a 64-bit runtime at 24 bytes with System.IO.Hashing 10 and 32
+        /// with 11. It was charged as a small object of 64, 40 more than it takes with 10
+        /// (#346).
         /// </summary>
-        internal const long ChecksumStateCost = 24;
+        /// <remarks>
+        /// The size is the package's, not the runtime's. System.IO.Hashing 11.0.0's
+        /// <see cref="Crc32"/> adds a field, <c>ParameterSet</c>, beside its running value and
+        /// its hash length, and one allocates 32 bytes with 11.0.0 and 24 with 10.0.14 and
+        /// 10.0.15, on .NET 10 and .NET 11 alike: 11.0.0's own net10.0 build on .NET 10 is 32,
+        /// and 10.0.15 on .NET 11 is 24. Each of this library's target frameworks depends on a
+        /// different major of the package, but the application decides which one loads, and a
+        /// .NET 10 application that takes 11.x runs the net10.0 build with the larger state. So
+        /// the cost is read once from the version of the assembly loaded, not from the
+        /// framework the library was built for.
+        /// </remarks>
+        internal static readonly long ChecksumStateCost =
+            ChecksumStateCostFor(typeof(Crc32).Assembly.GetName().Version);
+
+        /// <summary>
+        /// What a <see cref="Crc32"/> allocates with the System.IO.Hashing of
+        /// <paramref name="hashing"/>, its assembly version: 24 bytes before 11 and 32 from 11
+        /// on (<see cref="ChecksumStateCost"/>). A version that cannot be read is charged the
+        /// larger, since a read may be charged more than it allocates but never less.
+        /// </summary>
+        internal static long ChecksumStateCostFor(Version? hashing) =>
+            hashing is null || hashing.Major >= 11 ? 32 : 24;
 
         /// <summary>
         /// What a read makes once, around everything it reads, whatever it holds, and a read
