@@ -502,6 +502,7 @@ namespace ProbabilisticDataStructures
 
             // The scratch buffer below is sized by the hash count the payload claims.
             budget.Charge(ScratchCost(k));
+            budget.Charge(ObjectCost);
 
             return new DeletableBloomFilter
             {
@@ -523,7 +524,7 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the two bucket
-        /// regions and the scratch buffer. See <see cref="PayloadPrice"/>.
+        /// regions and the scratch buffer, and the filter. See <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
@@ -542,7 +543,11 @@ namespace ProbabilisticDataStructures
             CheckRegions(m, buckets, collisions);
             PersistenceFormat.CheckHashCount(k);
             reader.Budget.Price(ScratchCost(k));
+            reader.Budget.Price(ObjectCost);
         }
+
+        /// <summary>What a read charges for the filter itself, measured at 80 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(80);
 
         internal static void CheckRegions(ulong m, ulong buckets, ulong collisions)
         {

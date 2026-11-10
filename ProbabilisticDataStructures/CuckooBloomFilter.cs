@@ -574,6 +574,7 @@ namespace ProbabilisticDataStructures
             // The whole table, and the map of which entries hold something: what a
             // filter of this shape is, however few entries the payload carries.
             budget.Charge(TableCost(entries, bits));
+            budget.Charge(ObjectCost);
             var fingerprints = new ulong[WordsFor(entries, bits)];
             var occupancy = new ulong[MapWords(entries)];
 
@@ -789,6 +790,9 @@ namespace ProbabilisticDataStructures
             return filled;
         }
 
+        /// <summary>What a read charges for the filter itself, measured at 104 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(104);
+
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the whole table
         /// and its occupancy map, and, before fingerprints were packed, the copy of each
@@ -805,6 +809,7 @@ namespace ProbabilisticDataStructures
             }
 
             reader.Budget.Price(TableCost(entries, bits));
+            reader.Budget.Price(ObjectCost);
             if (version >= PersistenceFormat.CuckooPackedVersion)
             {
                 // Packed entries are fixed fields, and a table read whole is read into the

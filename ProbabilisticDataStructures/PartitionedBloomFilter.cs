@@ -454,6 +454,7 @@ namespace ProbabilisticDataStructures
                     "Filter has partitions of zero bits, which it divides by on use.");
             }
 
+            budget.Charge(ObjectCost);
             return new PartitionedBloomFilter
             {
                 Partitions = partitions,
@@ -468,7 +469,7 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the array of
-        /// partitions and each partition's buckets. See <see cref="PayloadPrice"/>.
+        /// partitions and each partition's buckets, and the filter. See <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
@@ -488,7 +489,12 @@ namespace ProbabilisticDataStructures
                     ? PersistenceFormat.PriceBuckets64(ref reader)
                     : PersistenceFormat.PriceBucketsAs64(ref reader), s);
             }
+
+            reader.Budget.Price(ObjectCost);
         }
+
+        /// <summary>What a read charges for the filter itself, measured at 64 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(64);
 
         private static void CheckPartition(uint i, ulong buckets, ulong s)
         {

@@ -183,9 +183,10 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Used only by <see cref="Read"/>, which has checked every argument against the
-        /// limits the public constructor applies. The heap starts empty: the reader
-        /// sizes it by the elements the payload holds rather than by k, so a large k
-        /// costs nothing until it is used.
+        /// limits the public constructor applies. The heap is the reader's to give it,
+        /// sized by the elements the payload holds rather than by k, so a large k costs
+        /// nothing until it is used. It made an empty heap of its own, which the reader
+        /// then replaced, charged nowhere (#346).
         /// </summary>
         private HeavyKeeper(Func<ReadOnlySpan<byte>, ulong> hash,
             uint k, uint width, uint depth, double decay, ulong seed, Placement placement)
@@ -195,7 +196,7 @@ namespace ProbabilisticDataStructures
             this.Depth = depth;
             this.decay = decay;
             this.random = new SeededRandom(seed);
-            this.elements = new ElementHeap();
+            this.elements = null!;
             (this.Fingerprints, this.Counters) = Buckets(width, depth);
             this.Hash = hash;
             this.Placement = placement;
@@ -601,6 +602,7 @@ namespace ProbabilisticDataStructures
             CheckShape(ref reader, k, width, depth, decay);
 
             budget.Charge(ArraysCost(width, depth));
+            budget.Charge(ObjectCost);
             var restored = new HeavyKeeper(PersistenceFormat.ResolveOrThrow(hashId, hash),
                 k, width, depth, decay, randomState, placement)
             {
@@ -658,6 +660,7 @@ namespace ProbabilisticDataStructures
             CheckShape(ref reader, k, width, depth, decay);
 
             reader.Budget.Price(ArraysCost(width, depth));
+            reader.Budget.Price(ObjectCost);
             reader.Skip((long)width * depth * (sizeof(ushort) + sizeof(ulong)));
 
             var elementCount = ReadElementCount(ref reader, k);
@@ -686,6 +689,9 @@ namespace ProbabilisticDataStructures
             reader.RequireHolds(elementCount, sizeof(uint) + sizeof(ulong), "elements");
             return elementCount;
         }
+
+        /// <summary>What a read charges for the structure itself, measured at 96 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(96);
 
         /// <summary>
         /// The arrays of <paramref name="depth"/> rows of <paramref name="width"/>

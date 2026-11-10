@@ -460,6 +460,7 @@ namespace ProbabilisticDataStructures
             // Every slot is allocated, occupied or not; the occupied ones' data are
             // runs, charged as they are copied.
             budget.Charge(SlotsCost(capacity));
+            budget.Charge(ObjectCost);
             var slots = new byte[capacity][];
             for (uint n = 0; n < occupied; n++)
             {
@@ -479,6 +480,9 @@ namespace ProbabilisticDataStructures
             };
         }
 
+        /// <summary>What a read charges for the filter itself, measured at 40 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(40);
+
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: every slot, and
         /// the copy of each occupied one's data. See <see cref="PayloadPrice"/>.
@@ -490,6 +494,7 @@ namespace ProbabilisticDataStructures
             var occupied = ReadOccupied(ref reader, capacity);
 
             reader.Budget.Price(SlotsCost(capacity));
+            reader.Budget.Price(ObjectCost);
             for (uint n = 0; n < occupied; n++)
             {
                 CheckSlot(reader.ReadUInt32(), capacity);

@@ -73,6 +73,33 @@ namespace ProbabilisticDataStructures
         /// <param name="nominalEntries">How many keys the sketch keeps.</param>
         /// <param name="policy">How several values for one key are folded together.</param>
         public TupleSketch(uint nominalEntries, SummaryPolicy policy = SummaryPolicy.Sum)
+            : this(Checked(nominalEntries, policy), policy, Defaults.GetDefaultHashFunction())
+        {
+            this.values = new ulong[this.Capacity(0)];
+            this.summaries = new double[this.values.Length];
+        }
+
+        /// <summary>
+        /// A sketch retaining <paramref name="nominalEntries"/> keys folded by
+        /// <paramref name="policy"/>, both already checked, with no buffers of its own: a read
+        /// gives it buffers sized by what the payload holds. Made through the public
+        /// constructor, every read made a fresh pair and dropped them, charged nowhere, and
+        /// asked the runtime's cache of the policy's values whether the policy was one (#346).
+        /// </summary>
+        private TupleSketch(uint nominalEntries, SummaryPolicy policy, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            this.nominalEntries = nominalEntries;
+            this.policy = policy;
+            this.values = [];
+            this.summaries = [];
+            this.Hash = hash;
+        }
+
+        /// <summary>
+        /// Refuses a count of keys or a policy the constructor does not build with, and
+        /// returns the count.
+        /// </summary>
+        private static uint Checked(uint nominalEntries, SummaryPolicy policy)
         {
             Guard.ValidItemCount(nominalEntries, nameof(nominalEntries));
             if (nominalEntries > MaxNominalEntries)
@@ -89,11 +116,7 @@ namespace ProbabilisticDataStructures
                     $"{policy} is not a way of folding values this sketch knows.");
             }
 
-            this.nominalEntries = nominalEntries;
-            this.policy = policy;
-            this.values = new ulong[this.Capacity(0)];
-            this.summaries = new double[this.values.Length];
-            this.Hash = Defaults.GetDefaultHashFunction();
+            return nominalEntries;
         }
 
         /// <summary>How several values for one key are folded together.</summary>
@@ -695,10 +718,11 @@ namespace ProbabilisticDataStructures
             // sized by it, so a claim cannot cost more than the payload it came in.
             reader.RequireHolds(held, sizeof(ulong) + sizeof(double), "keys");
 
-            var sketch = new TupleSketch(nominalEntries, policy)
+            var resolved = PersistenceFormat.ResolveOrThrow(hashId, hash);
+            budget.Charge(ObjectCost);
+            var sketch = new TupleSketch(nominalEntries, policy, resolved)
             {
                 theta = theta,
-                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
             };
             budget.Charge(EntriesCost(held));
             var size = sketch.Capacity((int)held);
@@ -751,8 +775,8 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Prices what <see cref="Read"/> allocates beyond the envelope: the buffers of
-        /// keys and summaries held. See <see cref="PayloadPrice"/>.
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the sketch, and the
+        /// buffers of keys and summaries held. See <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
@@ -762,8 +786,12 @@ namespace ProbabilisticDataStructures
             var held = reader.ReadUInt32();
             CheckShape(nominalEntries, policy, held);
             reader.RequireHolds(held, sizeof(ulong) + sizeof(double), "keys");
+            reader.Budget.Price(ObjectCost);
             reader.Budget.Price(EntriesCost(held));
         }
+
+        /// <summary>What a read charges for the sketch itself, measured at 64 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(64);
 
         private static void CheckShape(uint nominalEntries, SummaryPolicy policy, uint held)
         {

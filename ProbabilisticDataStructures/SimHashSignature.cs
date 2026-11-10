@@ -132,6 +132,9 @@ namespace ProbabilisticDataStructures
             ref PayloadReader reader, ushort version, HashId hashId,
             Func<ReadOnlySpan<byte>, ulong>? hash)
         {
+            // Charged before the field is read, as its price prices it without reading the
+            // field, so that a payload refused for the field has been charged its price.
+            reader.Budget.Charge(ObjectCost);
             var value = reader.ReadUInt64();
             reader.ExpectEnd();
 
@@ -154,12 +157,16 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Prices what <see cref="Read"/> allocates beyond the envelope, which is nothing
-        /// a payload's claims can size: the fingerprint is one fixed field. See
-        /// <see cref="PayloadPrice"/>.
+        /// Prices what <see cref="Read"/> allocates beyond the envelope, which nothing a
+        /// payload claims can size: the fingerprint is one fixed field, and the signature
+        /// holds it. See <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
+            reader.Budget.Price(ObjectCost);
         }
+
+        /// <summary>What a read charges for the signature itself, measured at 24 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(24);
     }
 }

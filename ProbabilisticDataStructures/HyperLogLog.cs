@@ -533,6 +533,7 @@ namespace ProbabilisticDataStructures
             // way a fresh estimator derives them, rather than trusted from the payload.
             // b was computed wrongly before 3.1.0, and storing it would have kept that.
             budget.Charge(ReadBudget.ArrayOf(m, 1));
+            budget.Charge(ObjectCost);
             var hyperLogLog = new HyperLogLog(m)
             {
                 Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
@@ -541,6 +542,9 @@ namespace ProbabilisticDataStructures
             registers.CopyTo(hyperLogLog.Registers, 0);
             return hyperLogLog;
         }
+
+        /// <summary>What a read charges for the estimator itself, measured at 48 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(48);
 
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the copy of the
@@ -553,6 +557,7 @@ namespace ProbabilisticDataStructures
             reader.ExpectEnd();
             CheckRegisters(m, stored);
             reader.Budget.Price(ReadBudget.ArrayOf(m, 1));
+            reader.Budget.Price(ObjectCost);
         }
 
         private static void CheckRegisters(uint m, int stored)

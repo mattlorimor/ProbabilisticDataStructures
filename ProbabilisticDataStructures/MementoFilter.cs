@@ -813,6 +813,7 @@ namespace ProbabilisticDataStructures
             var segmentCount = reader.ReadUInt32();
             CheckChain(mementoBits, segmentCount);
 
+            budget.Charge(FilterCost(segmentCount));
             var filter = new MementoFilter(true)
             {
                 Added = added,
@@ -909,6 +910,7 @@ namespace ProbabilisticDataStructures
             var mementoBits = (int)reader.ReadUInt32();
             var segmentCount = reader.ReadUInt32();
             CheckChain(mementoBits, segmentCount);
+            reader.Budget.Price(FilterCost(segmentCount));
 
             for (var i = 0; i < segmentCount; i++)
             {
@@ -925,11 +927,22 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// One table, its words read straight into it, and the segment that holds it with its
-        /// codec, which come to more than one small object allows for, so are charged as two.
+        /// The filter, measured at 72 bytes, and its list of <paramref name="segmentCount"/>
+        /// segments, made before any is read (#346).
+        /// </summary>
+        internal static long FilterCost(uint segmentCount) => ReadBudget.Sum(
+            ReadBudget.Object(72),
+            ReadBudget.SmallObject,
+            ReadBudget.ArrayOf(segmentCount, sizeof(long)));
+
+        /// <summary>
+        /// One table, its words read straight into it, the segment that holds it with its
+        /// codec, which come to more than one small object allows for, so are charged as two,
+        /// and the view its runs are checked through (#346).
         /// </summary>
         internal static long SegmentCost(uint words) => ReadBudget.Sum(
             ReadBudget.ArrayOf(words, sizeof(ulong)),
+            ReadBudget.SmallObject,
             ReadBudget.SmallObject,
             ReadBudget.SmallObject);
 

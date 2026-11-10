@@ -867,6 +867,7 @@ namespace ProbabilisticDataStructures
             var width = reader.ReadUInt32();
             CheckShape(ref reader, delta, growthExponent, sizeFactor, depth, width);
 
+            reader.Budget.Charge(ObjectCost);
             var sketch = new SublimeCountMinSketch
             {
                 delta = delta,
@@ -931,6 +932,7 @@ namespace ProbabilisticDataStructures
             var depth = reader.ReadUInt32();
             var width = reader.ReadUInt32();
             CheckShape(ref reader, delta, growthExponent, sizeFactor, depth, width);
+            reader.Budget.Price(ObjectCost);
 
             var count = reader.ReadUInt64();
             var expansionLimit = reader.ReadUInt64();
@@ -1029,6 +1031,12 @@ namespace ProbabilisticDataStructures
 
             return (chunkCounters, stub);
         }
+
+        /// <summary>
+        /// What a read charges for the sketch itself, measured at 112 bytes, and its list of
+        /// records (#346).
+        /// </summary>
+        private static long ObjectCost => ReadBudget.Sum(ReadBudget.Object(112), ReadBudget.SmallObject);
 
         /// <summary>The rows of plain counts one state is read into.</summary>
         private static long CountsCost(int depth, int forWidth) => ReadBudget.Sum(

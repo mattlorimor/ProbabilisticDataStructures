@@ -485,6 +485,7 @@ namespace ProbabilisticDataStructures
 
             // The scratch buffer below is sized by the hash count the payload claims.
             budget.Charge(ScratchCost(k));
+            budget.Charge(ObjectCost);
 
             return new CountingBloomFilter
             {
@@ -502,7 +503,7 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the counters and
-        /// the scratch buffer. See <see cref="PayloadPrice"/>.
+        /// the scratch buffer, and the filter. See <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
@@ -518,7 +519,11 @@ namespace ProbabilisticDataStructures
             CheckBuckets(m, buckets);
             PersistenceFormat.CheckHashCount(k);
             reader.Budget.Price(ScratchCost(k));
+            reader.Budget.Price(ObjectCost);
         }
+
+        /// <summary>What a read charges for the filter itself, measured at 64 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(64);
 
         private static void CheckBuckets(ulong m, ulong buckets)
         {
