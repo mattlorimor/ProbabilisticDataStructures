@@ -15,6 +15,10 @@
 #                    Default: one per CPU.
 #   --out DIR        where the reports go; it must be empty or new. Default: a new
 #                    directory under ${TMPDIR:-/tmp}, named when the run ends.
+#   --framework TFM  the target framework whose build is swept. Default: net10.0. One,
+#                    because Stryker picks one at random for a project with several, and
+#                    net10.0 because every sweep recorded before net11.0 was added ran
+#                    there, so a new one stays comparable with them.
 #   -- ...           everything after it goes to every Stryker run as it is.
 #
 # For each file, <out>/<name>/ ends up holding Stryker's reports/mutation-report.json and
@@ -53,7 +57,7 @@ die() {
 }
 
 usage() {
-    sed -n '5,24p' "$0" | sed 's/^# \{0,1\}//' >&2
+    sed -n '5,28p' "$0" | sed 's/^# \{0,1\}//' >&2
     exit 2
 }
 
@@ -61,6 +65,7 @@ cpus="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 concurrency="$cpus"
 jobs="$cpus"
 out=""
+framework="net10.0"
 targets=()
 stryker_args=()
 
@@ -69,6 +74,7 @@ while [ $# -gt 0 ]; do
         --concurrency) [ $# -ge 2 ] || usage; concurrency="$2"; shift 2 ;;
         --jobs) [ $# -ge 2 ] || usage; jobs="$2"; shift 2 ;;
         --out) [ $# -ge 2 ] || usage; out="$2"; shift 2 ;;
+        --framework) [ $# -ge 2 ] || usage; framework="$2"; shift 2 ;;
         --) shift; stryker_args=("$@"); break ;;
         -h|--help) usage ;;
         -*) die "unknown option $1 (Stryker's own options go after --)" ;;
@@ -176,7 +182,12 @@ copy_head "$base" || die "cannot copy HEAD"
 echo "stryker-file: building and running the suite"
 (cd "$base" && dotnet build -c Release) > "$out/build.log" 2>&1 \
     || die "the commit does not build; see $out/build.log"
-(cd "$base" && dotnet test -c Release --no-build --logger "trx;LogFileName=$work/suite.trx") \
+# The framework is checked against what the build wrote, not a list kept here.
+[ -d "$base/TestProbabilisticDataStructures/bin/Release/$framework" ] \
+    || die "the test project has no $framework build; it has: $(ls "$base/TestProbabilisticDataStructures/bin/Release" | tr '\n' ' ')"
+echo "stryker-file: sweeping the $framework build"
+(cd "$base" && dotnet test -c Release --no-build --framework "$framework" \
+    --logger "trx;LogFileName=$work/suite.trx") \
     > "$out/suite.log" 2>&1 \
     || die "the suite does not pass; see $out/suite.log"
 
@@ -225,7 +236,7 @@ cat > "$reach/coverage.runsettings" <<'EOF'
 EOF
 i=1
 while [ "$i" -le "$jobs" ]; do
-    cp -a "$base/TestProbabilisticDataStructures/bin/Release/net11.0" "$reach/slot$i" \
+    cp -a "$base/TestProbabilisticDataStructures/bin/Release/$framework" "$reach/slot$i" \
         || die "cannot copy the build output"
     i=$((i + 1))
 done
@@ -310,9 +321,9 @@ for t in "${rel[@]}"; do
     tree="$work/$name"
     mkdir -p "$dest"
     copy_head "$tree" || die "cannot copy HEAD for $name"
-    REACH="$reach" TREE="$tree" TARGET="$t" DEST="$dest" python3 - <<'EOF' || die "cannot write the config for $t"
+    REACH="$reach" TREE="$tree" TARGET="$t" DEST="$dest" FRAMEWORK="$framework" python3 - <<'EOF' || die "cannot write the config for $t"
 import os, json, glob
-reach, tree, target, dest = (os.environ[k] for k in ("REACH", "TREE", "TARGET", "DEST"))
+reach, tree, target, dest, framework = (os.environ[k] for k in ("REACH", "TREE", "TARGET", "DEST", "FRAMEWORK"))
 for path in glob.glob(os.path.join(tree, "ProbabilisticDataStructures", "**", "*.cs"), recursive=True):
     if os.path.normpath(os.path.relpath(path, tree)) != os.path.normpath(target):
         text = open(path, encoding="utf-8-sig").read()
@@ -338,6 +349,8 @@ path = os.path.join(tree, "TestProbabilisticDataStructures", "stryker-config.jso
 config = json.load(open(path))
 c = config["stryker-config"]
 c["mutate"] = ["**/" + os.path.basename(target)]
+# The build the tests that reach the file were found in; left out, Stryker picks one.
+c["target-framework"] = framework
 c["test-case-filter"] = "|".join(f"FullyQualifiedName={m}" for m in keep)
 c["reporters"] = sorted(set(c.get("reporters", [])) | {"json", "html"})
 json.dump(config, open(os.path.join(tree, "TestProbabilisticDataStructures", "stryker-file.json"), "w"), indent=2)
