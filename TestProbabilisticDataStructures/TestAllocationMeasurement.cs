@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime;
+using System.Threading;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using ProbabilisticDataStructures;
 
@@ -29,11 +31,18 @@ namespace TestProbabilisticDataStructures
         /// read, quietly 4,648,320 bytes, was once measured at 4,656,208, past the margin
         /// its test allows (#293). A background collection started before each repeat is
         /// that run's condition made certain. The read is that one, the longest the
-        /// suite's budget samples make. The guard measures the same read the same way
-        /// without the measurement's own protection, and needs it to come out high at
-        /// least once, so that a runtime whose counter a background collection no longer
-        /// disturbs fails here rather than passing by testing nothing. Not run in parallel,
-        /// so that the collections are this test's own.
+        /// suite's budget samples make. Not run in parallel, so that the collections are
+        /// this test's own.
+        /// <para>
+        /// The guard counts the same read the same way without the measurement's protection,
+        /// and needs a count to come out high, so that a runtime whose counter a background
+        /// collection no longer disturbs fails here rather than passing by testing nothing. A
+        /// collection disturbs only a read that the end of its marking falls in, so the guard
+        /// reads on until one does, as <see cref="CountUntilDisturbed"/> says (#357). It also
+        /// needs the read counted that way after the same blocking collections, with no
+        /// background one, to come out no higher than quietly, so that a count high for some
+        /// other reason cannot pass for a disturbance.
+        /// </para>
         /// </remarks>
         [TestMethod]
         [DoNotParallelize]
@@ -49,25 +58,233 @@ namespace TestProbabilisticDataStructures
             Read();
 
             var quiet = TestReadBudget.Allocated(Read);
-            var unprotected = Enumerable.Range(0, 5).Max(_ =>
-            {
-                StartABackgroundCollection();
-                var before = GC.GetAllocatedBytesForCurrentThread();
-                GC.KeepAlive(Read());
-                return GC.GetAllocatedBytesForCurrentThread() - before;
-            });
-            var busy = TestReadBudget.LeastAllocated(Read, 5, StartABackgroundCollection);
+            var disturbed = CountUntilDisturbed(() => CountedWithoutARegion(Read), quiet, StartABackgroundCollection);
+            CollectFully();
+            var undisturbed = CountedWithoutARegion(Read);
+            var busy = TestReadBudget.LeastAllocated(Read, 5, () => StartABackgroundCollection());
             Console.WriteLine(
-                $"[MEASUREMENT] {sample.Name}: quietly {quiet:N0}, unprotected with a background collection " +
-                $"started first at most {unprotected:N0}, measured so {busy:N0}");
+                $"[MEASUREMENT] {sample.Name}: quietly {quiet:N0}; without a region, {undisturbed:N0} with no " +
+                $"background collection, and {disturbed.Counted:N0} at read {disturbed.Reads}, in collection " +
+                $"{disturbed.Collections}, with them running; measured so {busy:N0}");
 
-            Assert.IsGreaterThan(quiet, unprotected,
-                $"{sample.Name}'s read counted {unprotected:N0} bytes at most with a background collection started " +
-                $"before it and nothing to keep it out, and {quiet:N0} quietly, so the collection did not disturb " +
-                "the count and this shows nothing");
+            Assert.IsGreaterThan(quiet, disturbed.Counted,
+                $"{sample.Name}'s read counted {disturbed.Counted:N0} bytes at most in {disturbed.Reads} reads, with " +
+                $"{disturbed.Collections} background collections running beside them and nothing to keep them out, " +
+                $"and {quiet:N0} quietly, so no collection disturbed the count and this shows nothing");
+            Assert.IsLessThanOrEqualTo(quiet, undisturbed,
+                $"{sample.Name}'s read counted {undisturbed:N0} bytes with nothing to keep a collection out and no " +
+                $"background collection running, more than the {quiet:N0} it allocates quietly, so a count comes out " +
+                "high without a collection disturbing it and the guard shows nothing");
             Assert.AreEqual(quiet, busy,
                 $"{sample.Name}'s read was measured at {busy:N0} bytes with a background collection started before " +
                 $"each repeat, and {quiet:N0} quietly: the collection reached the count");
+        }
+
+        /// <summary>
+        /// The guard reads on while a collection runs and starts another only once it has
+        /// ended, and the first count above quiet is the one it returns.
+        /// </summary>
+        [TestMethod]
+        public void TestTheGuardReadsOnThroughACollectionAndStartsAnotherOnlyOnceItHasEnded()
+        {
+            // The first collection ends after its second read, undisturbed; the second is
+            // disturbed at its second read.
+            var guard = new ScriptedGuard(counts: [100, 100, 100, 108], readsPerCollection: [2, 10]);
+
+            var disturbed = CountUntilDisturbed(guard.Count, 100, guard.Start, reads: 10);
+
+            Assert.AreEqual((108L, 4, 2), disturbed, "the guard did not read on through each collection to the count above quiet");
+            Assert.AreEqual(2, guard.Started, "the guard did not start a collection once, and once more after the first ended");
+        }
+
+        /// <summary>
+        /// A guard no collection ever disturbs counts every read it may and no more, and
+        /// returns the most it counted, so that the test fails saying how far it went.
+        /// </summary>
+        [TestMethod]
+        public void TestAGuardNothingDisturbsCountsEveryReadItMayAndReturnsTheMost()
+        {
+            // The most is neither the first count, the last nor the least.
+            var guard = new ScriptedGuard(counts: [76, 92, 100, 88, 96, 84, 90], readsPerCollection: [3, 3, 3]);
+
+            var undisturbed = CountUntilDisturbed(guard.Count, 100, guard.Start, reads: 7);
+
+            Assert.AreEqual((100L, 7, 3), undisturbed,
+                "the guard did not count all seven reads, starting a collection every third, and return the most");
+            Assert.AreEqual(7, guard.Counted, "the guard counted reads past the most it may");
+        }
+
+        /// <summary>
+        /// The guard reads as far as the longest wait for a disturbance measured: twelve
+        /// reads, over two collections.
+        /// </summary>
+        /// <remarks>
+        /// Measured with 1.6 GB of small objects added to the live heap, where marking took 38
+        /// to 50 ms against a read of about 18. Of 90 waits, 30 with one framework running and
+        /// 60 with both at once, every one took three reads or more and the longest twelve;
+        /// with 800 MB added, all of 30 took two, and with 400 MB or none, one (#357). Which
+        /// read the first collection ended at was not recorded, so the script has it run
+        /// through all twelve. See <see cref="GuardReads"/>.
+        /// </remarks>
+        [TestMethod]
+        public void TestTheGuardReadsAsFarAsTheLongestWaitForADisturbanceMeasured()
+        {
+            var guard = new ScriptedGuard(
+                counts: [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 104], readsPerCollection: [12]);
+
+            var disturbed = CountUntilDisturbed(guard.Count, 100, guard.Start);
+
+            Assert.AreEqual((104L, 12, 1), disturbed,
+                $"the guard gives up after {GuardReads} reads, short of the twelve a disturbance has been measured to take");
+        }
+
+        /// <summary>
+        /// A background collection the guard starts is taken for ended once it has ended and
+        /// not before, though one it started before is still running when it starts.
+        /// </summary>
+        /// <remarks>
+        /// The scripted tests above stand in for the collections; this one holds the hook the
+        /// guard runs. The second collection is started straight after the first, whose
+        /// marking is still under way, so the second's blocking collections wait for the
+        /// first to end. The wait for the second to end is bounded so that a hook that never
+        /// tells fails rather than hanging.
+        /// </remarks>
+        [TestMethod]
+        [DoNotParallelize]
+        public void TestABackgroundCollectionIsTakenForEndedOnceItHasEndedAndNotBefore()
+        {
+            if (GCSettings.LatencyMode == GCLatencyMode.Batch)
+            {
+                Assert.Inconclusive("background collection is turned off in this process, so none can run");
+            }
+
+            var first = StartABackgroundCollection();
+            var second = StartABackgroundCollection();
+
+            Assert.IsTrue(first(),
+                "the first collection was not taken for ended, though the second's blocking collections waited for it");
+            Assert.IsFalse(second(),
+                "the second collection was taken for ended as soon as it began: the first's end was taken for it");
+
+            var waited = Stopwatch.StartNew();
+            while (!second() && waited.Elapsed < TimeSpan.FromSeconds(30))
+            {
+                Thread.Sleep(1);
+            }
+
+            Assert.IsTrue(second(), $"the second collection was not taken for ended in {waited.Elapsed.TotalSeconds:N0} s");
+        }
+
+        /// <summary>
+        /// The most reads the guard counts without a region, waiting for a background
+        /// collection to disturb one, before it fails.
+        /// </summary>
+        /// <remarks>
+        /// About four times the longest wait measured, twelve reads (see
+        /// <see cref="TestTheGuardReadsAsFarAsTheLongestWaitForADisturbanceMeasured"/>), so that
+        /// a collection that ends without disturbing a read, as 2 of the 92 started with 1.6 GB
+        /// added did, does not bring the guard near failing. Counted in a region instead, where
+        /// nothing can disturb it, the read took the guard to its fiftieth and failing in about
+        /// two seconds, run alone.
+        /// </remarks>
+        internal const int GuardReads = 50;
+
+        /// <summary>
+        /// Counts reads with <paramref name="count"/> while background collections run, starting
+        /// one with <paramref name="start"/> and another only once that one has ended, until a
+        /// count comes out above <paramref name="quiet"/> or <paramref name="reads"/> have been
+        /// counted. Returns that count, or the most counted if none came out above, with the
+        /// reads and collections it took.
+        /// </summary>
+        /// <remarks>
+        /// A background collection disturbs a thread's count once, at the pause that ends its
+        /// marking. There, with the runtime suspended, it voids every thread's allocation
+        /// context, setting its pointer and limit to zero without taking what the context had
+        /// left unused off the bytes the thread is counted as allocating, where a blocking
+        /// collection takes it off; and <see cref="GC.GetAllocatedBytesForCurrentThread"/>
+        /// subtracts only what a context still holds unused. So a count is high by what the
+        /// read's context had left when the pause came, if the pause came during the read, and
+        /// not otherwise: dotnet/runtime v10.0.14, gc.cpp, <c>gc_heap::background_mark_phase</c>
+        /// ends calling <c>repair_allocation_contexts (FALSE)</c>, whose <c>void_allocation</c>
+        /// leaves <c>alloc_bytes</c> alone, while <c>fix_allocation_context</c> subtracts the
+        /// unused part; comutilnative.cpp, <c>GCInterface::GetAllocatedBytesForCurrentThread</c>.
+        /// v11.0.0 has the same, in background.cpp and allocation.cpp. Read 2026-11-10.
+        /// <para>
+        /// Measured that way, with the pause timed by the runtime's own events, 1,671 of the
+        /// 1,680 reads it fell in came out high, by 16 to 8,192 bytes, and none of the 320 that
+        /// ended before it or started after it. The guard first counted one read per
+        /// collection, started straight after it, which catches the pause only when marking
+        /// takes less time than the read. In the whole suite, marking took 2 to 30 ms against
+        /// a read of about 11 to 21, and in the runs where it took longest, 12 to 19 reads in
+        /// 100 came out exact; with 800 MB of small objects added to the live heap, 59 in 60
+        /// ended before the pause, and all five of a test's repeats can miss it (#357).
+        /// Reading on while the collection runs brings its pause into a read, whatever its
+        /// marking takes. A collection can still end without disturbing one, when its pause
+        /// falls between two reads or a read's context is empty, and the guard then starts
+        /// another.
+        /// </para>
+        /// </remarks>
+        internal static (long Counted, int Reads, int Collections) CountUntilDisturbed(
+            Func<long> count, long quiet, Func<Func<bool>> start, int reads = GuardReads)
+        {
+            long most = 0;
+            var collections = 0;
+            Func<bool> ended = null;
+            for (var read = 1; read <= reads; read++)
+            {
+                if (ended is null || ended())
+                {
+                    ended = start();
+                    collections++;
+                }
+
+                var counted = count();
+                if (counted > quiet)
+                {
+                    return (counted, read, collections);
+                }
+
+                most = Math.Max(most, counted);
+            }
+
+            return (most, reads, collections);
+        }
+
+        /// <summary>
+        /// What <paramref name="read"/> allocates on this thread, counted with nothing to keep
+        /// a collection out: the guard's count, which only this class takes.
+        /// </summary>
+        private static long CountedWithoutARegion(Func<object> read)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            GC.KeepAlive(read());
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+
+        /// <summary>
+        /// Counts and collections played from a script, for holding
+        /// <see cref="CountUntilDisturbed"/> to what it does with them.
+        /// </summary>
+        private sealed class ScriptedGuard(long[] counts, int[] readsPerCollection)
+        {
+            private int readsInThisCollection;
+
+            public int Started { get; private set; }
+
+            public int Counted { get; private set; }
+
+            public long Count()
+            {
+                readsInThisCollection++;
+                return counts[Counted++];
+            }
+
+            public Func<bool> Start()
+            {
+                var runsFor = readsPerCollection[Started++];
+                readsInThisCollection = 0;
+                return () => readsInThisCollection >= runsFor;
+            }
         }
 
         /// <summary>
@@ -336,16 +553,29 @@ namespace TestProbabilisticDataStructures
                 .ToDictionary(op => op.Value));
 
         /// <summary>
-        /// Starts a background collection, after a full blocking one: started alone, one
-        /// sometimes left a repeat undisturbed, measured in one repeat of ten, and after a
-        /// full collection none did, in twenty.
+        /// Starts a background collection, after a full blocking one, and returns whether it
+        /// has ended yet: started alone, one sometimes left a repeat undisturbed, measured in
+        /// one repeat of ten, and after a full collection none did, in twenty.
         /// </summary>
-        private static void StartABackgroundCollection()
+        /// <remarks>
+        /// The last background collection to end is noted after the blocking ones, which wait
+        /// for one still running: noted before them, a collection still running when this is
+        /// called would end in them and be taken for this one ending as soon as it began.
+        /// </remarks>
+        private static Func<bool> StartABackgroundCollection()
+        {
+            CollectFully();
+            var ended = GC.GetGCMemoryInfo(GCKind.Background).Index;
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: false);
+            return () => GC.GetGCMemoryInfo(GCKind.Background).Index != ended;
+        }
+
+        /// <summary>A full blocking collection, with the finalizers it queued run and collected after it.</summary>
+        private static void CollectFully()
         {
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: false);
         }
     }
 }

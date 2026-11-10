@@ -929,6 +929,19 @@ rest of a message survives, as it should, and one that deletes the guard does no
   guard needs the same read, counted without a region, to come out high, so that a
   runtime whose counter no longer minds fails the test rather than passing it. A new
   measurement uses the helper, not the counter.
+- **A guard waits for what it needs to see, rather than retrying a race for it.** That
+  guard counted one read straight after starting each of five collections, and a loaded
+  run counted all five exactly (#357). A background collection reaches the count only at
+  the pause that ends its marking, where it voids every thread's allocation context without
+  taking what was left unused in it off the thread's count (gc.cpp,
+  `gc_heap::background_mark_phase`, at v10.0.14 and v11.0.0); a read that ends before that
+  pause is counted exactly. Whether a read held it was not a draw but how long marking took
+  against the read, which a heap or a machine can hold for every repeat: with 800 MB of
+  small objects added to the live heap, 59 reads in 60 ended before the pause, and the old
+  guard failed ten times in ten on each framework; with 1.6 GB, 60 in 60 did, and no number
+  of retries would have helped. The guard now reads on while each collection runs until a
+  read holds its pause, and gives up after 50 reads, about four times the longest wait
+  measured.
 - **A refusal's number is held to loading.** Honest charges were not enough: a refusal
   named the running total at the charge that failed, so a read refused needing a number
   was refused again, needing more, under exactly that number. Every read is now priced
