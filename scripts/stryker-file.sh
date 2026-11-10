@@ -225,7 +225,7 @@ cat > "$reach/coverage.runsettings" <<'EOF'
 EOF
 i=1
 while [ "$i" -le "$jobs" ]; do
-    cp -a "$base/TestProbabilisticDataStructures/bin/Release/net10.0" "$reach/slot$i" \
+    cp -a "$base/TestProbabilisticDataStructures/bin/Release/net11.0" "$reach/slot$i" \
         || die "cannot copy the build output"
     i=$((i + 1))
 done
