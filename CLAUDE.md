@@ -1,7 +1,7 @@
 # ProbabilisticDataStructures
 
 Probabilistic data structures for C#. Managed IL throughout — no `unsafe`, no pointers,
-no hardware intrinsics — targeting `net10.0` with one dependency, `System.IO.Hashing`.
+no hardware intrinsics — targeting `net10.0` and `net11.0` with one dependency, `System.IO.Hashing`.
 
 ## Read these before writing anything
 
