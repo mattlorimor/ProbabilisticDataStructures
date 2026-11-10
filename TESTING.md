@@ -989,14 +989,19 @@ rest of a message survives, as it should, and one that deletes the guard does no
   shape check holds the current rows to the bytes after the shape, and every block is held
   again where it begins, so every cut it refuses is refused at the current rows at the
   latest, having read only blocks it holds. And a nested envelope's length is the one
-  claim no cut can make disagree with its run: the outer price's slice of that length is
-  what refuses one longer, and with that check gone the refusal was an
-  `ArgumentOutOfRangeException`. Each now has a test that edits the claim, its checksum
-  resealed, to one past what the bytes hold and to the largest the field can make. Each
-  edited claim is priced exactly what a cut just before the field is, and refused for what
-  it lacks under every budget, having allocated no more than that cut's read. The most the
+  claim no cut can make disagree with its run: since #347 the outer price, from a held
+  payload, holds it to what the run holds after the header, with the checksum after it,
+  before it prices it (`RequireHeld`), and that is what refuses one longer. Each now has a
+  test that edits the claim, its checksum resealed, to one past what the bytes hold and to
+  the largest the field can make. Each edited claim is priced exactly what a cut just
+  before the field is, and refused for what it lacks under every budget, having allocated
+  no more than the read, beside it and under the same budget, of the cut just after the
+  field, which the same check refuses. The bound was a cut before the field at first, but
+  that cut is refused on another path, which the JIT optimises apart from the claim's, and
+  across states of the JIT the difference ran from -672 to 1,080 bytes, past the 1,024 the
+  bound allowed (#351). A cut the same check refuses runs the claim's code. The most the
   bytes hold is the control, and its read allocates past that, so the bound can see what
-  the check stops. That bound is the cut's own read, not the sweep's slack, which is what
+  the check stops. That bound is a cut's own read, not the sweep's slack, which is what
   let #332's check pass unseen.
   `TestEveryHoldsCheckIsHeldByAnEditedClaimOrNamesTheTestThatHoldsIt` takes its roster
   from the library's IL, every call of `RequireHolds` with what it counts. So a check
