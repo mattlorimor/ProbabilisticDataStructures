@@ -1,7 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net11.0</TargetFramework>
+    <!-- One build for each supported .NET, and the test project runs the suite on each.
+         .NET 10 is the LTS and .NET 11 the STS, both supported to the same day. -->
+    <TargetFrameworks>net10.0;net11.0</TargetFrameworks>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <!-- Enabled for the library only. The annotations ship in the package and give
          consumers null analysis against this API; the test and benchmark projects
@@ -54,7 +56,13 @@
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
 
-  <ItemGroup>
+  <!-- Each build takes the System.IO.Hashing released with its own .NET, so that a
+       .NET 10 consumer's dependency stays on the 10.0 line it was on before net11.0
+       was added. The 11.0.0 package would serve both: it carries a net10.0 build too. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <PackageReference Include="System.IO.Hashing" Version="10.0.15" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net11.0'">
     <PackageReference Include="System.IO.Hashing" Version="11.0.0" />
   </ItemGroup>
 

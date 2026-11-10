@@ -2,7 +2,10 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net11.0</TargetFramework>
+    <!-- net10.0 only, until a stable BenchmarkDotNet supports .NET 11. 0.15.8 stops
+         before running anything on .NET 11 ("GetRuntimeVersion not implemented for
+         NotRecognized": its runtime list ends at .NET 10); 0.16.0-preview.2 adds it. -->
+    <TargetFramework>net10.0</TargetFramework>
     <IsPackable>false</IsPackable>
     <!-- BenchmarkDotNet requires optimized builds; guard against Debug runs. -->
     <Optimize Condition="'$(Configuration)' == 'Release'">true</Optimize>
