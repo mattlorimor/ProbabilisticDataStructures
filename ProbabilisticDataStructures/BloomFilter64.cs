@@ -344,6 +344,7 @@ namespace ProbabilisticDataStructures
 
             PersistenceFormat.CheckHashCount(k);
 
+            reader.Budget.Charge(ObjectCost);
             return new BloomFilter64
             {
                 Buckets = buckets,
@@ -356,7 +357,7 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the buckets'
-        /// arrays and the copies of their runs. See <see cref="PayloadPrice"/>.
+        /// arrays and the copies of their runs, and the filter. See <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
@@ -364,7 +365,11 @@ namespace ProbabilisticDataStructures
             reader.ReadUInt32();
             reader.ReadUInt64();
             PersistenceFormat.PriceBuckets64(ref reader);
+            reader.Budget.Price(ObjectCost);
         }
+
+        /// <summary>What a read charges for the filter itself, measured at 56 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(56);
 
         /// <summary>
         /// Used only by <see cref="Read"/>, which sets every field itself.

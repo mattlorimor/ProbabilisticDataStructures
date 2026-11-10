@@ -116,6 +116,26 @@ namespace ProbabilisticDataStructures
         /// The precision is outside 4 to 18.
         /// </exception>
         public HyperLogLogPlus(uint precision, Func<ReadOnlySpan<byte>, ulong>? hash = null)
+            : this(hash ?? Defaults.GetDefaultHashFunction(), Checked(precision))
+        {
+            this.sparse = new ulong[this.InitialSparseEntries];
+        }
+
+        /// <summary>
+        /// An estimator at a precision already checked, with neither a sparse buffer nor
+        /// registers: a read gives it the one its payload holds. Made through the public
+        /// constructor, every read made a fresh sparse buffer and dropped it, charged nowhere
+        /// (#346).
+        /// </summary>
+        private HyperLogLogPlus(Func<ReadOnlySpan<byte>, ulong> hash, uint precision)
+        {
+            this.precision = precision;
+            this.m = 1u << (int)precision;
+            this.Hash = hash;
+        }
+
+        /// <summary>Refuses a precision the constructor does not build at, and returns it.</summary>
+        private static uint Checked(uint precision)
         {
             if (precision < MinPrecision || precision > MaxPrecision)
             {
@@ -126,10 +146,7 @@ namespace ProbabilisticDataStructures
                     "registers cost more than the accuracy is worth.");
             }
 
-            this.precision = precision;
-            this.m = 1u << (int)precision;
-            this.Hash = hash ?? Defaults.GetDefaultHashFunction();
-            this.sparse = new ulong[this.InitialSparseEntries];
+            return precision;
         }
 
         private const int InitialSparseCapacity = 16;
@@ -761,10 +778,8 @@ namespace ProbabilisticDataStructures
             CheckPrecision(precision);
 
             var representation = reader.ReadByte();
-            var estimator = new HyperLogLogPlus(precision)
-            {
-                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
-            };
+            budget.Charge(ObjectCost);
+            var estimator = new HyperLogLogPlus(PersistenceFormat.ResolveOrThrow(hashId, hash), precision);
 
             if (representation == 0)
             {
@@ -842,9 +857,12 @@ namespace ProbabilisticDataStructures
             return estimator;
         }
 
+        /// <summary>What a read charges for the estimator itself, measured at 56 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(56);
+
         /// <summary>
-        /// Prices what <see cref="Read"/> allocates beyond the envelope: the sparse buffer,
-        /// or the copy of the dense registers. See <see cref="PayloadPrice"/>.
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the estimator, and the
+        /// sparse buffer or the copy of the dense registers. See <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
@@ -852,6 +870,7 @@ namespace ProbabilisticDataStructures
             CheckPrecision(precision);
 
             var representation = reader.ReadByte();
+            reader.Budget.Price(ObjectCost);
             if (representation == 0)
             {
                 var held = ReadHeld(ref reader);

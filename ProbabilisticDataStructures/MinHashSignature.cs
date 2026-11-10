@@ -169,6 +169,7 @@ namespace ProbabilisticDataStructures
             reader.RequireHolds(length, sizeof(ulong), "values");
 
             budget.Charge(ReadBudget.ArrayOf(length, sizeof(ulong)));
+            budget.Charge(ObjectCost);
             var values = new ulong[length];
             for (uint i = 0; i < length; i++)
             {
@@ -194,6 +195,9 @@ namespace ProbabilisticDataStructures
             }
         }
 
+        /// <summary>What a read charges for the signature itself, measured at 24 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(24);
+
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the values. See
         /// <see cref="PayloadPrice"/>.
@@ -204,6 +208,7 @@ namespace ProbabilisticDataStructures
             CheckLength(length);
             reader.RequireHolds(length, sizeof(ulong), "values");
             reader.Budget.Price(ReadBudget.ArrayOf(length, sizeof(ulong)));
+            reader.Budget.Price(ObjectCost);
         }
 
         private static void CheckLength(uint length)

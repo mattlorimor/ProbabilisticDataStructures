@@ -914,7 +914,8 @@ namespace ProbabilisticDataStructures
             var start = stream.Position;
             RequireHeld(stream.Length - start, length, large: true);
 
-            var envelope = LargeEnvelopeCost;
+            // A read nested in another has its budget, and its stream, from the read around it.
+            var envelope = budget.IsSettled ? NestedLargeEnvelopeCost : LargeEnvelopeCost;
             var crc = new Crc32();
             crc.Append(header[MagicLength..LargeFieldsLength]);
             var source = new PayloadSource(stream);
@@ -1030,9 +1031,10 @@ namespace ProbabilisticDataStructures
                 RequireHeld(stream.Length - stream.Position, length, large: false);
             }
 
-            var envelope = EnvelopeCost(length);
-
+            // A read nested in another, priced with it and so settled, has its budget, and its
+            // stream, from the read around it.
             var pricing = !budget.IsSettled;
+            var envelope = pricing ? EnvelopeCost(length) : NestedEnvelopeCost(length);
             if (pricing)
             {
                 // The payload is the first thing a header's claim allocates, and it is
@@ -1857,7 +1859,7 @@ namespace ProbabilisticDataStructures
                 // stream over the run: priced first, a claim of a gigabyte was priced at that
                 // and admitted under no budget (#347).
                 RequireHeld(envelope.Remaining, length, large);
-                envelope.Budget.Price(large ? LargeEnvelopeCost : EnvelopeCost(length));
+                envelope.Budget.Price(large ? NestedLargeEnvelopeCost : NestedEnvelopeCost(length));
             }
 
             var payload = envelope.Slice((long)length, large);
@@ -1893,33 +1895,78 @@ namespace ProbabilisticDataStructures
         internal const int MinNestedLength = sizeof(uint) + HeaderLength + ChecksumLength;
 
         /// <summary>
-        /// What reading an ordinary envelope with a payload of <paramref name="length"/>
-        /// bytes allocates: the payload, the header and checksum buffers, and the
-        /// checksum's state.
+        /// What a read of a structure in the ordinary envelope, with a payload of
+        /// <paramref name="length"/> bytes, allocates around the structure: the envelope's
+        /// own cost (<see cref="NestedEnvelopeCost"/>), and what the read itself makes
+        /// (<see cref="ReadCost"/>).
         /// </summary>
-        internal static long EnvelopeCost(ulong length) => ReadBudget.Sum(
+        internal static long EnvelopeCost(ulong length) => ReadBudget.Sum(NestedEnvelopeCost(length), ReadCost);
+
+        /// <summary>
+        /// What an ordinary envelope with a payload of <paramref name="length"/> bytes
+        /// allocates as it is read, nested in another structure or not: the payload, the
+        /// header and checksum buffers, and the checksum's state.
+        /// </summary>
+        internal static long NestedEnvelopeCost(ulong length) => ReadBudget.Sum(
             ReadBudget.ArrayOf(length, 1),
             ReadBudget.ArrayOf(HeaderLength, 1),
             ReadBudget.ArrayOf(ChecksumLength, 1),
-            ReadBudget.SmallObject);
+            ChecksumStateCost);
 
         /// <summary>
-        /// What reading an envelope in the large form allocates around its payload, which is
-        /// read from the stream rather than held (#226): the header and checksum buffers,
-        /// the checksum's state, and the source the payload is read through, with its
-        /// buffer for a field. The same whatever the payload's length, and the same whether
-        /// the read is priced first or not, since both passes read through one source.
+        /// What a read of a structure in the large form allocates around the structure: the
+        /// envelope's own cost (<see cref="NestedLargeEnvelopeCost"/>), and what the read
+        /// itself makes (<see cref="ReadCost"/>).
+        /// </summary>
+        internal static long LargeEnvelopeCost => ReadBudget.Sum(NestedLargeEnvelopeCost, ReadCost);
+
+        /// <summary>
+        /// What an envelope in the large form allocates around its payload as it is read,
+        /// nested in another structure or not, its payload read from the stream rather than
+        /// held (#226): the header and checksum buffers, the checksum's state, and the source
+        /// the payload is read through, with its buffer for a field. The same whatever the
+        /// payload's length, and the same whether the read is priced first or not, since both
+        /// passes read through one source.
         /// </summary>
         /// <remarks>
         /// The rest of the large header is read onto the stack, beside the ordinary
         /// header's buffer.
         /// </remarks>
-        internal static long LargeEnvelopeCost => ReadBudget.Sum(
+        internal static long NestedLargeEnvelopeCost => ReadBudget.Sum(
             ReadBudget.ArrayOf(HeaderLength, 1),
             ReadBudget.ArrayOf(ChecksumLength, 1),
-            ReadBudget.SmallObject,
+            ChecksumStateCost,
             ReadBudget.SmallObject,
             ReadBudget.ArrayOf(PayloadSource.WidestField, 1));
+
+        /// <summary>
+        /// What a checksum's state allocates: a <see cref="Crc32"/>, which holds its running
+        /// value, measured at 24 bytes on a 64-bit runtime. It was charged as a small object
+        /// of 64, 40 more than it takes (#346).
+        /// </summary>
+        internal const long ChecksumStateCost = 24;
+
+        /// <summary>
+        /// What a read makes once, around everything it reads, whatever it holds, and a read
+        /// nested in it does not make again: its budget (<see cref="ReadBudgetCost"/>) and the
+        /// stream a byte array is read through (<see cref="ByteArrayStreamCost"/>). Charged to
+        /// a read from a stream as well, which made no stream, since nothing tells the two
+        /// apart; it is charged nowhere else.
+        /// </summary>
+        internal const long ReadCost = ReadBudgetCost + ByteArrayStreamCost;
+
+        /// <summary>
+        /// What a read's own budget allocates, which every read but a nested one makes
+        /// (<see cref="ReadBudget.For"/>): measured at 48 bytes on a 64-bit runtime (#346).
+        /// </summary>
+        internal const long ReadBudgetCost = 48;
+
+        /// <summary>
+        /// What the <see cref="MemoryStream"/> that <c>FromByteArray</c> reads its bytes
+        /// through allocates, over an array it does not copy: measured at 64 bytes on a
+        /// 64-bit runtime (#346).
+        /// </summary>
+        internal const long ByteArrayStreamCost = 64;
 
         /// <summary>
         /// What a nested read allocates around the run it reads from: a stream over it

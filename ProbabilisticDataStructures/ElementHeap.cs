@@ -53,14 +53,17 @@ namespace ProbabilisticDataStructures
 
         /// <summary>
         /// An upper bound on what a heap sized for <paramref name="count"/> elements, and
-        /// then given them, allocates beyond their data: the list's array, the index's
-        /// bucket and entry tables, and an <see cref="Element"/> each.
+        /// then given them, allocates beyond their data: the heap, its list and index, the
+        /// list's array, the index's bucket and entry tables, and an <see cref="Element"/>
+        /// each.
         /// </summary>
         /// <remarks>
         /// A dictionary sizes its tables to the next prime it uses at or above the count,
         /// never more than about twice it; an entry is a hash, a link, a
         /// <see cref="ReadOnlyMemory{T}"/> key and an int value, which pad to 32 bytes.
-        /// The data the elements hold are runs a reader copies, and charges, itself.
+        /// The data the elements hold are runs a reader copies, and charges, itself. The heap
+        /// and its index are measured at 32 and 80 bytes; the index was charged as a small
+        /// object and the heap not at all (#346).
         /// </remarks>
         internal static long RestoreCost(ulong count)
         {
@@ -70,7 +73,9 @@ namespace ProbabilisticDataStructures
                 ReadBudget.ArrayOf(tableSize, sizeof(int)),
                 ReadBudget.ArrayOf(tableSize, 32),
                 ReadBudget.Times(count, ElementSize),
-                2 * ReadBudget.SmallObject);
+                ReadBudget.Object(32),
+                ReadBudget.SmallObject,
+                ReadBudget.Object(80));
         }
 
         /// <summary>

@@ -74,6 +74,26 @@ namespace ProbabilisticDataStructures
         /// </summary>
         /// <param name="nominalEntries">How many values the sketch keeps.</param>
         public ThetaSketch(uint nominalEntries)
+            : this(Checked(nominalEntries), Defaults.GetDefaultHashFunction())
+        {
+            this.values = new ulong[this.Capacity(0)];
+        }
+
+        /// <summary>
+        /// A sketch retaining <paramref name="nominalEntries"/> values, already checked, with
+        /// no buffer of its own: a read gives it one sized by what the payload holds. Made
+        /// through the public constructor, every read made a fresh buffer and dropped it,
+        /// charged nowhere (#346).
+        /// </summary>
+        private ThetaSketch(uint nominalEntries, Func<ReadOnlySpan<byte>, ulong> hash)
+        {
+            this.nominalEntries = nominalEntries;
+            this.values = [];
+            this.Hash = hash;
+        }
+
+        /// <summary>Refuses a count of values the constructor does not build with, and returns it.</summary>
+        private static uint Checked(uint nominalEntries)
         {
             Guard.ValidItemCount(nominalEntries, nameof(nominalEntries));
             if (nominalEntries > MaxNominalEntries)
@@ -84,9 +104,7 @@ namespace ProbabilisticDataStructures
                     $"holds at most {Array.MaxLength}.");
             }
 
-            this.nominalEntries = nominalEntries;
-            this.values = new ulong[this.Capacity(0)];
-            this.Hash = Defaults.GetDefaultHashFunction();
+            return nominalEntries;
         }
 
         /// <summary>
@@ -473,10 +491,11 @@ namespace ProbabilisticDataStructures
             // cost more than the payload it came in.
             reader.RequireHolds(held, sizeof(ulong), "values");
 
-            var sketch = new ThetaSketch(nominalEntries)
+            var resolved = PersistenceFormat.ResolveOrThrow(hashId, hash);
+            budget.Charge(ObjectCost);
+            var sketch = new ThetaSketch(nominalEntries, resolved)
             {
                 theta = theta,
-                Hash = PersistenceFormat.ResolveOrThrow(hashId, hash),
             };
             budget.Charge(ValuesCost(held));
             sketch.values = new ulong[sketch.Capacity((int)held)];
@@ -523,8 +542,8 @@ namespace ProbabilisticDataStructures
         }
 
         /// <summary>
-        /// Prices what <see cref="Read"/> allocates beyond the envelope: the buffer of
-        /// values held. See <see cref="PayloadPrice"/>.
+        /// Prices what <see cref="Read"/> allocates beyond the envelope: the sketch, and the
+        /// buffer of values held. See <see cref="PayloadPrice"/>.
         /// </summary>
         internal static void Price(ref PayloadReader reader, ushort version)
         {
@@ -533,8 +552,12 @@ namespace ProbabilisticDataStructures
             var held = reader.ReadUInt32();
             CheckHeld(nominalEntries, held);
             reader.RequireHolds(held, sizeof(ulong), "values");
+            reader.Budget.Price(ObjectCost);
             reader.Budget.Price(ValuesCost(held));
         }
+
+        /// <summary>What a read charges for the sketch itself, measured at 56 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(56);
 
         private static void CheckHeld(uint nominalEntries, uint held)
         {

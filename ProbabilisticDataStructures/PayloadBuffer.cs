@@ -1183,7 +1183,7 @@ namespace ProbabilisticDataStructures
         /// What carrying a nested envelope's checksum allocates: the checksum's state, and
         /// the link that carries it.
         /// </summary>
-        internal static long NestedChecksumCost => ReadBudget.Sum(ReadBudget.SmallObject, ReadBudget.SmallObject);
+        internal static long NestedChecksumCost => ReadBudget.Sum(PersistenceFormat.ChecksumStateCost, ReadBudget.SmallObject);
 
         internal PayloadSource(Stream stream)
         {

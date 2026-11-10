@@ -840,6 +840,7 @@ namespace ProbabilisticDataStructures
 
             // The registers, and the two arrays that order their updates.
             budget.Charge(RegistersCost(m));
+            budget.Charge(ObjectCost);
             var sketch = new SetSketch(
                 (int)m, b, a, (int)q,
                 PersistenceFormat.ResolveOrThrow(hashId, hash),
@@ -925,6 +926,9 @@ namespace ProbabilisticDataStructures
             }
         }
 
+        /// <summary>What a read charges for the sketch itself, measured at 112 bytes (#346).</summary>
+        private static long ObjectCost => ReadBudget.Object(112);
+
         /// <summary>
         /// Prices what <see cref="Read"/> allocates beyond the envelope: the registers and
         /// the two arrays that order their updates. See <see cref="PayloadPrice"/>.
@@ -940,6 +944,7 @@ namespace ProbabilisticDataStructures
 
             reader.RequireHolds(m, sizeof(ushort), "registers");
             reader.Budget.Price(RegistersCost(m));
+            reader.Budget.Price(ObjectCost);
         }
 
         /// <summary>
