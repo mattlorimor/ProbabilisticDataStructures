@@ -53,9 +53,13 @@ jobs:
       - name: Check out
         uses: actions/checkout@v7
 
+      # global.json's SDK, which builds both frameworks, and a .NET 10 SDK beside it
+      # for the .NET 10 runtime the net10.0 suite runs on. setup-dotnet installs the
+      # versions from both inputs.
       - name: Set up .NET
         uses: actions/setup-dotnet@v6
         with:
+          dotnet-version: 10.0.x
           global-json-file: global.json
 
       - name: Restore
@@ -64,10 +68,13 @@ jobs:
       - name: Build
         run: dotnet build --configuration Release --no-restore -warnaserror
 
+      # Runs the suite once per target framework, and fails if either run fails. A
+      # prefix rather than a file name, because each framework writes its own results
+      # and a fixed name keeps only whichever finished last.
       - name: Test
         run: >-
           dotnet test --configuration Release --no-build
-          --logger "trx;LogFileName=test-results.trx"
+          --logger "trx;LogFilePrefix=test-results"
           --results-directory ${{ github.workspace }}/test-results
 
       - name: Upload test results
